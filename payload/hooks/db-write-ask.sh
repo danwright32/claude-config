@@ -87,18 +87,34 @@
 # project's write carries. Before, the failed save was swallowed, and the next session asked him
 # to approve the same line again with no reason given.
 #
-# A COMMAND HOLDING A #, since #3472. The shared reader took a # for a comment by a rule the shell
+# A COMMAND READ TWICE, since #3472. The shared reader took a # for a comment by a rule the shell
 # does not follow, so a command on the rest of that line was left out of what this hook judged: a
 # write there was not asked about, a push Dan applied was let through with that line riding along,
 # and a commit there of an unapproved list line was not asked about (all three reproduced,
 # test-db-write-ask-unsure-line.sh). The reader now reads on where every shell does, and names a #
-# it cannot tell from a comment, but only for a caller that asks. So a Bash command holding a # is
-# judged by both readings (lib/db-write-calls.py, bash_findings(), dry_push_dir() and
-# second_reading()): what either finds is asked about; a # that cannot be told, or a reader that
-# cannot be asked, is asked about saying so, since nobody can say such a command holds no write;
-# and a push or a write from a file is let through only when both readings find that same run as
-# the whole of its command, after a dry run that both read as a dry run. A command with no # has
-# none to be unsure of and is read once, as before.
+# it cannot tell from a comment, but only for a caller that asks. So a Bash command is judged by
+# both readings (lib/db-write-calls.py, bash_findings(), dry_push_dir() and second_reading()): what
+# either finds is asked about; a reader that cannot be asked is asked about saying so, since nobody
+# can say such a command holds no write; and a push or a write from a file is let through only when
+# both readings find that same run as the whole of its command, after a dry run that both read as
+# a dry run.
+#
+# WHAT IT REFUSES (permissionDecision "deny"), the one thing: a command holding a line the reader
+# names as one it cannot vouch for. That is a # it cannot tell from a comment, and, since the reader
+# came to name them (#3492, #3566), a heredoc it cannot find the end of: one whose marker follows a
+# body line ending in a backslash or that no line ends, one whose opener line ends in a backslash,
+# one whose quoted marker holds a line break, one whose marker holds a dollar quote, and one typed
+# on a single line. The second reading was made only of a command holding a #, and a heredoc holds
+# none, so a write or a commit the shell runs out of such a heredoc was not asked about (each kind
+# reproduced, test-db-write-ask-unsure-line.sh, section 6); it is made of every command now. Such a
+# command was asked about where it held a #. It is refused instead, as a command the hook could
+# not check (the choice made on #3472 for its second open question, which Dan can overturn): an
+# answer to a question about the part that was read lets the rest run with it, and the refusal
+# says which line, in a sentence true of the mark the reader named it with (lib/db-write-calls.py,
+# UNSURE), and how to write the command so that it can be read. A dry run in an earlier call that
+# holds such a line is still only not counted, so its push is asked about as one no Apply covers.
+# A refusal is printed whatever state lib/hook-notice.sh is in beside the hook, since printing
+# nothing passes the command (refuse_json below; section 7 of that suite).
 #
 # THE SCREEN. The hook now runs on every Bash and MCP call, and since #2643 every Edit, Write and
 # MultiEdit, so it leaves before python3 starts unless the payload holds one of DB_SCREEN_WORDS, which
@@ -128,9 +144,11 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 
 # Every word this hook prints is built by lib/hook-notice.sh, valid whatever the statement holds
 # (#1906). Without the library it still asks, keeping only characters that need no escaping.
+NOTICE_LIBRARY=loaded
 load_notice() {
   # shellcheck source=lib/hook-notice.sh
   . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || {  # the library is missing
+    NOTICE_LIBRARY=missing
     hook_ask_json() {
       local n="${2:-}"
       if [ -n "$n" ]; then printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s (lib/hook-notice.sh is missing beside this hook)"}, "systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}" "${n//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
@@ -146,6 +164,108 @@ load_notice() {
 # (claude-config#1885). The session's locale is tried first, since only it counts a Unicode space
 # as [[:space:]], so a match is only ever added, never lost.
 payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+
+# A refusal (claude-config#3472). The library's hook_deny_json builds it (added for #3618; this
+# hook moved onto it in #3793), by the same builder as its ask and its allow, so its words are
+# escaped and cut as theirs are. The hook calls that public name and never the private builder
+# behind it (test-hook-notice.sh fails on a hook that names one).
+#
+# A refusal that is not printed is a command that runs: the hook leaves with 0 either way, and
+# Claude Code reads no decision as none. Beside a library that loaded and had no such function (a
+# copy from before #3618 that the sync held back), a call to it would print nothing, so a command
+# the hook meant to refuse would run with no question at all. So the function is looked for first.
+#
+# THE RULE for what it printed: the hook passes it on only when it is exactly one JSON object, with
+# nothing before or after it, whose only keys are hookSpecificOutput (a PreToolUse deny holding
+# only its event, its decision and at most a reason, all texts) and, at most, the library's notice
+# field holding a text. Anything else, nothing included, is replaced by refuse_plain's object, which
+# needs no library. Claude Code lets a call go ahead when a hook's object fails its validation, and
+# its top level continue, suppressOutput and decision are not texts, so a refusal beside one of
+# them written as a text is no refusal. An earlier form of this check took any one key beside the
+# refusal that held a text, and so took each of those (the second review of #3793).
+#
+# It is checked in two steps, since this hook may not write the notice field's name: a notice is
+# built by the library alone, and test-hook-notice.sh fails on a hook that names the field (#1906).
+#   1. refusal_shape reads the text as strict UTF-8 and then with Python's JSON reader, and
+#      answers "alone" for a refusal with no other key, "beside" for one with exactly one other
+#      key holding a text, and nothing for everything else. It never learns that key's name. For
+#      a refusal that is alone this step is all that decides, so its two rules on what stands
+#      inside the decision (only the event, the decision and a reason; every value a text) each
+#      have their own cases in section 7 of test-db-write-ask-unsure-line.sh (the third review of
+#      #3793 took both out and that suite still passed). Strict UTF-8 matters for one form: a
+#      lone surrogate written as three bytes, which the JSON reader takes when handed bytes.
+#   2. A refusal that is alone is passed on. One with a key beside it is passed on only when the
+#      library's hook_decision_verdict, the one place that names the key allowed there, is a
+#      function, returned 0 and said nothing. Beside a library with no such function (an older
+#      copy), or one whose function fails or says anything, refuse_plain's object goes out. So
+#      such a Mac loses the escaped words of a refusal that carries a notice, never the refusal.
+# What is still trusted is that function's own answer: a library whose hook_deny_json wrote a
+# wrong key and whose hook_decision_verdict called it fine would be passed on. test-hook-notice.sh
+# holds that function to each wrong text, and to a copy of itself with each rule taken out.
+#
+# Before the first review of #3793 the check was a bash match asking only for a { first, a } last
+# and the deny somewhere between, and a dot there takes a line break too, so a refusal cut short at
+# a brace, two objects on two lines, a raw line break inside the reason and an ask holding a deny
+# under another key all went out as the refusal (section 7 of test-db-write-ask-unsure-line.sh
+# holds every case named here). The hook reaches a refusal only through its classifier, which is
+# python3, so python3 is there. What a refused command costs in python3 starts, all of them
+# counted (the third review measured it with a counting stand in): the classifier is one. Beside
+# a missing library, or one with no hook_deny_json, that is all. Beside the real library its
+# builder is a second, and this check adds a third for a refusal with no notice and a fourth for
+# one that carries a notice, the fourth inside hook_decision_verdict. A text that is no refusal
+# costs the check one start before refuse_plain replaces it, and a builder that printed nothing
+# costs the check none, since refusal_shape returns before it reaches python3. A python3 that
+# cannot start, or says nothing, judges nothing, so refuse_plain's object goes out. Whatever
+# happens once the classifier has asked for a refusal, exactly one object is printed, and it is
+# a refusal.
+#
+# refusal_shape itself is written further down, below the place where this hook asks whether
+# python3 is there and names it when it is not: test-gate-payload-reader.sh holds every hook that
+# can refuse to asking for a reader before the first line that reaches for it, and its failure on
+# this hook's pull request (the function stood here, above that question) is why it moved.
+refuse_json() {
+  local built="" shape="" said=""
+  if [ "$NOTICE_LIBRARY" = missing ]; then
+    refuse_plain "$1" "${2:-}" "lib/hook-notice.sh is missing beside this hook"
+    return 0
+  fi
+  if ! declare -F hook_deny_json >/dev/null; then
+    refuse_plain "$1" "${2:-}" "lib/hook-notice.sh beside this hook has no hook_deny_json, which builds a refusal, so this one is written without the characters that need escaping"
+    return 0
+  fi
+  built="$(hook_deny_json "$1" "${2:-}" 2>/dev/null)"
+  shape="$(refusal_shape "$built")" || shape=""
+  if [ "$shape" = alone ]; then
+    printf '%s\n' "$built"
+    return 0
+  fi
+  if [ "$shape" != beside ]; then
+    refuse_plain "$1" "${2:-}" "hook_deny_json in lib/hook-notice.sh beside this hook printed no refusal, so this one is written without the characters that need escaping"
+    return 0
+  fi
+  if ! declare -F hook_decision_verdict >/dev/null; then
+    refuse_plain "$1" "${2:-}" "lib/hook-notice.sh beside this hook has no hook_decision_verdict, which checks what stands beside a refusal, so this one is written without the characters that need escaping"
+    return 0
+  fi
+  if said="$(hook_decision_verdict "$built" deny 2>&1)" && [ -z "$said" ]; then
+    printf '%s\n' "$built"
+    return 0
+  fi
+  refuse_plain "$1" "${2:-}" "hook_decision_verdict in lib/hook-notice.sh beside this hook did not take what hook_deny_json printed as a refusal with at most a notice beside it, so this one is written without the characters that need escaping"
+}
+
+# refuse_plain <reason> <notice> <why>: a refusal built with no library, keeping only characters
+# that need no escaping, so the object is valid whatever the two texts held. <why> says, at the
+# end, why it is written this way; it is this hook's own text and holds no such character.
+# The object has one field, the decision. The notice is said inside the reason, after it, and
+# never as a systemMessage beside the decision: that field is built by the library alone
+# (claude-config#1906; the scan in test-hook-notice.sh failed on one built here), and a refusal
+# is read by the session whether or not anything is shown beside it.
+refuse_plain() {
+  local r="${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}" n="${2:-}" why="$3"
+  n="${n//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
+  printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "%s%s (%s)"}}\n' "$r" "${n:+ $n}" "$why"
+}
 
 # The screen: a payload holding none of these words, in any case, names no database call.
 DB_SCREEN_WORDS="sql quer statement migration notebook supabase mariadb pgcli mycli litecli duckdb clickhouse cockroach mongo redis-cli pg_restore dropdb createdb dropuser createuser"
@@ -194,6 +314,42 @@ if ps_reader_missing python3; then
   [ "$db_call$commit_call" = 01 ] && hook_ask_json "db-write-ask.sh asks before this commit because python3 is not on PATH, so whether it adds a project to a test project list could not be told. Install python3 (claude-config#3023)"
   exit 0
 fi
+
+# refusal_shape <text>: step 1 of the rule above refuse_json. It prints "alone" for exactly one
+# object holding only a PreToolUse deny, "beside" for one with exactly one other key holding a
+# text, and nothing for everything else. Written here, below the question about python3 just
+# above, so that no line of this hook reaches for python3 before the hook has asked for it
+# (test-gate-payload-reader.sh). refuse_json, its one caller, runs only after the classifier.
+refusal_shape() {
+  [ -n "$1" ] || return 1
+  printf '%s' "$1" | python3 -I -c '
+import json, sys
+sys.stdout.reconfigure(errors="replace")
+def once(pairs):
+    d = dict(pairs)
+    if len(d) != len(pairs):
+        raise ValueError("a key is written twice")
+    return d
+raw = sys.stdin.buffer.read()
+if not (raw.startswith(b"{") and raw.endswith(b"}")):
+    sys.exit(1)
+try:
+    d = json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=once)
+except Exception:
+    sys.exit(1)
+h = d.get("hookSpecificOutput")
+if not (isinstance(h, dict) and h.get("hookEventName") == "PreToolUse" and h.get("permissionDecision") == "deny"
+        and set(h) <= {"hookEventName", "permissionDecision", "permissionDecisionReason"}
+        and all(isinstance(v, str) for v in h.values())):
+    sys.exit(1)
+others = [v for k, v in d.items() if k != "hookSpecificOutput"]
+if not others:
+    print("alone")
+elif len(others) == 1 and isinstance(others[0], str):
+    print("beside")
+else:
+    sys.exit(1)' 2>/dev/null
+}
 
 # -S: the hook uses the standard library only, and the site module was 5.2 ms of every start
 # (the personal MacBook, 2026-11-15, claude-config#3023).
@@ -304,6 +460,16 @@ def ask(why, issue="2521", what=DATABASE_CALL):
     for a command that holds both kinds."""
     emit("db-write-ask.sh asks before this " + what + ": " + why + " (claude-config#" + issue + ")", sf_notice())
 
+def refuse(why, how, issue):
+    """Refuse the command as one this hook could not check (claude-config#3472): the shared reader
+    named a line of it that it cannot vouch for, so nobody can say what the command runs, and an
+    answer to a question about the part that was read would let the rest run with it. The refusal
+    says which line, by the mark the reader named it with, and how to write the command so that it
+    can be read; the notice beside it is the one a question carries."""
+    leave("deny\x1f" + plain("db-write-ask.sh refuses this command, which it could not check: " + why + ". "
+                             + how + ", then send the command again (claude-config#" + issue + ")")
+          + "\x1f" + plain(sf_notice(), *UNKEPT))
+
 try:
     d = json.loads(raw)
 except Exception:
@@ -312,8 +478,9 @@ tool = d.get("tool_name") if isinstance(d, dict) else None
 
 # Which other calls reach a database, and which statements they carry (claude-config#2536). A Bash
 # call the screen found no database word in (the second argument) is here only as a commit, and a
-# commit check needs this library just to take a redirection out of a command, so it is loaded
-# then and not before: 7 ms of every commit (the personal MacBook, 2026-11-15, claude-config#3023).
+# commit check needs this library to take a redirection out of a command and, since #3472, to read
+# the command a second time, so it is loaded in the commit check and not before: a call that is
+# neither still pays nothing for it (7 ms a load, the personal MacBook, 2026-11-15, claude-config#3023).
 COMMIT_ONLY = tool == "Bash" and sys.argv[2:3] == ["0"]
 calls, calls_why = None, None
 def load_calls():
@@ -398,25 +565,39 @@ if tool == "Bash":
         decided_by = "2989, claude-config#3023"
         try:
             change = shell_change()
-            if change is None and "#" in bcmd:
-                # The reader left out the rest of a line whose # the shell reads inside a word, so a
-                # commit there was never seen (claude-config#3472). A command holding a # is read
-                # again as the reader gives it to a caller that asks, and one whose # cannot be told
-                # from a comment is asked about. The library that asks is loaded only here, as for a
-                # redirection above, so a commit holding no # pays nothing for it.
-                load_calls()
-                if calls is None:
-                    change = calls_why + ", so the command, which holds a #, could not be read as the shell runs it" + untold
-                else:
-                    bcwd = d.get("cwd")
-                    change, unsure = calls.second_reading(bcmd, bsw, bcwd if isinstance(bcwd, str) and bcwd.startswith("/") else "",
-                                                          None, shell_change)
-                    # Read twice, what could not be saved is said once.
-                    UNKEPT[:] = list(dict.fromkeys(UNKEPT))
-                    if unsure is not None:
-                        change = calls.unsure_why(unsure, untold_what)
-                if change is not None:
-                    decided_by += ", claude-config#3472"
+            # The reader left out the rest of a line whose # the shell reads inside a word, so a
+            # commit there was never seen (claude-config#3472). The command is read again as the
+            # reader gives it to a caller that asks, and one holding a line the reader names is
+            # refused as a command this hook could not check, in the words for the mark it was
+            # named with: a # it cannot tell from a comment, or a heredoc it cannot find the end
+            # of. That second reading was made only of a command holding a #, and a heredoc holds
+            # none, so a commit the shell runs out of one was never seen either. It is made of every
+            # command now, one whose commit is in plain sight among them: an answer to the question
+            # about that commit would let whatever the named line hides run with it.
+            load_calls()
+            held = change
+            if calls is None:
+                if held is None:
+                    change = calls_why + ", so the command could not be read as the shell runs it" + untold
+            else:
+                bcwd = d.get("cwd")
+                try:
+                    again, unsure = calls.second_reading(bcmd, bsw, bcwd if isinstance(bcwd, str) and bcwd.startswith("/") else "",
+                                                         held, shell_change if held is None else (lambda: held))
+                except Exception:
+                    # The question about a change already found is still put, in its own words.
+                    if held is None:
+                        raise
+                    again, unsure = held, None
+                # Read twice, what could not be saved is said once.
+                UNKEPT[:] = list(dict.fromkeys(UNKEPT))
+                how = None if unsure is None else calls.unsure_fix(unsure)
+                if how is not None:
+                    refuse(calls.unsure_why(unsure, untold_what), how, decided_by + ", claude-config#3472")
+                if held is None:
+                    change = again if unsure is None else calls.unsure_why(unsure, untold_what)
+            if held is None and change is not None:
+                decided_by += ", claude-config#3472"
         except Exception as e:
             change = (calls_why or "the command could not be read (" + type(e).__name__ + ")") + untold
         if change is not None:
@@ -486,6 +667,13 @@ if tool == "Bash":
             + "), so the call could not be classified as read only", "2536")
     if not found:
         sys.exit()
+    # A line the shared reader named, a # it cannot tell from a comment or a heredoc it cannot find
+    # the end of, is refused as a command this hook could not check, in the words for that mark
+    # (claude-config#3472). It was asked about, and only in a command holding a #.
+    for f in found:
+        how = calls.unsure_fix(f)
+        if how is not None:
+            refuse(f[0], how, "2536, claude-config#3472")
     # A `supabase db push`, or a `supabase db query` write from a -f file, that is the whole of its
     # command is let through when the Apply Dan answered in the /db-apply picker in this session
     # covers it, and asked about, saying why, when none does (claude-config#2763). A finding is
@@ -588,6 +776,12 @@ if [ "$rc" -eq 0 ]; then
     "ask$US"*)
       rest="${out#ask$US}"
       hook_ask_json "${rest%%"$US"*}" "${rest#*"$US"}"
+      exit 0 ;;
+    "deny$US"*)
+      # A command the shared reader named a line of, refused as one that could not be checked
+      # (claude-config#3472), with the notice a question would carry beside it.
+      rest="${out#deny$US}"
+      refuse_json "${rest%%"$US"*}" "${rest#*"$US"}"
       exit 0 ;;
     "note$US"*)
       hook_notice_json "${out#note$US}"

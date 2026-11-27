@@ -274,6 +274,20 @@ and settles its own surfaces in rounds of its own before it is built.
 | A judgment that cannot be had | Stop, as specced (picker) |
 | The note cannot be delivered (2026-10-04, picker) | Tried once more; if that fails too, the card gets a dim line under the safe way, "The other session could not be told: <reason>.", which Claude also reads. The block stands either way. |
 
+A read left unanswered is asked once more (#3673, built 2026-11-26). Claude Code cuts a call to
+another mod's noun off at 10 seconds (standing rule 4), in the words "did not answer within
+10000ms". In the personal MacBook's session records, 2026-10-26 to 2026-11-26, that was all 12
+calls this guard refused as not checked (11 the session list, 1 mod-kit's git reader), none a
+fault in its reading of the call: each came while other agents kept the Mac busy, and each of the
+11 sent again unchanged went through. So the session list and mod-kit's five reads (commands, git,
+pipeline, writes and its walk for the checkout around a repository), which change nothing however
+often they are asked, are each asked a second time when the first ask got no answer, and the call
+is judged on the second answer by the same rules. Nothing is let through on a failure: a second silence refuses the call with the words "and
+again when asked a second time", which a later count can tell from a refusal after one ask, and a
+read failing in any other words refuses at once, as does the registry's own refusal inside its 8
+seconds, seen 0 times in those records. Not known: how often the second ask answers, which leaves
+no trace in a session record.
+
 A session silent for five minutes counts as closed; its latest request is read from its transcript,
 never copied into the registry. The transcript is found where it is read (2026-10-04, picker): in
 Claude Code's folder for the session's starting directory, else by its session id, and only if that
@@ -2443,6 +2457,67 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   and stop none from firing. None counts inside a quotation, after I or we in its sentence (a report
   of an edit Claude made itself, "I saved it with Cmd+S"), or after when, if, before, once and the
   like ("when you press Cmd+S", a key described rather than handed over).
+- **A slash command to type is answered only by a step that names it** (#3652). On 2026-11-25 a
+  session told Dan his next move was to start `/plan-council`, the brief in a code block near the
+  end of a long reply, while the card it pinned that turn held two other steps. He did those, the
+  card closed, and the command was forgotten. Two things let it through: no phrase knew "start
+  `/plan-council`", and any unfinished step on the card answered the prose check whatever that step
+  was. So `hooks/typed.ts` recognises a command handed over to type (an imperative to type, run,
+  start, paste, invoke, launch or kick off it, leading its sentence, its line, the words after a
+  label's colon or a clause after "so", with "just", "when you're ready" or "after those two"
+  before it; "to do X, type"; "until you run", "you have to type", "you should now run", "needs
+  you to type", "remember to type"; "your next move is" and "your next move:"; "is yours:" then a
+  marked command; "open a new session and run"; a fenced block whose first line is the command),
+  and the turn's end is held unless an unfinished step on the card shown names the command. The
+  prose check keeps its own rule, any unfinished step, since arbitrary prose cannot be matched to
+  a step. One step gets one ask: where the only phrase the prose check finds is in the words that
+  hand the command over, or in the sentence right after them asking to be told it is done ("Tell
+  me when it is done"), the command's ask is the only one given, and a phrase anywhere else in
+  the turn keeps its own. Not counted: a command in an offer or a condition (if, could, want me,
+  later, a question), judged on the command's own clause, so an aside in brackets and what follows
+  "then" do not count against it; a standing rule ("on anything other people will read",
+  "always"); one Claude runs or ran (I, we, will before it in its sentence, except after "so",
+  after a label that speaks to Dan, and where "you" names him); "you can type"; one quoted on its
+  line or in a block quote; file text inside a code block; a list the line above it calls the
+  session's own plan or examples; a command called an example or named as a skill; a sentence
+  that speaks of a web address (endpoint, route, URL, redirect, domain); a block introduced as
+  already typed; and a path. "use" and "enter" are not among the verbs, after "your next move is
+  to" ("Your next step is to use `/tmp`") as anywhere else; "begin" is read there: the independent
+  review of pull request 3677 found them holding a skill ("use the `/db-apply` skill"), a folder and
+  a web address, and no turn held in the count of 2026-11-27 below depended on them. A one word route with nothing said of it
+  ("Start `/login`.") cannot be told from a command and is still held, once, and the ask lets the
+  session answer in one line. The review's two lists, seventeen hand overs that passed and eleven
+  replies held that handed nothing over, are cases in `tests/typed.test.ts`, held together so a
+  fix for one cannot bring the other back. Measured on 2026-11-25 over this Mac's 122 interactive
+  sessions of the 30 days before (2,914 turns; the 7,221 headless and SDK sessions are never held):
+  43 turns handed Dan a command, 20 had it in a card call already, and 23 would be held. All 23
+  hand him a command only he can type (13 `/reload-plugins`, 5 `/compact`, 3 `/goal`, 1
+  `/plan-lite`, 1 `/winddown`); 3 say it as why something is stale ("until you run") and 2 as one of
+  two ways, and none is a mention, an explanation or Claude's own run. Of the 193 turns naming a
+  known command at all, 30 named it near a verb and were not counted. Read, all but one were an
+  offer ("you can also type"), a description ("it now tells you to run"), Claude's own run or a
+  later step ("once it installs I'll ask you to run"); the one missed hand over put the command
+  after a colon with no verb ("To run when convenient: `/reload-plugins`").
+  Counted again on 2026-11-27, after the review's fixes, over the personal MacBook's 127
+  interactive sessions of the 30 days before (3,015 turns, each counted once though a resumed
+  session's file repeats them; 7,483 headless and SDK sessions passed over): 44 turns handed Dan
+  a command and 37 would be held, 34 with no card shown and 3 beside a card of other unfinished
+  steps, which is the case of the issue (27 `/reload-plugins`, 6 `/compact`, 2 `/goal`, 1
+  `/plan-lite`, 1 `/winddown`). The 37 were read in a window around each command's first mention,
+  which need not be the words that held the turn, and judged by the builder: 30 hand Dan a command
+  only he can type now, and 7 are open to question (5 for the morning or for when he is back, 2
+  offered beside another way). The prose check as it stands holds 2 of the 37, so 35 are turns
+  sent back that were not before, a little over one a day. The recogniser as first built holds
+  the same 37 turns, so on this Mac the review's fixes moved no turn between held and not held; a
+  wording said in a turn held for another reason would not show. The count tool was then fixed to
+  read a record's text blocks joined, as the mod does, and to mark the words that held each turn,
+  and was run again the same day after the second review's fixes (3,025 turns in 128 interactive
+  sessions, counts only, no window kept): the same 37 held, the same names, none moved against the
+  recogniser as first built. The 37 is higher than the 23
+  of the first count because that count took a command as on the card whenever the session's
+  last steps call named it, finished or not; this one follows each card through its steps calls
+  and verdicts and asks for an unfinished step. By the first count's rule the same 30 days give
+  25.
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On
@@ -2909,8 +2984,9 @@ mod-kit's reader gives such a word as the one name it spells and marks it `unexp
 `handedToUnknown` dropped the mark, so the guard read the parenthesis and its bar as a group and
 the `$(` as a command's output, and held the word as a name that may be any screen file. The mark
 is now kept, and `patternMayBeLook(word, asWritten)` reads such a word as the characters it spells,
-its groups as each name they can spell, as any other word is. Only a word inside a script's own
-text is read so: the same word typed whole on a command line is judged as before, and a word that
+its groups as each name they can spell, as any other word is. That change read only a word inside
+a script's own text so (the same word typed whole on a command line is read by the mark since
+#3620, below), and a word that
 spells a screen file, one handed over beside it, or a suite that writes a stylesheet, is still
 held. This makes the guard hold less. Counted the same day over the personal MacBook's records
 (one run, 2026-11-25: 70,279 shell calls from 2026-10-24 to 2026-11-25, 63,186 distinct; 9,052
@@ -2924,6 +3000,36 @@ guard reads the same with the change and passed before too. No call passed befor
 now. Still held: a suite whose helper is handed a fixture file's name and writes it under the
 suite's own work folder (test-lessons-advisory.sh, test-pr-review.sh), 4 calls, which needs the
 shared rule for a temporary folder to vouch for that folder, and it does not on the real suites.
+
+**The same word typed whole on a command line (#3620), built 2026-11-26 for the design round
+guard.** #3602 left one case held on purpose: the same marked word typed whole, as in
+`mystery "x \$(a | b) y"`, which the guard still read as a group and a command's output. The
+target a command line gives a run already carried the reader's mark; `judged` now reads it there
+too, whichever run is handed the word (a program the reader does not know, a script file, a tool).
+Two things are stricter typed whole than in a script's text. A word that names a look changing
+file anywhere in its text (`mentionedLookFiles`) is judged as before and so held: a program that
+runs what it is handed as a command (a remote shell, a helper that evaluates its argument) would
+write that file, and `mystery "cp x app/page.css; echo y/\$(a|b)"` was held only by the old
+reading. And only the reader's own `true` is the mark, here and in `handedToUnknown`: a word with
+no mark, or with any other value in its place, is judged as one the shell may fill in. Still held,
+each with a test: a word whose last part spells a screen file, a screen file beside the word, and
+a script file or tool handed a substitution that really runs. Not changed, and passed before as
+now: a program the reader does not know handed a substitution that really runs, which the reader
+cannot place. This makes the guard hold less. What it newly passes is a text that names no screen
+file; the same text with no bar inside its parenthesis (`mystery "x \$(a) y"`) passed before.
+Counted on the personal MacBook (one run of each stage, 2026-11-26: 8,381 record files, 76,866
+shell calls from 2026-10-26 to 2026-11-26, 68,898 distinct by folder and command), every rule
+asked of the guard's own modules. 96 distinct calls hand a run a marked word, 33 of them one
+holding a `$(` or a backtick, and 3 (3 calls, all agents', 2026-11-14 and 2026-11-25) hold a word
+the change reads differently: each hands a script file a finding or a command as text, none a
+program the reader does not know and none a tool. No word read as no screen file before is held
+now, and no recorded word is kept held only by the rule for a name anywhere in the text. The 33
+were then judged whole by the guard at the base and with the change, in the test file's stand-in
+world: none changes verdict (30 pass both ways, the 3 with a moved word among them; 3 are held
+both ways as could not check). Twelve planted controls went through the same judging and read as
+required: three that must move (held, then passed), four that change or sit beside a screen file
+(held both ways), a script file handed a live substitution (held both ways), and four that pass
+both ways. Not established: the work MacBook's records, and any call older than 2026-10-26.
 
 **The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
 to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was
@@ -3426,10 +3532,13 @@ and the band question is removed rather than kept beside it (L29). Three defects
   line once its markdown is drawn, in bold, in a list or in a quote, is refused in the question
   and in the entry (`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits
   of the lessons file were ever approved For good, both adding a whole lesson entry, which is the
-  route now closed. Left as they were and filed as #3343: a write that touches no entry (a section
+  route now closed. Left as they were by this change: a write that touches no entry (a section
   heading, an entry taken out whole, text above the first section) and a checkout's
-  `payload/LESSONS.md`, which the lesson picker does not cover. A shell command that writes the
-  lessons file was filed there with them and has since been built, below.
+  `payload/LESSONS.md`, which the lesson picker does not cover. Both went to #3343 with a shell
+  command that writes the lessons file. That command was built first, below, and #3343 closed on
+  2026-11-27 with a guard on the merge (pull request 3580): a pull request that adds, changes,
+  removes or moves an entry in a checkout's lessons file is held until Dan has answered for it.
+  A section heading and text above the first section are not asked about there either.
   Not built, and Dan's to decide (#3320's open questions): deriving the SHORT line from the rule
   by a fixed rule, so that nothing is free to differ; and reading the 737 SHORT lines already in
   the file against their rules once, since none was ever shown.

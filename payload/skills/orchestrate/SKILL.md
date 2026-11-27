@@ -13,6 +13,17 @@ Number every item and say it back in one line, in Dan's words. Settle what you c
 
 Record where each item came from, so it can be answered there (see "Answering each item at its source" below): for a Slack alert, post or thread, the channel id and message ts of the message it started from; for a Slack list row, the list id and record id; for a GitHub issue, the repo and issue number. An item Dan typed into the chat has no source, and the board says so.
 
+For every item whose source is not a GitHub issue and that has a repository, look for an open issue or pull request that already covers it (claude-config#3555): someone may have filed the alert already, or another session may have its fix open. Run, with the item's text in the message's words, inside a quoted heredoc so nothing in it is run by the shell:
+
+    bash ~/.claude/skills/orchestrate/find-existing.sh <owner/repo or a folder in its checkout> <<'ITEM'
+    <the item's text>
+    ITEM
+
+- Exit 0, nothing printed: no open issue or pull request shares the item's wording. It matches on words, so this is not proof that nothing covers it.
+- Exit 0, `MAY ALREADY BE COVERED`: read each one it names (at most three, issues and pull requests both) and decide; the script never rules an item a duplicate. When an issue covers it, its number goes on the board beside the Slack source, a `build` item is claimed on that issue as in "Claiming an issue before its builder starts", and the reply at the source links the issue. When an open pull request covers it, the item is already in hand: its row shows `covered by #<n>` and no builder is dispatched for it.
+- A `READ ONLY THE NEWEST` line: a list filled the read limit, and older items were not compared. Say so on the board.
+- Exit 2, `COULD NOT LOOK`: show the reason it prints on the board. Never read it as nothing covering the item.
+
 ## 2. Dispatch board
 
 Build the board, one row per item:
@@ -37,11 +48,19 @@ On 2026-11-19 two sessions, one on each Mac, built the same fix, because a branc
 
     bash ~/.claude/skills/orchestrate/claim-issue.sh claim <owner/repo> <issue number> <branch>
 
-It reads the issue's claims, the open pull requests naming it and the remote branches carrying its number, and posts the claim (which Mac, the time in ET, the branch) only when none of them shows another session at work. Dispatch on exit 0 only:
+It reads the issue's claims, the open pull requests built for it and the remote branches carrying its number, and posts the claim (which Mac, the time in ET, the branch) only when none of them shows another session at work. A pull request is built for an issue when its branch or its title names the issue, or its body names it straight after a closing keyword, "Part of" or "Refs". One that only mentions the number is printed as a `mentioned, not held` line and holds nothing (claude-config#3788). Dispatch on exit 0 only:
 
-- Exit 0, `CLAIMED` or `ALREADY CLAIMED`: dispatch the builder.
+- Exit 0, `CLAIMED` or `ALREADY CLAIMED`: dispatch the builder. A `mentioned, not held` line under it names a pull request to glance at, never a reason to hold the item back.
 - Exit 1, `HELD` or `CLOSED`: the item is not started. Its board row shows `held by <who>`, taken from the lines the script prints, and Dan is told in one line.
 - Exit 2, `COULD NOT CHECK`: the item is not started, and nothing was claimed unless the message says a claim may have been posted, when it names the release command to run straight away. Show the reason it prints on the board and run it again later; never read a failed check as free.
+
+A claim names the session that made it (claude-config#3804), because two sessions on one Mac write the same branch name from an issue's title. So `ALREADY CLAIMED` is this session's own claim and nobody else's, and a claim by another session on the same Mac is `HELD`, like one from the other Mac. The session is the one Claude Code names in `CLAUDE_CODE_SESSION_ID`, which every command this session and its agents run carries: it is the same after a compaction, and a new one after a `/clear`. After a restart of the session (`claude --resume`) the transcript goes on under the same id, and that is what was measured: the variable itself was not read in a restarted session. A restarted session that is told `HELD` by a claim it posted has been given a new id, and is then a session that is not the claimant (below); `takeover` does not help it, since the claim names the earlier id. The claim carries a short name made from that id, never the id. A script that cannot read its session stops with exit 2. A pull request or a remote branch under the very branch name being claimed is `HELD` as well, unless this session's own claim on that name, live, stale or released, accounts for it: a name already on GitHub that this session never claimed is not a name to start a builder on. So a session that is not the claimant (another session, this conversation after a `/clear`, a fork, or a fresh session started from `handoff.md`) is held by the claim until it is released or 24 hours old, and by the claimant's pushed branch or open pull request for as long as it is up: until the pull request merges or the branch is deleted, whatever the claim's age. Where the claim names its session, no command of this script lets it through.
+
+A claim with no session recorded was posted before claims named their session and is `HELD` for every session. `release` never ends a claim with no session recorded. Under one from this Mac, where this session has no claim of its own on that branch, it posts nothing, answers `NOT RELEASED`, exit 1, and names the take over command. Where it has one, it releases that claim alone, answers `RELEASED`, exit 0, and says the claim with no session recorded still stands. A claim from the other Mac changes nothing in what `release` answers, since it is never this session's to take over. Only the session that knows such a claim is its own takes it over, on purpose, and then claims again:
+
+    bash ~/.claude/skills/orchestrate/claim-issue.sh takeover <owner/repo> <issue number> <branch> "<reason>"
+
+`takeover` ends a claim from this Mac with no session recorded. It never ends a claim that names another session, and never the other Mac's; this session's own claim on that branch, if it has one, ends with it, because the comment names this session. Never run it to clear a `HELD` or a `NOT RELEASED` for a claim this session does not know to be its own.
 
 A `check` or `investigate` item changes nothing and needs no claim. `claim-issue.sh check` does the same reads and posts nothing, for a look before the board is shown.
 
@@ -49,7 +68,7 @@ A claimed item that ends any way other than a merged pull request that closes it
 
     bash ~/.claude/skills/orchestrate/claim-issue.sh release <owner/repo> <issue number> <branch> "<reason>"
 
-A claim with no release stops counting after 24 hours; an open pull request or remote branch naming the issue blocks whatever the claim's age.
+A claim with no release stops counting after 24 hours; an open pull request built for the issue, or a remote branch naming it, blocks whatever the claim's age.
 
 ### Which model a builder runs on
 
@@ -86,7 +105,7 @@ Every brief has exactly these parts, in this order, and nothing else:
 6. What done means for this item, and what must come back to Dan instead of being done. Wording does not come back to him by default, never "any new sentence a person reads" (claude-config#2570): a Slack alert's wording follows the `slack-alerts` skill and passes its checker, and a repo wide rewrite of alerts merges when its checks and the lessons review pass, with nothing brought back to him (Dan, 2026-11-17: "it should literally just go through in every repo (separate issues for each repo) and update all alerts without me"). For a `build` item whose issue carries a `Must always be true` list, done includes what keeps each of its rules true, built and seen to fail, and a pull request body that passes the built check, both as `~/.claude/skills/milestone/MUST-ALWAYS-BE-TRUE.md` says. When the issue has no such list, say so in the brief and have the builder write one into `pr-body.md` before it builds.
 7. For a `build` item only: the `Claude-Session:` line for commits and the session link line for the PR body, copied from this session's attribution note.
 
-The rules every agent shares live in `agent-rules.md`, so a brief never restates them. Send a whole wave in one message, one `Agent` call per agent, all in the background, each carrying the `model` its board row shows.
+The rules every agent shares live in `agent-rules.md`, so a brief names only what is particular to its item (the load limit, the suites to run, the files off limits) and never restates a shared rule (claude-config#3542). Send a whole wave in one message, one `Agent` call per agent, all in the background, each carrying the `model` its board row shows.
 
 ## 4. While agents run
 
@@ -122,7 +141,7 @@ When nothing is running or queued:
 - A final table: item, outcome in one sentence, pull request and live status, and anything that still needs Dan.
 - Each draft reply saved, with its link, so Dan knows where to find and send it; and each list row whose Status moved, with the value it now holds.
 - One git status line per repo.
-- Every claim this session posted for an item that ended without closing its issue, released with `claim-issue.sh release` (see "Claiming an issue before its builder starts").
+- Every claim this session posted for an item that ended without closing its issue, released with `claim-issue.sh release` (see "Claiming an issue before its builder starts"). A release that answers `NOT RELEASED` found a claim that records no session, which may be another session's: leave it standing and say so in the final table. `takeover` is never part of finishing.
 - Each decision left for Dan as its own picker, one at a time.
 - Stop anything this session started in the background, and say so.
 - Then `/next-issue`.

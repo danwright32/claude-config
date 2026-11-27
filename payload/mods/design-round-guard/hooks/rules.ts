@@ -2299,14 +2299,16 @@ export type HandedRun = { script: string; what: string; unknown?: true; why?: st
  * `unexpanded` is the reader's own mark on the word, kept since #3602: every `$` and backtick in
  * it is one the shell hands on as written, so the caller reads it as the name it spells
  * (patternMayBeLook's `asWritten`). It was dropped here before, so a `$(` in such a word was read
- * as a command substitution.
+ * as a command substitution. Only the reader's own `true` is the mark (#3620): anything else in its
+ * place is no mark, so a reading that cannot say the word is handed on as written leaves it judged
+ * as one the shell may fill in.
  */
 export const handedToUnknown = (runs: readonly HandedRun[] | undefined): { word: string; path: string; program: string; why: string; remedy: string; unexpanded?: true }[] =>
   (runs ?? [])
     .filter(r => r.unknown)
     .flatMap(r =>
       r.args.flatMap(a =>
-        a.path === undefined ? [] : [{ word: a.word, path: a.path, program: r.script, why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '', ...(a.unexpanded ? { unexpanded: true as const } : {}) }],
+        a.path === undefined ? [] : [{ word: a.word, path: a.path, program: r.script, why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '', ...(a.unexpanded === true ? { unexpanded: true as const } : {}) }],
       ),
     )
 

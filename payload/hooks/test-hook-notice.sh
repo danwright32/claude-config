@@ -15,6 +15,7 @@
 #     SessionStart: PreToolUse, PostToolUse, Stop and the rest) prints words plain to stdout and then
 #     exits 0, outside a branch only a person running it by hand takes (#1924);
 #   * no shell script under the hooks builds a systemMessage anywhere but the library;
+#   * no shell script under the hooks calls one of the library's private _hn_ functions (#3793);
 #   * every registered hook using the library sources it with the fallback.
 #
 # What the two scans see, and what they do not, is written above scan.py below.
@@ -158,6 +159,36 @@ for n, what, reason, notice in ((0, "with a reason and a notice", want, "notice:
     elif set(d) - {"hookSpecificOutput", "systemMessage"}:
         print("%s: it carried more: %r" % (what, sorted(d)))')"
   [ -z "$shape" ] && ok || bad "#3058 $name: hook_allow_json did not print one valid allow carrying its reason and notice: $shape"
+  # hook_deny_json: a PreToolUse refusal carrying the tricky text as its reason and its notice, as
+  # one valid object; with no notice, or an empty one, no systemMessage; and a reason too long for
+  # Claude Code cut short of its cap, saying so, as the ask and the allow are (claude-config#3618,
+  # #3793).
+  long="$(python3 -c 'print("x" * 20000, end="")')"
+  out="$(env PATH="$arm" HN_A="$TRICKY" HN_B="notice: $TRICKY" HN_L="$long" "$BASH" -c '. "$0" && hook_deny_json "$HN_A" "$HN_B"; echo "@@"; hook_deny_json "$HN_A"; echo "@@"; hook_deny_json "$HN_A" ""; echo "@@"; hook_deny_json "$HN_L"' "$LIB" 2>/dev/null)"
+  shape="$(printf '%s' "$out" | HN_WANT="$TRICKY" python3 -c '
+import json, os, sys
+want = os.environ["HN_WANT"]
+parts = sys.stdin.read().split("@@\n")
+if len(parts) != 4:
+    print("printed %d parts, not 4: %r" % (len(parts), parts[:2])); sys.exit()
+for n, what, notice in ((0, "with a notice", "notice: " + want), (1, "with no notice", None), (2, "with an empty notice", None), (3, "with a 20,000 character reason", None)):
+    try:
+        d = json.loads(parts[n])
+    except Exception as e:
+        print("%s: not one JSON object (%s): %r" % (what, e, parts[n][:200])); continue
+    h = d.get("hookSpecificOutput") or {}
+    if n == 3:
+        r = h.get("permissionDecisionReason") or ""
+        if h.get("permissionDecision") != "deny" or not 0 < len(r) <= 10000 or "cut short" not in r:
+            print("%s: it was not one refusal whose reason is cut short of 10,000 characters and says so: %r" % (what, {k: str(v)[:80] for k, v in h.items()}))
+        continue
+    if h != {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": want}:
+        print("%s: hookSpecificOutput was %r" % (what, h))
+    elif d.get("systemMessage") != notice:
+        print("%s: the systemMessage was %r" % (what, d.get("systemMessage")))
+    elif set(d) - {"hookSpecificOutput", "systemMessage"}:
+        print("%s: it carried more: %r" % (what, sorted(d)))')"
+  [ -z "$shape" ] && ok || bad "#3618 #3793 $name: hook_deny_json did not print one valid refusal carrying its reason and notice: $shape"
 done
 
 # --- the event and context arguments, each seen to fail against a library that mishandles it -------
@@ -256,6 +287,168 @@ for bad_out in '' 'plain words' '{"systemMessage": "a"}{"systemMessage": "b"}' '
   v="$(hook_notice_verdict "$bad_out" 'DID NOT RUN')"
   [ -n "$v" ] && ok || bad "#1906 hook_notice_verdict passed [$bad_out] as a notice saying DID NOT RUN"
 done
+
+# hook_decision_verdict, which db-write-ask.sh asks before it passes on a refusal that carries a
+# notice, and which a suite can ask too (claude-config#3793, the second review of its pull
+# request). It says nothing and returns 0 only for exactly one object holding a PreToolUse decision
+# of the kind asked for (its event, its decision and at most a reason, all texts) with at most a
+# systemMessage, a text, beside it. For everything else it says why and returns 1. Claude Code lets
+# a call go ahead when a hook's object fails its validation, and continue, suppressOutput and a top
+# level decision are not texts there, so a refusal beside one of them written as a text is no
+# refusal. The function reads the text with python3. With no python3, or one that says nothing, it
+# says so and returns 1: no answer is never read as "fine".
+#
+# decision_verdict <PATH> <text> <kind> [<library>]: what the function says under that PATH, then
+# rc=<its status>. A good decision is exactly "rc=0".
+decision_verdict(){
+  env PATH="$1" HN_OUT="$2" HN_KIND="$3" "$BASH" -c '
+. "$0" || { echo "the library did not load"; exit 9; }
+declare -F hook_decision_verdict >/dev/null || { echo "the library has no hook_decision_verdict"; exit 8; }
+hook_decision_verdict "$HN_OUT" "$HN_KIND"; printf "rc=%s" "$?"' "${4:-$LIB}" 2>&1
+}
+# said_no <verdict>: the function said why and returned 1.
+said_no(){ case "$1" in ?*$'\n'rc=1) return 0 ;; *) return 1 ;; esac; }
+DV_D='{"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "r"}'
+DV_GOOD="{\"hookSpecificOutput\": $DV_D, \"systemMessage\": \"n\"}"
+# Every decision the library builds, in each of its arms, with a notice and without, is taken.
+for arm in "$PATH" "$WORK/empty"; do
+  name="built with python3"; [ "$arm" = "$WORK/empty" ] && name="built with nothing on PATH"
+  for kind in deny ask allow; do
+    for notice in "" "notice: $TRICKY"; do
+      built="$(env PATH="$arm" HN_A="$TRICKY" HN_B="$notice" "$BASH" -c '. "$0" && "hook_${1}_json" "$HN_A" "$HN_B"' "$LIB" "$kind" 2>/dev/null)"
+      v="$(decision_verdict "$PATH" "$built" "$kind")"
+      [ "$v" = "rc=0" ] && ok || bad "#3793 $name: hook_decision_verdict did not take the library's own $kind${notice:+ with a notice beside it}: ${v//$'\n'/ / }"
+    done
+  done
+  built="$(env PATH="$arm" "$BASH" -c '. "$0" && hook_deny_json ""' "$LIB" 2>/dev/null)"
+  v="$(decision_verdict "$PATH" "$built" deny)"
+  [ "$v" = "rc=0" ] && ok || bad "#3793 $name: hook_decision_verdict did not take the library's own deny with no reason: ${v//$'\n'/ / }"
+done
+# The function's own second arm: with nothing on PATH it can read nothing. A python3 that leaves
+# with 0 and says nothing, or leaves with 1, has read nothing either.
+v="$(decision_verdict "$WORK/empty" "$DV_GOOD" deny)"
+said_no "$v" && [[ "$v" == *"python3 is not on PATH"* ]] && ok || bad "#3793 with nothing on PATH, hook_decision_verdict did not say that python3 is missing and return 1 for a good refusal, so no answer could be read as fine: ${v//$'\n'/ / }"
+mkdir -p "$WORK/mutepy" "$WORK/failpy"
+printf '#!/bin/sh\nexit 0\n' > "$WORK/mutepy/python3"
+printf '#!/bin/sh\nexit 1\n' > "$WORK/failpy/python3"
+chmod +x "$WORK/mutepy/python3" "$WORK/failpy/python3"
+v="$(decision_verdict "$WORK/mutepy" "$DV_GOOD" deny)"
+said_no "$v" && ok || bad "#3793 with a python3 that leaves with 0 and says nothing, hook_decision_verdict did not say so and return 1 for a good refusal: ${v//$'\n'/ / }"
+v="$(decision_verdict "$WORK/failpy" "$DV_GOOD" deny)"
+said_no "$v" && ok || bad "#3793 with a python3 that leaves with 1, hook_decision_verdict did not say so and return 1 for a good refusal: ${v//$'\n'/ / }"
+# Every text that is not one decision of the kind asked for. One line each: <kind> TAB <what it
+# is> TAB <the text>, with @D standing for a whole PreToolUse deny.
+cat > "$WORK/not-decisions.tsv" <<'TSV'
+deny	a refusal beside a continue written as a text	{"hookSpecificOutput": @D, "continue": "false"}
+deny	a refusal beside a suppressOutput written as a text	{"hookSpecificOutput": @D, "suppressOutput": "yes"}
+deny	a refusal after a top level decision that is no decision	{"decision": "zzz", "hookSpecificOutput": @D}
+deny	a refusal after a top level decision of approve	{"decision": "approve", "hookSpecificOutput": @D}
+deny	a refusal beside a key nobody knows	{"hookSpecificOutput": @D, "other": "text"}
+deny	a refusal with a notice and one more key beside it	{"hookSpecificOutput": @D, "systemMessage": "n", "stopReason": "s"}
+deny	a refusal whose notice is a number	{"hookSpecificOutput": @D, "systemMessage": 1}
+deny	a refusal whose notice is null	{"hookSpecificOutput": @D, "systemMessage": null}
+deny	a refusal whose notice is a list	{"hookSpecificOutput": @D, "systemMessage": ["n"]}
+deny	a refusal whose notice is written twice	{"hookSpecificOutput": @D, "systemMessage": "a", "systemMessage": "b"}
+deny	an ask and a refusal under the one key	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask"}, "hookSpecificOutput": @D}
+deny	an ask	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "r"}}
+ask	a refusal where an ask was wanted	{"hookSpecificOutput": @D}
+allow	a refusal where an allow was wanted	{"hookSpecificOutput": @D}
+deny	a refusal for another event	{"hookSpecificOutput": {"hookEventName": "PostToolUse", "permissionDecision": "deny"}}
+deny	a refusal with no event	{"hookSpecificOutput": {"permissionDecision": "deny"}}
+deny	a refusal holding an updatedInput	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "updatedInput": "x"}}
+deny	a refusal whose reason is a number	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": 5}}
+deny	a refusal whose decision is written Deny	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "Deny"}}
+deny	a notice with no decision	{"systemMessage": "n"}
+deny	two refusals on one line	{"hookSpecificOutput": @D}{"hookSpecificOutput": @D}
+deny	a refusal with words after it	{"hookSpecificOutput": @D} and more
+deny	a refusal with words before it	words {"hookSpecificOutput": @D}
+deny	a refusal after a blank	 {"hookSpecificOutput": @D}
+deny	a refusal cut short	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "cut sh
+deny	a refusal inside a list	[{"hookSpecificOutput": @D}]
+deny	plain words	plain words
+refuse	a good refusal asked about as a kind that does not exist	{"hookSpecificOutput": @D}
+TSV
+not_decisions=0
+while IFS=$'\t' read -r kind what text; do
+  [ -n "$kind" ] || continue
+  not_decisions=$((not_decisions + 1))
+  v="$(decision_verdict "$PATH" "${text//@D/$DV_D}" "$kind")"
+  said_no "$v" && ok || bad "#3793 hook_decision_verdict did not say why and return 1 for $what: ${v//$'\n'/ / }"
+done < "$WORK/not-decisions.tsv"
+[ "$not_decisions" -eq 28 ] && ok || bad "#3793 only $not_decisions texts that are no decision were read, not 28"
+for text in '' "$(printf '{"hookSpecificOutput": %s}\n{"hookSpecificOutput": %s}' "$DV_D" "$DV_D")" "$(printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "a\nb"}}')"; do
+  v="$(decision_verdict "$PATH" "$text" deny)"
+  said_no "$v" && ok || bad "#3793 hook_decision_verdict did not say why and return 1 for an empty text, two refusals on two lines or a raw line break in the reason: ${v//$'\n'/ / }"
+done
+# Bytes that are not UTF-8 in a form Python's JSON reader takes when it is handed bytes: a lone
+# surrogate written as the three bytes ED A0 80 (the third review of #3793). The function reads
+# the text as strict UTF-8 first, so it refuses one in the reason and one in the notice. The
+# library's two arms differ on such bytes. python3 replaces them as it builds, so what that arm
+# built is taken. The arm with nothing on PATH cannot tell them from text: it writes the bytes it
+# was given, less any byte the shell's locale counts as a control character, which differs by
+# platform. So that arm is held to the one thing that is true everywhere: what it built is taken
+# only when it is UTF-8, and the suite says which of the two it met here.
+DV_SUR="$(printf '\355\240\200')"
+[ "$(printf '%s' "$DV_SUR" | wc -c | tr -d ' ')" = 3 ] && ok || bad "#3793 (control) the lone surrogate this suite writes is not the three bytes ED A0 80"
+for text in "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"r $DV_SUR\"}}" "{\"hookSpecificOutput\": $DV_D, \"systemMessage\": \"n $DV_SUR\"}"; do
+  v="$(decision_verdict "$PATH" "$text" deny)"
+  said_no "$v" && ok || bad "#3793 hook_decision_verdict did not say why and return 1 for a refusal whose reason or notice holds a lone surrogate written as three bytes: ${v//$'\n'/ / }"
+done
+# The same lone surrogate written as a JSON escape is six ASCII characters, so the strict read
+# takes it, and inside python3 it is a character no encoding can write. A reason holding one is
+# still one refusal, since the function's answer for it is a fixed line. An event holding one is
+# refused in words that show it as an escape, since the function prints such a value by its repr.
+# Were it printed as it is, the answer would be a question mark in those words, never a
+# traceback: the program sets how its stdout treats what it cannot write before it prints
+# (test-python-bad-bytes.sh asks that of every program that reads JSON and prints).
+DV_ESC='\ud800'
+v="$(decision_verdict "$PATH" "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"r $DV_ESC\"}}" deny)"
+[ "$v" = "rc=0" ] && ok || bad "#3793 hook_decision_verdict did not take a refusal whose reason holds a lone surrogate written as a JSON escape: ${v//$'\n'/ / }"
+v="$(decision_verdict "$PATH" "{\"hookSpecificOutput\": {\"hookEventName\": \"$DV_ESC\", \"permissionDecision\": \"deny\"}}" deny)"
+said_no "$v" && [[ "$v" == "the event is '$DV_ESC', not PreToolUse"* ]] && ok || bad "#3793 hook_decision_verdict did not refuse, in words naming the escape, a refusal whose event is a lone surrogate written as a JSON escape: ${v//$'\n'/ / }"
+for arm in "$PATH" "$WORK/empty"; do
+  built="$(env PATH="$arm" HN_A="r $DV_SUR" HN_B="n $DV_SUR" "$BASH" -c '. "$0" && hook_deny_json "$HN_A" "$HN_B"' "$LIB" 2>/dev/null)"
+  v="$(decision_verdict "$PATH" "$built" deny)"
+  if [ "$arm" = "$PATH" ]; then
+    [ "$v" = "rc=0" ] && printf '%s' "$built" | python3 -I -c 'import sys; sys.stdin.buffer.read().decode("ascii")' 2>/dev/null && ok || bad "#3793 built with python3: a refusal whose reason and notice held a lone surrogate written as three bytes did not come out as ASCII with those bytes replaced, or hook_decision_verdict did not take it: ${v//$'\n'/ / }"
+  elif printf '%s' "$built" | python3 -I -c 'import sys; sys.stdin.buffer.read().decode("utf-8")' 2>/dev/null; then
+    echo "  built with nothing on PATH from a lone surrogate written as three bytes: the refusal came out as UTF-8"
+    [ "$v" = "rc=0" ] && ok || bad "#3793 built with nothing on PATH: the refusal came out as UTF-8 and hook_decision_verdict did not take it: ${v//$'\n'/ / }"
+  else
+    echo "  built with nothing on PATH from a lone surrogate written as three bytes: the refusal is not UTF-8"
+    said_no "$v" && ok || bad "#3793 built with nothing on PATH: hook_decision_verdict took a refusal that is not UTF-8: ${v//$'\n'/ / }"
+  fi
+done
+# Each rule seen to fail (L1): a copy of the library with that one rule taken out must take a text
+# the real one refuses. <name> TAB <text in the library> TAB <what it becomes> TAB <the PATH: real
+# or mute> TAB <the text it then takes>.
+cat > "$WORK/verdict-mutants.tsv" <<'TSV'
+any one key beside the decision is taken	if other not in ([], ["systemMessage"]):	if len(other) > 1:	real	{"hookSpecificOutput": @D, "continue": "false"}
+a notice that is not a text is taken	if other and not isinstance(d[other[0]], str):	if False:	real	{"hookSpecificOutput": @D, "systemMessage": 1}
+the kind of decision is not compared	if h.get("permissionDecision") != want:	if False:	real	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask"}}
+more inside the decision is taken	if more:	if False:	real	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "updatedInput": "x"}}
+a key written twice is taken	if len(d) != len(pairs):	if False:	real	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask"}, "hookSpecificOutput": @D}
+silence from python3 is read as fine	if [ "$said" = "one $2 decision" ]; then	if [ -z "$said" ] || [ "$said" = "one $2 decision" ]; then	mute	{"hookSpecificOutput": @D, "continue": "false"}
+TSV
+verdict_mutants=0
+while IFS=$'\t' read -r mname mold mnew mpath mtext; do
+  [ -n "$mname" ] || continue
+  verdict_mutants=$((verdict_mutants + 1))
+  if ! HN_OLD="$mold" HN_NEW="$mnew" python3 -c '
+import os, sys
+s = open(sys.argv[1]).read(); old = os.environ["HN_OLD"]
+if s.count(old) != 1: sys.exit(1)
+open(sys.argv[2], "w").write(s.replace(old, os.environ["HN_NEW"]))' "$LIB" "$WORK/verdict-mutant.sh"; then
+    bad "#3793 mutant \"$mname\": its text is not in lib/hook-notice.sh exactly once, so the check it proves is unproven. Update verdict-mutants.tsv in this suite to the library's new wording."
+    continue
+  fi
+  arm="$PATH"; [ "$mpath" = mute ] && arm="$WORK/mutepy"
+  v="$(decision_verdict "$arm" "${mtext//@D/$DV_D}" deny)"
+  said_no "$v" && ok || bad "#3793 control for the mutant \"$mname\": the real library did not refuse its text: ${v//$'\n'/ / }"
+  v="$(decision_verdict "$arm" "${mtext//@D/$DV_D}" deny "$WORK/verdict-mutant.sh")"
+  [ "$v" = "rc=0" ] && ok || bad "#3793 canary: a library in which $mname still refused the text that rule alone refuses, so nothing shows the check on it can fail: ${v//$'\n'/ / }"
+done < "$WORK/verdict-mutants.tsv"
+[ "$verdict_mutants" -eq 6 ] && ok || bad "#3793 only $verdict_mutants mutants of hook_decision_verdict were read, not 6"
 
 # --- the prompt hooks' notices reach the person ------------------------------------------------------
 # A UserPromptSubmit or SessionStart hook's plain stdout becomes context for Claude ("Neither channel
@@ -761,6 +954,57 @@ found="$(scan_handbuilt "${shell_files[@]}")"
 if [ -z "$found" ]; then ok
 else
   bad "#1906 these scripts build a systemMessage by hand, which breaks on a newline, tab or quote in its text. Build it with hook_notice_json or hook_allow_notice from lib/hook-notice.sh:"
+  printf '%s\n' "$found" | sed "s|$DIR/|  |"
+fi
+
+# scan_private <file>...: a line outside lib/hook-notice.sh naming one of its private names: a
+# function starting _hn_, a variable starting _HN_, or HN_MAX. A private name can change with no
+# notice to a caller outside the library, and a refusal a hook then fails to build is a command that
+# runs (db-write-ask.sh called _hn_decision_json to refuse, claude-config#3793). The library's
+# public names are what a hook calls: hook_ask_json, hook_allow_json and hook_deny_json for a
+# decision.
+#
+# What it sees and does not: it is a search for the name as a whole word on every line that does not
+# start with #. So it finds a call however it is made (directly, through command or eval, inside
+# $( )), and it also flags the name in a trailing comment, a quoted string or a here document's
+# body, which fails loud on a mention that is not a call. It does not see a name put together at run
+# time. lib/shell_code_lines.py could tell code from text, but an open pull request is changing it,
+# so this scan does not lean on it yet.
+scan_private(){
+  python3 - "$@" <<'PY'
+import re, sys
+private = re.compile(r"(?<![A-Za-z0-9_])(_hn_[A-Za-z0-9_]+|_HN_[A-Za-z0-9_]+|HN_MAX)(?![A-Za-z0-9_])")
+for path in sys.argv[1:]:
+    for n, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
+        s = line.strip()
+        if s.startswith("#"):
+            continue
+        m = private.search(s)
+        if m:
+            print("%s:%d: %s: %s" % (path, n, m.group(0), s[:160]))
+PY
+}
+printf 'built="$(_hn_decision_json deny "$r" "$n")"\n' > "$WORK/private-call.sh"
+printf 'if ! declare -F _hn_string >/dev/null; then exit 0; fi\n' > "$WORK/private-declare.sh"
+printf 'echo "$_HN_PY_CUT" | python3\nn="${HN_MAX:-0}"\n' > "$WORK/private-variables.sh"
+printf '# a refusal used to be built with _hn_decision_json\nbuilt="$(hook_deny_json "$r" "$n")"\nx="$MY_hn_x $HN_MAXIMUM"\n' > "$WORK/private-clean.sh"
+[ -n "$(scan_private "$WORK/private-call.sh")" ] && ok || bad "#3793 canary: the private name scan did not find a call to _hn_decision_json"
+[ -n "$(scan_private "$WORK/private-declare.sh")" ] && ok || bad "#3793 canary: the private name scan did not find a declare -F of a private name"
+[ "$(scan_private "$WORK/private-variables.sh" | grep -c -E ': (_HN_PY_CUT|HN_MAX):')" = 2 ] && ok || bad "#3793 canary: the private name scan did not find the library's private variable _HN_PY_CUT or HN_MAX: $(scan_private "$WORK/private-variables.sh")"
+[ -z "$(scan_private "$WORK/private-clean.sh")" ] && ok || bad "#3793 control: the private name scan flagged a comment, a public name or a longer word: $(scan_private "$WORK/private-clean.sh")"
+# Its subjects: every shell script the hand built scan reads, and the scripts under bin/ that have
+# no extension (bin/gh), told by their first line.
+private_files=("${shell_files[@]}")
+for f in "$DIR"/bin/*; do
+  case "${f##*/}" in *.*) continue ;; esac
+  [ -f "$f" ] || continue
+  case "$(head -n 1 "$f")" in '#!'*sh*) private_files+=("$f") ;; esac
+done
+case " ${private_files[*]} " in *"$DIR/bin/gh "*) ok ;; *) bad "#3793 bin/gh, a shell script with no extension, is not among the files the private name scan reads" ;; esac
+found="$(scan_private "${private_files[@]}")"
+if [ -z "$found" ]; then ok
+else
+  bad "#3793 these scripts call a private function of lib/hook-notice.sh, whose name can change with no notice to them. Call its public names instead (hook_deny_json for a refusal):"
   printf '%s\n' "$found" | sed "s|$DIR/|  |"
 fi
 

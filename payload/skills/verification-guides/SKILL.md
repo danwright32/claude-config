@@ -333,8 +333,9 @@ pull request's BASE commit holds `.claude/verification/areas.json`, through
 `verification.py`. It reads areas.json and the guides from the base commit, so a pull request
 cannot change what judges it: a new file needs an owner merged first, and a guide the pull request
 edits counts only once it has merged. A merge passes when every changed file lands in exactly one
-bucket and each touched area's newest record at the head (or at an earlier commit whose later
-changes, in the pull request's own files, leave the area alone) passes every check and done when
+bucket and each touched area's newest record at the head (or at an earlier commit since which the
+pull request's own patch leaves the area alone; a file the base branch alone changed, merged into
+the branch since, does not count, claude-config#3574) passes every check and done when
 item, with its receipt on the merging machine showing serve stopped, a clean egress verdict, a
 build stamp equal to the record's commit, and a successful drive call for the area, and the record
 exactly as `record render` wrote it from that receipt (its fingerprint in `rendered.jsonl`). The
