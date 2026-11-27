@@ -1505,9 +1505,12 @@ def _file_hash(path, deadline):
     if untold is not None:
         return answer["hash"], None, untold + ", and an approval of wording nobody could judge approves nothing"
     if verdict["refused"]:
+        import shlex
+        # The path is quoted as a shell reads it, so the command can be run as written whatever
+        # folder the file is in (a space in a folder's name; the file's own name is a plain one).
         return answer["hash"], None, (
             refused_why(verdict) + " An approval of wording the merge would refuse approves nothing. Change the "
-            "wording in the file until `" + JUDGE_COMMAND.replace("<file>", path) + "` refuses nothing, then open the "
+            "wording in the file until `" + JUDGE_COMMAND.replace("<file>", shlex.quote(path)) + "` refuses nothing, then open the "
             "file for him and ask him again")
     return answer["hash"], None, None
 

@@ -409,6 +409,15 @@ Hand back - then pick a reason.'; do
   check "R2 #3846 an Approve of wording the merge refuses as $code approves nothing, in the gate's own words" "$([ -n "$WORDS" ] && [[ "$r" == "no|"*"his Approve for $F does not count"*"$code"*"$WORDS"* && "$WORDS" == *"$needle"* ]] && echo ok || echo "$r")"
   check "R2 #3846 and writes no approval to the record ($code)" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
 done
+# The command the refusal gives is one that can be run as written: a wording file under a folder
+# with a space in its name is named to it in quotes (the lessons review of this change found the
+# path pasted in bare, which a shell reads as two arguments).
+STORE_USED="$WORK/store-spaced"
+mkdir -p "$WORK/a folder"; F="$WORK/a folder/announcement.md"; T="$WORK/spaced.jsonl"
+printf '%s\n' "$SHARED_LINE" > "$F"
+new_talk "$T"; talk "$T" bash "$BBEDIT --front-window '$F'"; talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget "$(hash_file "$F")")"
+check "#3846 the refusal names a wording file under a folder with a space to the command in quotes" "$([[ "$r" == "no|"*"ANNOUNCEMENT_NO_OPENER"*"changelog-entry.js announcement-refusal '$F'\`"* ]] && echo ok || echo "$r")"
 # Still possible: the same post with the mention alone on its first line.
 STORE_USED="$WORK/store-ownline"
 F="$(shown_as ownline "@here
