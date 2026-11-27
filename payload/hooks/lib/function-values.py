@@ -23,9 +23,16 @@ it is worded as a check the gate could not make, never as a post it found (L11).
 
 Not read by it: a name several bodies set to different values, a name anything else in the text
 binds (the walk gives no value in a body for one: an assignment at the top level, a read, a
-for, a local with an option; a bare `local NAME` in a body is not counted, body_value_read), and
-a function called after a cd, whose relative path is then read against the directory the reader
-follows, as one written out is.
+for, a local, declare or typeset with an option; a bare `local NAME`, `declare NAME` or `typeset
+NAME` in a body is not counted, nor is a value that is none, as in `local NAME=""`,
+body_value_read), and a function called after a cd, whose relative path is then read against the
+directory the reader follows, as one written out is.
+
+What it reads is read with the directory unknown, as every command of a function is. So a quiet
+script that finds its own folder from BASH_SOURCE and sources a file beside it, run through a
+variable a function sets, is refused as a check the gate could not make, where main allows it:
+`run() { local t; t=sub/tool.sh; bash "$t"; }; run`, and the same with `local t=sub/tool.sh`
+(the two reviews of #3497, 2026-11-27). Each spelling this file comes to read widens that.
 
 Nor is one command read by it: a shell handed the script being read, and nothing else
 (own_again). A suite that runs itself inside a function (`sc_run(){ ... bash "${BASH_SOURCE[0]}"
@@ -91,9 +98,13 @@ def in_body(judge):
 
 # The gate's SH_UNKNOWN_DIR, which it sets here once it has loaded this file.
 UNKNOWN_DIR = None
-# A command that only declares names local to a function: `local kept`, `local a b`. One with an
-# option (`local -a kept`) or a value is not this.
-BARE_LOCAL = re.compile(r"local((?:\s+[A-Za-z_]\w*)+)")
+# A command that only declares names local to a function: `local kept`, `local a b`, and the same
+# with declare or typeset, which in a function declare a name as local does. One with an option
+# (`local -a kept`) or a value is not this.
+DECLARES = r"(?:local|declare|typeset)"
+BARE_LOCAL = re.compile(DECLARES + r"((?:\s+[A-Za-z_]\w*)+)")
+# A value that is none: `local kept=`, `local kept=""`, `kept=''`. It names no file.
+EMPTY = ("", '""', "''")
 
 
 def body_sets(judge, k):
@@ -112,12 +123,14 @@ def body_sets(judge, k):
             if not k.inside(p["start"]):
                 continue
             if "=" not in t:
-                # A bare `local NAME` in a body declares the name there and gives it no value.
-                bare = BARE_LOCAL.fullmatch(judge.sh_strip_openers(t).strip()) if "local" in t else None
+                # A bare `local NAME` in a body declares the name there and gives it no value, and
+                # so does a bare declare or typeset.
+                declares = "local" in t or "declare" in t or "typeset" in t
+                bare = BARE_LOCAL.fullmatch(judge.sh_strip_openers(t).strip()) if declares else None
                 for name in bare.group(1).split() if bare else ():
                     k.bare.setdefault(name, []).append((p["start"], p["end"]))
                 continue
-            set_here = judge.sh_assignment(re.sub(r"^local\s+", "", judge.sh_strip_openers(t).strip()))
+            set_here = judge.sh_assignment(re.sub(r"^" + DECLARES + r"\s+", "", judge.sh_strip_openers(t).strip()))
             if set_here:
                 k.sets.setdefault(set_here[0], []).append((p["start"], p["end"], set_here[1]))
     return k.sets
@@ -151,7 +164,13 @@ def body_value_read(judge, k, name, depth):
         if sets is False:
             return None
         found = sets.get(name, ())
-        for start, _, written in found:
+        # A value that is none (`local kept=""`, `local kept=`) is a declaration: it names no
+        # file, so it is no second value beside the one set on a line after it, the other ordinary
+        # way to write a function. Counted as one, `run() { local kept=""; kept=posts.sh; bash
+        # "$kept"; }; run` ran a script nothing had read (second review of #3497, 2026-11-27).
+        # Where every value written is none, the answer is the one it was.
+        named = [(a, w) for a, _, w in found if w not in EMPTY]
+        for start, written in named or [(a, w) for a, _, w in found]:
             values.add(judge.sh_word(written, UNKNOWN_DIR, lambda x, at=start: judge.sh_home(
                 x, ctx["text"], judge.sh_at(known, x, at)) or body_value(judge, x, depth + 1),
                 ctx["script"], True)[0])
@@ -165,6 +184,8 @@ def body_value_read(judge, k, name, depth):
         # set on a line after, the ordinary way to write a function, and `run() { local kept;
         # kept=posts.sh; bash "$kept"; }; run` ran a script nothing had read (review of #3497,
         # 2026-11-27). Left out of the text with the assignments, so it is not what else binds it.
+        # Every bare local, declare or typeset of the name in any body of the text is left out,
+        # wherever it stands: in another function, or after the assignment.
         if values:
             rest, upto = [], 0
             for start, end in sorted([(a, b) for a, b, _ in found] + k.bare.get(name, [])):

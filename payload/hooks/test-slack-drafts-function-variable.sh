@@ -215,6 +215,40 @@ run() {@NL@  local kept@NL@  kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
 run() {@NL@  local other kept@NL@  kept=lib/@F@.sh@NL@  bash "$kept"@NL@}@NL@run
 set_it() {@NL@  local kept@NL@  kept=@F@.py@NL@  python3 "$kept"@NL@}@NL@set_it
 SHAPES
+# The same declaration in its other ordinary spellings: `local kept=""`, `local kept=''` and
+# `local kept=`, which give the name an empty value, and `declare kept` and `typeset kept`, which
+# in a function declare it as local does. The empty value counted as a second value that differs
+# from the one set on the next line, and declare and typeset as something else that binds the
+# name, so the name got no value and the script it ran was read by nobody: allowed on main and at
+# 010c05a1b0 (the second review's probes d4b, d4, d3 and d3b, 2026-11-27). An empty value names no
+# file, so it is no second one, and a bare declare or typeset is read as a bare local is.
+while IFS= read -r body; do
+  [ -n "$body" ] || continue
+  body="${body//@NL@/$NL}"
+  for file in posts quiet; do
+    printf '%s\n' "${body//@F@/$file}" > "$FV/case.sh"
+    judge_script
+    if [ "$file" = posts ]; then
+      refused "a script that posts, run through a variable declared empty or by declare or typeset and set on the next line, is refused: $(shown "$body")"
+      says "as a check it could not make: $(shown "$body")" "REFUSED: the gate could not check whether this command posts to Slack"
+      says "naming the variable: $(shown "$body")" "runs a file through \$kept, whose value the gate cannot follow to that command"
+    else
+      allowed "the same function running a script that does not post passes: $(shown "$body")"
+    fi
+  done
+done <<'SHAPES'
+run() {@NL@  local kept=""@NL@  kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() {@NL@  local kept=''@NL@  kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() {@NL@  local kept=@NL@  kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() {@NL@  declare kept@NL@  kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() {@NL@  typeset kept@NL@  kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() { local kept=""; kept=@F@.sh; bash "$kept"; }; run
+set_it() {@NL@  typeset kept other@NL@  kept=@F@.py@NL@  python3 "$kept"@NL@}@NL@set_it
+SHAPES
+# What those spellings do not excuse: a name the body goes on to read in.
+script 'run() {' '  declare kept' '  kept=posts.sh' '  read -r kept' '  bash "$kept"' '}' 'run'
+judge_script
+allowed "a name declared with a bare declare, set, and then read in is not followed, as before"
 # What a bare local does not excuse: a name the body goes on to read in is still one the gate
 # holds no value for, and the answer is the one it was.
 script 'run() {' '  local kept' '  kept=posts.sh' '  read -r kept' '  bash "$kept"' '}' 'run'
