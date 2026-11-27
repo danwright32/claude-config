@@ -228,6 +228,27 @@ check_not "and no longer the seven days it replaced" "seven days" "$body"
 check "the skill tells Dan how many reads were concise, and that nothing is paired from them" "concise reads (which show no time, so nothing is paired from them)" "$body"
 check "the only name in a rule is Dan's own, in the bracket" "Dan's own name there is the only name in it" "$body"
 check "the reader is given ten minutes, since it reads every record" "Give the command a timeout of ten minutes" "$body"
+# The second review's M4: the share sent as drafted is unexplained, and nothing put that in front of
+# Dan at the question. The count is run with the two flags that bear on it, he is told the doubt with
+# this run's numbers before any rule, and each question carries how much of its kind a difference in
+# how a read is written could account for.
+check "the count is run with the differences and the count by likeness" 'draft-edit-diff.py --author <member id> --differences --likeness' "$body"
+flags="$(python3 -B "$DIFF" --help 2>&1)"
+check "and the reader takes the first of those flags" "--differences" "$flags"
+check "and the second" "--likeness" "$flags"
+check "Dan is told the doubt over the counts before any rule" "Before any rule is put to him, tell Dan the doubt over these counts" "$body"
+check "in so many words: nobody yet knows why so few read as sent as drafted" "nobody yet knows why" "$body"
+check "with how many changed pairs a difference in how a read is written could explain" "how many one difference in how a read writes a message would make the same" "$body"
+check "and how many pairs sit in the top band of likeness" "how many sit at 0.98 and over in the count by likeness" "$body"
+check_eq "he is told before the first question" "1" "$(follows 'Before any rule is put to him, tell Dan the doubt over these counts' 'Ask one AskUserQuestion for each recurring kind')"
+check "each question says how many of its kind's pairs may be no edit of his" "how many of those N pairs one difference in how a read is written would make the same" "$body"
+# The reader's own account and the skill say it together: when the share is explained, both change.
+check_eq "the reader's account still calls that share not explained, which is why the skill says so" "1" "$(grep -c 'That is not explained (see --likeness)' "$DIFF")"
+# Three sentences the feature rests on that no case held (second review, S6).
+check "the weekly notice is not a request to run the review" "Run it only when Dan asks." "$body"
+check "a rule never quotes the example, and names nobody and nothing from it" "It never quotes the example, and it names nobody and nothing from it" "$body"
+check "with no recurring kind nothing is asked" 'If no kind is `recurring`, say so, run step 7, and stop. Ask nothing.' "$body"
+check "the skill tells Dan a pair is set aside for a first or last line that may be the connector's" "pairs whose post begins or ends in a line that may be the connector's own" "$body"
 # The two long dashes are written as their bytes, so this file holds neither character.
 EM="$(printf '\342\200\224')"; EN="$(printf '\342\200\223')"
 check_eq "no dash is used as punctuation in the skill" "0" "$(grep -c -e ' - ' -e "$EM" -e "$EN" "$SKILL" 2>/dev/null || true)"

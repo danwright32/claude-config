@@ -6489,19 +6489,29 @@ pieces turn the edits he keeps making into written rules, each one his to accept
   could write. Message text is printed only with `--examples`: one pair for each recurring kind. A
   kind is recurring at 10 pairs in 3 threads, a setting chosen on 2026-11-27 so that one long thread
   cannot make an edit look like a habit; under it the kind is reported as too thin and no rule is
-  offered. A read result it finds no message in is counted and said. A run exits 4 when none could
-  be read, or when most messages have their text somewhere it does not look (none under the
-  Message TS line, an unknown line above it, or a last line shaped like one of the connector's
-  own). `--shapes` prints what the results are made of: counts, and a field or label name only
-  when it is in a fixed list in the script, never a key or a line it does not know.
-  `--differences` counts, for the pairs changed but not heavily, how many would be the same with
-  one more thing set aside (a name inside angle brackets, how a link is written, punctuation,
-  emoji, a trailing edited mark, a last or first line).
-- **The offer**, the `draft-edit-review` skill. It runs the reader, tells Dan the counts, and asks
-  one question for each recurring kind: the proposed rule in one sentence, the pairs it rests on,
-  one example pair, and Accept, Not now or Never offer this again. The sentence is run through
-  `/no-ai-tells` before that question, so the sentence he accepts is the sentence written, word for
-  word. On Accept a second question asks where the rule goes (the no-ai-tells skill, the Slack
+  offered. A read result it finds no message in is counted and said. Only the `messages` field of
+  a read result is read for messages: text in any other field, `pagination_info` included, is no
+  part of a message, and a result with no such field is counted as one it cannot read. A run exits
+  4 when none could be read, or when most messages have their text somewhere it does not look
+  (none under the Message TS line, an unknown line above it, or a first or last line shaped like
+  one of the connector's own). A pair whose post begins or ends in such a line is set aside and
+  counted, unless the draft holds a line with the same label at that end, which makes it his.
+  `--shapes` prints what the results are made of: counts, and a field or label name only when it
+  is in a fixed list in the script, never a key or a line it does not know. `--differences`
+  counts, for the pairs changed but not heavily, how many would be the same with one more thing
+  set aside (a name inside angle brackets, how a link is written, punctuation, emoji, a trailing
+  edited mark, a last or first line), and the same for each kind a rule can be offered for. Each
+  is a ceiling on what a difference in how a read is written could explain, since he also changes
+  punctuation and adds and cuts lines. `--likeness` counts the pairs in each band of likeness (the
+  same, 0.98 and over, 0.95, 0.90, 0.80, 0.70, under 0.70) and how many posts were the last
+  message of the read their text came from.
+- **The offer**, the `draft-edit-review` skill. It runs the reader with `--differences` and
+  `--likeness`, tells Dan the counts and, before any rule, the doubt set out in the last paragraph
+  of this section, and asks one question for each recurring kind: the proposed rule in one
+  sentence, the pairs it rests on and how many of them a difference in how a read is written could
+  explain, one example pair, and Accept, Not now or Never offer this again. The sentence is run
+  through `/no-ai-tells` before that question, so the sentence he accepts is the sentence written,
+  word for word. On Accept a second question asks where the rule goes (the no-ai-tells skill, the Slack
   section of the global `CLAUDE.md`, or the project's own file), and the session makes that edit
   itself. What checks the save depends on the place. The ask before saving mod asks him before a
   save to a `CLAUDE.md`, an `AGENTS.md` or a memory file. It does not ask about a skill file, so
@@ -6523,7 +6533,12 @@ What the pairing cannot see: a thread no later session read back, or read back o
 layout; a draft Dan deleted (a post he then wrote in that thread within the hour reads as heavily
 rewritten); a draft he sent more than an hour after it was saved; a message he wrote with no
 draft; a post a session sent as him; an edit he made after sending; a read result that was cut
-short; and the other Mac's sessions.
+short; and the other Mac's sessions. Three things it reads wrongly, each on purpose or for want of
+a measurement. A line of his own shaped like a label ("Update: ...") that opens or ends what he
+sent, and that the draft did not hold there, is set aside with the lines that may be the
+connector's, so that pair is in no count. A line of the connector's that is not shaped like a
+label, and is not the Reactions line, is read as his words. And "@Name" typed in a draft and made
+a real mention by hand reads as an edit, which it is.
 
 State is in `~/.claude/state/draft-edit-review/` on each Mac and is never synced: `draft-saved`,
 `last-offered` and `last-review` (one time each), `author` (Dan's Slack member id) and
@@ -6537,9 +6552,13 @@ the work MacBook the same day, over 1,765 read results, by counts, field names a
 of headings only (pull request 3848), and the reader was fitted to it: the concise layout, a channel
 heading with no name, the section heading over a thread's replies, a `Reactions:` line under a
 message, and the name a read adds inside a mention. The fixtures hold invented text in that layout.
-One thing that run left unexplained: 6 of its 184 pairs read as sent as drafted, against 22 of 106
-in the issue's measurement of 2026-11-24. Until `--differences` has been run there, read a first
-review's counts with that doubt.
+A channel, a group and a here mention with a name added are set aside the same way, and were not
+measured. One thing that run left unexplained: 6 of its 184 pairs read as sent as drafted, against
+22 of 106 in the issue's measurement of 2026-11-24. The likeliest cause is that the two counts
+meant different things by it: the issue reported four bands, and this reader wants the two texts
+the same. `--likeness` is the count that can be set beside those bands, and it had not been run on
+the work MacBook when this was written on 2026-11-27. Until it has, the skill tells Dan that doubt
+at every review, with the run's own numbers, before it puts any rule to him.
 
 ## Read only queries are approved without asking
 

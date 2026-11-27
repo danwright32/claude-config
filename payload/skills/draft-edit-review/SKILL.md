@@ -47,10 +47,11 @@ Run this alone, exactly as written, with the member id. No pipe, no redirection,
 after it. Give the command a timeout of ten minutes: it reads every session record on this Mac.
 
 ```
-python3 ~/.claude/hooks/lib/draft-edit-diff.py --author <member id>
+python3 ~/.claude/hooks/lib/draft-edit-diff.py --author <member id> --differences --likeness
 ```
 
-It prints counts only. It reads the decisions from step 1 itself, so a kind Dan accepted or said
+It prints counts only: the tallies, then how the changed pairs differ, then the pairs by how like
+their draft they are. It reads the decisions from step 1 itself, so a kind Dan accepted or said
 never to offer is marked `decided before` without anything being passed. Read the result by its
 exit code first:
 
@@ -67,11 +68,28 @@ Tell Dan the counts in plain words: how many pairs, how many were sent as drafte
 rewritten, and each kind of edit with the pairs and threads it rests on. Say what was left out, with
 its count: read results it could not read, concise reads (which show no time, so nothing is paired
 from them), drafts with no post read back and how many of those sit where a concise read came
-afterwards, posts more than an hour after their draft, and pairs whose post ends in a line that may
-be the connector's own. Say what the count cannot see, in one line: it only pairs a draft with a
+afterwards, posts more than an hour after their draft, and pairs whose post begins or ends in a line
+that may be the connector's own (a line of his shaped like "Update: ..." that the draft did not hold
+is left out with them). Say what the count cannot see, in one line: it only pairs a draft with a
 post in a thread some later session read back in the detailed layout, a heavily rewritten pair is
 in no kind because it may not be an edit of that draft at all, and each Mac counts only its own
 sessions.
+
+Before any rule is put to him, tell Dan the doubt over these counts, in plain words, with this
+run's numbers:
+
+- How many pairs read as sent as drafted, and how many sit at 0.98 and over in the count by
+  likeness.
+- Of the pairs changed but not heavily rewritten, how many one difference in how a read writes a
+  message would make the same, and how many are none of these. Say that this is a ceiling: he also
+  changes punctuation and adds and cuts lines, so some of those are his edits.
+- That the first count, on the issue on 2026-11-24, read about one draft in five as sent as
+  drafted, that the first run of this reader read 6 of 184, and that nobody yet knows why. The
+  likeliest reason is that the two counts meant different things by it. Until that is settled, a
+  rule below may rest partly on differences that are not his edits.
+
+Say it at every review for as long as the reader's own account, at the top of
+`draft-edit-diff.py`, lists that share as not explained.
 
 A kind marked `too thin` is reported with its count and no rule is offered for it. The floor is 10
 pairs in 3 threads, set in the script: below it one long thread is enough to make an edit look like
@@ -113,7 +131,9 @@ question holds, in this order:
 
 1. The proposed rule: the sentence from step 4, whole, brackets included, exactly as it would be
    written.
-2. What it rests on: "N of M pairs, in T threads".
+2. What it rests on: "N of M pairs, in T threads", and how many of those N pairs one difference in
+   how a read is written would make the same, from the reader's line for that kind under "Of the
+   pairs under each kind": "up to K of those N may be no edit of yours".
 3. The example pair, the draft and then what he sent, each as the script printed it.
 
 The options, in this order:
