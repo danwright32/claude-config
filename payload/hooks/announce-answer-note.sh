@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Note every picker Dan answers in a main session, so his answer about an announcement's wording
-# can be found later (claude-config#3742, #3789).
+# Note every picker Dan answers in a main session, so his answer about an announcement can be
+# found later: his approval of its wording, or whether the feature is announced to agents at all
+# (claude-config#3742, #3789, #3669).
 #
 # PostToolUse on AskUserQuestion. It asks lib/announce-approval.py to note the picker on this Mac's
 # record by its ids alone: the session, its transcript and the picker. That library says what a note
@@ -34,9 +35,11 @@
 #
 # IT SPEAKS ONLY WHEN THE NOTE COULD NOT BE WRITTEN: the record cannot be reached or appended to,
 # the hook was not handed the session, its transcript and the picker's id, or the library could not
-# be asked at all. That is the one case where an approval of his would be lost, and the hook still
-# cannot tell whether the picker was an announcement's, so the notice says what to do if it was and
-# that nothing is lost if it was not. It never blocks: the picker is already answered. The notice
+# be asked at all. That is the one case where an answer of his would be lost, and the hook still
+# cannot tell what the picker asked, so the notice says what reads his answer in for each of the
+# two pickers a note is read back for (his approval of an announcement's wording, and whether a
+# feature is announced to agents) and that nothing is lost if it asked anything else. It never
+# blocks: the picker is already answered. The notice
 # goes through lib/hook-notice.sh as one JSON object on exit 0, with the same words for Dan
 # (systemMessage) and for the session (the additionalContext of PostToolUse), and on standard error
 # too, for the debug log.
