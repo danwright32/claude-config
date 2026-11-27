@@ -235,7 +235,11 @@ check "#3804 the skill says a session id that cannot be read stops the claim" "$
 # claim goes stale.
 check "#3804 the take over command is written out" "$(holds "$claiming" 'bash ~/.claude/skills/orchestrate/claim-issue.sh takeover <owner/repo> <issue number> <branch> "<reason>"' 'no take over command')"
 check "#3804 the skill says a plain release never ends a claim with no session recorded" "$(holds "$claiming" '`release` never ends a claim with no session recorded' 'no word that release leaves such a claim alone')"
-check "#3804 the skill says a release that ended nothing for that reason exits 1" "$(holds "$claiming" '`NOT RELEASED`' 'no NOT RELEASED wording')"
+check "#3804 the skill says a release that ended nothing for that reason exits 1" "$(holds "$claiming" 'answers `NOT RELEASED`, exit 1' 'no word that NOT RELEASED is exit 1')"
+# The second review of that change: that answer is the one a session with no claim of its own on
+# the branch gets. With one, the release ends that claim alone and says the other still stands.
+check "#3804 the skill says which session gets NOT RELEASED" "$(holds "$claiming" 'Where this session has no claim of its own on that branch, it posts nothing' 'no word of which session is answered NOT RELEASED')"
+check "#3804 the skill says a release beside this session's own claim ends that claim alone" "$(holds "$claiming" 'Where it has one, it releases that claim alone, answers `RELEASED`, exit 0, and says the claim with no session recorded still stands' 'no word of a release beside the session own claim')"
 check "#3804 the skill says a branch or pull request holds a session that is not the claimant for as long as it is up" "$(holds "$claiming" 'for as long as it is up' 'no word of how long a pushed branch holds')"
 check "#3804 the skill says no command lets a session that is not the claimant through" "$(holds "$claiming" 'no command of this script lets it through' 'no word that nothing lets another session through')"
 check "#3804 Finish says what a NOT RELEASED answer means" "$(holds "$finish" '`NOT RELEASED`' 'Finish does not say what a NOT RELEASED answer means')"

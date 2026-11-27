@@ -798,6 +798,10 @@ has "#3804 a plain release under a claim with no session recorded, the claim aft
 is "#3804 a plain release under a claim with no session recorded, the claim after it: nothing posted" 0 "$(posted_count)"
 SESSION_OVERRIDE="$OTHER_SESSION" run check "$REPO" 3674 "$SEEN"
 is "#3804 a plain release under a claim with no session recorded, another session after it: exit 1" 1 "$code"
+# The pull request and the branch in this fixture hold that session whatever became of the claim,
+# so the exit code alone cannot fail for a claim the release wrongly ended. The line that names the
+# claim can (second review of #3804, S3).
+has "#3804 a plain release under a claim with no session recorded, another session after it: held by the claim" "branch $SEEN, with no session recorded, so it is not taken for this session's own" "$out"
 
 # The take over, on purpose: `takeover`, then a claim.
 staged_3674 "$(unnamed 3600 claim "$SEEN")"
@@ -858,6 +862,13 @@ run takeover "$REPO" 3317 "$MINE" "taking over"
 is "#3804 take over under the other Mac's claim with no session recorded: exit 1" 1 "$code"
 is "#3804 take over under the other Mac's claim with no session recorded: nothing posted" 0 "$(posted_count)"
 run release "$REPO" 3317 "$MINE" "dropped"
+# The answer is asserted, not only that nothing was posted: a release that took the other Mac's
+# claim for one of this Mac's would post nothing either, and answer NOT RELEASED, exit 1 (second
+# review of #3804, S3).
+is "#3804 a plain release under the other Mac's claim with no session recorded: exit 0" 0 "$code"
+has "#3804 a plain release under the other Mac's claim with no session recorded: nothing to release" "NOTHING TO RELEASE" "$out"
+lacks "#3804 a plain release under the other Mac's claim with no session recorded: never not released" "NOT RELEASED" "$out"
+lacks "#3804 a plain release under the other Mac's claim with no session recorded: offers no take over" "takeover" "$out"
 is "#3804 a plain release under the other Mac's claim with no session recorded: nothing posted" 0 "$(posted_count)"
 
 # Under this session's own claim, which names it: nothing to take over, and the claim stands.
@@ -1039,6 +1050,8 @@ rm -rf "$TMP/broken"
 # A session whose claim went stale with no release posts it again. Until the review of this change
 # the new claim kept the place in the list of the stale one, so it read as posted first when another
 # session's claim had landed a moment before it, and both sessions were told CLAIMED, exit 0.
+# 12a to 12d are that case. 12e to 12h are the other way a claim is posted twice, a second run that
+# never saw the first post, where the first post keeps its place (second review of #3804, S1).
 
 # 12a. Seen from the session posting again: the other session's claim landed first, so ours loses,
 # is released, and the winner keeps the issue.
@@ -1091,6 +1104,32 @@ run claim "$REPO" 3317 "$MINE"
 is "F1 posted again with GitHub's clock behind, another session's landing first: exit 1" 1 "$code"
 lacks "F1 posted again with GitHub's clock behind, another session's landing first: never claimed" "CLAIMED:" "$out"
 is "F1 posted again with GitHub's clock behind, another session's landing first: our claim and its release posted" 2 "$(posted_count)"
+# The second half of 12c is a gap the script still has, written down so the suite says what happens
+# there, not because it is wanted (second review of #3804, S2). The place goes by a claim's latest
+# post and the branch name by the times GitHub stamps, and by those times the winner's claim was
+# posted while the stale claim still counted, so the name stays with the session that lost. The
+# winner's builder pushes the branch and opens its pull request, and the winner is then held by
+# both. If a later change gives the winner the name, these lines are the ones to turn round.
+printf 'main\n%s\n' "$MINE" >"$FAKE/branches"
+pr_row 4173 "$MINE" "The winner's" "Closes #3317" >"$FAKE/prs"
+SESSION_OVERRIDE="$OTHER_SESSION" run check "$REPO" 3317 "$MINE"
+is "S2 the clock case, the winner with its branch and pull request up: held, exit 1" 1 "$code"
+has "S2 the clock case, the winner with its branch and pull request up: held by its own pull request" "pull request: #4173" "$out"
+has "S2 the clock case, the winner with its branch and pull request up: the name is not its own" "(the branch name being claimed, which no claim of this session's accounts for)" "$out"
+lacks "S2 the clock case, the winner with its branch and pull request up: never already claimed" "ALREADY CLAIMED" "$out"
+is "S2 the clock case, the winner with its branch and pull request up: nothing more posted" 2 "$(posted_count)"
+# It fails closed for a day: the session that lost is held by the winner's claim meanwhile.
+run claim "$REPO" 3317 "$MINE"
+is "S2 the clock case, the session that lost, the winner's claim live: exit 1" 1 "$code"
+has "S2 the clock case, the session that lost, the winner's claim live: held by that claim" "claim: another session on the personal MacBook claimed it at" "$out"
+# A day and an hour later the winner's claim is stale, which it could not refresh (every `claim` it
+# ran was held by its own branch), and the session that lost is let in over the winner's open pull
+# request and told that pull request is its own.
+echo "$((NOW + 25 * 3600 - 20))" >"$FAKE/stamp"
+NOW=$((NOW + 25 * 3600)) run claim "$REPO" 3317 "$MINE"
+is "S2 the clock case, the session that lost, a day later, the winner's pull request open: exit 0" 0 "$code"
+has "S2 the clock case, the session that lost, a day later, the winner's pull request open: claimed" "CLAIMED:" "$out"
+has "S2 the clock case, the session that lost, a day later, the winner's pull request open: the pull request reads as its own" "this session's own, by its claim on the issue: pull request #4173" "$out"
 
 # 12d. Nobody racing: a claim posted again over its own stale one is still claimed (section 11d has
 # the same with its branch and pull request up).
@@ -1099,6 +1138,120 @@ mine $((25 * 3600)) claim >"$FAKE/markers"
 run claim "$REPO" 3317 "$MINE"
 is "F1 a claim posted again over its own stale one, nobody racing: exit 0" 0 "$code"
 has "F1 a claim posted again over its own stale one, nobody racing: claimed" "CLAIMED:" "$out"
+
+# 12e. One session whose two `claim` runs overlap (second review of #3804, S1). The second run read
+# the issue before the first run's claim could be seen, so it posted the claim again, and another
+# session's claim landed between the two. The first run had already been told CLAIMED, so the place
+# stays with its post: a claim posted again within AGAIN seconds of its own unreleased post, by the
+# times GitHub stamps, was never judged over (that takes the stale window on the Mac's clock), it
+# was only not seen. While every claim posted again took the place of its latest post, the session
+# between was told CLAIMED too, after the first run already had been.
+AGAIN=600 # the script's AGAIN_SECONDS, written out here so that a change to it fails the edge in 12h
+THIRD="$THIS_MAC,session=0f1e2d3c4b5a" # a third session's host word, only ever a line in a fixture
+# Seen from the first run: nothing there when it read, the other session's claim a moment after it.
+new_case
+theirs 0 claim >"$FAKE/late"
+run claim "$REPO" 3317 "$MINE"
+is "S1 the first of two overlapping runs: exit 0" 0 "$code"
+# Seen from the session between. Comment 1 is the first run's, not yet to be seen when this session
+# read the issue; comment 2 is this session's; comment 3 is the second run's, a second after it.
+new_case
+mine 2 claim >"$FAKE/race"
+echo "$((NOW - 1))" >"$FAKE/stamp"
+mine 0 claim >"$FAKE/late"
+SESSION_OVERRIDE="$OTHER_SESSION" run claim "$REPO" 3317 "$MINE"
+is "S1 a session claiming between another's two overlapping runs: exit 1" 1 "$code"
+has "S1 a session claiming between another's two overlapping runs: says held" "HELD: another session claimed" "$out"
+lacks "S1 a session claiming between another's two overlapping runs: never claimed" "CLAIMED:" "$out"
+is "S1 a session claiming between another's two overlapping runs: its claim and its release posted" 2 "$(posted_count)"
+has "S1 a session claiming between another's two overlapping runs: the second post is its release" "<!-- orchestrate-release branch=$MINE host=$THIS_MAC,session=$OSID -->" "$(cat "$FAKE/posted.2" 2>/dev/null)"
+# Seen from the second run: both earlier comments landed after it read the issue.
+new_case
+{ mine 2 claim; theirs 1 claim; } >"$FAKE/race"
+run claim "$REPO" 3317 "$MINE"
+is "S1 the second of two overlapping runs, another session's claim between them: exit 0" 0 "$code"
+has "S1 the second of two overlapping runs, another session's claim between them: claimed" "CLAIMED:" "$out"
+is "S1 the second of two overlapping runs, another session's claim between them: only the claim posted" 1 "$(posted_count)"
+# Afterwards the session between has released, and the builder's branch and pull request are up.
+# The place and the branch name are with the same session, so it is not held by them.
+theirs 0 release >>"$FAKE/markers"
+printf 'main\n%s\n' "$MINE" >"$FAKE/branches"
+pr_row 4173 "$MINE" "The first run's" "Closes #3317" >"$FAKE/prs"
+run claim "$REPO" 3317 "$MINE"
+is "S1 the session that ran twice, its branch and pull request up: exit 0" 0 "$code"
+has "S1 the session that ran twice, its branch and pull request up: already claimed" "ALREADY CLAIMED" "$out"
+has "S1 the session that ran twice, its branch and pull request up: the pull request is its own" "this session's own, by its claim on the issue: pull request #4173" "$out"
+SESSION_OVERRIDE="$OTHER_SESSION" run claim "$REPO" 3317 "$MINE"
+is "S1 the session between, afterwards: exit 1" 1 "$code"
+has "S1 the session between, afterwards: held by the claim" "claim: another session on the personal MacBook claimed it at" "$out"
+
+# 12f. Three sessions. Two claim between the overlapping runs: both are held by the first post.
+new_case
+mine 3 claim >"$FAKE/race"
+echo "$((NOW - 2))" >"$FAKE/stamp"
+{ marker 1 claim "$MINE" "$THIRD"; mine 0 claim; } >"$FAKE/late"
+SESSION_OVERRIDE="$OTHER_SESSION" run claim "$REPO" 3317 "$MINE"
+is "S1 three sessions, the first of two claiming between the overlapping runs: exit 1" 1 "$code"
+is "S1 three sessions, the first of two claiming between the overlapping runs: its claim and its release posted" 2 "$(posted_count)"
+new_case
+{ mine 3 claim; theirs 2 claim; marker 1 claim "$MINE" "$THIRD"; } >"$FAKE/race"
+run claim "$REPO" 3317 "$MINE"
+is "S1 three sessions, the second of the overlapping runs: exit 0" 0 "$code"
+is "S1 three sessions, the second of the overlapping runs: only the claim posted" 1 "$(posted_count)"
+# A third session's claim that landed before both runs is first, whatever the two runs do.
+new_case
+{ marker 3 claim "$MINE" "$THIRD"; mine 2 claim; } >"$FAKE/race"
+run claim "$REPO" 3317 "$MINE"
+is "S1 three sessions, another's claim before both overlapping runs: exit 1" 1 "$code"
+has "S1 three sessions, another's claim before both overlapping runs: says held" "HELD: another session claimed" "$out"
+
+# 12g. A release between the two posts ends the first, so the second is a new claim and takes its
+# own place: a place is kept only for a claim no release has ended.
+new_case
+{ mine 3 claim; mine 2 release; } >"$FAKE/markers"
+echo "$((NOW - 1))" >"$FAKE/stamp"
+mine 0 claim >"$FAKE/late"
+SESSION_OVERRIDE="$OTHER_SESSION" run claim "$REPO" 3317 "$MINE"
+is "S1 a release between the two posts, the session claiming after it: exit 0" 0 "$code"
+has "S1 a release between the two posts, the session claiming after it: claimed" "CLAIMED:" "$out"
+is "S1 a release between the two posts, the session claiming after it: only the claim posted" 1 "$(posted_count)"
+new_case
+{ mine 3 claim; mine 2 release; } >"$FAKE/markers"
+theirs 1 claim >"$FAKE/race"
+run claim "$REPO" 3317 "$MINE"
+is "S1 a release between the two posts, the session posting again: exit 1" 1 "$code"
+is "S1 a release between the two posts, the session posting again: its claim and its release posted" 2 "$(posted_count)"
+# The same with the release landing after the other session's claim and before the second post.
+new_case
+mine 3 claim >"$FAKE/race"
+echo "$((NOW - 2))" >"$FAKE/stamp"
+{ mine 1 release; mine 0 claim; } >"$FAKE/late"
+SESSION_OVERRIDE="$OTHER_SESSION" run claim "$REPO" 3317 "$MINE"
+is "S1 a release after the other session's claim and before the second post: exit 0" 0 "$code"
+is "S1 a release after the other session's claim and before the second post: only the claim posted" 1 "$(posted_count)"
+
+# 12h. The edge. AGAIN seconds apart, the second post keeps the first one's place. One second more
+# and it takes its own, as a claim posted again over a stale one does (12a to 12c).
+new_case
+mine "$AGAIN" claim >"$FAKE/race"
+echo "$((NOW - 1))" >"$FAKE/stamp"
+mine 0 claim >"$FAKE/late"
+SESSION_OVERRIDE="$OTHER_SESSION" run claim "$REPO" 3317 "$MINE"
+is "S1 the two posts $AGAIN seconds apart, the session between: exit 1" 1 "$code"
+new_case
+{ mine "$AGAIN" claim; theirs 1 claim; } >"$FAKE/race"
+run claim "$REPO" 3317 "$MINE"
+is "S1 the two posts $AGAIN seconds apart, the session posting again: exit 0" 0 "$code"
+new_case
+mine $((AGAIN + 1)) claim >"$FAKE/race"
+echo "$((NOW - 1))" >"$FAKE/stamp"
+mine 0 claim >"$FAKE/late"
+SESSION_OVERRIDE="$OTHER_SESSION" run claim "$REPO" 3317 "$MINE"
+is "S1 the two posts $((AGAIN + 1)) seconds apart, the session between: exit 0" 0 "$code"
+new_case
+{ mine $((AGAIN + 1)) claim; theirs 1 claim; } >"$FAKE/race"
+run claim "$REPO" 3317 "$MINE"
+is "S1 the two posts $((AGAIN + 1)) seconds apart, the session posting again: exit 1" 1 "$code"
 
 # ---- 13. a session part that is not 12 hex digits names no session (review of #3804, F6) ----
 # A host word is a Mac's name alone, or a Mac's name, ",session=" and exactly 12 lower case hex

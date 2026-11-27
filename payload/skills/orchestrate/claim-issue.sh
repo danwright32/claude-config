@@ -104,6 +104,16 @@
 set -uo pipefail
 
 STALE_HOURS="${CLAIM_STALE_HOURS:-24}"
+# A claim posted again this many seconds or less after its own unreleased post keeps that post's
+# place among the claims (see live_claims). Ten minutes, chosen and not measured, and not a setting,
+# since two sessions that read the same comments must agree who was first. It has to be longer than
+# the gap between two runs of one session that did not see each other's post: one run's reads and
+# its post, where the script itself allows a post READBACK_TRIES waits of READBACK_WAIT seconds to
+# be seen. And it has to be much shorter than the stale window less any error in the Mac's clock,
+# because a claim the Mac judged stale and posted again must never keep its old place: at ten
+# minutes that takes a clock more than the window less ten minutes ahead of GitHub's, which a wrong
+# time zone (hours) does not reach under the default window.
+AGAIN_SECONDS=600
 READBACK_WAIT="${CLAIM_READBACK_WAIT:-2}"
 READBACK_TRIES="${CLAIM_READBACK_TRIES:-3}"
 BRANCH_READER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/branch-issues.mjs"
@@ -197,7 +207,8 @@ read_issue() { # fills $tmp/issue; returns non zero, with the reason in $tmp/iss
 # The claims on the issue, read out of its marker lines in the order GitHub shows them. Two kinds of
 # line come out:
 #   LIVE <epoch> <branch> <host> <session>   a claim no release has ended, stale or not, in the
-#                                            order of each claim's latest post
+#                                            order of each claim's latest post, or of the post
+#                                            before it when the two are AGAIN_SECONDS or less apart
 #   NAME <branch> <host> <session>           whose that branch name is (see "Whose a branch is")
 # <session> is "-" for a claim posted before claims named their session. A claim is one branch, host
 # and session; a release ends the claim with the same three. A host word that is not a Mac's name
@@ -208,7 +219,7 @@ read_issue() { # fills $tmp/issue; returns non zero, with the reason in $tmp/iss
 # in the same comment by the release naming the session.
 # awk, not a bash associative array, which the bash 3.2 macOS ships does not have.
 live_claims() {
-  awk -v window="$((STALE_HOURS * 3600))" '
+  awk -v window="$((STALE_HOURS * 3600))" -v again="$AGAIN_SECONDS" '
     NF == 6 && $2 == "<!--" && $6 == "-->" &&
       $1 ~ /^[0-9]+$/ &&
       $4 ~ /^branch=/ && $5 ~ /^host=/ {
@@ -221,14 +232,20 @@ live_claims() {
         held = 1
         for (k in when) if (k != key && $1 - when[k] <= window) held = 0
         if (held) { if (!(b in name)) { m++; names[m] = b }; name[b] = h " " s }
-        # A claim posted again takes the place of this, its latest post, never the place of the
-        # earlier one: a session posts again only once it has judged its earlier claim over, and
-        # another session that judged the same may have claimed in between. Keeping the earlier
-        # place let the claim posted again read as first, so both sessions were told CLAIMED.
-        # Whatever the two times are: with the clock at GitHub behind the one on the Mac, a claim
-        # the Mac calls stale is posted again inside the window by the times GitHub stamps
-        # (section 12 of the suite). No apostrophe in this program: it sits in single quotes.
-        n++; order[n] = key; pos[key] = n
+        # A claim posted again over one its session judged over takes the place of this, its
+        # latest post, never the place of the earlier one: another session that judged the same
+        # may have claimed in between, and keeping the earlier place let the claim posted again
+        # read as first, so both sessions were told CLAIMED. A session judges a claim of its own
+        # over only when it is past the stale window on the clock of its Mac. With the clock at
+        # GitHub behind that one, such a claim is posted again inside the window by the times
+        # GitHub stamps, so the window is not the test (section 12 of the suite, 12a to 12c).
+        # A claim is also posted again when the earlier post was never judged at all: a second
+        # run of the same session read the issue before the first post could be seen. The first
+        # run may already have been told CLAIMED, so that post keeps its place, or a session that
+        # claimed between the two is told CLAIMED as well (12e to 12h). The two are told apart by
+        # the gap between the posts, both times stamped by GitHub: AGAIN_SECONDS or less is a
+        # post that was not seen. No apostrophe in this program: it sits in single quotes.
+        if (!(key in when) || $1 - when[key] > again) { n++; order[n] = key; pos[key] = n }
         when[key] = $1
         ended = ""
       } else if ($3 == "orchestrate-release") {
