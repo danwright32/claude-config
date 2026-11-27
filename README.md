@@ -3452,10 +3452,12 @@ it took 174 to 273 ms (3 runs).
 
 What it does not cover:
 
-- A process that left its shell's group (`setsid`, a job control shell, a runner that puts what it
-  starts in a group of its own) is not tied. The time limit runner of claude-config#3578 is to
-  record the group it makes the same way: an empty file named for the group's id in the folder
-  `python3 hooks/lib/agent-leftovers.py dir "$CLAUDE_CODE_SESSION_ID"` prints.
+- A process that left its shell's group (`setsid`, a job control shell) is not tied. The time
+  limit runner (`hooks/lib/run-with-limit.sh`, the next section) puts what it starts in a group of
+  its own and records that group the same way: an empty file named for the group's id in the folder
+  `python3 hooks/lib/agent-leftovers.py dir "$CLAUDE_CODE_SESSION_ID"` prints. A group is listed
+  only once its leader has gone, so a command that runs on after its runner was killed outright is
+  not listed until it ends and leaves something behind.
 - A group whose oldest process started after the agent's command ended (each generation started
   the next and ended) is said as one that could not be told, never as the agent's.
 - The hand back is where an agent can still act, so an agent that ends by plain text is not asked
@@ -3466,6 +3468,80 @@ What it does not cover:
 
 Tests: `hooks/test-agent-leftovers.sh`, with stand in process tables (a suite never leaves a real
 stray process); the marker line alone is run for real, in bash and in zsh.
+
+### A time limit that ends the whole process group (#3578)
+
+Every agent brief says a loop, a harness or a generated command runs under a time limit that ends
+its whole process group (L1040). Until 2026-11-27 nothing an agent could run did that: the one
+shared limit, `lib/bounded-run.sh`, is a function a script has to load, and macOS ships no
+`timeout`. So each agent wrote its own in perl or python, the gates could not read it, and a suite
+went unrun where it most needed a limit (four sightings on claude-config#3578).
+
+    bash ~/.claude/hooks/lib/run-with-limit.sh <seconds> <command> [its words]
+
+The command runs as the leader of a process group of its own, with the caller's input and output
+as they are. The limit is a whole number of seconds from 1 to 86400.
+
+| Comes back as | What happened |
+| --- | --- |
+| the command's own code | It ended in time and left nothing running. Nothing is said. |
+| 124 | It reached the limit. The whole group was sent TERM, then KILL 2 seconds later. |
+| 123 | It ended in time and left a process running in its group, which was stopped the same way. |
+| 125 | Nothing was run: a bad limit, no command, python3 missing, or a system it cannot work on. |
+| 128 plus the signal | The runner was sent TERM, INT or HUP, and ended the group before it went. |
+
+A command a signal ended comes back as 128 plus that signal's number, and one that could not be
+started as 127 or 126, as a shell reports them. When something was stopped the runner says so in
+one line on standard error, naming the group's id, whether TERM or KILL ended it, and the command.
+
+- **A process left running fails the run.** A suite that passes and leaves a process behind is
+  what cost 40 GB on 2026-11-24, so the run comes back as 123 whatever the command's own code
+  was, and the line names that code. What a command leaves is first given one second to end by
+  itself: a shell does not wait for a process substitution, so `exec > >(tee log)` ends with
+  `tee` a moment behind it, and ending `tee` at once would cut the log short and fail a passing
+  run by a race. The 123 is Dan's to reverse (stop the process and keep the command's code).
+- **The command is never run with no limit.** With python3 missing, the program behind the
+  launcher missing, or a system where the runner cannot see a process group, nothing runs and 125
+  comes back. A fault inside the runner after the command has started sends the group KILL. The
+  command starts only once the runner is watching it: a runner that dies first leaves a child
+  that ends without becoming the command.
+- **It signals a number only while its own child pins it.** A child that has not been collected
+  keeps its process id, running or ended, and the group it leads has that number. So the runner
+  learns that the command ended without collecting it (a kqueue process event on macOS, `waitid`
+  with `WNOWAIT` on Linux), ends whatever the group still holds, and collects the command last.
+  After the collect it signals nothing: the number can by then belong to any new process. One
+  class in `lib/run-with-limit.py` holds both calls and refuses a signal after the collect.
+- **It reads no `ps`,** which cannot start under `hooks/no-network-run.sh` (macOS refuses a
+  setuid program in a sandbox). On macOS it asks with signal 0: measured on 2026-11-27 on the
+  personal MacBook (macOS 26.6.2) with the runner's own children, a group holding only its ended,
+  uncollected leader answers EPERM, a group with one more member answers success, and 15 ms after
+  that member ended it answers EPERM again. On Linux signal 0 succeeds for a group holding only
+  its ended leader, so the members are read from `/proc`. Either way the runner first asks about
+  its own group, where the answer is known, and runs nothing where that fails. Under the no
+  network wrapper the order is the wrapper first, then the runner.
+- **Its group is recorded for the leftover process check** above, before the command starts, when
+  the run is inside a session whose shells are recorded. A session with no marker folder is left
+  alone, since the folder's being there is what tells the reader the shells are recorded. A record
+  that should have been made and could not be is said in one line, and the limit is kept.
+
+What it does not cover:
+
+- A process that leaves the group (`setsid`, a job control shell) is not stopped and not seen.
+- A process this user may not signal (a setuid program) reads as nothing left.
+- A runner ended by KILL stops nothing. The command runs on with no limit, and the leftover
+  process check lists its group only once its leader has gone.
+- The gates do not read through it yet. The Slack drafts gate, the payload write gate and the
+  area check judge a command behind it as they judge any program they do not know. Reading through
+  lets commands run that are refused today, so it waits for Dan's sign off (claude-config#3578).
+- `lib/bounded-run.sh`'s eight callers and the three private perl copies of it
+  (`lib/sleep-queue.sh`, `subagent-issue-harvest.sh`, `tools/lib/pinned-compiler.sh`) are not
+  moved onto it. By its code, `bounded_run` signals its group from an alarm that can arrive just
+  after the command was collected (read on 2026-11-27, not reproduced), which is the fault this
+  runner's order exists to rule out.
+
+Tests: `hooks/test-run-with-limit.sh`. The fixtures are real processes, and every case ends by
+checking none is left. The rule about signals is held by running the program with stand ins for
+the calls that signal and collect: a signal asked for after the collect is recorded and never sent.
 
 ### An agent getting past the checks, and a report that says it did not
 
