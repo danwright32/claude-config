@@ -1923,6 +1923,41 @@ take before the command is even read (the library that reads it cannot be loaded
 python3 is installed, the payload is not a call any reader takes) say it too, where they said
 nothing: of a command, since not even whether it merges a pull request was read.
 
+`push-scope-notice.sh` also refuses a push from a repository whose `core.hooksPath` names a folder
+that does not exist (claude-config#2070), because git then runs none of the repository's own hooks
+for the push and says nothing. A work project sets it to `.husky/_`, which only `pnpm install` creates,
+so a worktree that never ran the install pushed a live migration (in one of its pull requests) with no SQL
+suite, test gate or style gate. The folder is the one git resolves (`git rev-parse --git-path
+hooks` at the top level), so a linked worktree is judged by its own copy. The refusal names the
+folder and the install that creates it, read from the lockfile at the top level (`pnpm install`,
+`yarn install`, `bun install`, `npm install`, or the repository's install in general words when
+there is none). The main session can push past it once with `SKIP_HOOKS_PATH_CHECK=1`; an agent
+cannot, as it cannot skip the repository's hooks any other way (`no-verify-gate.sh`, #1666).
+Something at the path that is not a folder, such as `/dev/null`, is hooks switched off on purpose
+and is left alone, and a setting that cannot be read refuses the push. On 2026-11-02 the personal
+MacBook had 5 repositories setting `core.hooksPath` across 8 working trees, every folder present,
+so no push there would have been refused. That leaving alone is the main session's only
+(claude-config#2135): for an AGENT's push, a location that exists but holds no hook git would run
+(`/dev/null`, an empty folder, a folder of samples) refuses too, since an agent may have set it
+itself. A hook git runs is an executable file named after one. On 2026-11-03 each of those 5
+repositories pointed at a folder holding an executable `pre-push`, so no agent push there is
+refused.
+
+To measure a Mac, run `bash ~/.claude/hooks/measure-hooks-path.sh <folder> [<folder>...]` with the
+folders the repositories live in (claude-config#2098). It lists every working tree, linked worktrees
+included wherever they are, with where `core.hooksPath` is set and to what, and the gate's own verdict
+on a push from there for the main session and for an agent. Finding no repository, or a verdict the
+gate gave as an error, exits non zero rather than reporting no refusals. On the personal MacBook on
+2026-11-12 it found 36 working trees, 7 setting the key, all folders with a runnable hook, `/dev/null`
+nowhere, and no push refused. The work MacBook has not been measured yet.
+
+No hook runs the install when a worktree is created (claude-config#2098): Claude Code's worktree
+creation hook replaces its own creation of the worktree in every project rather than adding a step
+after it, and a worktree made for reading needs no install. Instead the orchestrate agent rules tell
+an agent to read `core.hooksPath` right after `git worktree add` and run the install in the worktree
+before its first commit, because until the folder exists git runs none of the repository's hooks on a
+commit either, and this refusal only arrives at the push.
+
 #### An announcement merges only on wording Dan approved (#3666)
 
 A pull request labelled `changelog/announce` carries the post for agents under `## Announcement`,
@@ -2268,7 +2303,11 @@ only where this Mac's dev update registry names an announcements channel for the
   a picker naming that milestone. `ALLOW_UNTAGGED_MERGE=1` does not clear the refusal, and a pull
   request the dependency bot opened is held to it like any other. Only where whether the pull
   request finishes such a feature could not be read does the override let the merge through, and
-  it says so. "Finishes" means every issue still open in the milestone is one the pull request
+  it says so. His decline is one such case when the call that leans on it left noted sessions
+  unread (past the fifty, or out of time) and nothing else clears the milestone: a newer
+  `Announce it` of his there would be his last answer, so the merge is refused as what could not
+  be told, saying what was left unread (decided by the main session on the stricter side,
+  2026-11-26). A decline with every noted session read clears as before. "Finishes" means every issue still open in the milestone is one the pull request
   closes, a milestone with none left open included, and only milestones of the pull request's own
   repository are judged. A pull request that closes no issue is settled by GitHub's answer alone,
   before the library is asked. A `used` line in the record says the gate let a merge go ahead,
@@ -2304,41 +2343,6 @@ know and asks for again; and a change that deserved an announcement that nobody 
 `hooks/test-changelog-tag.sh` the gate (its #3669 section), `hooks/test-announce-label-ask.sh` the
 reading in before the helper runs, `hooks/test-announce-answer-note.sh` the note, and
 `skills/milestone/test-create-milestone.sh` the helper.
-
-`push-scope-notice.sh` also refuses a push from a repository whose `core.hooksPath` names a folder
-that does not exist (claude-config#2070), because git then runs none of the repository's own hooks
-for the push and says nothing. A work project sets it to `.husky/_`, which only `pnpm install` creates,
-so a worktree that never ran the install pushed a live migration (in one of its pull requests) with no SQL
-suite, test gate or style gate. The folder is the one git resolves (`git rev-parse --git-path
-hooks` at the top level), so a linked worktree is judged by its own copy. The refusal names the
-folder and the install that creates it, read from the lockfile at the top level (`pnpm install`,
-`yarn install`, `bun install`, `npm install`, or the repository's install in general words when
-there is none). The main session can push past it once with `SKIP_HOOKS_PATH_CHECK=1`; an agent
-cannot, as it cannot skip the repository's hooks any other way (`no-verify-gate.sh`, #1666).
-Something at the path that is not a folder, such as `/dev/null`, is hooks switched off on purpose
-and is left alone, and a setting that cannot be read refuses the push. On 2026-11-02 the personal
-MacBook had 5 repositories setting `core.hooksPath` across 8 working trees, every folder present,
-so no push there would have been refused. That leaving alone is the main session's only
-(claude-config#2135): for an AGENT's push, a location that exists but holds no hook git would run
-(`/dev/null`, an empty folder, a folder of samples) refuses too, since an agent may have set it
-itself. A hook git runs is an executable file named after one. On 2026-11-03 each of those 5
-repositories pointed at a folder holding an executable `pre-push`, so no agent push there is
-refused.
-
-To measure a Mac, run `bash ~/.claude/hooks/measure-hooks-path.sh <folder> [<folder>...]` with the
-folders the repositories live in (claude-config#2098). It lists every working tree, linked worktrees
-included wherever they are, with where `core.hooksPath` is set and to what, and the gate's own verdict
-on a push from there for the main session and for an agent. Finding no repository, or a verdict the
-gate gave as an error, exits non zero rather than reporting no refusals. On the personal MacBook on
-2026-11-12 it found 36 working trees, 7 setting the key, all folders with a runnable hook, `/dev/null`
-nowhere, and no push refused. The work MacBook has not been measured yet.
-
-No hook runs the install when a worktree is created (claude-config#2098): Claude Code's worktree
-creation hook replaces its own creation of the worktree in every project rather than adding a step
-after it, and a worktree made for reading needs no install. Instead the orchestrate agent rules tell
-an agent to read `core.hooksPath` right after `git worktree add` and run the install in the worktree
-before its first commit, because until the folder exists git runs none of the repository's hooks on a
-commit either, and this refusal only arrives at the push.
 
 Every merge gate judges a merge however it is made (claude-config#1181): `gh pr merge`, a repo's own
 merge tool, the GitHub API's merge endpoint (`gh api -X PUT repos/<owner>/<name>/pulls/<n>/merge`,

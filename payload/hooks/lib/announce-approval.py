@@ -1844,7 +1844,7 @@ def decisions(session_id, transcript_path, deadline=None, done=(), sought=()):
     return [line for _, line in sorted(lines, key=lambda pair: pair[0])], untaken, None
 
 
-def _harvest_decisions(payload, notes, key=None):
+def _harvest_decisions(payload, notes, key=None, short=None):
     """This session's pickers of DISCOVERY, the pickers the record notes that nothing has judged
     (in any session: a note is by its ids alone, so only the transcript says which is of DISCOVERY;
     with a repository key, a note naming another repository is left out), and the record, read once
@@ -1852,7 +1852,9 @@ def _harvest_decisions(payload, notes, key=None):
     gave, each written to the record here unless the call is a subagent's; a failed save of an
     answer of his is added to notes. This is the one place his answer about announcing a feature is
     written, and only a hook reaches it. It is _harvest's twin for the other source, and reads back
-    the same sessions by the same rule (_read_back)."""
+    the same sessions by the same rule (_read_back). short, when a list is handed in, is given the
+    sentences of unlooked that say noted sessions were left unread (past the number one call reads,
+    or out of time), for a caller that must not lean on his last answer then (finishes)."""
     deadline = time.monotonic() + CHECK_SECONDS
     entries, unreadable = read_record()
     noted = _noted(entries)
@@ -1872,6 +1874,7 @@ def _harvest_decisions(payload, notes, key=None):
     looked = own if _text(payload.get("transcript_path")) else None
     unlooked = [unlooked] if unlooked else []
     read, seen = [], {f["picker"] for f in found}
+    before = len(unlooked)
     for session, transcript, _, left in _read_back(entries, noted, looked, unjudged, deadline, unlooked):
         gone = []
         if _gone(transcript):
@@ -1887,6 +1890,10 @@ def _harvest_decisions(payload, notes, key=None):
         read.append((gone + more, less, why and (
             "an answer of his the record notes, in the session whose transcript is " + transcript
             + ", could not be read back: " + why)))
+    # Whatever joined unlooked while the sessions were read back is _read_back's own: the sessions
+    # it left unread. What a session read here could not tell is added only below.
+    if short is not None:
+        short.extend(unlooked[before:])
     # Read newest first, and kept in the order the sessions' notes were taken.
     for more, less, why in reversed(read):
         found += more
@@ -2086,7 +2093,12 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
     description says yes (milestone_says), unless the record holds an announcement let through
     for it (a `used` line naming the milestone: the pull requests are given back in `announced`,
     because that line says the gate let one through and never that GitHub merged it, so the gate
-    asks GitHub), or Dan's last answer in a picker naming that milestone is NOT_ANNOUNCING.
+    asks GitHub), or Dan's last answer in a picker naming that milestone is NOT_ANNOUNCING. His
+    decline clears it only when this call read every noted session: when it left any unread (past
+    NOTED_SESSIONS, or out of time) and his decline is all that would clear the milestone, the
+    answer is "unread", saying what was left unread, because a newer ANNOUNCE_IT of his there
+    would be his last answer. The question that reads the record only reads no session, and is
+    not held to that.
     Anything GitHub's answer or the record does not say is "unread", never "clear" (L98). payload
     is the hook payload, and None reads the record only. unmerged is the pull requests among
     `announced` that GitHub then said have not merged: asked again with them, their lines cover
@@ -2132,24 +2144,33 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
             if s["says"] == "yes" and s["count"] <= len(s["open"]) and s["open"] <= s["closes"]]
     if not owed:
         return out
+    short = []
     if payload is None:
         found, untaken, unlooked = [], [], None
         entries, unreadable = read_record()
     else:
         found, untaken, unlooked, entries, unreadable = _harvest_decisions(
-            payload if isinstance(payload, dict) else {}, out["notes"], key)
+            payload if isinstance(payload, dict) else {}, out["notes"], key, short)
     if entries is None:
         return unread(unreadable + ", so whether an announcement was let through for the milestone this pull request "
                       "finishes, or Dan declined one, could not be told")
-    why, how = [], []
+    why, how, behind = [], [], []
     for s in sorted(owed, key=lambda s: s["number"]):
         last = _last_decided(entries, found, key, _feature_key(s["title"]), s["number"])
-        if last is not None and last.get("answer") == "no":
+        declined = last is not None and last.get("answer") == "no"
+        # His decline clears the milestone only when this call read every noted session. With
+        # sessions left unread (short), a newer ANNOUNCE_IT of his may be in one of them and would
+        # be his last answer, so the decline is leaned on only if nothing else clears it: an
+        # announcement let through does not depend on his last answer, and is looked for first.
+        if declined and not short:
             continue
         let_through = _announced(entries, key, s["number"], s["title"])
         announced = [n for n in let_through if n not in unmerged]
         if announced:
             out["announced"] += [n for n in announced if n not in out["announced"]]
+            continue
+        if declined:
+            behind.append("the milestone " + json.dumps(s["title"]) + " (number " + str(s["number"]) + ")")
             continue
         said = ("it closes the last open issue of the milestone " + json.dumps(s["title"]) + " (number " + str(s["number"])
                 + "), whose description says Dan said yes to announcing it to agents, and this Mac's record holds no "
@@ -2171,6 +2192,13 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
                    + "` lets this merge through under its own label; his `" + ANNOUNCE_IT + "` means it merges under "
                    "changelog/announce")
     if not why:
+        if behind:
+            # Unread, never clear (L98), and never owed: his decline is on the record, so there is
+            # nothing to ask him. A milestone that IS owed stands in front of this (below), because
+            # the gate's override lets an unread through and never an owed.
+            return unread("this Mac's record holds Dan's `" + NOT_ANNOUNCING + "` for " + " and ".join(behind)
+                          + ", which this pull request finishes, and whether that is still his last answer could "
+                          "not be told: " + ". ".join(w.rstrip(".") for w in short))
         return out
     if unlooked:
         why.append(unlooked)

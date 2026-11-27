@@ -1593,50 +1593,37 @@ talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
 check "still possible: one naming that milestone does" "$([[ "$(decided "$T" acme/widget "Hand back" 28)" == "no|"* ]] && echo ok || decided "$T" acme/widget "Hand back" 28)"
 
 echo "the line a milestone's description carries, written and read by one function (#3669)"
-# milestone_line <store> <answer> <feature> [description]: the helper's question, as "<ok>|<line>|<description>|<why>".
+# milestone_line <store> <answer> <feature> [description]: the helper's question, as "<ok>|<line>|<description>|<why>",
+# on one line: each line break in it is written as the two characters \n, so a case that fails prints
+# nothing at the margin (test-fail-margin.sh).
 milestone_line() {
   local d="$WORK/description.txt"; printf '%s' "${4:-}" > "$d"
   ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" milestone-line --repo acme/widget --feature "$3" --answer "$2" --description-file "$d" </dev/null \
     | python3 -c 'import json, sys
 d = json.load(sys.stdin)
-print(("yes" if d["ok"] is True else "no") + "|" + d["line"] + "|" + d["description"] + "|" + d["why"] + (" " + d["how"] if d["how"] else ""), end="")'
+out = ("yes" if d["ok"] is True else "no") + "|" + d["line"] + "|" + d["description"] + "|" + d["why"] + (" " + d["how"] if d["how"] else "")
+print(out.replace("\n", "\\n"), end="")'
 }
 YES_LINE="Announce to agents: yes (Dan answered \"Announce it\" on $TODAY_ET)"
 NO_LINE="Announce to agents: no (Dan answered \"Not announcing\" on $TODAY_ET)"
 r="$(milestone_line "$WORK/store-d-none" unasked "Hand back" "Rework the hand back.")"
-check "unasked needs nothing and writes that he was not asked yet" "$([[ "$r" == "yes|Announce to agents: not asked yet|Rework the hand back.
-
-Announce to agents: not asked yet|" ]] && echo ok || echo "$r")"
+check "unasked needs nothing and writes that he was not asked yet" "$([[ "$r" == 'yes|Announce to agents: not asked yet|Rework the hand back.\n\nAnnounce to agents: not asked yet|' ]] && echo ok || echo "$r")"
 r="$(milestone_line "$WORK/store-d-none" yes "Hand back" "")"
 check "R9 a yes the record does not hold is refused, saying how to ask him" "$([[ "$r" == "no|||"*"holds no answer"*"AskUserQuestion"* ]] && echo ok || echo "$r")"
 r="$(milestone_line "$WORK/store-d-none" no "Hand back" "")"
 check "R9 and so is a no the record does not hold" "$([[ "$r" == "no|||"*"holds no answer"* ]] && echo ok || echo "$r")"
 r="$(milestone_line "$WORK/store-d-yes" yes "Hand back" "Rework the hand back.")"
-check "a yes the record holds is written quoting his answer and its date" "$([[ "$r" == "yes|$YES_LINE|Rework the hand back.
-
-$YES_LINE|" ]] && echo ok || echo "$r")"
+check "a yes the record holds is written quoting his answer and its date" "$([[ "$r" == "yes|$YES_LINE|Rework the hand back."'\n\n'"$YES_LINE|" ]] && echo ok || echo "$r")"
 r="$(milestone_line "$WORK/store-d-yes" no "Hand back" "")"
 check "R9 a no where his last answer was Announce it is refused, quoting him" "$([[ "$r" == "no|||"*'`Announce it`'* ]] && echo ok || echo "$r")"
 r="$(milestone_line "$WORK/store-d-yes" unasked "Hand back" "")"
 check "R9 unasked is refused where the record holds his answer about that feature" "$([[ "$r" == "no|||"*'"announce": "yes"'* ]] && echo ok || echo "$r")"
 r="$(milestone_line "$WORK/store-d-typed" no "Hand back" "")"
 check "R9 a no where his last answer decided nothing is refused" "$([[ "$r" == "no|||"*"decides nothing"* ]] && echo ok || echo "$r")"
-r="$(milestone_line "$WORK/store-d-yes" yes "Hand back" "Rework.
-
-Announce to agents: not asked yet
-
-More.")"
-check "the line replaces one the description already carries, where it stood" "$([[ "$r" == "yes|$YES_LINE|Rework.
-
-$YES_LINE
-
-More.|" ]] && echo ok || echo "$r")"
-r="$(milestone_line "$WORK/store-d-none" unasked "Hand over" "Rework.
-
-$NO_LINE")"
-check "unasked never replaces an answer the description already carries" "$([[ "$r" == "yes|$NO_LINE|Rework.
-
-$NO_LINE|" ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-yes" yes "Hand back" $'Rework.\n\nAnnounce to agents: not asked yet\n\nMore.')"
+check "the line replaces one the description already carries, where it stood" "$([[ "$r" == "yes|$YES_LINE|Rework."'\n\n'"$YES_LINE"'\n\nMore.|' ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-none" unasked "Hand over" "Rework."$'\n\n'"$NO_LINE")"
+check "unasked never replaces an answer the description already carries" "$([[ "$r" == "yes|$NO_LINE|Rework."'\n\n'"$NO_LINE|" ]] && echo ok || echo "$r")"
 r="$(milestone_line "$WORK/store-d-none" maybe "Hand back" "")"
 check "any other value is refused, naming the three" "$([[ "$r" == "no|||"*'"yes", "no" or "unasked"'* ]] && echo ok || echo "$r")"
 # The helper writes the description it is handed back into the milestone, so one read short or not
@@ -1733,6 +1720,70 @@ T="$WORK/f-hook.jsonl"; new_talk "$T"
 talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
 check "the record-only question does not read his picker" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")")" == "owed|"* ]] && echo ok || echo no)"
 check "still possible: asked as a hook asks, his Not announcing in this session clears it" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")" "$T")" == "clear|"* ]] && echo ok || echo no)"
+# A decline clears the merge only when the call that leans on it read every noted session (decided by
+# the main session on the stricter side, 2026-11-26). A newer Announce it of his, in a session the
+# call left unread, would be his last answer, so a decline with sessions left unread is unread,
+# never clear. An announcement let through for the milestone does not depend on his last answer, and
+# clears as before.
+# finishes_short <store> <GitHub's answer> <transcript> [sessions one call reads back] [late]: the same
+# question asked as a hook asks in session s1, in process, with that many sessions read back in place
+# of the library's own number, and with `late` the call's time already run out when the first noted
+# session comes up: "<state>|<the pull requests given back as announced>|<why> <how>".
+finishes_short() {
+  ANNOUNCE_APPROVALS_DIR="$1" python3 -B -c 'import importlib.util, json, sys, time
+spec = importlib.util.spec_from_file_location("announce_approval", sys.argv[1])
+lib = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lib)
+if sys.argv[4]:
+    lib.NOTED_SESSIONS = int(sys.argv[4])
+if sys.argv[5] == "late":
+    lib._clock = lambda: time.monotonic() + 10 ** 6
+d = lib.finishes("acme/widget", 7, json.loads(sys.argv[2]), {"session_id": "s1", "transcript_path": sys.argv[3]},
+                 [int(n) for n in sys.argv[6].split(",") if n])
+print(d["state"] + "|" + ",".join(str(n) for n in d["announced"]) + "|" + d["why"] + " " + d["how"], end="")' "$LIB" "$2" "$3" "${4:-}" "${5:-}" "${UNMERGED:-}"
+}
+STORE_USED="$WORK/store-f-behind"
+T="$WORK/f-behind.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+# Two other sessions each hold a noted picker nothing can judge (put and not answered), so each is
+# read back on every call and neither is ever settled.
+F="$(shown behind)"
+for n in 1 2; do
+  aaf_new "$WORK/f-behind-other-$n.jsonl"
+  PX="$(talk "$WORK/f-behind-other-$n.jsonl" put acme/widget "$F" "" "behind$n")"
+  note "$WORK/f-behind-other-$n.jsonl" payload "$PX" acme/widget "$F" "" "" "behind$n" >/dev/null
+done
+YES12="$(closing "$SAYS_YES" "12" "12")"
+r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
+check "still possible: his Not announcing clears it when the call read every noted session" "$([[ "$r" == "clear||"* ]] && [ "$(kinds decided)" = 1 ] && echo ok || echo "$r")"
+r="$(finishes_short "$STORE_USED" "$YES12" "$T" 1)"
+check "R9 #3669 his Not announcing does not clear it when the call read back one of two noted sessions: unread, naming the milestone and the session left unread" "$([[ "$r" == "unread||"*'`Not announcing`'*'"Hand back" (number 28)'*"1 session holding a picker the record notes was left unread, because one call reads back 1"*"an answer of his there is not known to this call"* ]] && echo ok || echo "$r")"
+r="$(finishes_short "$STORE_USED" "$YES12" "$T" "" late)"
+check "R9 #3669 nor when the call's time ran out before any noted session was read: unread, saying both were left unread" "$([[ "$r" == "unread||"*'`Not announcing`'*"2 sessions holding a picker the record notes were left unread, because the 12 seconds one call has ran out"* ]] && echo ok || echo "$r")"
+check "still possible: the question that reads the record only reads no session, and his Not announcing on the record clears it" "$([[ "$(finishes "$STORE_USED" "$YES12")" == "clear|"* ]] && echo ok || echo no)"
+# A second milestone the same pull request finishes, with no answer of his: owed, which no override
+# clears, stands in front of unread, which the override lets through.
+BOTH="$(python3 -c 'import json, sys
+a, b = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+refs = a["data"]["repository"]["pullRequest"]["closingIssuesReferences"]
+refs["nodes"] += b["data"]["repository"]["pullRequest"]["closingIssuesReferences"]["nodes"]
+refs["totalCount"] = len(refs["nodes"])
+print(json.dumps(a), end="")' "$YES12" "$(closing "$SAYS_YES" "14" "14" | sed -e 's/"number": 28/"number": 29/' -e 's/Hand back/Hand over/')")"
+r="$(finishes_short "$STORE_USED" "$BOTH" "$T" "" late)"
+check "R9 #3669 a second milestone it finishes with no answer of his is owed, never unread, and the left unread sentence is still said" "$([[ "$r" == "owed||"*'"Hand over" (number 29)'*"2 sessions holding a picker the record notes were left unread"* ]] && echo ok || echo "$r")"
+# An announcement let through for the milestone, beside his decline and the sessions left unread.
+printf '{"kind": "used", "repo": "acme/widget", "hash": "%064d", "pr": 5, "closes": [{"issue": 11, "repo": "acme/widget", "milestone": "Hand back", "milestone_number": 28}], "at": "2026-11-21T00:00:00Z"}\n' 0 >> "$STORE_USED/record.jsonl"
+r="$(finishes_short "$STORE_USED" "$YES12" "$T" "" late)"
+check "still possible #3669: an announcement let through for the milestone clears it with sessions left unread, and is given back for the gate to ask GitHub about" "$([[ "$r" == "clear|5|"* ]] && echo ok || echo "$r")"
+r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T" "" late)"
+check "R9 #3669 and once GitHub says that one has not merged, his decline with sessions left unread is unread again" "$([[ "$r" == "unread||"*"2 sessions holding a picker the record notes were left unread"* ]] && echo ok || echo "$r")"
+r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T")"
+check "still possible #3669: with every noted session read, his decline clears it whatever was let through" "$([[ "$r" == "clear||"* ]] && echo ok || echo "$r")"
+# A noted session whose transcript is gone, its note naming a repository, is tried on every call and
+# can never be read. It is no session the call left unread, so it does not stand in his decline's way.
+rm -f "$WORK/f-behind-other-2.jsonl"
+r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T")"
+check "still possible #3669: a noted session whose transcript is gone is no session left unread, and his decline still clears it" "$([[ "$r" == "clear||"* ]] && echo ok || echo "$r")"
 # What GitHub does not answer is never read as "not the last".
 for bad in '' '{}' '{"data":{"repository":{"pullRequest":null}}}' \
   '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":60,"nodes":[]}}}}}' \

@@ -1802,6 +1802,35 @@ out=$(FAKE_CLOSING_FAIL="HTTP 502: bad gateway" run_hook "$dir" "$OVERRIDDEN" 2>
 if let_through_unread "$out"; then pass; else fail "#3669 with the override typed, a pull request whose closing issues could not be read was refused, or went through with nothing said: $out"; fi
 rm -rf "$dir"
 
+# His decline clears the merge only when the call that leans on it read every noted session (decided
+# by the main session on the stricter side, 2026-11-26). A newer Announce it of his, in a session the
+# call left unread, would be his last answer, so a decline with a session left unread is refused as
+# what could not be told, never taken as clear.
+dir=$(make_repo acme/widget "$VISIBLE_OK" "$REGISTRY_ANNOUNCES")
+aaf_new "$dir/talk.jsonl"
+aaf_talk "$dir/talk.jsonl" decide acme/widget "Hand back" "Not announcing" "" "" 28
+out=$(TALK="$dir/talk.jsonl" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+# One note the real hook wrote, by its ids alone, of a picker its transcript never holds: nothing can
+# judge it, so its session is read back on every call. The other sessions' notes are that same line
+# with the session and the picker renamed, fifty sessions in all and then one more.
+aaf_new "$dir/other.jsonl"
+AAF_PAYLOAD_FORM=nometadata aaf_talk "$dir/other.jsonl" decide-payload toolu_behind0 acme/widget "Hand back" "Not announcing" "" behind0 "" 28 | note_it "$dir" >/dev/null
+real_note="$(grep '"picker": "toolu_behind0"' "$dir/approvals/record.jsonl" 2>/dev/null)"
+for n in $(seq 1 49); do
+  printf '%s\n' "$real_note" | sed -e "s/toolu_behind0/toolu_behind$n/" -e "s/\"behind0\"/\"behind$n\"/"
+done >> "$dir/approvals/record.jsonl"
+out50=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+if [ -z "$out" ] && [ -z "$out50" ] && [ "$(grep -c '"session": "behind' "$dir/approvals/record.jsonl" 2>/dev/null)" = 50 ]; then pass
+else fail "#3669 R9 still possible: his Not announcing on the record did not let the merge through when the call read all fifty noted sessions, or the fixture does not hold fifty: $out $out50 $(grep -c '"session": "behind' "$dir/approvals/record.jsonl" 2>/dev/null)"; fi
+printf '%s\n' "$real_note" | sed -e "s/toolu_behind0/toolu_behind50/" -e "s/\"behind0\"/\"behind50\"/" >> "$dir/approvals/record.jsonl"
+out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if cannot_tell "$out" && says "$out" "Not announcing" && says "$out" "1 session holding a picker the record notes was left unread, because one call reads back 50"; then pass
+else fail "#3669 R9: his Not announcing on the record let the merge through when the call left a noted session unread, or the refusal does not say which answer and what was left unread: $out"; fi
+out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$OVERRIDDEN" 2>/dev/null)
+if let_through_unread "$out" && says "$out" "left unread"; then pass
+else fail "#3669 with the override typed, a decline with a noted session left unread was refused, or went through without saying what was left unread: $out"; fi
+rm -rf "$dir"
+
 # The judge failing is not a pull request that finishes nothing (L98). Driven with a copy of the
 # hooks whose approval library throws. A pull request that closes an issue is refused in its own
 # words, whatever that issue's milestone says, because only the library reads the milestone's line
