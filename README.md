@@ -11531,7 +11531,8 @@ Unreadable counts as nothing"), never a reason to withhold or to pin, and is kep
 (`notes`) in the reasons file, seen and not counted
 (`tests/test-close-card-process-look.sh` runs the look on real processes). A reading that cannot be
 taken withholds it, except a process whose parents cannot be followed, which is noted and never
-withholds or pins the card. Each reason is written to `~/.claude/state/close-session/<session id>.json`, newest
+withholds or pins the card. Each reason is written to
+`~/.claude/state/close-session/<session id>.json`, newest
 replacing the one before. The next turn start takes the card down as withdrawn; it comes back
 only after the next box. Invisible to both readings: a program that detaches itself without the
 command saying so, and an Apple signed program (a shell, sleep) left behind, whose environment
