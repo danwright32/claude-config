@@ -22,8 +22,8 @@ Serve is stopped on EVERY path, which is why a supervisor and not the caller own
 supervisor is a detached process that started serve in a process group of its own, holds a lock
 for exactly as long as it lives, and stops serve, runs the project's stop command and removes the
 worktree when any of these happens first: `stop` asks it to, the ready command never succeeds,
-serve exits by itself, the run's deadline (timeouts.max_run_s) passes, or the supervisor itself
-fails. If the supervisor is killed outright, `stop` sees its lock free with no stop recorded and
+serve exits by itself, the run's deadline (timeouts.max_run_s) passes, the caller's lifeline ends
+(for a run started with one, below), or the supervisor itself fails. If the supervisor is killed outright, `stop` sees its lock free with no stop recorded and
 does the same work itself, by the process group it recorded (L1011). Waiting for the end of a run
 is waiting for that lock, never a poll of a fixed length (L290).
 
@@ -46,8 +46,9 @@ and serve would then never see the SIGTERM that stops it (measured, claude-confi
 
 A stop that cannot finish is CUT OFF, in two places. Serve that is killed and still cannot be
 collected within KILLED_WAIT_S ends the stop there. And a supervisor whose caller is gone gives the
-stop stop_wait_s to finish, counted from when the lifeline ended and whether or not an earlier
-`stop` already stands, then ends the run itself from the lifeline's thread. Cutting off kills serve's
+stop stop_longest_s to finish (every wait in a stop at its limit, so a slow stop is not taken for a
+hung one), counted from when the lifeline ended and whether or not an earlier `stop` already
+stands, then ends the run itself from the lifeline's thread. Cutting off kills serve's
 group and the report stream's group by the ids the supervisor recorded, collects serve, runs the
 project's stop command if the stop had not, removes the worktree, and writes the receipt with the
 reason, a `stop_detail` saying the stop did not finish, and egress `unmeasured`: the monitor is never
@@ -69,7 +70,11 @@ its test connections, #3576) and nothing outside the allowed hosts was reached; 
 names what was; `unmeasured` says why the monitor could not see, a Mac that did not report every
 connection it was asked to among the reasons, and never passes for clean.
 
-Env: VERIFICATION_HOME (see verification.py). Three injectable clocks (L524), each a number of at
+Env: VERIFICATION_HOME (see verification.py). VERIFICATION_LIFELINE_FD, read by `start` alone: the
+number of a descriptor that is the read end of a pipe (the lifeline above), or unset for a run with
+none; anything else is refused as `lifeline-bad` before a run starts.
+
+Three injectable clocks (L524), each a number of at
 least 0 that multiplies seconds, default 1: VERIFICATION_TIME_SCALE scales every poll delay (the
 ready interval, the wait for a stopped process group to empty), VERIFICATION_DEADLINE_SCALE scales
 the run's deadline, and VERIFICATION_STOP_LIMIT_SCALE scales how long a supervisor whose caller is
@@ -235,14 +240,31 @@ def stop_wait_s(timeouts):
             + egress.finish_budget_s(timeouts.get("egress_s", v.TIMEOUT_DEFAULTS["egress_s"])))
 
 
+def stop_longest_s(timeouts):
+    """The longest a stop that is still getting somewhere can take, every wait in it at its limit:
+    stop_wait_s, and the two things that leaves out, a serve that has to be killed and then waited
+    for (KILLED_WAIT_S), and its group, asked and then killed (stop_s each). A stop still going
+    after this is hung, not slow, which is what cutting a run off is for."""
+    return stop_wait_s(timeouts) + timeouts["stop_s"] * 2 + KILLED_WAIT_S
+
+
 def record_stop_reason(rdir, reason):
     """Record why the run is being stopped. False when an earlier request stands, whose reason is the one kept."""
+    path = os.path.join(rdir, "stop-reason")
     try:
-        fd = os.open(os.path.join(rdir, "stop-reason"), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
     except FileExistsError:
         return False
-    os.write(fd, reason.encode("utf-8", "replace"))
-    os.close(fd)
+    try:
+        os.write(fd, reason.encode("utf-8", "replace"))
+    except OSError:
+        # A reason that could not be written (a full disk) must not be left as an empty file: that
+        # would stand as an earlier request for ever, and read as `stop`.
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+        raise
+    finally:
+        os.close(fd)
     return True
 
 
@@ -618,9 +640,8 @@ def supervise(rdir, repo_lock_fd, pipe_w, lifeline_fd=None):
                 doc = json.load(f)
             rec = read_receipt(rdir)
             if lifeline_fd is not None:
-                # A caller that is gone gets the patience a caller that is there has: `stop` itself
-                # waits stop_wait_s for a supervisor before it calls it hung.
-                limit = stop_wait_s(doc["timeouts"]) * time_scale("VERIFICATION_STOP_LIMIT_SCALE")
+                # Long enough that only a stop that hung is cut off, never one that is merely slow.
+                limit = stop_longest_s(doc["timeouts"]) * time_scale("VERIFICATION_STOP_LIMIT_SCALE")
                 signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)  # inherited by the thread made next
                 try:
                     threading.Thread(target=watch_lifeline, daemon=True,

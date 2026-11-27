@@ -121,8 +121,8 @@ stamp, and `egress` (below). The three `start_` reasons mean setup failed before
 failed copy), `start_interrupted` an interrupt. `stop_detail` carries the error itself and any
 cleanup step that also failed, which `start` reports too, as `start-cleanup-failed`. A stop that
 could not finish is cut off (a killed serve that could not be collected, or a run whose caller was
-gone and whose stop was still going `stop`'s own wait later): `stop_detail` then says the run was
-cut off and why, and `egress` reads `unmeasured`, never a verdict.
+gone and whose stop was still going after the longest a working stop can take): `stop_detail` then
+says the run was cut off and why, and `egress` reads `unmeasured`, never a verdict.
 
 The receipt's `egress` is the verdict of the egress monitor, [scripts/egress.py](scripts/egress.py),
 which the run's supervisor starts before serve and settles after serve's whole process group is

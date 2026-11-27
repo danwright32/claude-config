@@ -1415,6 +1415,27 @@ class CutOffTests(RunFixture):
         self.assertIn("No space left on device", self.said.getvalue())
         self.assertEqual(run_session.requested_reason(rdir, "caller_gone" if gone.is_set() else "stop"), "caller_gone")
 
+    def test_a_reason_that_cannot_be_written_leaves_no_empty_reason_behind(self):
+        # An empty reason file would stand as an earlier request for ever, and read as `stop`.
+        rdir = self.a_run_on_disk()
+        with mock.patch.object(run_session.os, "write", side_effect=DISK_FULL):
+            with self.assertRaises(OSError):
+                run_session.record_stop_reason(rdir, "caller_gone")
+        self.assertFalse(os.path.exists(os.path.join(rdir, "stop-reason")), "an empty reason file was left behind")
+        self.assertEqual(run_session.requested_reason(rdir, "caller_gone"), "caller_gone")
+        self.assertTrue(run_session.record_stop_reason(rdir, "caller_gone"), "a later reason could not be recorded")
+
+    def test_a_caller_that_is_gone_waits_as_long_as_a_stop_still_getting_somewhere_can_take(self):
+        # Every wait a stop makes, each at its limit: a stop that slow is slow, not hung, and a
+        # supervisor whose caller is gone must not cut it off (the lessons review of #3807).
+        timeouts = {"stop_s": 10, "egress_s": 30}
+        longest = (10  # the project's stop command
+                   + 10 + run_session.KILLED_WAIT_S  # serve, asked to end and then killed
+                   + 10 + 10  # serve's group, asked and then killed
+                   + run_session.egress.finish_budget_s(30))  # the monitor settling
+        self.assertGreaterEqual(run_session.stop_longest_s(timeouts), longest)
+        self.assertGreater(run_session.stop_longest_s(timeouts), run_session.stop_wait_s(timeouts))
+
     def test_a_supervisor_whose_stop_finishes_in_time_is_not_cut_off(self):
         rdir = self.a_run_on_disk()
         r, w = os.pipe()
