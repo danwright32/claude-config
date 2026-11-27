@@ -3489,6 +3489,8 @@ prompt, the command is in a background group of the terminal, and a command that
 the terminal there (`git commit` opening an editor, `sudo`, `ssh`, anything that asks) is
 suspended by the system until the limit ends it. The runner hands the terminal to nobody; the
 usage says so, and what it says with 124 tells when the command was suspended and not running.
+The runner sees that the command was suspended and never why (it may have stopped itself, or
+been sent STOP), so that sentence names the terminal as the likely cause and no more.
 
 | Comes back as | What happened |
 | --- | --- |
@@ -3503,7 +3505,9 @@ started as 127 or 126, as a shell reports them. An executable file with no inter
 handed to `sh`, as a shell hands it. When something was stopped the runner says so in one line on
 standard error, naming the group's id, whether TERM or KILL ended it, and the command. A command
 can itself exit with 123, 124 or 125 (another runner inside this one does), and only that line
-tells the runner's code from the command's.
+tells the runner's code from the command's. One 125 of the runner's has no line on standard
+error: the words `--prove <anything>` given as a run are the launcher's own question to the
+program, and the answer is one line on standard output.
 
 - **A process left running fails the run.** A suite that passes and leaves a process behind is
   what cost 40 GB on 2026-11-24, so the run comes back as 123 whatever the command's own code
@@ -3511,22 +3515,28 @@ tells the runner's code from the command's.
   itself: a shell does not wait for a process substitution, so `exec > >(tee log)` ends with
   `tee` a moment behind it, and ending `tee` at once would cut the log short and fail a passing
   run by a race. The 123 is Dan's to reverse (stop the process and keep the command's code).
-- **The command is never run with no limit, and a run with nothing run is never a pass.** With
-  python3 missing, the program behind the launcher missing, or a system where the runner cannot
-  see a process group or keep its own children, nothing runs and 125 comes back. The launcher
-  asks the program one question before it hands a command over and goes on only at the program's
-  own answer, so a `python3` that starts and is not Python (a version manager's shim with no
-  python chosen) is 125 too, where its exit code 0 used to read as a pass. A fault inside the
-  runner once the command's process exists sends the group KILL, and a fault before that is 125
-  in words. The command starts only once the runner is watching it: a runner that dies first, or
-  is told to stop first, leaves a child that ends without becoming the command.
+- **The command is never started with no limit, and a run with nothing run is not a pass, with
+  the one exception below.** With python3 missing, the program behind the launcher missing, or a
+  system where the runner cannot see a process group or keep its own children, nothing runs and
+  125 comes back. The launcher asks the program one question before it hands a command over and
+  goes on only at the program's own answer, so a `python3` that starts and is not Python (a
+  version manager's shim with no python chosen) is 125 too, where its exit code 0 used to read
+  as a pass. The exception: a `python3` built to give that answer and then exit 0 is a pass with
+  nothing run, since this is a time limit and no security boundary. A fault inside the runner
+  once the command's process exists sends the group KILL, and a fault before that is 125 in
+  words. The command starts only once the runner is watching it: a runner that dies first, or
+  is told to stop first, leaves a child that ends without becoming the command. What can take
+  the limit away AFTER the start (the runner ended by KILL, for one) is under "What it does not
+  cover".
 - **It signals a number only while its own child pins it.** A child that has not been collected
   keeps its process id, running or ended, and the group it leads has that number. So the runner
   learns that the command ended without collecting it (a kqueue process event on macOS, `waitid`
   with `WNOWAIT` on Linux), ends whatever the group still holds, and collects the command last.
   After the collect it signals nothing: the number can by then belong to any new process. One
   class in `lib/run-with-limit.py` holds the calls that signal the command or its group and the
-  call that collects it, and refuses a signal after the collect.
+  call that collects it. It refuses a signal after the collect, and after either of its own
+  looks at the command (the one before a fault's KILL, the one for a suspended command) was
+  told the command is no longer the runner's child.
 - **It keeps its own children whatever its caller set.** A caller that ignores SIGCHLD hands
   that down, and on Linux a process with it has its children collected by the system the moment
   they end, which would leave the number pinned by nothing (found by review, claude-config#3833).
@@ -3536,10 +3546,27 @@ tells the runner's code from the command's.
   sends on a fault, the runner asks the system whether the command is still its own child.
 - **A signal that would end the runner ends the command's group first.** TERM, INT, HUP, QUIT,
   USR1, USR2, ALRM, VTALRM, PROF and XCPU are carried over (on Linux also IO, PWR, STKFLT and
-  the real time signals), unless the caller had the signal ignored. The runner then ends by that
-  signal itself, so a shell loop around it stops at Ctrl C. A stop that arrives before the
-  command was let go starts nothing. TSTP (Ctrl Z) is caught and not acted on, since a stopped
-  runner keeps no limit.
+  the real time signals python can set, from its SIGRTMIN up, which is 34 with glibc), unless
+  the caller had the signal ignored. The runner then ends by that signal itself, so a shell loop
+  around it stops at Ctrl C. A stop the runner has noted by its last look before it lets the
+  command go starts nothing. Both hold from the moment the runner's handlers are in, which is
+  after the command's process exists and before it is let go. Three spans are outside that,
+  each read from the code and none measured:
+  - Before the handlers are in, TERM and the others end the runner at once and the command
+    never starts. An INT there is turned by python into an error, so the run comes back 125
+    with nothing run, where an end by INT was meant, and a shell loop around it goes on. Inside
+    a session that span includes the reader that names the marker folder.
+  - A stop that lands in the few steps between the runner's last look for one and its letting
+    the command go starts the command and stops it at once.
+  - While the launcher waits for the answer to its question, an INT sent to the launcher's
+    process alone can be dropped by bash (its rule for a child it waits on), and the command
+    then starts and runs to its limit. The limit is kept; the sender's stop is lost. Ctrl C at
+    a terminal goes to the whole group and is not affected.
+- **A signal that would stop the runner does not stop it,** since a stopped runner keeps no
+  limit. TSTP (Ctrl Z) is caught and not acted on. TTIN and TTOU are ignored while a command
+  runs: ignored and not caught, because a write that raised a caught TTOU fails and is tried
+  again for ever. The command does not inherit that. It starts with TTIN and TTOU as its caller
+  had them.
 - **It reads no `ps`,** which cannot start under `hooks/no-network-run.sh` (macOS refuses a
   setuid program in a sandbox). On macOS it asks with signal 0: measured on 2026-11-27 on the
   personal MacBook (macOS 26.6.2) with a probe's own children, a group holding only its ended,
@@ -3560,20 +3587,36 @@ tells the runner's code from the command's.
   nothing else removes it, and macOS empties the folder of what nobody has touched for about
   three and a half days (`bash-shell-mark.sh`). While a file is there, the check's count of
   "other commands of this session" in the same span is one too high for it.
-- **A command that left its own group is ended by its own process id,** which it keeps for as
-  long as the runner has not collected it. What it started outside the group is not reached.
+- **A command that left its own group is ended by its own process id, late.** It keeps that id
+  for as long as the runner has not collected it, so the same pin covers it. At the limit its
+  group reads empty at once, and the runner then watches for the command's end for up to 10
+  seconds (a setting, not a measurement) before it sends TERM to that id, with KILL after the
+  same wait a group gets. So such a command runs up to that long past its limit. The watch is
+  not cut short, because on macOS a leader that is ending reads for a moment exactly as one
+  that left its group: it stops counting as a member at the start of its exit, and the event
+  the runner waits for comes near the end of it (Apple's published kernel source, read on
+  2026-11-27, not measured). A TERM by id sent in that moment would have the runner say a
+  command had left a group it never left. What the command started outside the group is not
+  reached.
 
 What it does not cover:
 
+- **A process can outlive the limit by the wait between TERM and KILL** (2 seconds, a setting,
+  not a measurement) when it ignores TERM, and a command that left its own group by the watch
+  described just above.
 - A process the command starts outside the group (`setsid`, a job control shell) is not stopped
   and not seen.
 - A process this user may not signal (a setuid program) reads as nothing left, and when the
   runner has taken its record away the leftover process check no longer ties it either.
-- A runner ended by KILL stops nothing. Neither does one ended by a signal a fault raises (ABRT,
-  BUS, FPE, ILL, SEGV, SYS, TRAP), which are left at their default. A runner stopped by STOP
-  keeps no limit while it is stopped, and applies it late when it goes on. In each case the
-  command runs on with no limit, and the leftover process check lists its group only once its
-  leader has gone.
+- A runner ended by KILL stops nothing, and a runner stopped by STOP keeps no limit while it is
+  stopped and applies it late when it goes on. Nothing can catch either. A real fault in the
+  runner's own process cannot be answered either, since a python handler cannot return from
+  one, so the signals a fault raises (ABRT, BUS, FPE, ILL, SEGV, SYS, TRAP, and EMT on macOS)
+  are left at their default. That leaves the same signals sent from outside unanswered too, by
+  choice: ABRT, TRAP, SYS and EMT could be carried over when something else sends them, and are
+  not. On Linux signals 32 and 33 belong to the C library, and python cannot set them. In each
+  case the command runs on with no limit, and the leftover process check lists its group only
+  once its leader has gone.
 - A command that reads the terminal, as said above. With a python3 that has no `os.waitid` (the
   developer tools' 3.9.6, read on 2026-11-27) what it says with 124 cannot tell that.
 - A `python3` that never answers the launcher's question holds the launcher for as long, with

@@ -2809,8 +2809,11 @@ stop a group. What pins a number is a child that has not been collected: it keep
 or ended, and the group it leads has that id. So the order is fixed. Learn that the command ended
 without collecting it, end what its group still holds, collect it last, signal nothing after. One
 class holds the call that signals and the call that collects, and refuses the first after the
-second. The suite runs the program with those calls replaced by recorders and fails on a signal
-asked for after the collect, which the recorder never sends.
+second, and after either of its own looks at the command was told the command is no longer the
+runner's child (the look before a fault's KILL, and the look for a suspended command, which until
+the second review of claude-config#3833 threw that answer away). The suite runs the program with
+those calls replaced by recorders and fails on a signal asked for after the collect, which the
+recorder never sends.
 
 **The pin is only real if the runner keeps its own ended children, so it makes sure first.** An
 independent review of the pull request (claude-config#3833, 2026-11-27) found, by reading, that a
@@ -2824,6 +2827,24 @@ whether the command is still the runner's child (`waitid` with `WNOWAIT`, where 
 before any KILL. Considered: refusing whenever SIGCHLD is ignored (rejected: every command under
 such a caller would then fail for a setting the runner can put right for itself). A command that
 moved itself to another group is ended by its own process id, which the same pin covers.
+
+**A command that left its group is sent TERM by its id only after the watch, and the watch is not
+cut short.** At the limit such a command's group reads empty at once, and the runner watches for
+the command's end for up to ten seconds (a setting, not a measurement) before it signals the
+command's own id. The second review (2026-11-27) asked for that signal as soon as the group reads
+empty and the watch has not seen the end. That reading cannot tell a command that left its group
+from an ordinary one that is ending. In Apple's published kernel source (xnu, read on 2026-11-27,
+not measured on this Mac) a process is marked dead at the start of its exit, from which point a
+walk of its group no longer counts it and the group reads empty, while the process event the
+runner's watch waits for is posted near the end of the exit, after its files are closed. All
+through that span a signal to its process id answers success. A TERM by id sent then goes to the
+runner's own uncollected child, so it breaks no rule, and it would make the runner say the
+command had left a group it never left. Considered: sending on that reading anyway (rejected: an
+untrue sentence about an ordinary run, at a rate set by how slow an exit is under load). What
+would tell the two apart is a look at the command's own group id, which names another group only
+for a command that is alive and has moved. That look is a design step the review did not spell
+out, so it is put to Dan on the pull request (claude-config#3833), and README says the ten
+seconds.
 
 **Python, because the rule cannot be held in perl or bash.** Bash collects a child by itself the
 moment it ends, whether or not the script calls `wait`, so a script never holds the pin. Perl's core
@@ -2864,14 +2885,21 @@ watched after KILL are settings, not measurements.
 The child waits on a pipe before it becomes the command, and is let go after the runner is watching
 it and has recorded its group. A runner that dies first closes the pipe and the child ends. A fault
 after that sends the group KILL while the child still pins it. Every signal that would end the
-runner and that it can catch is carried over to the group first (TERM, INT, HUP, QUIT, USR1, USR2,
-ALRM, VTALRM, PROF, XCPU, and on Linux IO, PWR, STKFLT and the real time signals), and the runner
-then ends by that signal, so a shell loop around it stops at Ctrl C. TSTP is caught and not acted
-on, because a stopped runner keeps no limit. So the paths that run the command with nobody keeping
-its limit are these, and nothing in the same process can answer them: the runner ended by KILL; the
-runner ended by a signal a fault raises (ABRT, BUS, FPE, ILL, SEGV, SYS, TRAP), which stay at
-their default because a python handler cannot return from a real fault; and the runner stopped by
-STOP, for as long as it is stopped. Considered: a watchdog inside the group that signals its own
+runner and that it carries is carried over to the group first (TERM, INT, HUP, QUIT, USR1, USR2,
+ALRM, VTALRM, PROF, XCPU, and on Linux IO, PWR, STKFLT and the real time signals python can set,
+from its SIGRTMIN up, which is 34 with glibc), and the runner then ends by that signal, so a shell
+loop around it stops at Ctrl C once the handlers are in (README names the spans before that, and
+the launcher's). TSTP is caught and not acted on, and TTIN and TTOU are ignored while a command
+runs, because a stopped runner keeps no limit. Ignored and not caught: a write that raised a caught
+TTOU fails and is tried again for ever. They are set after the command's process exists, so the
+command starts with both as its caller had them. So the paths that run the command with nobody
+keeping its limit are these. Nothing in the same process can answer the first three: the runner
+ended by KILL; the runner stopped by STOP, for as long as it is stopped; and a real fault in the
+runner's own process, since a python handler cannot return from one, which is why the signals a
+fault raises (ABRT, BUS, FPE, ILL, SEGV, SYS, TRAP, and EMT on macOS) stay at their default. The
+fourth is left by choice: the same signals sent from outside, of which ABRT, TRAP, SYS and EMT
+could be carried over and are not. On Linux signals 32 and 33 belong to the C library, and python
+cannot set them. Considered: a watchdog inside the group that signals its own
 group with `kill 0`, as `tools/load-window.sh` does, which would outlive the runner (rejected: it
 is a second process in every run, and it cannot tell a command that ended from one that was
 stopped). Considered for TSTP: stopping the group and then the runner, and letting both go on
@@ -2882,7 +2910,9 @@ stopped counts toward the limit, which is Dan's to say).
 the caller's terminal, and one that reads or sets the terminal is suspended by the system until the
 limit (reproduced by the review with `cat` on a terminal of the probe's own making, 2026-11-27).
 The runner is for agents and gates, which have no terminal, so it says so (the usage, the README)
-and what it says with 124 tells when the command was suspended and not running. Considered: giving the
+and what it says with 124 tells when the command was suspended and not running. It names the
+terminal as the likely cause only: the runner's look shows that the command was suspended, never
+why, and a command that stopped itself gets the same words. Considered: giving the
 terminal's foreground to the command's group and taking it back (rejected: taking it back safely
 means handling the signals a background writer gets, and Ctrl Z would then stop the command and
 leave the runner to notice, which is the job control shell again).
