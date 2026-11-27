@@ -48,6 +48,9 @@ const deps: { name: string; register: Register } = {
           branch: async (input: { path: string }) => (await kit('branch', input)) ?? null,
           // A folder with no .git entry the world names is none; one the world cannot read refuses.
           workingTree: async ({ path }: { path: string }) => {
+            // #3673: the world may leave this read unanswered too, as it may the kit's other readers.
+            const asked = await built.process.run(['__modkit', 'workingTree', JSON.stringify({ path })])
+            if (asked.exitCode !== 0) throw new Error(asked.stderr)
             let dir = path.replace(/\/+$/, '') || '/'
             for (let looked = 0; looked < 64; looked++) {
               const s = (await built.fs.stat(`${dir === '/' ? '' : dir}/.git`).catch(() => undefined)) as { kind?: string } | undefined
@@ -86,7 +89,12 @@ const deps: { name: string; register: Register } = {
           account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
         },
         sessions: {
-          list: async () => JSON.parse((await built.process.run(['__sessions'])).stdout),
+          // A list the world fails (#3673) throws in the words it gives, as a noun Claude Code cut does.
+          list: async () => {
+            const r = await built.process.run(['__sessions'])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+            return JSON.parse(r.stdout)
+          },
           // A path naming 'unwritable' is one whose note the registry cannot write (#751).
           noteEdit: async ({ path }: { path: string }) => {
             if (path.includes('unwritable')) throw new Error("this session's record could not be written")
@@ -505,16 +513,40 @@ type Send = true | { refused: string } | 'throws'
 // How the call fares beneath the guard: it runs (the default), it runs and fails, or a later guard
 // refuses it.
 type Ran = 'ok' | 'error' | { deny: string }
-type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; branch?: string | { fails: string }; branchReaderFails?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string; listBreaks?: boolean; tops?: Record<string, string | null | { says: string }> }
+// `unanswered` (#3673): how many of the first asks of a read get no answer in time, by the read: the
+// session list ('list'), or one of mod-kit's readers by its name ('git', 'writes'). Each such ask
+// fails in Claude Code's own words for a noun it cut at 10 seconds, copied from the 12 refusals in
+// the personal MacBook's session records (read 2026-10-26 to 2026-11-26; the 12 fall on 2026-11-20
+// to 2026-11-25): 11 named the list, 1 mod-kit's git reader.
+type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; branch?: string | { fails: string }; branchReaderFails?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string; listBreaks?: boolean; tops?: Record<string, string | null | { says: string }>; unanswered?: Record<string, number>; readFails?: Record<string, string> }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+const cutNoun = (noun: string, mod: string) => ({ value: { exitCode: 1, stdout: '', stderr: `$.${noun}: ${mod} did not answer within 10000ms`, isStdoutTruncated: false, isStderrTruncated: false } })
 
 // The Mac and the model beneath the guard. Everything that gets past it, every question put to the
 // judge, every message sent and every card and toast is recorded.
 const world = (engine: Engine, on: On, o: Opts = {}) => {
-  const w = { o, reached: [] as string[], prompts: [] as { model: string; prompt: string }[], sent: [] as { to: unknown; text: string }[], toasts: [] as string[], cards: [] as Record<string, unknown>[], edits: [] as string[], runs: [] as string[] }
+  const w = { o, reached: [] as string[], prompts: [] as { model: string; prompt: string }[], sent: [] as { to: unknown; text: string }[], toasts: [] as string[], cards: [] as Record<string, unknown>[], edits: [] as string[], runs: [] as string[], asks: [] as string[] }
+  // Asks of each read that are still to go unanswered (#3673), counted down as they are made.
+  const silent = new Map(Object.entries(o.unanswered ?? {}))
+  // A reader is named alone ('git'), or with its exact request as the table above keys it, for
+  // the one ask of several that goes unanswered.
+  const goesUnanswered = (read: string, request?: string): boolean => {
+    w.asks.push(read)
+    const key = request !== undefined && silent.has(`${read} ${request}`) ? `${read} ${request}` : read
+    const left = silent.get(key) ?? 0
+    if (left > 0) silent.set(key, left - 1)
+    return left > 0
+  }
   on('process.run', function answer($, e) {
     const [cmd, ...args] = e.argv
+    if (cmd === '__sessions' && goesUnanswered('list')) return cutNoun('sessions.list', 'session-registry')
+    if (cmd === '__modkit' && args[0] !== 'branch' && goesUnanswered(String(args[0]), args[1])) return cutNoun(`modkit.${args[0]}`, 'mod-kit')
+    // A reader of mod-kit's that fails in words of its own, which is no read left unanswered.
+    const fails = cmd === '__modkit' ? o.readFails?.[String(args[0])] : undefined
+    if (fails !== undefined) return { value: { exitCode: 1, stdout: '', stderr: fails, isStdoutTruncated: false, isStderrTruncated: false } }
+    // The walk for a checkout answers from the disk in the stand-in above; here it is only asked.
+    if (cmd === '__modkit' && args[0] === 'workingTree') return ok('')
     // mod-kit's readers, answered from the table; a request it has no answer for fails the test by
     // name rather than being read some other way. Not one of the runs a test watches.
     if (cmd === '__modkit' && args[0] === 'branch') {
@@ -1837,6 +1869,160 @@ test('a check that fails refuses the call rather than let it through unjudged', 
   expect(refusal(r)).toContain('Blocked: the collision guard could not check this call against the other sessions')
   expect(w.reached).toEqual([])
   expect(w.edits).toEqual([])
+  // #3673: a failure that is not a read left unanswered is never asked again.
+  expect(w.asks).toEqual(['list'])
+})
+
+// #3673: Claude Code gives a call to another mod's noun 10 seconds and fails it when no answer came.
+// Every one of the 12 calls this guard refused as not checked in a month of the personal MacBook's
+// session records was that (11 the session list, 1 mod-kit's git reader), and each was an ordinary
+// call on a busy Mac. A read left unanswered is asked once more, and the call is then judged on the
+// second answer by the guard's usual rules: let through where nobody else is on the file, put to
+// the judge where somebody is.
+test('a session list left unanswered is asked once more, and the edit nobody else is making goes through (#3673)', withDeps, async ($, on) => {
+  const w = world($, on, { unanswered: { list: 1 } })
+  const r = await $.tool.call(edit('/repo/src/a.ts', 'u1'))
+  // The call's own answer: it ran.
+  expect(refusal(r)).toBe('ran')
+  expect(w.reached).toEqual(['Edit'])
+  expect(w.asks).toEqual(['list', 'list'])
+  expect(w.prompts).toEqual([])
+  expect(w.edits).toEqual(['/repo/src/a.ts'])
+})
+
+test('the second answer is judged as the first would have been: a clash it shows still stops the edit (#3673)', withDeps, async ($, on) => {
+  const w = world($, on, { unanswered: { list: 1 }, open: [rec('them', { edits: ['/repo/src/InvoiceTable.tsx'] })], judge: '{"verdict":"Stop","reason":"They are mid rebase."}' })
+  const r = await $.tool.call(edit('/repo/src/InvoiceTable.tsx', 'u2'))
+  expect(refusal(r)).toBe('Blocked: Another session is working on InvoiceTable.tsx. They are mid rebase. Leave it to the other session, or ask Dan.')
+  expect(w.reached).toEqual([])
+  expect(w.prompts.length).toBe(1)
+  expect(w.sent.length).toBe(1)
+  expect(w.edits).toEqual([])
+})
+
+test('a record the second answer cannot read still stops the edit and names it (#3673)', withDeps, async ($, on) => {
+  const w = world($, on, { unanswered: { list: 1 }, unreadable: ['abc.json'] })
+  const r = await $.tool.call(edit('/repo/src/a.ts', 'u3'))
+  expect(refusal(r)).toBe("Blocked: Couldn't read another session's record (abc.json), so this was stopped. Delete the damaged file in ~/.claude/state/sessions, or ask Dan.")
+  expect(w.reached).toEqual([])
+})
+
+test('a session list left unanswered twice refuses the call, saying it was asked twice, and is not asked a third time (#3673)', withDeps, async ($, on) => {
+  const w = world($, on, { unanswered: { list: 2 } })
+  const r = await $.tool.call(edit('/repo/src/a.ts', 'u4'))
+  expect(refusal(r)).toBe(
+    'Blocked: the collision guard could not check this call against the other sessions ($.sessions.list: session-registry did not answer within 10000ms, and again when asked a second time), so it did not run. Try it again; if it fails the same way, tell Dan.',
+  )
+  expect(w.reached).toEqual([])
+  expect(w.edits).toEqual([])
+  expect(w.asks).toEqual(['list', 'list'])
+})
+
+test("mod-kit's git reader left unanswered is asked once more, and the branch switch is judged (#3673)", withDeps, async ($, on) => {
+  const w = world($, on, { unanswered: { git: 1 }, open: [rec('them')], judge: '{"verdict":"Stop","reason":"They have uncommitted work."}' })
+  const r = await $.tool.call(bash('git checkout main', 'u5'))
+  expect(refusal(r)).toBe('Blocked: Another session is working in this checkout. They have uncommitted work. Leave it to the other session, or ask Dan.')
+  expect(w.reached).toEqual([])
+  expect(w.asks.filter(a => a === 'git').length).toBe(2)
+  expect(w.prompts.length).toBe(1)
+})
+
+test("mod-kit's write reader left unanswered is asked once more, and the write another session is on is judged (#3673)", withDeps, async ($, on) => {
+  const w = world($, on, { unanswered: { writes: 1 }, open: [rec('them', { edits: ['/repo/notes.txt'] })], judge: '{"verdict":"Stop","reason":"They are rewriting the notes."}' })
+  const r = await $.tool.call(bash('echo done >> notes.txt', 'u6'))
+  expect(refusal(r)).toBe('Blocked: Another session is working on notes.txt. They are rewriting the notes. Leave it to the other session, or ask Dan.')
+  expect(w.reached).toEqual([])
+  expect(w.asks.filter(a => a === 'writes').length).toBe(2)
+})
+
+// Every other place the guard asks a read (#3673): the list for a checkout wide git command, for a
+// command whose effect cannot be read and for the files a command writes, mod-kit's reader of each
+// command's folder, and its git reader asked again with the settings in front of the command.
+test('the list asked for a branch switch and left unanswered is asked once more, and the switch is judged (#3673)', withDeps, async ($, on) => {
+  const w = world($, on, { unanswered: { list: 1 }, open: [rec('them')], judge: stopped })
+  const r = await $.tool.call(bash('git checkout main', 'u8'))
+  expect(refusal(r)).toBe('Blocked: Another session is working in this checkout. They have uncommitted work. Leave it to the other session, or ask Dan.')
+  expect(w.reached).toEqual([])
+  expect(w.asks.filter(a => a === 'list').length).toBe(2)
+})
+
+test('the list asked for a command whose effect cannot be read and left unanswered is asked once more (#3673)', withDeps, async ($, on) => {
+  const w = world($, on, { unanswered: { list: 1 }, unreadable: ['/sessions/x.json'] })
+  const r = await $.tool.call(bash('eval "$BUILD_STEP"', 'u9'))
+  expect(refusal(r)).toContain("Couldn't read another session's record (/sessions/x.json)")
+  expect(w.reached).toEqual([])
+  expect(w.asks.filter(a => a === 'list').length).toBe(2)
+})
+
+test('the list asked for the files a command writes and left unanswered is asked once more (#3673)', withDeps, async ($, on) => {
+  const w = world($, on, { unanswered: { list: 1 }, open: [rec('them', { edits: ['/repo/notes.txt'] })], judge: '{"verdict":"Stop","reason":"They are rewriting the notes."}' })
+  const r = await $.tool.call(bash('echo done >> notes.txt', 'u10'))
+  expect(refusal(r)).toBe('Blocked: Another session is working on notes.txt. They are rewriting the notes. Leave it to the other session, or ask Dan.')
+  expect(w.reached).toEqual([])
+  expect(w.asks.filter(a => a === 'list').length).toBe(2)
+})
+
+test("mod-kit's reader of each command's folder left unanswered is asked once more, and the switch is judged (#3673)", withDeps, async ($, on) => {
+  const w = world($, on, { unanswered: { pipeline: 1 }, open: [rec('them')], judge: stopped })
+  const r = await $.tool.call(bash('git checkout main', 'u11'))
+  expect(refusal(r)).toBe('Blocked: Another session is working in this checkout. They have uncommitted work. Leave it to the other session, or ask Dan.')
+  expect(w.reached).toEqual([])
+  expect(w.asks.filter(a => a === 'pipeline').length).toBe(2)
+})
+
+test("mod-kit's git reader asked with the settings in front of a command and left unanswered is asked once more (#3673)", withDeps, async ($, on) => {
+  const named = '-C /repo --git-dir=/other/.git --work-tree=/other rev-parse'
+  const withSettings = 'git {"words":["git","checkout","main"],"env":["GIT_DIR=/other/.git","GIT_WORK_TREE=/other"]}'
+  const w = world($, on, { unanswered: { [withSettings]: 1 }, open: inOther(), judge: stopped, tops: { [`${named} --show-toplevel`]: '/other', '-C /other rev-parse --show-toplevel': '/other', [`${named} --absolute-git-dir`]: '/other/.git' } })
+  const r = await $.tool.call(bash('GIT_DIR=/other/.git GIT_WORK_TREE=/other git checkout main', 'u12'))
+  expect(refusal(r)).toBe('Blocked: Another session is working in this checkout. They have uncommitted work. Leave it to the other session, or ask Dan.')
+  expect(w.reached).toEqual([])
+  expect(w.prompts[0]?.prompt).toContain('The checkout: /other, on branch')
+  // Asked plainly once, then with the settings twice.
+  expect(w.asks.filter(a => a === 'git').length).toBe(3)
+})
+
+// The lessons review of #3673: mod-kit's walk for the checkout around a repository a command names
+// is a read cut at the same 10 seconds, and was refused at once as a checkout that could not be told.
+test("mod-kit's walk for a checkout left unanswered is asked once more, and the switch is judged (#3673)", withDeps, async ($, on) => {
+  const named = '-C /repo --git-dir=/other/.git --work-tree=/other rev-parse'
+  const w = world($, on, { unanswered: { workingTree: 1 }, open: inOther(), judge: stopped, tops: { [`${named} --show-toplevel`]: '/other', '-C /other rev-parse --show-toplevel': '/other', [`${named} --absolute-git-dir`]: '/other/.git' } })
+  const r = await $.tool.call(bash('git --git-dir=/other/.git --work-tree=/other checkout main', 'u14'))
+  expect(refusal(r)).toBe('Blocked: Another session is working in this checkout. They have uncommitted work. Leave it to the other session, or ask Dan.')
+  expect(w.reached).toEqual([])
+  expect(w.asks.filter(a => a === 'workingTree').length).toBe(2)
+})
+
+test("mod-kit's walk for a checkout left unanswered twice stops the command, saying it was asked twice (#3673)", withDeps, async ($, on) => {
+  const named = '-C /repo --git-dir=/other/.git --work-tree=/other rev-parse'
+  const w = world($, on, { unanswered: { workingTree: 2 }, open: inOther(), judge: stopped, tops: { [`${named} --show-toplevel`]: '/other', '-C /other rev-parse --show-toplevel': '/other', [`${named} --absolute-git-dir`]: '/other/.git' } })
+  const r = await $.tool.call(bash('git --git-dir=/other/.git --work-tree=/other checkout main', 'u15'))
+  expect(refusal(r)).toBe(
+    "Blocked: Couldn't tell which checkout git checkout main acts on (the checkout around /other/.git could not be looked for: $.modkit.workingTree: mod-kit did not answer within 10000ms, and again when asked a second time), and another session is open, so this was stopped. Try again, or ask Dan.",
+  )
+  expect(w.reached).toEqual([])
+  expect(w.prompts).toEqual([])
+  expect(w.asks.filter(a => a === 'workingTree').length).toBe(2)
+})
+
+// What the second ask must not change: a failure in any other words is a failure of the read, never
+// a read left unanswered, and refuses at once.
+test('a read that fails in other words is not asked again (#3673)', withDeps, async ($, on) => {
+  const w = world($, on, { readFails: { commands: 'the reader could not read this command' } })
+  const r = await $.tool.call(bash('ls src', 'u13'))
+  expect(refusal(r)).toBe('Blocked: the collision guard could not check this call against the other sessions (the reader could not read this command), so it did not run. Try it again; if it fails the same way, tell Dan.')
+  expect(w.reached).toEqual([])
+  expect(w.asks).toEqual(['commands'])
+})
+
+test("mod-kit's command reader left unanswered twice refuses the command, and is not asked a third time (#3673)", withDeps, async ($, on) => {
+  const w = world($, on, { unanswered: { commands: 2 } })
+  const r = await $.tool.call(bash('ls src', 'u7'))
+  expect(refusal(r)).toBe(
+    'Blocked: the collision guard could not check this call against the other sessions ($.modkit.commands: mod-kit did not answer within 10000ms, and again when asked a second time), so it did not run. Try it again; if it fails the same way, tell Dan.',
+  )
+  expect(w.reached).toEqual([])
+  expect(w.asks).toEqual(['commands', 'commands'])
 })
 
 // #1299: a call to the session registry's noun that fails for a member an older loaded copy lacks is

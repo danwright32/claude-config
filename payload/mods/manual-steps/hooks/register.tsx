@@ -1,7 +1,7 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
 import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, held as heldFor, heldNote, heldSteps, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, unheld, untoldSteps, VERDICTS } from './card.ts'
+import { cardFrom, cardLines, carriedIn, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, held as heldFor, heldNote, heldSteps, keepAdded, keepFinished, nextStep, paneColumns, pinnedBy, pressed, sent, unheld, untoldSteps, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
 import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
 import { clearTurnPages, notePinned, pagesAtStop, registerPages } from './pages.ts'
@@ -49,9 +49,11 @@ const projectKeys = async ($: EngineInterface) => {
 // Kept for the next session in this project: written whenever the card changes, removed once
 // nothing is left to do. Never with "sent", since the turn that would answer it does not reach the
 // next session. A failure here loses only the carry over, so it is said and the action stands
-// (fail loud, not silent).
+// (fail loud, not silent). A step for this session alone (#3770) is never kept: the session it is
+// about is gone by the next one.
 const persist = async ($: EngineInterface) => {
-  const card = (await $.state.get(cardRef)).value ?? null
+  const held = (await $.state.get(cardRef)).value ?? null
+  const card = held ? { ...held, steps: held.steps.filter(s => !s.isSessionOnly) } : null
   try {
     const { key } = await projectKeys($)
     if (card && nextStep(card) !== undefined) {
@@ -77,6 +79,20 @@ const readKept = async ($: EngineInterface): Promise<StepsCard | undefined> => {
   await $.store.set(key, moved)
   await $.store.delete(legacy)
   return moved
+}
+
+// This session's id, which a step records as the session that pinned it (#3770: the close this
+// session card waits only for this session's own steps). One that cannot be read is said in the
+// debug log and the step records none, never a made up one, so a reader counts it as not known.
+const sessionId = async ($: EngineInterface): Promise<string | undefined> => {
+  try {
+    const id: unknown = await $.session.id()
+    if (typeof id === 'string' && id) return id
+    $.ui.log("Manual steps could not read this session's id (it came back empty), so the steps pinned now do not record their session")
+  } catch (err) {
+    $.ui.log(`Manual steps could not read this session's id, so the steps pinned now do not record their session: ${message(err)}`)
+  }
+  return undefined
 }
 
 // Read, change and write the card with ifVersion, again on a miss, so a Done pressed twice before
@@ -587,8 +603,17 @@ const addStep: Hook<'manualSteps.add'> = async ($, e) => {
   const made = cardFrom({ heading: e.heading, steps: [{ ...e.step, checked: 'not-done' }] })
   // Refused to the caller: a hook that throws is skipped, and the caller would hear only that it did not answer.
   if ('refusal' in made) return { deny: made.refusal }
-  // Marked as another mod's, so a later pin through the steps tool keeps it.
-  const added = { ...(made.card.steps[0] as StepsCard['steps'][number]), isAdded: true }
+  // Marked as another mod's, so a later pin through the steps tool keeps it. #3770: one for this
+  // session alone is never kept for the next, and one with no Done is done by the act itself; and
+  // it records this session as the one that pinned it.
+  const by = await sessionId($)
+  const added = {
+    ...(made.card.steps[0] as StepsCard['steps'][number]),
+    isAdded: true,
+    ...(by ? { pinnedBy: by } : {}),
+    ...(e.step.sessionOnly === true ? { isSessionOnly: true } : {}),
+    ...(e.step.noDone === true ? { isNoDone: true } : {}),
+  }
   const how = await change($, card => {
     if (!card || nextStep(card) === undefined) return { card: { ...made.card, steps: [added] }, out: 'shown' as const }
     if (card.steps.some(s => !s.finished && s.title === added.title)) return { card, out: card.isCarried ? ('held' as const) : ('shown' as const) }
@@ -615,6 +640,20 @@ const finishStep: Hook<'manualSteps.finish'> = async ($, e) => {
   return { value: { isFinished } }
 }
 
+// #3770: a step another mod takes back, because what it asked for no longer holds: off the card as
+// withdrawn (drawn "taken off, not done"), never as done, and the card goes when nothing is left.
+const withdrawStep: Hook<'manualSteps.withdraw'> = async ($, e) => {
+  const at = await now($)
+  const isWithdrawn = await change($, card => {
+    const i = card ? card.steps.findIndex(s => !s.finished && s.title === e.title) : -1
+    if (!card || i < 0) return { card, out: false }
+    const next = { ...card, steps: card.steps.map((s, k) => (k === i ? { ...s, isSent: false, finished: 'withdrawn' as const, finishedAt: at } : s)) }
+    return { card: nextStep(next) === undefined ? null : next, out: true }
+  })
+  if (isWithdrawn) await refresh($)
+  return { value: { isWithdrawn } }
+}
+
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -625,11 +664,15 @@ export const register: Register = on => {
       finish: async () => {
         throw new Error(NOUN_UNANSWERED)
       },
+      withdraw: async () => {
+        throw new Error(NOUN_UNANSWERED)
+      },
     }
     return { ...built, manualSteps }
   })
   on('manualSteps.add', addStep)
   on('manualSteps.finish', finishStep)
+  on('manualSteps.withdraw', withdrawStep)
 
   on('session.start', async ($, e, next) => {
     interactive = e.isInteractive === true
@@ -662,7 +705,8 @@ export const register: Register = on => {
       if (held.version === 0) {
         const kept = await readKept($)
         if (kept && Array.isArray(kept.steps) && nextStep(kept) !== undefined) {
-          const set = await $.state.set(cardRef, { ...kept, isCarried: true }, { ifVersion: 0 })
+          // #3770: a kept step that records no session is marked as an earlier session's, here only.
+          const set = await $.state.set(cardRef, { ...carriedIn(kept), isCarried: true }, { ifVersion: 0 })
           if (set.isSet) await $.state.set(placeRef, null)
         }
       }
@@ -753,9 +797,10 @@ export const register: Register = on => {
     // #1811: called and not refused, it answers a page of steps published this turn (hooks/pages.ts).
     await notePinned($)
     // A step found done keeps how and when it finished on the card this one replaces (#886), and an
-    // unfinished step another mod added stays on it (#1107).
+    // unfinished step another mod added stays on it (#1107). Each step records the session that
+    // pinned it (#3770): the one the replaced card holds for it, else this one.
     const prior = (await $.state.get(cardRef)).value ?? null
-    const card = keepAdded(keepFinished(made.card, prior), prior)
+    const card = keepAdded(keepFinished(pinnedBy(made.card, prior, await sessionId($)), prior), prior)
     if (nextStep(card) === undefined) {
       await change($, () => ({ card: null, out: undefined }))
       await hide($)
