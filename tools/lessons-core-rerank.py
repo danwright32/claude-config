@@ -125,10 +125,15 @@ def function_source(text, name, signature):
 def check_records(sync, lessons):
     """({n: (kind, detail)}, None) from claude-sync's reading of every entry, or (None, why not)."""
     try:
-        with open(lessons, encoding="utf-8") as f:
-            f.read(1)
+        # Bytes first, so a file that is not text is said rather than a traceback after the moves (L11).
+        with open(lessons, "rb") as f:
+            raw = f.read()
     except OSError as err:
         return None, f"the lessons file {lessons} cannot be read ({err.strerror or err})"
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError as err:
+        return None, f"the lessons file {lessons} cannot be read as text (not UTF-8 at byte {err.start})"
     try:
         with open(sync, encoding="utf-8", errors="surrogateescape") as f:
             text = f.read()
