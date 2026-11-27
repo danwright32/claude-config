@@ -461,7 +461,11 @@ for f in "$WORK"/*/project; do
 done
 check_eq "no run without --examples prints a word of any fixture" "0" "$leaks"
 check_eq "and that was looked for over every fixture in three ways of running (a count that cannot quietly shrink)" "1" "$([ "$runs" -ge 120 ] && echo 1 || echo 0)"
-check_eq "the search does see a fixture's words when they are printed" "1" "$(run recurring --examples | grep -cE "$WORDS" | sed 's/^[1-9][0-9]*$/1/')"
+# The control uses the same match as the sweep: were the shell to refuse the pattern, the sweep would
+# read every run as clean, and so would a control that asked grep instead.
+out="$(run recurring --examples)"
+check_eq "the search does see a fixture's words when they are printed" "1" "$([[ "$out" =~ $WORDS ]] && echo 1 || echo 0)"
+check_eq "and does not see them in a run that prints none" "0" "$([[ "$(run recurring)" =~ $WORDS ]] && echo 1 || echo 0)"
 
 # --- it writes nothing, and holds no way to -----------------------------------------------------------
 before="$(cd "$WORK" && find . -type f -exec cksum {} + | sort)"
