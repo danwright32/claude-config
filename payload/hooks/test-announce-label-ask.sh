@@ -272,14 +272,21 @@ forget
 # his Approve in a picker the hook could not tell the source of, because the transcript did not
 # hold its line yet, puts the label on once the transcript holds it.
 noted() { ANNOUNCE_APPROVALS_DIR="$STORE" bash "$DIR/announce-answer-note.sh" 2>&1; }
+# on_record <kind> <picker> [needle]: whether the record holds a line of that kind for that picker,
+# holding the needle. Read into a variable and matched there, never piped into a quiet grep.
+on_record() {
+  local line
+  line="$(grep "\"kind\": \"$1\"" "$STORE/record.jsonl" 2>/dev/null | grep "\"picker\": \"$2\"")"
+  [[ -n "$line" && "$line" == *"${3:-}"* ]]
+}
 F="$(aaf_shown "$WORK/elsewhere" "$WORK/elsewhere.jsonl" "$POST")"
 PL="$(aaf_talk "$WORK/elsewhere.jsonl" put acme/widget "$F" plain)"
 said="$(aaf_talk "$WORK/elsewhere.jsonl" payload "$PL" acme/widget "$F" "" plain | noted)"
 aaf_talk "$WORK/elsewhere.jsonl" answer "$PL" acme/widget "$F" "Approve the wording" plain
-check "#3789 the hook that notes a picker says nothing after an ordinary one, and notes it" "$([ -z "$said" ] && grep '"kind": "answered"' "$STORE/record.jsonl" 2>/dev/null | grep -q "\"picker\": \"$PL\"" && echo ok || echo "$said $(cat "$STORE/record.jsonl" 2>&1)")"
+check "#3789 the hook that notes a picker says nothing after an ordinary one, and notes it" "$([ -z "$said" ] && on_record answered "$PL" && echo ok || echo "$said $(cat "$STORE/record.jsonl" 2>&1)")"
 r="$(SESSION=s2 run "$EDIT")"
 check "R10 #3789 an ordinary picker noted in another session, answered with the approving words, puts no label on" "$(asks_dan "$r" && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
-check "#3789 and this hook settled it, so it is read once" "$(grep '"kind": "settled"' "$STORE/record.jsonl" 2>/dev/null | grep -q "\"picker\": \"$PL\"" && echo ok || cat "$STORE/record.jsonl" 2>&1)"
+check "#3789 and this hook settled it, so it is read once" "$(on_record settled "$PL" && echo ok || cat "$STORE/record.jsonl" 2>&1)"
 aaf_talk "$WORK/elsewhere.jsonl" bash "$AAF_BBEDIT --front-window $F"
 said="$(AAF_PAYLOAD_FORM="answers nometadata" aaf_talk "$WORK/elsewhere.jsonl" payload toolu_elsewhere1 acme/widget "$F" | noted)"
 r="$(SESSION=s2 run "$EDIT")"
@@ -290,7 +297,7 @@ r="$(SESSION=s2 AGENT=1 run "$EDIT")"
 check "#3789 a subagent's command counts his Approve in that session for the call, and writes nothing" "$(passed "$r" && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
 r="$(SESSION=s2 run "$EDIT")"
 check "R10 still possible #3789: his Approve in another session, in a picker noted by its ids alone, lets the label on" "$(passed "$r" && echo ok || echo "$r")"
-check "#3789 and his approval is written to the record as the picker it came from" "$(grep '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null | grep '"picker": "toolu_elsewhere1"' | grep -q "\"hash\": \"$H\"" && echo ok || cat "$STORE/record.jsonl" 2>&1)"
+check "#3789 and his approval is written to the record as the picker it came from" "$(on_record approved toolu_elsewhere1 "\"hash\": \"$H\"" && echo ok || cat "$STORE/record.jsonl" 2>&1)"
 forget
 # The same, with the file written after he answered: no hash was noted, so his Approve does not count.
 F="$(aaf_shown "$WORK/elsewhere-changed" "$WORK/elsewhere-changed.jsonl" "$POST")"

@@ -143,6 +143,10 @@ outcome for, and judges each from what the transcript holds:
   - a picker that names no source this record reads (NOTED_SOURCES): a `settled` line naming no
     repository and no file, so it is read once and never again. It approves nothing and takes
     nothing back, whatever he answered it.
+  - a picker of this source that can never count (its metadata names no repository and file, or
+    the session sent it with its answer filled in): settled the same way once it has been read
+    and, for an Approve, said. With no note such a picker is passed over; a note left with no
+    outcome would have its session read back on every later call.
   - a picker the transcript does not hold yet: left as it is, and looked for again.
   - a picker noted by its ids alone whose session's transcript is gone: settled the same way,
     since what it asked can never be read.
@@ -1031,6 +1035,15 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
     # nothis is, for each file, why the newest picker about it that holds an Approve is not an
     # answer of his (_not_his_approve), until a later picker about the file ends any other way.
     last, untaken, ended, nothis = {}, [], [], {}
+    # A noted picker of this source that can never count (it names no repository and file, or was
+    # sent with its answer filled in) is settled once it has been read, where one with no note is
+    # passed over: a note left with no outcome has its session read back on every later call.
+    never = []
+
+    def never_counts(p, why):
+        if p["picker"] in sought:
+            never.append(_settled_other(session_id, p["picker"], why + ", so it approves nothing and is not read again"))
+
     for p in asked:
         meta = p["ask"]["metadata"]
         repo, file = repo_key(meta.get("repo")), meta.get("file")
@@ -1040,6 +1053,9 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
         # an answer of his that is no approval, so it ends the picker as his `Not yet` does.
         typed = _typed_beside(p["result"]) if chose else None
         said = chose and typed is None
+        if repo is None or not isinstance(file, str) or not file.startswith("/"):
+            never_counts(p, "its metadata does not name the repository as owner/name and the wording file by its "
+                            "absolute path")
         if said and (repo is None or not isinstance(file, str) or not file.startswith("/")):
             untaken.append({"repo": repo or "", "file": file if isinstance(file, str) else "",
                             "why": "its metadata does not name the repository as owner/name and the wording file by "
@@ -1055,13 +1071,14 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
             nothis[where] = not_his
         if p["prefilled"]:
             # No picker at all: it is the last word on nothing, and takes nothing back.
+            never_counts(p, "the session sent it with its answer filled in, so it was never put to him")
             continue
         p.update(repo=repo, file=where[1], said=said)
         last[where] = p
         if not said and p["picker"] not in settled:
             ended.append(p)
     untaken += [{"repo": r, "file": f, "why": why} for (r, f), why in nothis.items()]
-    closed = ordinary + [_closed(p, session_id, ap, noted, deadline) for p in ended]
+    closed = ordinary + never + [_closed(p, session_id, ap, noted, deadline) for p in ended]
     candidates = []
     for p in last.values():
         if not p["said"]:

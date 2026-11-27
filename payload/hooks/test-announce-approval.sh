@@ -817,7 +817,13 @@ elif keys != ["at", "held", "kind", "picker", "session", "transcript"] or lines[
 else:
     print("ok", end="")' "$@"
 }
-settled_as() { grep '"kind": "settled"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$1\"" | grep -q "$2"; }
+# settled_as <picker> <needle>: whether the record holds a settled line for that picker saying that.
+# Read into a variable and matched there, never piped into a quiet grep (test-pipefail-shortcircuit.sh).
+settled_as() {
+  local line
+  line="$(grep '"kind": "settled"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$1\"")"
+  [[ -n "$line" && "$line" == *"$2"* ]]
+}
 STORE_USED="$WORK/store-noted-not"
 F="$(shown not-noted)"; T="$WORK/not-noted.jsonl"
 P="$(talk "$T" put acme/widget "$F")"
@@ -837,8 +843,15 @@ talk "$T" answer "$P3" acme/widget "$F" "Approve the wording" prefilled
 talk "$T" answer "$P4" "not a repository" "$F"
 r="$(helper_asks acme/widget "$(hash_file "$F")" 69)"
 check "R2 #3789 none of those notes approves anything" "$([[ "$r" == "no|unapproved|"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
-check "#3789 the picker of another source is settled as no picker of this record's, and the others are not" "$(settled_as "$P2" 'no picker of a source' && [ "$(kinds settled)" = 1 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+check "#3789 the picker of another source is settled as no picker of this record's" "$(settled_as "$P2" 'no picker of a source' && echo ok || cat "$STORE_USED/record.jsonl")"
 check "#3789 the refusal still says why his Approve in a picker naming no repository does not count" "$([[ "$r" == *"does not name the repository"* ]] && echo ok || echo "$r")"
+# A noted picker of this source that can never count (sent with its answer filled in, or naming no
+# repository and file) is settled too, once it has been said: left unjudged, its session would be
+# read back on every later call, and the reason said in refusals about other repositories.
+check "#3789 a noted picker sent with its answer filled in is settled as never put to him" "$(settled_as "$P3" 'never put to him' && echo ok || cat "$STORE_USED/record.jsonl")"
+check "#3789 a noted picker naming no repository is settled as one that can approve nothing" "$(settled_as "$P4" 'does not name the repository' && [ "$(kinds settled)" = 3 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+r="$(helper_asks acme/widget "$(hash_file "$F")" 69)"
+check "#3789 and none of them is read back or said again" "$([[ "$r" == "no|unapproved|"* && "$r" != *"does not name the repository"* ]] && [ "$(kinds settled)" = 3 ] && echo ok || echo "$r")"
 # The picker is read from the transcript, by the id the hook was handed, and not from the hook's own
 # copy of its input: no real payload has been printed, and the dialog may hand the hook an input
 # holding his answers and without the metadata. Such a payload is noted all the same.
@@ -874,7 +887,7 @@ check "R2 #3789 nor once the transcript holds the picker and not yet his answer"
 talk "$T" answer toolu_absent2 acme/widget "$F"
 r="$(helper_asks acme/widget "$HLATE" 70)"
 check "R2 still possible #3789: his Approve in a picker noted by its ids alone is found by a merge naming no session" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
-check "#3789 and written to the record once, as the session and the picker it came from" "$(grep '"kind": "approved"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"toolu_absent2\"" | grep '"session": "s1"' | grep -q "\"hash\": \"$HLATE\"" && [ "$(kinds approved)" = 1 ] && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+check "#3789 and written to the record once, as the session and the picker it came from" "$(line="$(grep '"kind": "approved"' "$STORE_USED/record.jsonl" 2>/dev/null | grep '"picker": "toolu_absent2"')"; [[ "$line" == *'"session": "s1"'* && "$line" == *"\"hash\": \"$HLATE\""* ]] && [ "$(kinds approved)" = 1 ] && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
 # A note that holds no hash never carries the wording past a later write to the file: it is judged
 # as a picker with no note is, by the file as it stands, unchanged since his answer.
 STORE_USED="$WORK/store-noted-late-changed"

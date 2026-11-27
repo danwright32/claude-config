@@ -87,6 +87,15 @@ else:
 kinds() { local n; n="$(grep -c "\"kind\": \"$1\"" "$STORE/record.jsonl" 2>/dev/null)"; printf '%s' "${n:-0}"; }
 # line_of <kind> <picker>: the record's line of that kind for that picker.
 line_of() { grep "\"kind\": \"$1\"" "$STORE/record.jsonl" 2>/dev/null | grep "\"picker\": \"$2\""; }
+# has <kind> <picker> <needle>...: whether the record holds a line of that kind for that picker, and
+# it holds every needle. The line is read into a variable and matched there, never piped into a
+# quiet grep, which under pipefail can report a failure that never happened (test-pipefail-shortcircuit.sh).
+has() {
+  local line needle kind="$1" picker="$2"; shift 2
+  line="$(line_of "$kind" "$picker")"
+  [ -n "$line" ] || return 1
+  for needle in "$@"; do [[ "$line" == *"$needle"* ]] || return 1; done
+}
 # ids_only <picker> <transcript> <held>: ok when the record's one note of that picker names the
 # session, its transcript and the picker, says whether the transcript held the picker's line when
 # the hook ran (true, false or null), and names nothing else: no source, repository, file or hash.
@@ -121,7 +130,7 @@ P="$(aaf_talk "$T" put acme/widget "$F")"
 r="$(hook "$(aaf_talk "$T" payload "$P" acme/widget "$F")")"
 check "the hook notes his answer, says nothing and exits 0" "$([[ "$r" == "0||" ]] && echo ok || echo "$r")"
 check "the note names the session, the picker and the hash of the file as it stood" "$(grep '"kind": "answered"' "$STORE/record.jsonl" 2>/dev/null | grep "\"picker\": \"$P\"" | grep '"session": "s1"' | grep -q "\"hash\": \"$H\"" && echo ok || cat "$STORE/record.jsonl" 2>&1)"
-check "#3789 the note says the transcript held the picker's line when the hook ran" "$(line_of answered "$P" | grep -q '"held": true' && echo ok || cat "$STORE/record.jsonl" 2>&1)"
+check "#3789 the note says the transcript held the picker's line when the hook ran" "$(has answered "$P" '"held": true' && echo ok || cat "$STORE/record.jsonl" 2>&1)"
 check "R2 a note is no approval" "$([ "$(kinds approved)" = 0 ] && [[ "$(helper_asks "$H" 7)" == "no|"* ]] && echo ok || cat "$STORE/record.jsonl")"
 aaf_talk "$T" answer "$P" acme/widget "$F"
 r="$(helper_asks "$H" 7)"
@@ -163,7 +172,7 @@ check "#3789 and is noted by its ids alone" "$(ids_only "$P" "$T" true)"
 aaf_talk "$T" answer "$P" acme/widget "$F" "Approve the wording" plain
 r="$(helper_asks "$(hash_file "$F")" 7)"
 check "R2 #3789 a note of an ordinary picker approves nothing, whatever he answered it" "$([[ "$r" == "no|"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r $(cat "$STORE/record.jsonl")")"
-check "#3789 and the hook that read the transcript settled it as no picker of this source" "$(line_of settled "$P" | grep -q 'no picker of a source' && echo ok || cat "$STORE/record.jsonl")"
+check "#3789 and the hook that read the transcript settled it as no picker of this source" "$(has settled "$P" 'no picker of a source' && echo ok || cat "$STORE/record.jsonl")"
 # Settled, it is never read again: with the transcript gone, the next question does not look for it.
 mv "$T" "$T.away"
 r="$(helper_asks "$(hash_file "$F")" 7)"
@@ -178,7 +187,7 @@ print(json.dumps(d), end="")')")"
 check "#3789 a picker of another source that names this one in its words is silent, and noted by its ids alone" "$([[ "$r" == "0||" ]] && ids_only "$P" "$T" true || echo "$r")"
 aaf_talk "$T" answer "$P" acme/widget "$F" "Approve the wording" othersource
 r="$(helper_asks "$(hash_file "$F")" 7)"
-check "R2 #3789 and approves nothing, and is settled" "$([[ "$r" == "no|"* ]] && [ "$(kinds approved)" = 0 ] && line_of settled "$P" | grep -q 'no picker of a source' && echo ok || echo "$r $(cat "$STORE/record.jsonl")")"
+check "R2 #3789 and approves nothing, and is settled" "$([[ "$r" == "no|"* ]] && [ "$(kinds approved)" = 0 ] && has settled "$P" 'no picker of a source' && echo ok || echo "$r $(cat "$STORE/record.jsonl")")"
 
 echo "the picker's line is not in the transcript when the hook runs, and is there later (#3789, as measured)"
 # Measured on the installed hook, 2026-11-26: no line of the transcript held the picker's id when
@@ -196,7 +205,7 @@ aaf_talk "$T" late toolu_late1 acme/widget "$F"
 aaf_talk "$T" answer toolu_late1 acme/widget "$F"
 r="$(helper_asks "$H" 7)"
 check "R2 still possible #3789: once the transcript holds the picker and his Approve, a merge naming no session is approved on it" "$([[ "$r" == "yes|" ]] && echo ok || echo "$r")"
-check "#3789 and his approval is on the record, as the picker it came from" "$(line_of approved toolu_late1 | grep -q "\"hash\": \"$H\"" && echo ok || cat "$STORE/record.jsonl")"
+check "#3789 and his approval is on the record, as the picker it came from" "$(has approved toolu_late1 "\"hash\": \"$H\"" && echo ok || cat "$STORE/record.jsonl")"
 # The same, with the file changed after he answered: no hash was noted when he answered, so the
 # wording he answered about cannot be told from the file, and his Approve does not count.
 STORE="$WORK/store-late-changed"
@@ -221,10 +230,10 @@ aaf_talk "$T" answer toolu_late3 acme/widget "$F" "" "typed:approve, but fix lin
 check "#3789 an Approve with words typed beside it is silent and noted by its ids alone" "$([[ "$r" == "0||" ]] && ids_only toolu_late3 "$T" false || echo "$r")"
 r="$(helper_asks "$H" 7)"
 check "R2 #3789 and approves nothing: the refusal gives his words" "$([[ "$r" == "no|"*"approves nothing"*"approve, but fix line 2"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
-check "#3789 and it is on the record as an answer of his that is no approval" "$(line_of withdrawn toolu_late3 | grep -q "\"hash\": \"$H\"" && echo ok || cat "$STORE/record.jsonl")"
+check "#3789 and it is on the record as an answer of his that is no approval" "$(has withdrawn toolu_late3 "\"hash\": \"$H\"" && echo ok || cat "$STORE/record.jsonl")"
 
 echo "a long session's transcript is read inside the hook's time (#3789, the size control)"
-# The transcript the hook was measured against was 18.8 MB and about 9,400 lines. One that size,
+# The transcript the hook was measured against on 2026-11-26 was 18.8 MB and about 9,400 lines. One that size,
 # built here, with the picker put at its end: the hook finds the picker and notes it with its hash,
 # and the question that reads the transcript back finds his answer, each well inside the 15 seconds
 # Claude Code gives the hook. So a reader too slow for a long transcript is not why the installed
@@ -244,7 +253,7 @@ PAYLOAD_LONG="$(AAF_PAYLOAD_FORM="answers nometadata" aaf_talk "$T" payload "$P"
 began="$(python3 -c 'import time; print(time.monotonic())')"
 r="$(hook "$PAYLOAD_LONG")"
 took="$(python3 -c 'import sys, time; print("%.2f" % (time.monotonic() - float(sys.argv[1])))' "$began")"
-check "#3789 the hook finds the picker in a 20 MB transcript and notes it with the file's hash, in silence ($took s)" "$([[ "$r" == "0||" ]] && line_of answered "$P" | grep '"held": true' | grep -q "\"hash\": \"$H\"" && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+check "#3789 the hook finds the picker in a 20 MB transcript and notes it with the file's hash, in silence ($took s)" "$([[ "$r" == "0||" ]] && has answered "$P" '"held": true' "\"hash\": \"$H\"" && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
 check "#3789 inside the hook's 15 seconds, with room ($took s)" "$(python3 -c 'import sys; print("ok" if float(sys.argv[1]) < 8 else "the hook took " + sys.argv[1] + " seconds", end="")' "$took")"
 hook_took="$took"
 aaf_talk "$T" answer "$P" acme/widget "$F"
@@ -305,11 +314,16 @@ PLAIN="$(aaf_talk "$T" put acme/widget "$F" plain)"
 run "$(aaf_talk "$T" payload "$PLAIN" acme/widget "$F" "" plain)"
 m="$(told "$HOUT")"
 check "#3789 and so is an ordinary picker's, since the hook cannot leave a note for whoever would judge it" "$([[ "$HRC" == 0 && "$m" == *"could not be noted"*"$STORE/record.jsonl"* ]] && echo ok || echo "$HRC|$m|$HERR")"
-# The record is there and cannot be appended to.
+# The record is there and cannot be appended to. A file made read only still takes a write from
+# root, so a run as root cannot make this state, and says so in place of a result (L411).
 STORE="$WORK/store-readonly"; mkdir -p "$STORE"; printf '' > "$STORE/record.jsonl"; chmod a-w "$STORE/record.jsonl" "$STORE"
-run "$PAYLOAD"
-m="$(told "$HOUT")"
-check "#3789 a record that cannot be appended to is said, naming it" "$([[ "$HRC" == 0 && "$m" == *"could not be noted"*"$STORE/record.jsonl"* ]] && [ ! -s "$STORE/record.jsonl" ] && echo ok || echo "$HRC|$m|$HERR")"
+if [ "$(id -u)" = 0 ]; then
+  echo "  UNMEASURED: this run is root's, which a read only record still takes a line from, so the case of a record that cannot be appended to was not run"
+else
+  run "$PAYLOAD"
+  m="$(told "$HOUT")"
+  check "#3789 a record that cannot be appended to is said, naming it" "$([[ "$HRC" == 0 && "$m" == *"could not be noted"*"$STORE/record.jsonl"* ]] && [ ! -s "$STORE/record.jsonl" ] && echo ok || echo "$HRC|$m|$HERR")"
+fi
 chmod u+w "$STORE" "$STORE/record.jsonl"
 
 echo "a subagent's picker writes nothing and says nothing (#3789)"

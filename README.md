@@ -2016,7 +2016,9 @@ session's noted pickers the record has no outcome for (no `approved`, `withdrawn
 line), and judges each from the transcript. An announcement's picker is judged by every rule above,
 unchanged. A picker that names no source the record reads gets a `settled` line naming no
 repository, so it is read once and never again: it approves nothing and takes nothing back,
-whatever he answered it. One the transcript does not hold yet is left and looked for again, and one
+whatever he answered it. So does an announcement's picker that can never count (its metadata names
+no repository and file, or the session sent it with its answer filled in), once it has been read.
+One the transcript does not hold yet is left and looked for again, and one
 noted by its ids alone whose transcript is gone is settled, since what it asked can never be read.
 One call reads back five sessions, the ones whose newest unjudged note is newest.
 

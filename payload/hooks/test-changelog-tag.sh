@@ -1367,17 +1367,22 @@ if owes_draft "$out" 7; then pass; else fail "#3666 R2 still possible: a later s
 # nothing and is settled; his Approve in a picker the hook could not tell the source of, because the
 # transcript did not hold its line yet, merges the wording once the transcript holds it.
 note_it() { ANNOUNCE_APPROVALS_DIR="$1/approvals" bash "$HOOK_DIR/announce-answer-note.sh" 2>&1; }
+record_holds() {  # $1 = fixture dir, $2 = a kind of line, $3 = a picker's id ; true when its record holds that line
+  local line
+  line="$(grep "\"kind\": \"$2\"" "$1/approvals/record.jsonl" 2>/dev/null | grep "\"picker\": \"$3\"")"
+  [ -n "$line" ]
+}
 late_dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
 late_file="$(aaf_shown "$late_dir/wording" "$late_dir/talk.jsonl" "$WORDING")"
 plain_id="$(aaf_talk "$late_dir/talk.jsonl" put acme/widget "$late_file" plain)"
 said="$(aaf_talk "$late_dir/talk.jsonl" payload "$plain_id" acme/widget "$late_file" "" plain | note_it "$late_dir")"
 aaf_talk "$late_dir/talk.jsonl" answer "$plain_id" acme/widget "$late_file" "Approve the wording" plain
-if [ -z "$said" ] && grep '"kind": "answered"' "$late_dir/approvals/record.jsonl" 2>/dev/null | grep -q "\"picker\": \"$plain_id\""; then pass
+if [ -z "$said" ] && record_holds "$late_dir" answered "$plain_id"; then pass
 else fail "#3789 the hook that notes a picker said something after an ordinary one, or did not note it: $said $(cat "$late_dir/approvals/record.jsonl" 2>/dev/null)"; fi
 out=$(run_hook "$late_dir" "$MERGE 7 --squash")
 if asks_dan "$out" && ! grep -q '"kind": "approved"' "$late_dir/approvals/record.jsonl" 2>/dev/null; then pass
 else fail "#3789 R2: an ordinary picker noted by its ids alone, answered with the approving words, merged an announcement: $out"; fi
-if grep '"kind": "settled"' "$late_dir/approvals/record.jsonl" 2>/dev/null | grep -q "\"picker\": \"$plain_id\""; then pass
+if record_holds "$late_dir" settled "$plain_id"; then pass
 else fail "#3789 the gate did not settle the ordinary picker it read, so it would be read again on every merge: $(cat "$late_dir/approvals/record.jsonl" 2>/dev/null)"; fi
 aaf_talk "$late_dir/talk.jsonl" bash "$AAF_BBEDIT --front-window $late_file"
 said="$(AAF_PAYLOAD_FORM="answers nometadata" aaf_talk "$late_dir/talk.jsonl" payload toolu_gatelate1 acme/widget "$late_file" | note_it "$late_dir")"
@@ -1388,7 +1393,7 @@ aaf_talk "$late_dir/talk.jsonl" late toolu_gatelate1 acme/widget "$late_file"
 aaf_talk "$late_dir/talk.jsonl" answer toolu_gatelate1 acme/widget "$late_file"
 out=$(run_hook "$late_dir" "$MERGE 7 --squash" 2>/dev/null)
 if owes_draft "$out" 7; then pass; else fail "#3789 R2 still possible: his Approve in a picker noted by its ids alone, in a session the merge does not name, was refused: $out"; fi
-if grep '"kind": "approved"' "$late_dir/approvals/record.jsonl" 2>/dev/null | grep -q '"picker": "toolu_gatelate1"'; then pass
+if record_holds "$late_dir" approved toolu_gatelate1; then pass
 else fail "#3789 his approval was not written to the record as the picker it came from: $(cat "$late_dir/approvals/record.jsonl" 2>/dev/null)"; fi
 rm -rf "$late_dir"
 # The same, with the file written after he answered: the note holds no hash, so the wording he
