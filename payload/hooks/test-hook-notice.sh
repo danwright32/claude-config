@@ -394,6 +394,18 @@ for text in "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"perm
   v="$(decision_verdict "$PATH" "$text" deny)"
   said_no "$v" && ok || bad "#3793 hook_decision_verdict did not say why and return 1 for a refusal whose reason or notice holds a lone surrogate written as three bytes: ${v//$'\n'/ / }"
 done
+# The same lone surrogate written as a JSON escape is six ASCII characters, so the strict read
+# takes it, and inside python3 it is a character no encoding can write. A reason holding one is
+# still one refusal, since the function's answer for it is a fixed line. An event holding one is
+# refused in words that show it as an escape, since the function prints such a value by its repr.
+# Were it printed as it is, the answer would be a question mark in those words, never a
+# traceback: the program sets how its stdout treats what it cannot write before it prints
+# (test-python-bad-bytes.sh asks that of every program that reads JSON and prints).
+DV_ESC='\ud800'
+v="$(decision_verdict "$PATH" "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"r $DV_ESC\"}}" deny)"
+[ "$v" = "rc=0" ] && ok || bad "#3793 hook_decision_verdict did not take a refusal whose reason holds a lone surrogate written as a JSON escape: ${v//$'\n'/ / }"
+v="$(decision_verdict "$PATH" "{\"hookSpecificOutput\": {\"hookEventName\": \"$DV_ESC\", \"permissionDecision\": \"deny\"}}" deny)"
+said_no "$v" && [[ "$v" == "the event is '$DV_ESC', not PreToolUse"* ]] && ok || bad "#3793 hook_decision_verdict did not refuse, in words naming the escape, a refusal whose event is a lone surrogate written as a JSON escape: ${v//$'\n'/ / }"
 for arm in "$PATH" "$WORK/empty"; do
   built="$(env PATH="$arm" HN_A="r $DV_SUR" HN_B="n $DV_SUR" "$BASH" -c '. "$0" && hook_deny_json "$HN_A" "$HN_B"' "$LIB" 2>/dev/null)"
   v="$(decision_verdict "$PATH" "$built" deny)"

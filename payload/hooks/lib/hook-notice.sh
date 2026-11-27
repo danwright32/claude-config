@@ -292,6 +292,7 @@ hook_decision_verdict() {
   fi
   said="$(printf '%s' "$1" | python3 -I -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 want = sys.argv[1]
 raw = sys.stdin.buffer.read()
 def no(why):
@@ -304,7 +305,7 @@ def once(pairs):
 if not (raw.startswith(b"{") and raw.endswith(b"}")):
     no("the text does not start with { and end with }: %r" % raw[:300])
 try:
-    d = json.loads(raw.decode("utf-8"), object_pairs_hook=once)
+    d = json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=once)
 except Exception as e:
     no("the text is not exactly one JSON object (%s): %r" % (e, raw[:300]))
 h = d.get("hookSpecificOutput")

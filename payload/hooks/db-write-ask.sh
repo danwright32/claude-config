@@ -324,6 +324,7 @@ refusal_shape() {
   [ -n "$1" ] || return 1
   printf '%s' "$1" | python3 -I -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 def once(pairs):
     d = dict(pairs)
     if len(d) != len(pairs):
@@ -333,7 +334,7 @@ raw = sys.stdin.buffer.read()
 if not (raw.startswith(b"{") and raw.endswith(b"}")):
     sys.exit(1)
 try:
-    d = json.loads(raw.decode("utf-8"), object_pairs_hook=once)
+    d = json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=once)
 except Exception:
     sys.exit(1)
 h = d.get("hookSpecificOutput")
