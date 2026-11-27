@@ -231,7 +231,8 @@ check "#3804 the skill says a session id that cannot be read stops the claim" "$
 # The review of that change: taking over a claim with no session recorded is a word of its own,
 # never what a plain release does (Finish runs release for every claim, so a release that took
 # claims over would do it by accident), and a session that is not the claimant is held by the
-# claimant's pushed branch or open pull request for as long as either is up, not for 24 hours.
+# claimant's pushed branch or open pull request for as long as either is up, not only until the
+# claim goes stale.
 check "#3804 the take over command is written out" "$(holds "$claiming" 'bash ~/.claude/skills/orchestrate/claim-issue.sh takeover <owner/repo> <issue number> <branch> "<reason>"' 'no take over command')"
 check "#3804 the skill says a plain release never ends a claim with no session recorded" "$(holds "$claiming" '`release` never ends a claim with no session recorded' 'no word that release leaves such a claim alone')"
 check "#3804 the skill says a release that ended nothing for that reason exits 1" "$(holds "$claiming" '`NOT RELEASED`' 'no NOT RELEASED wording')"

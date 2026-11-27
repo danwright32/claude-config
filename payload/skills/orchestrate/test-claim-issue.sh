@@ -1078,10 +1078,11 @@ is "F1 our claim landing before another session's posted again over its stale on
 has "F1 our claim landing before another session's posted again over its stale one: claimed" "CLAIMED:" "$out"
 is "F1 our claim landing before another session's posted again over its stale one: only the claim posted" 1 "$(posted_count)"
 
-# 12c. The same race with GitHub's clock 20 seconds behind this Mac's. By this Mac's clock the
-# earlier claim is stale, so it is posted again; by the times GitHub stamps, the new post is within
-# 24 hours of the old one. The place must not depend on that: a session posts again only once it
-# has judged its earlier claim over, and the other session's claim still landed first.
+# 12c. The same race with GitHub's clock a little behind this Mac's (the gap is the one this
+# fixture sets below, not measured). By this Mac's clock the earlier claim is stale, so it is
+# posted again; by the times GitHub stamps, the new post is still inside the stale window of the
+# old one. The place must not depend on that: a session posts again only once it has judged its
+# earlier claim over, and the other session's claim still landed first.
 new_case
 mine $((24 * 3600 + 10)) claim >"$FAKE/markers"
 theirs 21 claim >"$FAKE/race"
