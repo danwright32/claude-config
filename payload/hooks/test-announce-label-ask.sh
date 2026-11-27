@@ -86,11 +86,13 @@ H="$(hash_text "$POST")"
 approve() { mkdir -p "$STORE"; printf '{"kind": "approved", "repo": "%s", "hash": "%s"}\n' "${1:-acme/widget}" "$H" >> "$STORE/record.jsonl"; }
 forget() { rm -rf "$STORE"; }
 # call <tool> <tool input json> [cwd]: the hook's answer, as "<decision> rc=<exit>|<reason>|<notice>".
-# TALK names a session transcript to carry (session s1); AGENT=1 makes the call a subagent's.
+# TALK names a session transcript to carry (session s1, or the one SESSION names); AGENT=1 makes the
+# call a subagent's.
 call() {
   local body rc
   body="$(python3 -c 'import json, os, sys
-d = {"hook_event_name": "PreToolUse", "tool_name": sys.argv[1], "tool_input": json.loads(sys.argv[2]), "cwd": sys.argv[3], "session_id": "s1",
+d = {"hook_event_name": "PreToolUse", "tool_name": sys.argv[1], "tool_input": json.loads(sys.argv[2]), "cwd": sys.argv[3],
+     "session_id": os.environ.get("SESSION") or "s1",
      "transcript_path": os.environ.get("TALK") or (sys.argv[3] + "/no-transcript.jsonl")}
 if os.environ.get("AGENT") == "1":
     d["agent_id"] = "a9bba4c0ffee"
@@ -263,6 +265,48 @@ aaf_talk "$WORK/typed.jsonl" bash "$AAF_BBEDIT --front-window $F"
 aaf_talk "$WORK/typed.jsonl" ask acme/widget "$F"
 r="$(TALK="$WORK/typed.jsonl" run "$EDIT")"
 check "R10 still possible: asked again and approved with nothing typed, the command goes through" "$(passed "$r" && echo ok || echo "$r")"
+forget
+# Every picker is noted by its ids alone when he answers it (#3789), and this hook judges each noted
+# picker from its session's transcript. The command here is another session's (s2), which holds no
+# picker. An ordinary picker he answered with the approving words puts no label on and is settled;
+# his Approve in a picker the hook could not tell the source of, because the transcript did not
+# hold its line yet, puts the label on once the transcript holds it.
+noted() { ANNOUNCE_APPROVALS_DIR="$STORE" bash "$DIR/announce-answer-note.sh" 2>&1; }
+# on_record <kind> <picker> [needle]: whether the record holds a line of that kind for that picker,
+# holding the needle. Read into a variable and matched there, never piped into a quiet grep.
+on_record() {
+  local line
+  line="$(grep "\"kind\": \"$1\"" "$STORE/record.jsonl" 2>/dev/null | grep "\"picker\": \"$2\"")"
+  [[ -n "$line" && "$line" == *"${3:-}"* ]]
+}
+F="$(aaf_shown "$WORK/elsewhere" "$WORK/elsewhere.jsonl" "$POST")"
+PL="$(aaf_talk "$WORK/elsewhere.jsonl" put acme/widget "$F" plain)"
+said="$(aaf_talk "$WORK/elsewhere.jsonl" payload "$PL" acme/widget "$F" "" plain | noted)"
+aaf_talk "$WORK/elsewhere.jsonl" answer "$PL" acme/widget "$F" "Approve the wording" plain
+check "#3789 the hook that notes a picker says nothing after an ordinary one, and notes it" "$([ -z "$said" ] && on_record answered "$PL" && echo ok || echo "$said $(cat "$STORE/record.jsonl" 2>&1)")"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 #3789 an ordinary picker noted in another session, answered with the approving words, puts no label on" "$(asks_dan "$r" && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
+check "#3789 and this hook settled it, so it is read once" "$(on_record settled "$PL" && echo ok || cat "$STORE/record.jsonl" 2>&1)"
+aaf_talk "$WORK/elsewhere.jsonl" bash "$AAF_BBEDIT --front-window $F"
+said="$(AAF_PAYLOAD_FORM="answers nometadata" aaf_talk "$WORK/elsewhere.jsonl" payload toolu_elsewhere1 acme/widget "$F" | noted)"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 #3789 a note of a picker the transcript does not hold puts no label on, and the hook that noted it said nothing" "$([ -z "$said" ] && asks_dan "$r" && echo ok || echo "$said $r")"
+aaf_talk "$WORK/elsewhere.jsonl" late toolu_elsewhere1 acme/widget "$F"
+aaf_talk "$WORK/elsewhere.jsonl" answer toolu_elsewhere1 acme/widget "$F"
+r="$(SESSION=s2 AGENT=1 run "$EDIT")"
+check "#3789 a subagent's command counts his Approve in that session for the call, and writes nothing" "$(passed "$r" && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 still possible #3789: his Approve in another session, in a picker noted by its ids alone, lets the label on" "$(passed "$r" && echo ok || echo "$r")"
+check "#3789 and his approval is written to the record as the picker it came from" "$(on_record approved toolu_elsewhere1 "\"hash\": \"$H\"" && echo ok || cat "$STORE/record.jsonl" 2>&1)"
+forget
+# The same, with the file written after he answered: no hash was noted, so his Approve does not count.
+F="$(aaf_shown "$WORK/elsewhere-changed" "$WORK/elsewhere-changed.jsonl" "$POST")"
+AAF_PAYLOAD_FORM="answers nometadata" aaf_talk "$WORK/elsewhere-changed.jsonl" payload toolu_elsewhere2 acme/widget "$F" | noted >/dev/null
+aaf_talk "$WORK/elsewhere-changed.jsonl" late toolu_elsewhere2 acme/widget "$F"
+aaf_talk "$WORK/elsewhere-changed.jsonl" answer toolu_elsewhere2 acme/widget "$F"
+printf '%s\n' "$POST" > "$F"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 #3789 a file written after his answer, with no hash noted, puts no label on, and the refusal says to ask him again" "$(asks_dan "$r" && [[ "$r" == *"has changed since he answered"* && "$r" == *"ask him again"* ]] && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
 forget
 
 echo "one approval covers one pull request (Dan, 2026-11-25: \"One approval, one pull request\")"
@@ -510,6 +554,34 @@ check "run again, it writes no second line" "$(passed "$r" && [ "$(decided_lines
 aaf_talk "$D" decide acme/widget "Hand over" "Not announcing" prefilled
 r="$(TALK="$D" run "$HELPER_CALL")"
 check "a picker that was never put to him is said beside the call, to Dan and the session" "$([[ "$r" == "none rc=0||"*"Hand over"*"already filled in"* ]] && echo ok || echo "$r")"
+# His answer in ANOTHER session, in a picker the real hook noted by its ids alone (#3789: the
+# transcript did not hold its line yet and the hook's copy carried no metadata). The call running
+# the helper is session s2's, which holds no picker, so the note is all that leads to his answer.
+forget
+E="$WORK/deciding-elsewhere.jsonl"; aaf_new "$E"
+# Session s2's own transcript, which holds no picker at all.
+S2="$WORK/deciding-s2.jsonl"; aaf_new "$S2"
+said="$(AAF_PAYLOAD_FORM=nometadata aaf_talk "$E" decide-payload toolu_decelse1 acme/widget "Hand back" "Not announcing" | noted)"
+check "#3669 the hook that notes a picker says nothing after a discovery picker, and notes it" "$([ -z "$said" ] && on_record answered toolu_decelse1 && echo ok || echo "$said $(cat "$STORE/record.jsonl" 2>&1)")"
+r="$(TALK="$S2" SESSION=s2 run "$HELPER_CALL")"
+check "R9 #3669 a note of a discovery picker the transcript does not hold reads no answer in, and is not settled" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && ! on_record settled toolu_decelse1 && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+aaf_talk "$E" decide-late toolu_decelse1 acme/widget "Hand back"
+aaf_talk "$E" decide-answer toolu_decelse1 acme/widget "Hand back" "Not announcing"
+r="$(TALK="$S2" SESSION=s2 AGENT=1 run "$HELPER_CALL")"
+check "#3669 a subagent's call running the helper writes nothing of that picker" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
+r="$(TALK="$S2" SESSION=s2 run "$HELPER_CALL")"
+check "R9 still possible #3669: his Not announcing in another session, in a picker noted by its ids alone, is on the record before the helper runs" "$(passed "$r" && on_record decided toolu_decelse1 '"answer": "no"' && [ "$(decided_lines)" = 1 ] && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+# An approval picker noted in that same session is none of this job's: the call that runs the helper
+# gives it no line, and the label command still finds his Approve afterwards.
+forget
+F2="$(aaf_shown "$WORK/both-kinds" "$WORK/both-kinds.jsonl" "$POST")"
+AAF_PAYLOAD_FORM=nometadata aaf_talk "$WORK/both-kinds.jsonl" payload toolu_bothapprove acme/widget "$F2" | noted >/dev/null
+aaf_talk "$WORK/both-kinds.jsonl" late toolu_bothapprove acme/widget "$F2"
+aaf_talk "$WORK/both-kinds.jsonl" answer toolu_bothapprove acme/widget "$F2"
+r="$(TALK="$S2" SESSION=s2 run "$HELPER_CALL")"
+check "#3669 a call running the helper gives a noted approval picker no line: it is neither settled nor approved there" "$(passed "$r" && ! on_record settled toolu_bothapprove && ! on_record approved toolu_bothapprove && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 still possible #3669: and the label command then finds his Approve, in that picker noted by its ids alone" "$(passed "$r" && on_record approved toolu_bothapprove && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
 # One job per call: a call that also names the label is judged for the label alone, inside the time
 # the hook is registered with, and reads no answer in.
 forget

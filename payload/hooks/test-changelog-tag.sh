@@ -1377,6 +1377,54 @@ else fail "#3666 his approval was not written to the record: $(cat "$dir/approva
 out=$(run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
 if owes_draft "$out" 7; then pass; else fail "#3666 R2 still possible: a later session was refused wording already on the record, or its allow did not say the one line about the draft it owes (#3667): $out"; fi
 
+# Every picker is noted by its ids alone when he answers it (claude-config#3789), and the gate
+# judges each noted picker from its session's transcript. The merge here names no session of its
+# own, as the merge helper's does. An ordinary picker he answered with the approving words merges
+# nothing and is settled; his Approve in a picker the hook could not tell the source of, because the
+# transcript did not hold its line yet, merges the wording once the transcript holds it.
+note_it() { ANNOUNCE_APPROVALS_DIR="$1/approvals" bash "$HOOK_DIR/announce-answer-note.sh" 2>&1; }
+record_holds() {  # $1 = fixture dir, $2 = a kind of line, $3 = a picker's id ; true when its record holds that line
+  local line
+  line="$(grep "\"kind\": \"$2\"" "$1/approvals/record.jsonl" 2>/dev/null | grep "\"picker\": \"$3\"")"
+  [ -n "$line" ]
+}
+late_dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
+late_file="$(aaf_shown "$late_dir/wording" "$late_dir/talk.jsonl" "$WORDING")"
+plain_id="$(aaf_talk "$late_dir/talk.jsonl" put acme/widget "$late_file" plain)"
+said="$(aaf_talk "$late_dir/talk.jsonl" payload "$plain_id" acme/widget "$late_file" "" plain | note_it "$late_dir")"
+aaf_talk "$late_dir/talk.jsonl" answer "$plain_id" acme/widget "$late_file" "Approve the wording" plain
+if [ -z "$said" ] && record_holds "$late_dir" answered "$plain_id"; then pass
+else fail "#3789 the hook that notes a picker said something after an ordinary one, or did not note it: $said $(cat "$late_dir/approvals/record.jsonl" 2>/dev/null)"; fi
+out=$(run_hook "$late_dir" "$MERGE 7 --squash")
+if asks_dan "$out" && ! grep -q '"kind": "approved"' "$late_dir/approvals/record.jsonl" 2>/dev/null; then pass
+else fail "#3789 R2: an ordinary picker noted by its ids alone, answered with the approving words, merged an announcement: $out"; fi
+if record_holds "$late_dir" settled "$plain_id"; then pass
+else fail "#3789 the gate did not settle the ordinary picker it read, so it would be read again on every merge: $(cat "$late_dir/approvals/record.jsonl" 2>/dev/null)"; fi
+aaf_talk "$late_dir/talk.jsonl" bash "$AAF_BBEDIT --front-window $late_file"
+said="$(AAF_PAYLOAD_FORM="answers nometadata" aaf_talk "$late_dir/talk.jsonl" payload toolu_gatelate1 acme/widget "$late_file" | note_it "$late_dir")"
+out=$(run_hook "$late_dir" "$MERGE 7 --squash")
+if [ -z "$said" ] && asks_dan "$out"; then pass
+else fail "#3789 R2: a note of a picker the transcript does not hold merged an announcement, or the hook spoke: $said $out"; fi
+aaf_talk "$late_dir/talk.jsonl" late toolu_gatelate1 acme/widget "$late_file"
+aaf_talk "$late_dir/talk.jsonl" answer toolu_gatelate1 acme/widget "$late_file"
+out=$(run_hook "$late_dir" "$MERGE 7 --squash" 2>/dev/null)
+if owes_draft "$out" 7; then pass; else fail "#3789 R2 still possible: his Approve in a picker noted by its ids alone, in a session the merge does not name, was refused: $out"; fi
+if record_holds "$late_dir" approved toolu_gatelate1; then pass
+else fail "#3789 his approval was not written to the record as the picker it came from: $(cat "$late_dir/approvals/record.jsonl" 2>/dev/null)"; fi
+rm -rf "$late_dir"
+# The same, with the file written after he answered: the note holds no hash, so the wording he
+# answered about cannot be told, his Approve does not count, and the refusal says to ask him again.
+late_dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
+late_file="$(aaf_shown "$late_dir/wording" "$late_dir/talk.jsonl" "$WORDING")"
+AAF_PAYLOAD_FORM="answers nometadata" aaf_talk "$late_dir/talk.jsonl" payload toolu_gatelate2 acme/widget "$late_file" | note_it "$late_dir" >/dev/null
+aaf_talk "$late_dir/talk.jsonl" late toolu_gatelate2 acme/widget "$late_file"
+aaf_talk "$late_dir/talk.jsonl" answer toolu_gatelate2 acme/widget "$late_file"
+printf '%s\n' "$WORDING" > "$late_file"
+out=$(run_hook "$late_dir" "$MERGE 7 --squash")
+if asks_dan "$out" && says "$out" "has changed since he answered" && says "$out" "ask him again" && ! grep -q '"kind": "approved"' "$late_dir/approvals/record.jsonl" 2>/dev/null; then pass
+else fail "#3789 R2: a file written after his answer, with no hash noted when he answered, merged on his Approve, or the refusal did not say to ask him again: $out"; fi
+rm -rf "$late_dir"
+
 # A merged announcement's wording is marked used, with each issue it closes and its milestone, for
 # the later check that a feature Dan said yes to announcing does not finish under another label.
 used_line() { grep '"kind": "used"' "$1/approvals/record.jsonl" 2>/dev/null | tail -1; }
@@ -1687,6 +1735,32 @@ else fail "#3669 R9 still possible: his Not announcing in a picker naming the mi
 # So a later session, holding no picker, merges it on the record.
 out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
 if [ -z "$out" ]; then pass; else fail "#3669 R9 still possible: a later session was refused a decline already on the record: $out"; fi
+rm -rf "$dir"
+# The same through a note by its ids alone (#3789): his answer in a picker the real hook noted when
+# the transcript did not hold its line yet, and the hook's copy carried no metadata. The merge names
+# no session of its own, as the merge helper's does, so the note is all that leads to his answer.
+dir=$(make_repo acme/widget "$VISIBLE_OK" "$REGISTRY_ANNOUNCES")
+aaf_new "$dir/talk.jsonl"
+said="$(AAF_PAYLOAD_FORM=nometadata aaf_talk "$dir/talk.jsonl" decide-payload toolu_gatedecide1 acme/widget "Hand back" "Not announcing" "" "" "" 28 | note_it "$dir")"
+out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if [ -z "$said" ] && record_holds "$dir" answered toolu_gatedecide1 && yes_dropped "$out" && ! record_holds "$dir" settled toolu_gatedecide1; then pass
+else fail "#3669 R9: a note of a discovery picker the transcript does not hold let the merge through, was settled before its picker could be read, or the hook spoke: $said $out"; fi
+aaf_talk "$dir/talk.jsonl" decide-late toolu_gatedecide1 acme/widget "Hand back" "" "" 28
+aaf_talk "$dir/talk.jsonl" decide-answer toolu_gatedecide1 acme/widget "Hand back" "Not announcing" "" "" 28
+out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+if [ -z "$out" ] && record_holds "$dir" decided toolu_gatedecide1; then pass
+else fail "#3669 R9 still possible: his Not announcing in a picker noted by its ids alone, in a session the merge does not name, did not let the merge through, or got no decided line: $out $(cat "$dir/approvals/record.jsonl" 2>/dev/null)"; fi
+rm -rf "$dir"
+# An ordinary picker he answered with the declining words, noted the same way, declines nothing, and
+# the gate settles it once.
+dir=$(make_repo acme/widget "$VISIBLE_OK" "$REGISTRY_ANNOUNCES")
+plain_file="$(aaf_shown "$dir/wording" "$dir/talk.jsonl" "$WORDING")"
+plain_id="$(aaf_talk "$dir/talk.jsonl" put acme/widget "$plain_file" plain)"
+aaf_talk "$dir/talk.jsonl" payload "$plain_id" acme/widget "$plain_file" "" plain | note_it "$dir" >/dev/null
+aaf_talk "$dir/talk.jsonl" answer "$plain_id" acme/widget "$plain_file" "Not announcing" plain
+out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if yes_dropped "$out" && record_holds "$dir" settled "$plain_id" && ! record_holds "$dir" decided "$plain_id"; then pass
+else fail "#3669 R9: an ordinary picker noted by its ids alone, answered with the declining words, let the merge through, or the gate did not settle it: $out $(cat "$dir/approvals/record.jsonl" 2>/dev/null)"; fi
 rm -rf "$dir"
 
 # Or an announcement merged for that milestone: one the record holds as let through, which GitHub

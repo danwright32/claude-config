@@ -801,21 +801,57 @@ talk "$T" answer "$P" acme/widget "$F"
 r="$(helper_asks acme/widget "$(hash_file "$F")" 65)"
 check "R2 a noted Approve of a file never opened in front of him approves nothing, and says so" "$([[ "$r" == "no|unapproved|"*"was not opened in front of him"* ]] && echo ok || echo "$r")"
 
-# What is not noted, each said in its own words or, for a picker that is not this one, not at all.
+# EVERY main session picker is noted, by its ids alone (#3789): the session, its transcript and the
+# picker, and whether the transcript held the picker's line when the hook ran. What it asked is told
+# later, from the transcript, by whoever reads the note. Only a picker the hook can already tell is
+# an announcement's, with a repository and a file, is noted with the file's hash beside its ids.
+# bare <picker> <held>: ok when the record's one note of that picker carries its ids and nothing else.
+bare() {
+  grep '"kind": "answered"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$1\"" | python3 -c 'import json, sys
+lines = [json.loads(l) for l in sys.stdin if l.strip()]
+keys = sorted(lines[0]) if len(lines) == 1 else []
+if len(lines) != 1:
+    print("%d notes of %s" % (len(lines), sys.argv[1]), end="")
+elif keys != ["at", "held", "kind", "picker", "session", "transcript"] or lines[0]["held"] is not json.loads(sys.argv[2]):
+    print("the note is " + json.dumps(lines[0]), end="")
+else:
+    print("ok", end="")' "$@"
+}
+# settled_as <picker> <needle>: whether the record holds a settled line for that picker saying that.
+# Read into a variable and matched there, never piped into a quiet grep (test-pipefail-shortcircuit.sh).
+settled_as() {
+  local line
+  line="$(grep '"kind": "settled"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$1\"")"
+  [[ -n "$line" && "$line" == *"$2"* ]]
+}
 STORE_USED="$WORK/store-noted-not"
 F="$(shown not-noted)"; T="$WORK/not-noted.jsonl"
 P="$(talk "$T" put acme/widget "$F")"
 r="$(note "$T" payload "$P" acme/widget "$F" "" "" "" a9bba4c0ffee)"
-check "a subagent's picker is not noted, and that is said" "$([[ "$r" == "no|"*"subagent"* ]] && [ "$(kinds answered)" = 0 ] && echo ok || echo "$r")"
+check "#3789 a subagent's picker is not noted, and nothing is said" "$([[ "$r" == "no|" ]] && [ "$(kinds answered)" = 0 ] && [ ! -e "$STORE_USED/record.jsonl" ] && echo ok || echo "$r")"
 P2="$(talk "$T" put acme/widget "$F" othersource)"
 r="$(note "$T" payload "$P2" acme/widget "$F" "" othersource)"
-check "a picker of another source is not noted, and nothing is said" "$([[ "$r" == "no|" ]] && [ "$(kinds answered)" = 0 ] && echo ok || echo "$r")"
-P2="$(talk "$T" put acme/widget "$F" prefilled)"
-r="$(note "$T" payload "$P2" acme/widget "$F" "" prefilled)"
-check "a picker the session sent with its answer filled in was never put to him, and is not noted" "$([[ "$r" == "no|" ]] && [ "$(kinds answered)" = 0 ] && echo ok || echo "$r")"
-P2="$(talk "$T" put "not a repository" "$F")"
-r="$(note "$T" payload "$P2" "not a repository" "$F")"
-check "a picker whose metadata names no repository is not noted, and that is said" "$([[ "$r" == "no|"*"does not name the repository"* ]] && echo ok || echo "$r")"
+check "#3789 a picker of another source is noted by its ids alone, and nothing is said" "$([[ "$r" == "yes|" ]] && bare "$P2" true || echo "$r")"
+P3="$(talk "$T" put acme/widget "$F" prefilled)"
+r="$(note "$T" payload "$P3" acme/widget "$F" "" prefilled)"
+check "#3789 a picker the session sent with its answer filled in is noted by its ids alone: no hash is taken for it" "$([[ "$r" == "yes|" ]] && bare "$P3" true || echo "$r")"
+P4="$(talk "$T" put "not a repository" "$F")"
+r="$(note "$T" payload "$P4" "not a repository" "$F")"
+check "#3789 a picker whose metadata names no repository is noted by its ids alone, and nothing is said" "$([[ "$r" == "yes|" ]] && bare "$P4" true || echo "$r")"
+talk "$T" answer "$P2" acme/widget "$F" "Approve the wording" othersource
+talk "$T" answer "$P3" acme/widget "$F" "Approve the wording" prefilled
+talk "$T" answer "$P4" "not a repository" "$F"
+r="$(helper_asks acme/widget "$(hash_file "$F")" 69)"
+check "R2 #3789 none of those notes approves anything" "$([[ "$r" == "no|unapproved|"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
+check "#3789 the picker of another source is settled as no picker of this record's" "$(settled_as "$P2" 'no picker of a source' && echo ok || cat "$STORE_USED/record.jsonl")"
+check "#3789 the refusal still says why his Approve in a picker naming no repository does not count" "$([[ "$r" == *"does not name the repository"* ]] && echo ok || echo "$r")"
+# A noted picker of this source that can never count (sent with its answer filled in, or naming no
+# repository and file) is settled too, once it has been said: left unjudged, its session would be
+# read back on every later call, and the reason said in refusals about other repositories.
+check "#3789 a noted picker sent with its answer filled in is settled as never put to him" "$(settled_as "$P3" 'never put to him' && echo ok || cat "$STORE_USED/record.jsonl")"
+check "#3789 a noted picker naming no repository is settled as one that can approve nothing" "$(settled_as "$P4" 'does not name the repository' && [ "$(kinds settled)" = 3 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+r="$(helper_asks acme/widget "$(hash_file "$F")" 69)"
+check "#3789 and none of them is read back or said again" "$([[ "$r" == "no|unapproved|"* && "$r" != *"does not name the repository"* ]] && [ "$(kinds settled)" = 3 ] && echo ok || echo "$r")"
 # The picker is read from the transcript, by the id the hook was handed, and not from the hook's own
 # copy of its input: no real payload has been printed, and the dialog may hand the hook an input
 # holding his answers and without the metadata. Such a payload is noted all the same.
@@ -835,22 +871,173 @@ r="$(note "$T" payload toolu_absent1 acme/widget "$F")"
 check "a picker the transcript does not hold is noted from the payload's own input" "$([[ "$r" == "yes|" ]] && [ "$(kinds answered)" = 1 ] && echo ok || echo "$r")"
 r="$(helper_asks acme/widget "$(hash_file "$F")" 68)"
 check "R2 and approves nothing, since the transcript holds no answer of his to it" "$([[ "$r" == "no|unapproved|"* ]] && echo ok || echo "$r")"
-# A picker neither copy says the source of may be this one, in a form nobody has printed. It is
-# never left in silence: the answer says that what it asked could not be told, and why.
+# A picker neither copy says the source of (#3789, as measured on the installed hook: the transcript
+# did not hold the picker's line yet, and the hook's copy carried no metadata). It is noted by its
+# ids alone and nothing is said: what it asked is told later, from the transcript.
+STORE_USED="$WORK/store-noted-idsonly"
+F="$(shown late-noted)"; T="$WORK/late-noted.jsonl"
+HLATE="$(hash_file "$F")"
 r="$(AAF_PAYLOAD_FORM=nometadata note "$T" payload toolu_absent2 acme/widget "$F")"
-check "one the transcript does not hold and the payload does not name the source of is not noted, and that is said" "$([[ "$r" == "no|"*"could not be told"*"does not hold the picker toolu_absent2"*"carries no metadata"* ]] && [ "$(kinds answered)" = 1 ] && echo ok || echo "$r")"
+check "#3789 one the transcript does not hold and the payload does not name the source of is noted by its ids alone, and nothing is said" "$([[ "$r" == "yes|" ]] && bare toolu_absent2 false || echo "$r")"
+r="$(helper_asks acme/widget "$HLATE" 70)"
+check "R2 #3789 a note that names no source approves nothing, and is not settled while the transcript does not hold its picker" "$([[ "$r" == "no|unapproved|"* ]] && [ "$(kinds approved)" = 0 ] && [ "$(kinds settled)" = 0 ] && echo ok || echo "$r $(cat "$STORE_USED/record.jsonl")")"
+talk "$T" late toolu_absent2 acme/widget "$F"
+r="$(helper_asks acme/widget "$HLATE" 70)"
+check "R2 #3789 nor once the transcript holds the picker and not yet his answer" "$([[ "$r" == "no|unapproved|"* ]] && [ "$(kinds approved)" = 0 ] && [ "$(kinds settled)" = 0 ] && echo ok || echo "$r")"
+talk "$T" answer toolu_absent2 acme/widget "$F"
+r="$(helper_asks acme/widget "$HLATE" 70)"
+check "R2 still possible #3789: his Approve in a picker noted by its ids alone is found by a merge naming no session" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
+check "#3789 and written to the record once, as the session and the picker it came from" "$(line="$(grep '"kind": "approved"' "$STORE_USED/record.jsonl" 2>/dev/null | grep '"picker": "toolu_absent2"')"; [[ "$line" == *'"session": "s1"'* && "$line" == *"\"hash\": \"$HLATE\""* ]] && [ "$(kinds approved)" = 1 ] && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+# A note that holds no hash never carries the wording past a later write to the file: it is judged
+# as a picker with no note is, by the file as it stands, unchanged since his answer.
+STORE_USED="$WORK/store-noted-late-changed"
+F="$(shown late-changed)"; T="$WORK/late-changed.jsonl"
+HBEFORE="$(hash_file "$F")"
+AAF_PAYLOAD_FORM=nometadata note "$T" payload toolu_absent5 acme/widget "$F" >/dev/null
+talk "$T" late toolu_absent5 acme/widget "$F"
+talk "$T" answer toolu_absent5 acme/widget "$F"
+printf 'A line nobody showed him.\n' >> "$F"
+r="$(helper_asks acme/widget "$(hash_file "$F")" 71)"
+check "R2 #3789 with no hash noted, a file changed after his answer is not wording he approved" "$([[ "$r" == "no|unapproved|"*"has changed since he answered"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
+check "#3789 and the refusal says to ask him again" "$([[ "$r" == *"ask him again"* ]] && echo ok || echo "$r")"
+r="$(helper_asks acme/widget "$HBEFORE" 71)"
+check "R2 #3789 and what the file held before the write is not approved either: nothing noted it" "$([[ "$r" == "no|unapproved|"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
+# A note that names a source the hook was only handed, for a picker the transcript shows is an
+# ordinary one, is no approval and is not taken as one.
+STORE_USED="$WORK/store-noted-claimed"
+F="$(shown claimed)"; T="$WORK/claimed.jsonl"
+r="$(note "$T" payload toolu_claimed1 acme/widget "$F")"
+talk "$T" late toolu_claimed1 acme/widget "$F" plain
+talk "$T" answer toolu_claimed1 acme/widget "$F" "Approve the wording" plain
+r="$(helper_asks acme/widget "$(hash_file "$F")" 72)"
+check "R2 #3789 a note handed a source the transcript's picker does not name approves nothing, and is settled" "$([[ "$r" == "no|unapproved|"* ]] && [ "$(kinds approved)" = 0 ] && settled_as toolu_claimed1 'no picker of a source' && echo ok || echo "$r $(cat "$STORE_USED/record.jsonl")")"
+# A transcript that is not there when the hook runs: noted all the same, and settled by the first
+# question that finds it gone, since what its picker asked can never be read.
+STORE_USED="$WORK/store-noted-gone"
+F="$(shown gone)"
 r="$(AAF_PAYLOAD_FORM=nometadata note "$WORK/no-such-talk.jsonl" payload toolu_absent3 acme/widget "$F")"
-check "and so is one whose transcript cannot be read" "$([[ "$r" == "no|"*"could not be told"*"could not be read"* ]] && echo ok || echo "$r")"
+check "#3789 a picker whose transcript cannot be read is noted by its ids alone, saying so" "$([[ "$r" == "yes|" ]] && bare toolu_absent3 null || echo "$r")"
+r="$(helper_asks acme/widget "$(hash_file "$F")" 73)"
+check "R2 #3789 it approves nothing, and is settled as one whose transcript is gone" "$([[ "$r" == "no|unapproved|"* ]] && settled_as toolu_absent3 'transcript is gone' && echo ok || echo "$r $(cat "$STORE_USED/record.jsonl")")"
+r="$(helper_asks acme/widget "$(hash_file "$F")" 73)"
+check "#3789 and is not looked for again" "$([[ "$r" == "no|unapproved|"* && "$r" != *"could not be read back"* ]] && [ "$(kinds settled)" = 1 ] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-noted-absent"
+F="$(shown absent-noted-2)"; T="$WORK/absent-noted-2.jsonl"
 r="$(AAF_PAYLOAD_FORM=nometadata note "$T" payload toolu_absent4 acme/widget "$F" "" "" "" a9bba4c0ffee)"
-check "a subagent's picker is never noted whatever it asked, so one that cannot be told draws no line" "$([[ "$r" == "no|" ]] && echo ok || echo "$r")"
-# An ordinary picker, which the transcript holds and which names no source, is no business of this.
+check "a subagent's picker is never noted whatever it asked" "$([[ "$r" == "no|" ]] && [ "$(kinds answered)" = 1 ] && echo ok || echo "$r")"
+# An ordinary picker, which the transcript holds and which names no source.
 P2="$(talk "$T" put acme/widget "$F" plain)"
 r="$(note "$T" payload "$P2" acme/widget "$F" "" plain)"
-check "a picker the transcript holds with no metadata is not this one, and nothing is said" "$([[ "$r" == "no|" ]] && [ "$(kinds answered)" = 1 ] && echo ok || echo "$r")"
+check "#3789 a picker the transcript holds with no metadata is noted by its ids alone, and nothing is said" "$([[ "$r" == "yes|" ]] && bare "$P2" true || echo "$r")"
 STORE_USED="$WORK/store-noted-not"
 r="$(printf 'not json' | ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" answered 2>&1)"
-check "a payload nothing can read is not noted, and that is said" "$([[ "$r" == *'"noted": false'*"could not be told"*"was not a JSON object"* ]] && echo ok || echo "$r")"
+check "#3789 a payload nothing can read is not noted, and that is said" "$([[ "$r" == *'"noted": false'*"could not be noted"*"was not a JSON object"* ]] && echo ok || echo "$r")"
+r="$(note "$T" payload "" acme/widget "$F")"
+check "#3789 a payload naming no picker is not noted, and that is said" "$([[ "$r" == "no|"*"could not be noted"*"was not told the session, its transcript and the picker's id"* ]] && echo ok || echo "$r")"
+
+# ONE PASS over a session's transcript judges every picker of it the record notes and nothing has
+# judged (#3789): three ordinary pickers and an approval cost the reads one picker costs.
+STORE_USED="$WORK/store-noted-many"
+F="$(shown many)"; T="$WORK/many.jsonl"
+HMANY="$(hash_file "$F")"
+for n in 1 2 3; do
+  PM="$(talk "$T" put acme/widget "$F" plain)"
+  note "$T" payload "$PM" acme/widget "$F" "" plain >/dev/null
+  talk "$T" answer "$PM" acme/widget "$F" "A" plain
+done
+talk "$T" bash "$BBEDIT --front-window $F"
+AAF_PAYLOAD_FORM=nometadata note "$T" payload toolu_many4 acme/widget "$F" >/dev/null
+talk "$T" late toolu_many4 acme/widget "$F"
+talk "$T" answer toolu_many4 acme/widget "$F"
+# opens <transcript> <hash>: how many times one question opens that transcript, counted in process.
+opens() {
+  ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B -c 'import builtins, importlib.util, sys
+spec = importlib.util.spec_from_file_location("announce_approval", sys.argv[1])
+lib = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lib)
+real, seen = builtins.open, []
+def counting(path, *a, **k):
+    if path == sys.argv[2]:
+        seen.append(path)
+    return real(path, *a, **k)
+builtins.open = counting
+d = lib.check("acme/widget", sys.argv[3], {"session_id": "merge-when-ready"}, 74)
+builtins.open = real
+print(("yes" if d["approved"] is True else "no") + "|" + str(len(seen)), end="")' "$LIB" "$1" "$2"
+}
+STORE_ONE="$WORK/store-noted-one"; mkdir -p "$STORE_ONE"
+grep '"picker": "toolu_many4"' "$STORE_USED/record.jsonl" > "$STORE_ONE/record.jsonl"
+many="$(opens "$T" "$HMANY")"
+one="$(STORE_USED="$STORE_ONE" opens "$T" "$HMANY")"
+check "R2 still possible #3789: the approval among a session's ordinary pickers is found" "$([[ "$many" == "yes|"* && "$one" == "yes|"* ]] && echo ok || echo "four notes: $many, one note: $one")"
+check "#3789 four noted pickers of one session cost the transcript reads one costs" "$([ "${many#*|}" = "${one#*|}" ] && [ "${one#*|}" -ge 1 ] && echo ok || echo "four notes: $many, one note: $one")"
+check "#3789 and each ordinary one is settled in that pass" "$([ "$(kinds settled)" = 3 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+check "#3789 a settled ordinary picker takes no approval back" "$([[ "$(helper_asks acme/widget "$HMANY" 74)" == "yes|approved|" ]] && echo ok || helper_asks acme/widget "$HMANY" 74)"
+
+# The sessions read back are the ones whose NEWEST unjudged note is newest (#3789). Every picker is
+# noted now, so a session's first note is its first picker of any kind, long before the approval.
+STORE_USED="$WORK/store-noted-order"
+F="$(shown order)"; T="$WORK/order.jsonl"
+HORDER="$(hash_file "$F")"
+PO="$(talk "$T" put acme/widget "$F" plain)"
+note "$T" payload "$PO" acme/widget "$F" "" plain >/dev/null
+for n in 1 2 3 4 5 6; do
+  aaf_new "$WORK/order-other-$n.jsonl"
+  PX="$(talk "$WORK/order-other-$n.jsonl" put acme/widget "$F" "" "other$n")"
+  note "$WORK/order-other-$n.jsonl" payload "$PX" acme/widget "$F" "" "" "other$n" >/dev/null
+done
+talk "$T" bash "$BBEDIT --front-window $F"
+AAF_PAYLOAD_FORM=nometadata note "$T" payload toolu_order1 acme/widget "$F" >/dev/null
+talk "$T" late toolu_order1 acme/widget "$F"
+talk "$T" answer toolu_order1 acme/widget "$F"
+r="$(helper_asks acme/widget "$HORDER" 75)"
+check "R2 still possible #3789: a session whose first note is older than six other sessions' is read back for its newest" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
+# HOW MANY SESSIONS ONE CALL READS BACK (Dan, 2026-11-26, by picker: "Raise it to 50 (Recommended)").
+# Eight other sessions each hold a newer note than the session that holds his Approve, and none of
+# the eight can be judged (its picker is put and not answered), so reading them again settles
+# nothing. At five sessions a call his approval was never reached, and he was asked again.
+STORE_USED="$WORK/store-noted-fifty"
+F="$(shown fifty)"; T="$WORK/fifty.jsonl"
+HFIFTY="$(hash_file "$F")"
+AAF_PAYLOAD_FORM=nometadata note "$T" payload toolu_fifty1 acme/widget "$F" >/dev/null
+talk "$T" late toolu_fifty1 acme/widget "$F"
+talk "$T" answer toolu_fifty1 acme/widget "$F"
+for n in 1 2 3 4 5 6 7 8; do
+  aaf_new "$WORK/fifty-other-$n.jsonl"
+  PX="$(talk "$WORK/fifty-other-$n.jsonl" put acme/widget "$F" "" "fifty$n")"
+  note "$WORK/fifty-other-$n.jsonl" payload "$PX" acme/widget "$F" "" "" "fifty$n" >/dev/null
+done
+# asks_with <hash> [sessions one call reads back] [late]: a hook naming no session asks, without a
+# claim and in process, with that many sessions read back in place of the library's own number, and
+# with `late` the call's time already run out when the first noted session comes up: "<yes|no>|<why>".
+asks_with() {
+  ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B -c 'import importlib.util, sys, time
+spec = importlib.util.spec_from_file_location("announce_approval", sys.argv[1])
+lib = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lib)
+if sys.argv[3]:
+    lib.NOTED_SESSIONS = int(sys.argv[3])
+if sys.argv[4] == "late":
+    lib._clock = lambda: time.monotonic() + 10 ** 6
+d = lib.check("acme/widget", sys.argv[2], {"session_id": "merge-when-ready"}, 76)
+print(("yes" if d["approved"] is True else "no") + "|" + d["why"], end="")' "$LIB" "$1" "${2:-}" "${3:-}"
+}
+# The two ways a call stops short of a noted session are read first, while nothing is on the record
+# for his approval yet. Each says how many sessions it left unread, and why: a call that stopped
+# short never reads as one that looked and found no approval.
+r="$(asks_with "$HFIFTY" 5)"
+check "R2 #3669 with five sessions read back, his Approve behind eight newer notes is not reached, and the refusal says four sessions were left unread" "$([[ "$r" == "no|"*"4 sessions holding a picker the record notes were left unread, because one call reads back 5"*"an answer of his there is not known to this call"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
+r="$(asks_with "$HFIFTY" "" late)"
+check "R2 #3669 a call whose time ran out before any noted session was read approves nothing, and says all nine were left unread" "$([[ "$r" == "no|"*"9 sessions holding a picker the record notes were left unread, because the 12 seconds one call has ran out"*"an answer of his there is not known to this call"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
+r="$(helper_asks acme/widget "$HFIFTY" 76)"
+check "R2 still possible #3669: his Approve is found by a merge naming no session when eight other sessions hold a newer unjudged note" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
+check "#3669 the number of sessions one call reads back is the one Dan chose" "$([[ "$(python3 -B -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("announce_approval", sys.argv[1])
+lib = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lib)
+print(lib.NOTED_SESSIONS, end="")' "$LIB")" == 50 ]] && echo ok || echo "it is not 50")"
 # A wording file that cannot be hashed is noted with why, and that reason is the refusal's.
+STORE_USED="$WORK/store-noted-nofile"
 mkdir -p "$WORK/nofile"; aaf_new "$WORK/nofile.jsonl"; T="$WORK/nofile.jsonl"
 talk "$T" bash "$BBEDIT --front-window $WORK/nofile/announcement.md"
 P="$(talk "$T" put acme/widget "$WORK/nofile/announcement.md")"
@@ -865,7 +1052,10 @@ printf 'not a folder\n' > "$WORK/store-noted-unwritable"
 F="$(shown unwritable-noted)"; T="$WORK/unwritable-noted.jsonl"
 P="$(talk "$T" put acme/widget "$F")"
 r="$(note "$T" payload "$P" acme/widget "$F")"
-check "a note the record cannot take is said, naming the record" "$([[ "$r" == "no|"*"was not noted"*"$STORE_USED/record.jsonl"* ]] && echo ok || echo "$r")"
+check "#3789 a note the record cannot take is said, naming the record" "$([[ "$r" == "no|"*"could not be noted"*"$STORE_USED/record.jsonl"* ]] && echo ok || echo "$r")"
+P="$(talk "$T" put acme/widget "$F" plain)"
+r="$(note "$T" payload "$P" acme/widget "$F" "" plain)"
+check "#3789 and so is an ordinary picker's" "$([[ "$r" == "no|"*"could not be noted"*"$STORE_USED/record.jsonl"* ]] && echo ok || echo "$r")"
 
 unset STORE_USED
 
@@ -1250,22 +1440,147 @@ r="$(on_record acme/widget "Hand back")"
 check "R9 the record-only command takes no answer from a transcript handed to it" "$([[ "$r" == "none|"* && ! -e "$STORE_USED/record.jsonl" ]] && echo ok || echo "$r")"
 check "and says a hook reads his answer into the record" "$([[ "$r" == *"reads the record only"* ]] && echo ok || echo "$r")"
 
-# His answer is noted when he gives it, and read back by a caller that names no session (the merge helper).
+# This picker is noted as every picker is (#3789): by its ids alone, whatever the hook could tell of
+# it, and read back from its session's transcript by a caller that names no session (the merge
+# helper). The discovery picker has its own judge, and each judge leaves the other's pickers alone.
+# helper_decides <repo> <feature> [milestone]: what a hook naming no session and no transcript is
+# told Dan last answered, as "<answer>|<why>".
+helper_decides() {
+  printf '{"session_id": "merge-when-ready", "hook_event_name": "PreToolUse", "tool_name": "Bash"}' \
+    | ANNOUNCE_APPROVALS_DIR="$STORE_USED" aaf_hook_decision "$LIB" "$1" "$2" "${3:-}" \
+    | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["answer"] + "|" + d["why"], end="")'
+}
+# decided_as <picker> <answer>: whether the record holds one decided line for that picker with that answer.
+decided_as() {
+  local lines
+  lines="$(grep '"kind": "decided"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$1\"")"
+  [[ -n "$lines" && "$lines" != *$'\n'* && "$lines" == *"\"answer\": \"$2\""* ]]
+}
+# The picker's line is not in the transcript when its hook runs, and the hook's copy carries no
+# metadata (the form measured on the installed hook, #3789).
 STORE_USED="$WORK/store-d-noted"
 T="$WORK/d-noted.jsonl"; new_talk "$T"
-id="$(talk "$T" decide-put acme/widget "Hand back" "" "" 28)"
-noted="$(talk "$T" decide-payload "$id" acme/widget "Hand back" "Not announcing" "" "" "" 28 | ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" answered)"
-check "the picker is noted when he answers it" "$([[ "$noted" == *'"noted": true'* && "$(lines_of answered)" = 1 ]] && echo ok || echo "$noted")"
+r="$(AAF_PAYLOAD_FORM=nometadata note "$T" decide-payload toolu_dlate1 acme/widget "Hand back" "Not announcing" "" "" "" 28)"
+check "#3669 a discovery picker the transcript does not hold yet is noted by its ids alone, and nothing is said" "$([[ "$r" == "yes|" ]] && bare toolu_dlate1 false || echo "$r")"
 check "a note is not his answer" "$([[ "$(on_record acme/widget "Hand back")" == "none|"* ]] && echo ok || on_record acme/widget "Hand back")"
-talk "$T" decide-answer "$id" acme/widget "Hand back" "Not announcing" "" "" 28
-r="$(printf '{"session_id": "merge-when-ready", "hook_event_name": "PreToolUse", "tool_name": "Bash"}' | ANNOUNCE_APPROVALS_DIR="$STORE_USED" aaf_hook_decision "$LIB" acme/widget "Hand back" 28 | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["answer"] + "|" + d["why"], end="")')"
-check "R9 still possible: a call naming no session reads his noted Not announcing back from the session that asked" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
-# A note of this picker never holds up the reading back of an approval's notes.
-check "the note names its source, so the approval reader passes it over" "$(grep '"kind": "answered"' "$STORE_USED/record.jsonl" | grep -q '"source": "announce-discovery"' && echo ok || cat "$STORE_USED/record.jsonl")"
-# A prefilled picker and a subagent's are not noted.
-id="$(talk "$T" decide-put acme/widget "Hand over" prefilled)"
-noted="$(talk "$T" decide-payload "$id" acme/widget "Hand over" "Not announcing" prefilled | ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" answered)"
-check "a picker sent with its answer filled in is not noted" "$([[ "$noted" == *'"noted": false'* && "$(lines_of answered)" = 1 ]] && echo ok || echo "$noted")"
+r="$(helper_decides acme/widget "Hand back" 28)"
+check "R9 #3669 a note by its ids alone declines nothing, and is not settled while the transcript does not hold its picker" "$([[ "$r" == "none|"* ]] && [ "$(kinds decided)" = 0 ] && [ "$(kinds settled)" = 0 ] && echo ok || echo "$r $(cat "$STORE_USED/record.jsonl")")"
+talk "$T" decide-late toolu_dlate1 acme/widget "Hand back" "" "" 28
+r="$(helper_decides acme/widget "Hand back" 28)"
+check "R9 #3669 nor once the transcript holds the picker and not yet his answer" "$([[ "$r" == "none|"* ]] && [ "$(kinds decided)" = 0 ] && [ "$(kinds settled)" = 0 ] && echo ok || echo "$r")"
+talk "$T" decide-answer toolu_dlate1 acme/widget "Hand back" "Not announcing" "" "" 28
+r="$(helper_decides acme/widget "Hand back" 28)"
+check "R9 still possible #3669: a call naming no session reads his Not announcing, in a picker noted by its ids alone, back from the session that asked" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+check "#3669 and the picker gets its decided line, once, as the session and the picker it came from" "$(decided_as toolu_dlate1 no && [[ "$(grep '"kind": "decided"' "$STORE_USED/record.jsonl")" == *'"session": "s1"'* ]] && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+r="$(helper_decides acme/widget "Hand back" 28)"
+check "#3669 asked again, his answer is read from the record and the picker is not judged twice" "$([[ "$r" == "no|"* ]] && [ "$(kinds decided)" = 1 ] && [ "$(kinds settled)" = 0 ] && echo ok || echo "$r $(kinds decided) decided, $(kinds settled) settled")"
+# A picker the transcript already holds when its hook runs is noted the same way: nothing the hook
+# can tell of a discovery picker is written beside its ids.
+STORE_USED="$WORK/store-d-noted-held"
+T="$WORK/d-noted-held.jsonl"; new_talk "$T"
+id="$(talk "$T" decide-put acme/widget "Hand back")"
+r="$(note "$T" decide-payload "$id" acme/widget "Hand back" "Announce it")"
+check "#3669 a discovery picker the transcript holds is noted by its ids alone too: no feature, no source and no answer" "$([[ "$r" == "yes|" ]] && bare "$id" true || echo "$r")"
+talk "$T" decide-answer "$id" acme/widget "Hand back" "Announce it"
+check "R9 still possible #3669: and his Announce it is read back through that note" "$([[ "$(helper_decides acme/widget "Hand back")" == "yes|"* ]] && decided_as "$id" yes && echo ok || helper_decides acme/widget "Hand back")"
+r="$(note "$T" decide-payload toolu_dagent acme/widget "Hand back" "Not announcing" "" "" a9bba4c0ffee)"
+check "#3669 a subagent's discovery picker is not noted, and nothing is said" "$([[ "$r" == "no|" ]] && [ "$(kinds answered)" = 1 ] && echo ok || echo "$r $(kinds answered) notes")"
+
+# TWO JUDGES, EACH LEAVING THE OTHER'S PICKERS. One session holds his approval of a wording and his
+# answer about a feature, both noted by their ids alone. Whichever judge reads the session first
+# gives its own picker its line and gives the other's nothing, so the other judge still finds it.
+# two_judges <name>: that session, built; sets F, T and HTWO.
+two_judges() {
+  F="$(shown "$1")"; T="$WORK/$1.jsonl"
+  HTWO="$(hash_file "$F")"
+  AAF_PAYLOAD_FORM=nometadata note "$T" payload toolu_twoa acme/widget "$F" >/dev/null
+  talk "$T" late toolu_twoa acme/widget "$F"
+  talk "$T" answer toolu_twoa acme/widget "$F"
+  AAF_PAYLOAD_FORM=nometadata note "$T" decide-payload toolu_twod acme/widget "Hand back" >/dev/null
+  talk "$T" decide-late toolu_twod acme/widget "Hand back"
+  talk "$T" decide-answer toolu_twod acme/widget "Hand back"
+}
+STORE_USED="$WORK/store-d-two-approval-first"
+two_judges two-approval-first
+r="$(helper_asks acme/widget "$HTWO" 80)"
+check "R2 still possible #3669: his Approve beside a noted discovery picker is found by a merge naming no session" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
+check "#3669 the approval judge gives the discovery picker no line: it is not settled as no picker of a source this record reads" "$([ "$(kinds settled)" = 0 ] && [ "$(kinds decided)" = 0 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+r="$(helper_decides acme/widget "Hand back")"
+check "R9 still possible #3669: so his Announce it is still read, by its own judge, after the approval judge read that session" "$([[ "$r" == "yes|"* ]] && decided_as toolu_twod yes && echo ok || echo "$r $(cat "$STORE_USED/record.jsonl")")"
+check "#3669 and the approval it stood beside still stands" "$([[ "$(helper_asks acme/widget "$HTWO" 80)" == "yes|approved|" ]] && [ "$(kinds approved)" = 1 ] && [ "$(kinds settled)" = 0 ] && echo ok || helper_asks acme/widget "$HTWO" 80)"
+STORE_USED="$WORK/store-d-two-discovery-first"
+two_judges two-discovery-first
+r="$(helper_decides acme/widget "Hand back")"
+check "R9 still possible #3669: his Announce it beside a noted approval picker is read by a call naming no session" "$([[ "$r" == "yes|"* ]] && decided_as toolu_twod yes && echo ok || echo "$r")"
+check "#3669 the discovery judge gives the approval picker no line: it is neither settled nor approved there" "$([ "$(kinds settled)" = 0 ] && [ "$(kinds approved)" = 0 ] && [ "$(kinds withdrawn)" = 0 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+r="$(helper_asks acme/widget "$HTWO" 81)"
+check "R2 still possible #3669: so his Approve is still found, by its own judge, after the discovery judge read that session" "$([[ "$r" == "yes|approved|" ]] && [ "$(kinds approved)" = 1 ] && echo ok || echo "$r $(cat "$STORE_USED/record.jsonl")")"
+# A session whose pickers both judges have given a line is read back by neither again.
+for n in 1 2; do helper_decides acme/widget "Hand back" >/dev/null; helper_asks acme/widget "$HTWO" 81 >/dev/null; done
+check "#3669 and once each picker has its line, neither judge writes another" "$([ "$(kinds approved)" = 1 ] && [ "$(kinds decided)" = 1 ] && [ "$(kinds settled)" = 0 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+
+# An ordinary picker the discovery judge reads is settled once, in the words the approval judge
+# uses, and neither judge reads it back again.
+STORE_USED="$WORK/store-d-ordinary"
+F="$(shown d-ordinary)"; T="$WORK/d-ordinary.jsonl"
+PO="$(talk "$T" put acme/widget "$F" plain)"
+note "$T" payload "$PO" acme/widget "$F" "" plain >/dev/null
+talk "$T" answer "$PO" acme/widget "$F" "Announce it" plain
+r="$(helper_decides acme/widget "Hand back")"
+check "R9 #3669 an ordinary picker answered with the option's words decides nothing" "$([[ "$r" == "none|"* ]] && [ "$(kinds decided)" = 0 ] && echo ok || echo "$r")"
+check "#3669 and the discovery judge settles it as no picker of a source this record reads, naming both sources" "$(settled_as "$PO" 'no picker of a source this record reads (changelog-announce, announce-discovery)' && [ "$(kinds settled)" = 1 ] && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+helper_decides acme/widget "Hand back" >/dev/null
+helper_asks acme/widget "$(hash_file "$F")" 82 >/dev/null
+check "#3669 it is settled once: neither judge settles it again" "$([ "$(kinds settled)" = 1 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+
+# A noted discovery picker that can never count is settled once it has been read and said, the way
+# a noted approval picker that can never count is (#3789): left with no outcome, its session would
+# be read back on every later call.
+STORE_USED="$WORK/store-d-never"
+T="$WORK/d-never.jsonl"; new_talk "$T"
+PN="$(talk "$T" decide-put acme/widget "Hand over" prefilled)"
+r="$(note "$T" decide-payload "$PN" acme/widget "Hand over" "Not announcing" prefilled)"
+check "#3669 a discovery picker sent with its answer filled in is noted by its ids alone, as every picker is" "$([[ "$r" == "yes|" ]] && bare "$PN" true || echo "$r")"
+talk "$T" decide-answer "$PN" acme/widget "Hand over" "Not announcing" prefilled
+r="$(helper_decides acme/widget "Hand over")"
+check "R9 #3669 a noted Not announcing the session filled in itself declines nothing, and the answer says why" "$([[ "$r" == "none|"*"never put to him"* ]] && [ "$(kinds decided)" = 0 ] && echo ok || echo "$r")"
+check "#3669 and it is settled as never put to him" "$(settled_as "$PN" 'never put to him' && [ "$(kinds settled)" = 1 ] && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+r="$(helper_decides acme/widget "Hand over")"
+check "#3669 and is not read back or said again" "$([[ "$r" == "none|"* && "$r" != *"never put to him"* ]] && [ "$(kinds settled)" = 1 ] && echo ok || echo "$r")"
+PN2="$(talk "$T" decide-put acme/widget "Hand over" nometa)"
+note "$T" decide-payload "$PN2" acme/widget "Hand over" "Not announcing" nometa >/dev/null
+talk "$T" decide-answer "$PN2" acme/widget "Hand over" "Not announcing" nometa
+r="$(helper_decides acme/widget "Hand over")"
+check "R9 #3669 a noted picker whose metadata names no feature declines nothing, and is settled once" "$([[ "$r" == "none|"* ]] && settled_as "$PN2" 'does not name the feature' && [ "$(kinds settled)" = 2 ] && [[ "$(helper_decides acme/widget "Hand over")" == "none|"* ]] && [ "$(kinds settled)" = 2 ] && echo ok || echo "$r $(cat "$STORE_USED/record.jsonl")")"
+
+# A note by its ids alone whose session's transcript is gone is settled by the discovery judge too,
+# since what its picker asked can never be read.
+STORE_USED="$WORK/store-d-gone"
+r="$(AAF_PAYLOAD_FORM=nometadata note "$WORK/no-such-d-talk.jsonl" decide-payload toolu_dgone acme/widget "Hand back")"
+check "#3669 a discovery picker whose transcript cannot be read is noted by its ids alone, saying so" "$([[ "$r" == "yes|" ]] && bare toolu_dgone null || echo "$r")"
+r="$(helper_decides acme/widget "Hand back")"
+check "R9 #3669 it decides nothing, and is settled as one whose transcript is gone" "$([[ "$r" == "none|"* ]] && settled_as toolu_dgone 'transcript is gone' && echo ok || echo "$r $(cat "$STORE_USED/record.jsonl")")"
+r="$(helper_decides acme/widget "Hand back")"
+check "#3669 and is not looked for again" "$([[ "$r" == "none|"* && "$r" != *"could not be read back"* ]] && [ "$(kinds settled)" = 1 ] && echo ok || echo "$r")"
+
+# The sessions the discovery judge reads back are the ones whose NEWEST unjudged note is newest, as
+# for the approval judge (#3789): every picker is noted, so a session's first note is its first
+# picker of any kind, long before the one about announcing.
+STORE_USED="$WORK/store-d-order"
+T="$WORK/d-order.jsonl"; new_talk "$T"
+F="$(shown d-order-file)"
+PO="$(talk "$T" put acme/widget "$F" plain)"
+note "$T" payload "$PO" acme/widget "$F" "" plain >/dev/null
+for n in 1 2 3 4 5 6; do
+  aaf_new "$WORK/d-order-other-$n.jsonl"
+  PX="$(talk "$WORK/d-order-other-$n.jsonl" put acme/widget "$F" plain "dother$n")"
+  note "$WORK/d-order-other-$n.jsonl" payload "$PX" acme/widget "$F" "" plain "dother$n" >/dev/null
+done
+AAF_PAYLOAD_FORM=nometadata note "$T" decide-payload toolu_dorder acme/widget "Hand back" >/dev/null
+talk "$T" decide-late toolu_dorder acme/widget "Hand back"
+talk "$T" decide-answer toolu_dorder acme/widget "Hand back"
+r="$(helper_decides acme/widget "Hand back")"
+check "R9 still possible #3669: a session whose first note is older than six other sessions' is read back for its newest" "$([[ "$r" == "yes|"* ]] && decided_as toolu_dorder yes && echo ok || echo "$r")"
 
 # A milestone's own question: only a picker naming that milestone's number answers it.
 STORE_USED="$WORK/store-d-milestone"

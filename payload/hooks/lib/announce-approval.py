@@ -77,7 +77,8 @@ One JSON object a line, each carrying its repository:
      "picker": "<the picker's tool_use id>", "file": "<the wording file>", "answered": "<when he answered>"}
     {"kind": "withdrawn", "repo": ..., "hash": "<sha256, or null>", "file": ..., "session": ..., "picker": ...,
      "answered": ..., "why": "<why there is no hash, or null>", "at": ...}
-    {"kind": "settled", ...the same fields, for a picker that came back with no answer of his}
+    {"kind": "settled", ...the same fields, for a picker that came back with no answer of his, and,
+     with no repository and no file, for a noted picker that is none of this record's (below)}
     {"kind": "used", "repo": ..., "hash": ..., "pr": <number>, "claim": true, "closes": null, ...}
     {"kind": "used", "repo": ..., "hash": ..., "pr": <number>, "closes": [...], "unread": ..., "at": ...}
 A hook run that reads his Approve writes the approved line, unless the call is a subagent's (the
@@ -101,34 +102,78 @@ closed by its own timeout) takes nothing back from the record: it gets a `settle
 noted session whose pickers all have an outcome on the record is not read back again. A subagent's
 call counts these for that call and writes nothing, as with his Approve.
 
-HIS ANSWER IS NOTED WHEN HE GIVES IT (claude-config#3742). An approval used to reach the record only
-when a later hook read the session's transcript: the label hook, on a command putting the label on,
-or the merge gate, on a typed merge. The merge helper (lib/merge-when-ready.sh) hands the gates a
-payload naming no transcript and a session id that is no session's, so on any flow where neither
-followed his answer (the wording revised after the label went on, the label put on in GitHub's
-page) the merge was refused, told to ask him, and asking him again changed nothing. So
+EVERY PICKER IS NOTED WHEN HE ANSWERS IT (claude-config#3742, #3789). An approval used to reach the
+record only when a later hook read the session's transcript: the label hook, on a command putting
+the label on, or the merge gate, on a typed merge. The merge helper (lib/merge-when-ready.sh) hands
+the gates a payload naming no transcript and a session id that is no session's, so on any flow where
+neither followed his answer (the wording revised after the label went on, the label put on in
+GitHub's page) the merge was refused, told to ask him, and asking him again changed nothing. So
 announce-answer-note.sh runs after every picker is answered and asks note_answer() here, which
-says whether the picker is of this source and, for one that is, writes
+writes, for every picker a main session put, whatever it asked:
     {"kind": "answered", "session": "<id>", "transcript": "<its path>", "picker": "<tool_use id>",
+     "held": <whether the transcript held the picker's line then: true, false, or null when it
+     could not be read>, "at": "<when>"}
+The hook cannot tell what a picker asked, which is why it notes them all. As first built (#3780) it
+noted only a picker it could tell was of this source, and said a notice for one it could not tell.
+Measured on the installed hook on 2026-11-26, for two pickers, one sent with metadata naming a
+source: no line of the session's transcript held the picker's id when the hook ran, and the hook's
+own copy of the picker carried no metadata, while the transcript read afterwards held both pickers
+as the session sent them. So the hook told nothing, spoke after every picker in every session, and
+noted none, an approval picker included (#3789). An earlier reading of another session (#3742) had
+found the transcript ending at the call's tool_use when its PostToolUse hook ran, so the line may
+be there or not, and `held` records which on every note: it decides nothing. The size of the
+transcript is not why: a reader of one built to the measured size (20 MB, 10,000 lines) finds the
+picker in hundredths of a second (hooks/test-announce-answer-note.sh).
+
+When the hook can already tell the picker is of this source (the transcript holds it, or failing
+that its own copy carries the metadata) and names a repository and a file, the note also carries
      "repo": "<owner/name>", "file": "<the wording file>", "hash": "<sha256, or null>", "why": "<why
-     there is no hash, or null>", "changed": <the file's status change time then, in ns>, "at": "<when>"}
-A NOTE IS NOT AN APPROVAL, and it is not his answer. When that hook runs the transcript holds the
-picker and not yet what he answered: Claude Code writes a call's result to the transcript after the
-call's PostToolUse hooks have run (measured 2026-11-26 on this Mac: a session's transcript, read at
-the moment a PostToolUse hook of its own call ran, ended at that call's tool_use). The payload the
+     there is no hash, or null>", "changed": <the file's status change time then, in ns>
+
+A NOTE IS NOT AN APPROVAL, and it is not his answer. It names no answer at all. The payload the
 hook is handed does carry his answer, and it is not read: a payload is what the caller hands over,
-and a run of the hook by hand could say anything. A note says only which picker, in which session,
-and what the file held then. Whoever next asks with a payload (a hook: the label hook, the merge
-gate typed or through the helper) reads each noted session's transcript, for the repository asked
-about, and judges the noted picker by every rule above, read from that transcript: answered Approve
-by him, the file opened in front of him, nothing of the session touching it in between. Two things
-are then taken from the note and not from the file as it stands: the hash, and the file's change
-time, which must be before his answer. So the wording approved is what the file held when he
-answered, and a write to the file afterwards neither loses his approval nor rides on it; and a note
-taken later than his answer, over a file changed since, approves nothing. A picker's first note is
-the one kept. A subagent's picker is not noted. A noted picker is read back only until the record
-holds its outcome (an `approved`, `withdrawn` or `settled` line), the newest NOTED_SESSIONS sessions
-for one call.
+and a run of the hook by hand could say anything. Nothing that reads the record takes a note for an
+approval: an approval is an `approved` line, which only a judge writes. Whoever next asks with a
+payload (a hook: the label hook, the merge gate typed or through the helper) reads each noted
+session's transcript, in ONE pass for all of that session's noted pickers the record holds no
+outcome for, and judges each from what the transcript holds:
+  - a picker of this source, by every rule above, unchanged: answered Approve by him, the file
+    opened in front of him, nothing of the session touching it in between. It gets its `approved`,
+    `withdrawn` or `settled` line as any picker read from a session's transcript does.
+  - a picker that names no source this record reads (NOTED_SOURCES): a `settled` line naming no
+    repository and no file, so it is read once and never again. It approves nothing and takes
+    nothing back, whatever he answered it.
+  - a picker of the record's other source (WHETHER A FEATURE IS ANNOUNCED AT ALL, below): nothing.
+    It is left as it is for that source's own judge, which is the only one that gives it a line.
+  - a picker of this source that can never count (its metadata names no repository and file, or
+    the session sent it with its answer filled in): settled the same way once it has been read
+    and, for an Approve, said. With no note such a picker is passed over; a note left with no
+    outcome would have its session read back on every later call.
+  - a picker the transcript does not hold yet: left as it is, and looked for again.
+  - a picker noted by its ids alone whose session's transcript is gone: settled the same way,
+    since what it asked can never be read.
+THE WORDING HE ANSWERED ABOUT is taken from the note only when the note holds a hash, for the same
+repository and file as the transcript's picker: then the hash and the file's change time noted,
+which must be before his answer, are the ones judged, so a write to the file afterwards neither
+loses his approval nor rides on it, and a note taken later than his answer, over a file changed
+since, approves nothing. A note that holds no hash, which is every note by ids alone, gives no
+wording: the picker is judged exactly as one with no note is, by the file as it stands, which must
+not have changed since his answer was recorded. Where it has, his Approve does not count and the
+refusal says to open the file and ask him again. So a note by ids alone lets nothing through that
+the same picker, read from its own session's transcript with no note at all, would not.
+
+A picker's first note is the one kept. A subagent's picker is not noted, and nothing is said of
+it. Neither is one whose transcript is kept where no picker is ever read from (transcripts_dir).
+The hook says something only when the note itself could not be written (the record cannot be read
+or appended to, or the hook was not handed the session, its transcript and the picker's id): that
+is the one case where an answer of his would be lost, so it says what to do for each of the two
+pickers it may have been (an approval of wording, or whether a feature is announced). One call
+reads back at most NOTED_SESSIONS sessions (50: Dan, 2026-11-26, by picker, "Raise it to 50
+(Recommended)"; it was five), the ones whose newest unjudged note is newest, newest first, and only
+while its CHECK_SECONDS last. A CALL THAT STOPS SHORT SAYS SO: the sessions it left unread, past
+that number or because its time ran out, are counted in its answer, so a refusal after a short
+read never reads as one that looked everywhere and found nothing. The record is only ever added
+to: a picker costs it one `answered` line and, once judged, one line more.
 
 READING AND WRITING ARE SEPARATE (claude-config#3703). A review found that the check command read a
 session's pickers from whatever transcript its standard input named and wrote what it found, so a
@@ -191,13 +236,22 @@ discovery asks it, with this metadata:
 and the merge gate has it asked again, about a milestone, with "milestone": <its number> added and
 "feature" the milestone's title, when a pull request finishes a feature he said yes to under
 another label. Its options are `Announce it` and `Not announcing`. His answer is read by the same
-path as an approval: noted when he gives it (an `answered` line carrying "source", the feature and
-the milestone, and nothing he answered), and read from the session's transcript when a hook next
-asks, which writes one line for the picker:
+path as an approval (EVERY PICKER IS NOTED, above): the picker is noted when he answers it, by its
+ids alone as every picker is, and read from its session's transcript when a hook next asks, which
+writes one line for the picker:
     {"kind": "decided", "source", "repo", "feature", "milestone", "answer": "yes" | "no" | "other",
      "said": "<the option he chose>", "why": "<why an other decides nothing>", "session", "picker",
      "answered", "at"}
-or a `settled` line for a picker that was no answer of his. The hooks that ask are the merge gate
+or a `settled` line for a picker that was no answer of his. Its note carries nothing beside its ids,
+whatever the hook could tell of it: there is no file to hash, the feature and the milestone are
+read from the transcript's own call when it is judged, and a copy the hook was handed is not
+believed. This source is the second name in NOTED_SOURCES and decisions() is its judge, as
+approvals() is the first's. TWO JUDGES, EACH LEAVING THE OTHER'S PICKERS: a judge gives a line to a
+noted picker of its own source and settles one of no source this record reads, and a noted picker
+of the other source gets nothing from it, so it is still unjudged when its own judge asks. The two
+read back the same sessions by one rule (_read_back). What that costs: a session whose only
+unjudged picker is the other judge's is read again by this one, and counts among the
+NOTED_SESSIONS, until the other judge has asked. The hooks that ask are the merge gate
 (`finishes --hook`) and the label hook, before a Bash call that runs create-milestone.sh
 (read_answers), since the helper's own question reads the record only. What counts as his yes or
 his no is every rule of his approval that has a meaning without a file: one question, no answer
@@ -236,13 +290,13 @@ his option's words and the date.
       {"approved": bool, "state": str, "why": str, "how": str, "notes": [str]}: whether digest, an
       announcementHash, is wording Dan approved for repo that pull request pr may use. payload is
       the hook payload (session_id, transcript_path, agent_id): this session's pickers are read,
-      and so are the answers the record notes for repo in other sessions, the newest NOTED_SESSIONS
-      of them, each from its own session's transcript, and an approval found is written. payload None is the question that only reads the record:
+      and so are the pickers the record notes in other sessions and holds no outcome for, the
+      NOTED_SESSIONS sessions with the newest of them, each from its own session's transcript, and an approval found is written. payload None is the question that only reads the record:
       no picker is read and nothing is written. state says which answer it is, so a caller words its own first sentence truly:
       "approved"; "unapproved" (he approved no such wording; how says how to ask him); "used" (he
       did, and other pull requests used every approval; how says how to ask him again);
       "unrecorded" (he did, and the claim could not be written; how says what to put right).
-  note_answer(payload)                          (noted, why): the note of an answer just given.
+  note_answer(payload)                          (noted, why): the note of a picker just answered.
   mark_used(repo, digest, pr, closes, unread)   None, or why the line could not be written.
   hash_of(data, body=False)                     (announcement-hash's answer, None) or (None, why).
   is_record_path(path)                          whether a path is the record or under it.
@@ -262,8 +316,8 @@ And three about whether a feature is announced (claude-config#3669), each readin
 standard input is not read. They are create-milestone.sh's and the merge gate's to run, from inside
 those scripts: announce-label-ask.sh knows only `list` and `check` as forms that read, so a
 session's own Bash command running one of these is refused like any other verb. With --hook, which
-is the merge gate's, the hook payload is on standard input, his pickers are read, and what they
-hold is written:
+is the merge gate's and which `decision` and `finishes` take (`milestone-line` takes none), the hook
+payload is on standard input, his pickers are read, and what they hold is written:
   announce-approval.py decision --repo <owner/name> --feature <name> [--milestone <number>]
   announce-approval.py milestone-line --repo <owner/name> --feature <name> --answer <yes|no|unasked>
                                       [--description-file <file>]    create-milestone.sh's question
@@ -305,10 +359,19 @@ CHECK_SECONDS = 12
 # How long a claim waits for the record's lock. Its holder reads the record and writes one line, so
 # a wait this long means something is wrong, and the merge is refused saying so. Chosen, not measured.
 CLAIM_LOCK_SECONDS = 3
-# How many sessions' noted answers one call reads back, the newest first noted. Each is one pass
-# over that session's transcript, inside CHECK_SECONDS. Chosen, not measured.
-NOTED_SESSIONS = 5
-# How long the hook that notes an answer may take: one stat either side of one hash.
+# How many sessions' noted pickers one call reads back: the sessions whose newest unjudged note is
+# newest, read newest first (_read_back). Each is one pass over that session's transcript, however
+# many pickers of it are noted. The number is Dan's (2026-11-26, by picker: "Raise it to 50
+# (Recommended)"): at five, an approval of his was missed, and he was asked again, whenever five or
+# more other sessions had a picker answered between his Approve and a merge that names no session.
+# It is chosen, not measured. One pass is measured: 0.009 seconds for a 20 MB, 10,005 line
+# transcript, three runs alike, on 2026-11-26, with the file just written and so in the disk cache
+# (hooks/test-announce-answer-note.sh builds it and prints the time). What bounds the whole read is
+# not this number but CHECK_SECONDS: a call out of time stops before the next session, and whatever
+# it leaves unread, for either reason, is said in its answer and never read as nothing found.
+NOTED_SESSIONS = 50
+# How long the hook that notes a picker may take: one pass over the transcript and, for a picker it
+# can already tell is an announcement's, one stat either side of one hash.
 NOTE_SECONDS = 8
 # Seams: the wait between two tries for the lock, and the clock that bounds them (L524).
 _sleep = time.sleep
@@ -347,6 +410,16 @@ UNASKED = "not asked yet"
 LINE = re.compile(r"^[ \t]*" + re.escape(LINE_HEAD) + r"[ \t]*(yes|no|" + re.escape(UNASKED) + r")\b.*$",
                   re.IGNORECASE | re.MULTILINE)
 PLAN_VALUES = ("yes", "no", "unasked")
+# The sources whose pickers a note is read back for. Every main session picker is noted
+# (claude-config#3789), and one whose call the transcript shows names none of these is settled, so
+# it is read once. Each source has its own judge of its pickers: approvals() for SOURCE and
+# decisions() for DISCOVERY (claude-config#3669). A judge gives a line only to pickers of its own
+# source and to those of no source here, and leaves the other's with no line at all, so whichever
+# hook reads a session first, the other source's judge still finds its picker unjudged.
+NOTED_SOURCES = (SOURCE, DISCOVERY)
+# The kinds of line that are a picker's outcome. A noted picker the record holds one of these for
+# has been judged, by whichever judge, and is not read back by either.
+OUTCOMES = ("approved", "withdrawn", "settled", "decided")
 
 
 def how_to_ask_feature(repo, feature, milestone=None):
@@ -686,15 +759,25 @@ def _items(entry):
     return [i for i in content if isinstance(i, dict)] if isinstance(content, list) else []
 
 
-def _asked(transcript_path, session_id, source=SOURCE):
+def _asked(transcript_path, session_id, sought=(), other=None, source=SOURCE):
     """Every picker of source the session put that came back, oldest first, as a dict: ask (its
     input), result, is_error, sent and answered (line numbers), stamp (when the answer was
     recorded, as written) and prefilled (the session sent it with its answers filled in, so it is
-    no picker at all, and is kept only so a refusal can say so)."""
+    no picker at all, and is kept only so a refusal can say so).
+
+    sought is the ids of pickers the record notes and nothing has judged yet (EVERY PICKER IS NOTED,
+    module docstring). The same pass looks for each: one the transcript holds as a picker naming
+    none of NOTED_SOURCES is added to other, a set, and one it holds as a picker of source is judged
+    with the rest. So a session's noted pickers cost one pass, however many there are. A sought
+    picker of another source in NOTED_SOURCES is neither: it is left for that source's own judge
+    (approvals for SOURCE, decisions for DISCOVERY), which is the only one that gives it a line."""
     waiting, out = {}, []
+    needle = source.encode("utf-8", "replace")
+    seeking = {uid.encode("utf-8", "surrogatepass") for uid in sought if isinstance(uid, str) and uid}
 
     def wanted(raw):
-        if b"AskUserQuestion" in raw and source.encode("utf-8", "replace") in raw:
+        # A picker's call is on a line holding the tool's name, so only those are searched for an id.
+        if b"AskUserQuestion" in raw and (needle in raw or any(k in raw for k in seeking)):
             return True
         return bool(waiting) and b"tool_result" in raw and any(k in raw for k in waiting)
 
@@ -704,6 +787,9 @@ def _asked(transcript_path, session_id, source=SOURCE):
             if item.get("type") == "tool_use" and item.get("name") == "AskUserQuestion":
                 ask = item.get("input")
                 meta = ask.get("metadata") if isinstance(ask, dict) else None
+                named = meta.get("source") if isinstance(meta, dict) else None
+                if other is not None and isinstance(uid, str) and uid in sought and named not in NOTED_SOURCES:
+                    other.add(uid)
                 # One that came with its answers filled in was never put to him: the dialog returns
                 # them without asking (lib/db-apply-approval.py's rule), so it is no picker at all.
                 # It is marked, and approvals() takes nothing from it but the reason to give.
@@ -848,92 +934,80 @@ def _calls_on(transcript_path, session_id, first, last):
 
 
 def note_answer(payload, deadline=None):
-    """What announce-answer-note.sh asks once a picker is answered (HIS ANSWER IS NOTED WHEN HE GIVES
-    IT, module docstring): (True, None) once the record holds the note, (False, None) for a call that
-    is no picker of this source put to him, and (False, why) for one that is and could not be noted,
-    or one whose source could not be told at all.
+    """What announce-answer-note.sh asks once a picker is answered (EVERY PICKER IS NOTED, module
+    docstring): (True, None) once the record holds the picker's note, (False, None) for a call that
+    is not noted and loses nothing by it (no picker, a subagent's, one whose transcript no picker is
+    ever read from), and (False, why) only when the note itself could not be written, which is the
+    one case where an approval of his would be lost.
 
     payload is what Claude Code hands a PostToolUse hook. Of it, which picker this is and where its
-    session's transcript is are read (session_id, transcript_path, tool_use_id). The picker itself,
-    for its source, repository and file, is read from the transcript, by that id: the transcript
-    holds it as the session sent it, while the hook's copy of the input is the dialog's (the
-    tool's schema has it write his answers into that input, and what else it changes there has not
-    been printed). Only when the transcript does not hold the picker is the hook's copy read. What
-    he answered is NOT read from the payload, here or later: a payload is whatever the caller hands
-    over, and his answer is read from the transcript.
+    session's transcript is are read (session_id, transcript_path, tool_use_id), and those three are
+    the note. What the picker asked decides nothing here: the note of an ordinary picker and of an
+    announcement's are written the same way, and whoever reads the note judges the picker from the
+    transcript. What he answered is NOT read from the payload, here or later: a payload is whatever
+    the caller hands over, and his answer is read from the transcript.
 
-    A picker NEITHER copy says the source of (the transcript does not hold it and the hook's copy
-    carries no metadata) may be this one in a form nobody has seen, so it is never left in silence:
-    the answer says that what it asked could not be told, and why. A subagent's is the exception,
-    since its picker is never noted whatever it asked."""
-    untold = ("Whether the picker Dan just answered asked him about an announcement's wording could not be told, so "
-              "if it did, his answer was not noted on this Mac's record: ")
+    One thing more is noted when it can be: for a picker this run can already tell is an
+    announcement's (_wording_noted), the hash of its wording file as it stands, which is what lets
+    his approval outlast a later write to the file."""
+    lost = "The picker Dan just answered could not be noted on this Mac's record: "
     if not isinstance(payload, dict):
-        return False, untold + "what Claude Code handed the hook was not a JSON object"
-    if payload.get("tool_name") != "AskUserQuestion":
+        return False, lost + "what Claude Code handed the hook was not a JSON object"
+    if payload.get("tool_name") != "AskUserQuestion" or payload.get("agent_id"):
+        # No picker, or a subagent's: nothing is written and nothing is said, whatever it asked.
         return False, None
     session, transcript, picker = (_text(payload.get(k)) for k in ("session_id", "transcript_path", "tool_use_id"))
-    handed = payload.get("tool_input")
-    ask, misplaced, absent = None, None, None
     if session is None or transcript is None or picker is None:
-        absent = "the hook was not told the session, its transcript and the picker's id"
-    else:
-        absent = misplaced = _misplaced(transcript)
-        if misplaced is None:
-            try:
-                ask = _ask_of(transcript, session, picker)
-                absent = "this session's transcript, " + transcript + ", does not hold the picker " + picker
-            except OSError as e:
-                absent = "this session's transcript, " + transcript + ", could not be read (" + type(e).__name__ + ")"
-    sent = ask is not None
-    if not sent:
-        ask = handed
-    meta = ask.get("metadata") if isinstance(ask, dict) else None
-    if not sent and not isinstance(meta, dict):
-        if payload.get("agent_id"):
-            return False, None
-        return False, untold + absent + ", and the hook's own copy of the picker carries no metadata naming what it asked"
-    if not isinstance(meta, dict) or meta.get("source") not in (SOURCE, DISCOVERY):
+        return False, lost + "the hook was not told the session, its transcript and the picker's id"
+    if _misplaced(transcript) is not None:
+        # No picker is ever read from a transcript kept anywhere else (transcripts_dir), by a note
+        # or without one, so a note of this one could approve nothing and nothing is lost without
+        # it. A hook that is asked about wording says why, naming the transcript and that folder.
         return False, None
-    if sent and ask.get("answers"):
-        # The session sent it with its answers filled in, so it was never put to him.
-        return False, None
-    deciding = meta.get("source") == DISCOVERY
-    said = ("Dan's answer about " + ("whether a feature is announced to agents" if deciding else "the announcement's wording")
-            + " was not noted on this Mac's record: ")
-    if payload.get("agent_id"):
-        return False, said + "the picker was a subagent's, and only one the main session put to him is noted"
-    if session is None or transcript is None or picker is None:
-        return False, said + "the hook was not told the session, its transcript and the picker's id"
-    if misplaced is not None:
-        return False, said + misplaced
-    if deciding:
-        # The picker that asks whether a feature is announced (claude-config#3669) has no file: its
-        # note says which picker, in which session, about which feature, and nothing he answered.
-        repo = repo_key(meta.get("repo"))
-        feature, milestone, bad = _feature_of(meta)
-        if repo is None or bad is not None:
-            return False, said + (bad or "the picker's metadata does not name the repository as owner/name")
-        entries, unreadable = read_record()
-        if entries is None:
-            return False, said + unreadable
-        if any(e.get("kind") == "answered" and e.get("picker") == picker for e in entries):
-            return True, None
-        failed = _append([{"kind": "answered", "source": DISCOVERY, "session": session, "transcript": transcript,
-                           "picker": picker, "repo": repo, "feature": feature, "milestone": milestone, "at": _now()}])
-        return (False, said + failed) if failed else (True, None)
-    repo, file = repo_key(meta.get("repo")), meta.get("file")
-    if repo is None or not isinstance(file, str) or not file.startswith("/"):
-        return False, (said + "the picker's metadata does not name the repository as owner/name and the wording file "
-                       "by its absolute path")
-    file = os.path.realpath(file)
     entries, unreadable = read_record()
     if entries is None:
-        return False, said + unreadable
+        return False, lost + unreadable
     if any(e.get("kind") == "answered" and e.get("session") == session and e.get("picker") == picker for e in entries):
-        # The first note of a picker is the one taken as he answered. A second run for the same
-        # picker, which is never Claude Code's, changes nothing.
+        # The first note of a picker is the one kept. A second run for the same picker, which is
+        # never Claude Code's, changes nothing.
         return True, None
+    # held records one fact and decides nothing: whether the transcript held the picker's line when
+    # this hook ran (true or false), or could not be read then (null). It is what tells the two
+    # measurements in the module docstring apart on the first real picker after an install.
+    try:
+        ask = _ask_of(transcript, session, picker)
+        held = ask is not None
+    except OSError:
+        ask, held = None, None
+    note = {"kind": "answered", "session": session, "transcript": transcript, "picker": picker, "held": held, "at": _now()}
+    note.update(_wording_noted(ask if held else payload.get("tool_input"), bool(held), deadline))
+    failed = _append([note])
+    if failed:
+        return False, lost + failed
+    return True, None
+
+
+def _wording_noted(ask, sent, deadline):
+    """What a note carries beside its ids for a picker that can already be told to be an
+    announcement's when its hook runs: {repo, file, hash, why, changed}, or {} for any other. ask is
+    the picker's input, from the transcript when it holds the picker (sent) and else the hook's own
+    copy. A second source's picker is noted by adding what its own note carries here. The one
+    there is, DISCOVERY (claude-config#3669), adds nothing: it has no file to hash, and the feature
+    and milestone its picker names are read from the transcript when it is judged (decisions).
+
+    These fields approve nothing. Whoever reads the note judges the picker from the transcript, and
+    takes the hash only when the transcript's picker names the same repository and file
+    (_note_for), so a copy the hook was handed that names another is not believed."""
+    meta = ask.get("metadata") if isinstance(ask, dict) else None
+    if not isinstance(meta, dict) or meta.get("source") != SOURCE:
+        return {}
+    if sent and ask.get("answers"):
+        # The session sent it with its answers filled in, so it was never put to him.
+        return {}
+    repo, file = repo_key(meta.get("repo")), meta.get("file")
+    if repo is None or not isinstance(file, str) or not file.startswith("/"):
+        return {}
+    file = os.path.realpath(file)
     # The file's change time is read either side of the hash, so the hash noted is of the file as
     # it stood at the change time noted beside it.
     digest, why, changed = None, None, None
@@ -950,11 +1024,7 @@ def note_answer(payload, deadline=None):
             after = None
         if after != changed:
             digest, why = None, "the file changed while it was being hashed, so the wording he answered about could not be told"
-    failed = _append([{"kind": "answered", "session": session, "transcript": transcript, "picker": picker, "repo": repo,
-                       "file": file, "hash": digest, "why": why, "changed": changed, "at": _now()}])
-    if failed:
-        return False, said + failed
-    return True, None
+    return {"repo": repo, "file": file, "hash": digest, "why": why, "changed": changed}
 
 
 def _ask_of(transcript_path, session_id, picker):
@@ -969,16 +1039,16 @@ def _ask_of(transcript_path, session_id, picker):
     return None
 
 
-def _noted(entries, source=SOURCE):
-    """The answers the record notes for pickers of source, {session: (its transcript, {picker: the
-    note})}, each picker's first note only. A note naming no source is an approval picker's, which
-    is all there was before the other picker was noted (claude-config#3669)."""
+def _noted(entries):
+    """The pickers the record notes, {session: (its transcript, {picker: the note})}, each picker's
+    first note only. A note names what its picker asked only when its hook could tell (repo, file,
+    hash): one by its ids alone names nothing, and is of whatever the transcript shows. No note
+    names its picker's source: a picker of either source in NOTED_SOURCES is told from the
+    transcript by that source's own judge."""
     out = {}
     for e in entries or []:
         session, transcript, picker = _text(e.get("session")), _text(e.get("transcript")), _text(e.get("picker"))
         if e.get("kind") != "answered" or session is None or transcript is None or picker is None:
-            continue
-        if (_text(e.get("source")) or SOURCE) != source:
             continue
         out.setdefault(session, (transcript, {}))[1].setdefault(picker, e)
     return out
@@ -1034,7 +1104,41 @@ def _closed(p, session_id, ap, noted, deadline):
     return dict(line, kind="withdrawn", hash=digest)
 
 
-def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()):
+def _settled_other(session_id, picker, why):
+    """The record's line for a noted picker that is no picker of a source in NOTED_SOURCES, or whose
+    session's transcript is gone: settled, so it is not read back again. It names no repository and
+    no file, takes nothing back, and approves nothing."""
+    return {"kind": "settled", "repo": None, "file": None, "session": session_id, "picker": picker, "answered": None,
+            "hash": None, "why": why}
+
+
+def _ordinary(session_id, other):
+    """The record's lines for a session's noted pickers the transcript shows name no source in
+    NOTED_SOURCES (_asked's other). One wording, whichever source's judge found them."""
+    return [_settled_other(session_id, uid, "the transcript shows it is no picker of a source this record reads ("
+                                            + ", ".join(NOTED_SOURCES) + "), so it approves nothing and is not read again")
+            for uid in sorted(other)]
+
+
+def _gone_why(transcript_path):
+    """Why a picker noted by its ids alone is settled once its session's transcript is gone."""
+    return ("its session's transcript is gone (" + transcript_path + "), so what it asked can never be read: it "
+            "approves nothing and is not read again")
+
+
+def _gone(transcript_path):
+    """Whether a noted session's transcript is not there any more. One that is there and cannot be
+    read is not gone: that may pass, and is said by whoever tries to read it."""
+    try:
+        os.stat(transcript_path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def approvals(session_id, transcript_path, deadline=None, noted=None, settled=(), sought=()):
     """(approved, untaken, closed, None) for this session's pickers, or ([], [], [], why they could
     not be looked for). approved is [{kind, repo, hash, file, picker, session, answered}] for each
     wording Dan approved that counts (module docstring); untaken is [{repo, file, why}] for each
@@ -1042,20 +1146,25 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
     the session thinks it holds. closed is the record's line for each picker that came back as
     anything but his Approve (_closed), leaving out the pickers settled names, which the record
     already holds one for. noted is {picker: the note taken when he answered it} (note_answer): a
-    picker with one is judged by the hash and the change time noted then, and any other by the
-    file as it stands."""
+    picker whose note holds a hash for the same repository and file is judged by the hash and the
+    change time noted then, and any other, one noted by its ids alone included, by the file as it
+    stands. sought is the ids of this session's noted pickers nothing has judged yet: closed also
+    holds a `settled` line for each of those the transcript shows is no picker of a source this
+    record reads (_asked), found in the same pass."""
     if not isinstance(transcript_path, str) or not transcript_path or not isinstance(session_id, str) or not session_id:
         return [], [], [], "the call named no session transcript, so a picker of his in this session could not be looked for"
     misplaced = _misplaced(transcript_path)
     if misplaced is not None:
         return [], [], [], misplaced
+    other = set()
     try:
-        asked = _asked(transcript_path, session_id)
+        asked = _asked(transcript_path, session_id, sought, other)
     except OSError as e:
         return [], [], [], ("this session's transcript could not be read (" + type(e).__name__
                             + "), so a picker of his in this session could not be looked for")
+    ordinary = _ordinary(session_id, other)
     if not asked:
-        return [], [], [], None
+        return [], [], ordinary, None
     ap = _part("db_apply_approval_shared", "db-apply-approval.py")
     sw = _part("shell_words_shared", "shell-words.py")
 
@@ -1064,6 +1173,15 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
     # nothis is, for each file, why the newest picker about it that holds an Approve is not an
     # answer of his (_not_his_approve), until a later picker about the file ends any other way.
     last, untaken, ended, nothis = {}, [], [], {}
+    # A noted picker of this source that can never count (it names no repository and file, or was
+    # sent with its answer filled in) is settled once it has been read, where one with no note is
+    # passed over: a note left with no outcome has its session read back on every later call.
+    never = []
+
+    def never_counts(p, why):
+        if p["picker"] in sought:
+            never.append(_settled_other(session_id, p["picker"], why + ", so it approves nothing and is not read again"))
+
     for p in asked:
         meta = p["ask"]["metadata"]
         repo, file = repo_key(meta.get("repo")), meta.get("file")
@@ -1073,6 +1191,9 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
         # an answer of his that is no approval, so it ends the picker as his `Not yet` does.
         typed = _typed_beside(p["result"]) if chose else None
         said = chose and typed is None
+        if repo is None or not isinstance(file, str) or not file.startswith("/"):
+            never_counts(p, "its metadata does not name the repository as owner/name and the wording file by its "
+                            "absolute path")
         if said and (repo is None or not isinstance(file, str) or not file.startswith("/")):
             untaken.append({"repo": repo or "", "file": file if isinstance(file, str) else "",
                             "why": "its metadata does not name the repository as owner/name and the wording file by "
@@ -1088,13 +1209,14 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
             nothis[where] = not_his
         if p["prefilled"]:
             # No picker at all: it is the last word on nothing, and takes nothing back.
+            never_counts(p, "the session sent it with its answer filled in, so it was never put to him")
             continue
         p.update(repo=repo, file=where[1], said=said)
         last[where] = p
         if not said and p["picker"] not in settled:
             ended.append(p)
     untaken += [{"repo": r, "file": f, "why": why} for (r, f), why in nothis.items()]
-    closed = [_closed(p, session_id, ap, noted, deadline) for p in ended]
+    closed = ordinary + never + [_closed(p, session_id, ap, noted, deadline) for p in ended]
     candidates = []
     for p in last.values():
         if not p["said"]:
@@ -1213,7 +1335,8 @@ def _not_shown(p, events, ap, note=None, calls_on=None):
     except OSError as e:
         return "the file could not be read (" + type(e).__name__ + "), so the wording he approved cannot be hashed"
     if changed >= answered:
-        return "the file has changed since he answered, so it no longer holds the wording he approved"
+        return ("the file has changed since he answered, and no hash of it was noted when he answered, so the wording "
+                "he approved cannot be told from it. Open the file for him again and ask him again")
     return None
 
 
@@ -1247,38 +1370,100 @@ def _file_hash(path, deadline):
     return answer["hash"], None
 
 
+def _read_back(entries, noted, looked, unjudged, deadline, unlooked):
+    """The noted sessions one call reads back, as (session, its transcript, its notes, its unjudged
+    ones), NEWEST first: the sessions other than looked that hold a noted picker the record has no
+    outcome for (unjudged(session)), ranked by their newest such note, at most NOTED_SESSIONS of
+    them, and only while the call's time lasts (deadline, CHECK_SECONDS from its start). One rule
+    for both judges (_harvest, _harvest_decisions).
+
+    A session is ranked by its newest note and not its first: every picker is noted, so a session's
+    first note is its first picker of any kind, long before the one about an announcement. The
+    newest is read first, so that what a call out of time leaves unread is the oldest.
+
+    Whatever is left unread is SAID, in unlooked (a list of sentences the caller's answer carries):
+    sessions past the number one call reads, and sessions the time ran out before. An answer of his
+    may be in one of them, so a call that stopped short never reads as one that found nothing."""
+    place = {}
+    for i, e in enumerate(entries or []):
+        if e.get("kind") == "answered":
+            place.setdefault((_text(e.get("session")), _text(e.get("picker"))), i)
+    waiting = sorted((s for s in noted if s != looked and unjudged(s)),
+                     key=lambda s: max(place.get((s, p), -1) for p in unjudged(s)), reverse=True)
+
+    def left_unread(count, why):
+        unlooked.append(str(count) + (" session" if count == 1 else " sessions") + " holding a picker the record notes "
+                        + ("was" if count == 1 else "were") + " left unread, " + why + ", so an answer of his there is "
+                        "not known to this call. Run it again: a session whose noted pickers this call judged is not "
+                        "read again")
+
+    for n, session in enumerate(waiting[:NOTED_SESSIONS]):
+        if _clock() >= deadline:
+            left_unread(len(waiting) - n, "because the " + str(CHECK_SECONDS) + " seconds one call has ran out")
+            return
+        yield session, noted[session][0], noted[session][1], unjudged(session)
+    if len(waiting) > NOTED_SESSIONS:
+        left_unread(len(waiting) - NOTED_SESSIONS, "because one call reads back " + str(NOTED_SESSIONS)
+                    + ", the ones whose newest note is newest")
+
+
 def _harvest(payload, notes, key):
-    """This session's pickers, the answers the record notes for repository key, and the record, read
-    once for one call: (found, untaken, closed, unlooked, entries, unreadable), as approvals() and
-    read_record() give them. Each approval of his found and not yet on the record is written to it
-    here, and so is the line of each picker that came back any other way, unless the call is a
-    subagent's; a failed save is added to notes (module docstring)."""
+    """This session's pickers, the pickers the record notes that nothing has judged (those naming
+    repository key, and those noted by their ids alone), and the record, read once for one call:
+    (found, untaken, closed, unlooked, entries, unreadable), as approvals() and read_record() give
+    them. Each approval of his found and not yet on the record is written to it here, and so is the
+    line of each picker that came back any other way or is none of this record's, unless the call
+    is a subagent's; a failed save is added to notes (module docstring)."""
     deadline = time.monotonic() + CHECK_SECONDS
     entries, unreadable = read_record()
     noted = _noted(entries)
     own = _text(payload.get("session_id"))
     # A picker the record already holds an ending for (withdrawn, settled) is not worked out again.
     ended = {(e.get("session"), e.get("picker")) for e in entries or [] if e.get("kind") in ("withdrawn", "settled")}
+    # A picker the record holds any outcome for has been judged, a discovery picker's `decided`
+    # included: that one is the other judge's, and is not looked for here again.
+    on_record = {(e.get("session"), e.get("picker")) for e in entries or [] if e.get("kind") in OUTCOMES}
+
+    def unjudged(session):
+        """The session's noted pickers the record holds no outcome for (EVERY PICKER IS NOTED):
+        {picker: its note}, of the notes that name this repository or name none (a note by its ids
+        alone, which may be about any, and may be the other source's: only the transcript says)."""
+        return {p: n for p, n in noted.get(session, ("", {}))[1].items()
+                if (session, p) not in on_record and n.get("repo") in (key, None)}
+
     found, untaken, closed, unlooked = approvals(payload.get("session_id"), payload.get("transcript_path"), deadline,
-                                                 noted.get(own, ("", {}))[1], {p for s, p in ended if s == own})
-    # An answer of his the record notes, in any session, that the record holds no outcome for yet
-    # (HIS ANSWER IS NOTED WHEN HE GIVES IT): read back from that session's own transcript, the
-    # newest NOTED_SESSIONS of them. This is what a caller naming no session of its own (the merge
-    # helper) is approved by, and refused by when what he answered was Not yet.
-    on_record = ended | {(e.get("session"), e.get("picker")) for e in entries or [] if e.get("kind") == "approved"}
+                                                 noted.get(own, ("", {}))[1], {p for s, p in ended if s == own},
+                                                 set(unjudged(own)))
+    # A picker the record notes, in any session, that the record holds no outcome for yet: read
+    # back from that session's own transcript, in one pass for all of the session's (_read_back
+    # says which sessions, and says what it left unread). This is what a caller naming no session
+    # of its own (the merge helper) is approved by, and refused by when what he answered was Not yet.
     looked = own if _text(payload.get("transcript_path")) else None
-    waiting = [s for s, (_, pickers) in noted.items() if s != looked and any(
-        n.get("repo") == key and (s, p) not in on_record for p, n in pickers.items())]
     unlooked = [unlooked] if unlooked else []
-    for session in waiting[-NOTED_SESSIONS:]:
-        transcript, pickers = noted[session]
-        more, less, over, why = approvals(session, transcript, deadline, pickers, {p for s, p in ended if s == session})
+    read = []
+    for session, transcript, pickers, left in _read_back(entries, noted, looked, unjudged, deadline, unlooked):
+        gone = []
+        if _gone(transcript):
+            # Its transcript is gone, so what a picker noted by its ids alone asked can never be
+            # read: settled, so it is not looked for on every later call. A note that names this
+            # repository is left to the reading below, which says the transcript could not be read.
+            bare = sorted(p for p, n in left.items() if n.get("repo") is None)
+            gone = [_settled_other(session, p, _gone_why(transcript)) for p in bare]
+            if len(bare) == len(left):
+                read.append(([], [], gone, None))
+                continue
+        more, less, over, why = approvals(session, transcript, deadline, pickers, {p for s, p in ended if s == session},
+                                          set(left))
+        read.append((more, less, gone + over, why and (
+            "an answer of his the record notes, in the session whose transcript is " + transcript
+            + ", could not be read back: " + why)))
+    # Read newest first, and kept in the order the sessions' notes were taken.
+    for more, less, over, why in reversed(read):
         found += more
         untaken += less
         closed += over
         if why:
-            unlooked.append("an answer of his the record notes, in the session whose transcript is " + transcript
-                            + ", could not be read back: " + why)
+            unlooked.append(why)
     if (found or closed) and not payload.get("agent_id"):
         # One line per picker of his: the same wording approved in a second picker is a second
         # approval, which covers a second pull request.
@@ -1539,10 +1724,11 @@ def _day(stamp):
         return at.strftime("%Y-%m-%d") + " UTC"
 
 
-def decisions(session_id, transcript_path, deadline=None, done=()):
+def decisions(session_id, transcript_path, deadline=None, done=(), sought=()):
     """(lines, untaken, None) for the session's pickers of DISCOVERY, or ([], [], why they could
-    not be looked for). lines is the record's line for each picker that came back and that done,
-    the pickers the record already holds an outcome for, does not name, oldest first:
+    not be looked for). This is the DISCOVERY source's judge, as approvals() is SOURCE's. lines is
+    the record's line for each picker that came back and that done, the pickers the record already
+    holds an outcome for, does not name, oldest first:
         {"kind": "decided", "source", "repo", "feature", "milestone", "answer", "said", "why",
          "session", "picker", "answered"}
     for an answer of his, where answer is "yes" (ANNOUNCE_IT alone), "no" (NOT_ANNOUNCING alone)
@@ -1550,18 +1736,28 @@ def decisions(session_id, transcript_path, deadline=None, done=()):
     his or names no repository and feature. untaken is [{repo, feature, why}] for what a caller
     should say and the lines do not: a picker sent with its answer filled in, one whose metadata
     cannot be read, and one whose reading by him could not be checked just now, which gets no line
-    and is read again."""
+    and is read again.
+
+    sought is the ids of this session's noted pickers nothing has judged yet (EVERY PICKER IS NOTED,
+    module docstring), looked for in the same pass (_asked). lines also holds a `settled` line for
+    each of those the transcript shows is no picker of a source this record reads, and for a noted
+    picker of DISCOVERY the session sent with its answer filled in, which with no note gets no
+    line: a note left with no outcome has its session read back on every later call. A noted
+    picker of SOURCE gets nothing here. It is approvals()'s to judge."""
     if not isinstance(transcript_path, str) or not transcript_path or not isinstance(session_id, str) or not session_id:
         return [], [], "the call named no session transcript, so a picker of his in this session could not be looked for"
     misplaced = _misplaced(transcript_path)
     if misplaced is not None:
         return [], [], misplaced
+    other = set()
     try:
-        asked = _asked(transcript_path, session_id, DISCOVERY)
+        asked = _asked(transcript_path, session_id, sought, other, DISCOVERY)
     except OSError as e:
         return [], [], ("this session's transcript could not be read (" + type(e).__name__
                         + "), so a picker of his in this session could not be looked for")
-    lines, untaken, judged = [], [], []
+    # Each line is kept with the transcript line its picker was answered on, for the order; a
+    # settled picker of no source this record reads has none, and comes first.
+    lines, untaken, judged = [(-1, line) for line in _ordinary(session_id, other - set(done))], [], []
     for p in asked:
         if p["picker"] in done:
             continue
@@ -1570,9 +1766,14 @@ def decisions(session_id, transcript_path, deadline=None, done=()):
         feature, milestone, bad = _feature_of(meta)
         about = {"repo": repo or "", "feature": feature or ""}
         if p["prefilled"]:
-            # No picker at all: it was never put to him, and it gets no line.
+            # No picker at all: it was never put to him. With no note it gets no line. A noted one
+            # is settled once it has been read and said here, as approvals() settles its own.
             untaken.append(dict(about, why="the session sent a picker about it with its answer already filled in, so "
                                            "it was never put to him. Ask it with no answers of its own"))
+            if p["picker"] in sought:
+                lines.append((p["answered"], _settled_other(
+                    session_id, p["picker"], "the session sent it with its answer filled in, so it was never put to "
+                                             "him, so it decides nothing and is not read again")))
             continue
         result = p["result"] if isinstance(p["result"], dict) else {}
         line = {"kind": "settled", "source": DISCOVERY, "repo": repo or "", "feature": feature, "milestone": milestone,
@@ -1644,33 +1845,57 @@ def decisions(session_id, transcript_path, deadline=None, done=()):
 
 
 def _harvest_decisions(payload, notes, key=None):
-    """This session's pickers of DISCOVERY, the answers the record notes in other sessions (for
-    repository key, or any when it is None), and the record, read once for one call: (found,
-    untaken, unlooked, entries, unreadable). found is every line decisions() gave, each written to
-    the record here unless the call is a subagent's; a failed save is added to notes. This is the
-    one place his answer about announcing a feature is written, and only a hook reaches it."""
+    """This session's pickers of DISCOVERY, the pickers the record notes that nothing has judged
+    (in any session: a note is by its ids alone, so only the transcript says which is of DISCOVERY;
+    with a repository key, a note naming another repository is left out), and the record, read once
+    for one call: (found, untaken, unlooked, entries, unreadable). found is every line decisions()
+    gave, each written to the record here unless the call is a subagent's; a failed save of an
+    answer of his is added to notes. This is the one place his answer about announcing a feature is
+    written, and only a hook reaches it. It is _harvest's twin for the other source, and reads back
+    the same sessions by the same rule (_read_back)."""
     deadline = time.monotonic() + CHECK_SECONDS
     entries, unreadable = read_record()
-    noted = _noted(entries, DISCOVERY)
-    # A picker is one answer whichever session id its lines are found under (_approval_keys).
-    done = {e.get("picker") for e in entries or [] if e.get("kind") in ("decided", "settled")}
+    noted = _noted(entries)
+    # A picker the record holds any outcome for has been judged, an approval picker's lines
+    # included: that one is the other judge's. A picker is one answer whichever session id its
+    # lines are found under (_approval_keys).
+    done = {e.get("picker") for e in entries or [] if e.get("kind") in OUTCOMES}
     own = _text(payload.get("session_id"))
-    found, untaken, unlooked = decisions(payload.get("session_id"), payload.get("transcript_path"), deadline, done)
+
+    def unjudged(session):
+        """The session's noted pickers the record holds no outcome for: {picker: its note}."""
+        return {p: n for p, n in noted.get(session, ("", {}))[1].items()
+                if p not in done and (key is None or n.get("repo") in (key, None))}
+
+    found, untaken, unlooked = decisions(payload.get("session_id"), payload.get("transcript_path"), deadline, done,
+                                         set(unjudged(own)))
     looked = own if _text(payload.get("transcript_path")) else None
-    waiting = [s for s, (_, pickers) in noted.items() if s != looked and any(
-        (key is None or n.get("repo") == key) and p not in done for p, n in pickers.items())]
     unlooked = [unlooked] if unlooked else []
-    for session in waiting[-NOTED_SESSIONS:]:
-        transcript = noted[session][0]
-        more, less, why = decisions(session, transcript, deadline, done | {f["picker"] for f in found})
+    read, seen = [], {f["picker"] for f in found}
+    for session, transcript, _, left in _read_back(entries, noted, looked, unjudged, deadline, unlooked):
+        gone = []
+        if _gone(transcript):
+            # As in _harvest: what a picker noted by its ids alone asked can never be read.
+            bare = sorted(p for p, n in left.items() if n.get("repo") is None)
+            gone = [_settled_other(session, p, _gone_why(transcript)) for p in bare]
+            if len(bare) == len(left):
+                read.append((gone, [], None))
+                continue
+        # A picker a forked session carries under two session ids is judged once in one call.
+        more, less, why = decisions(session, transcript, deadline, done | seen, set(left))
+        seen |= {f["picker"] for f in more}
+        read.append((gone + more, less, why and (
+            "an answer of his the record notes, in the session whose transcript is " + transcript
+            + ", could not be read back: " + why)))
+    # Read newest first, and kept in the order the sessions' notes were taken.
+    for more, less, why in reversed(read):
         found += more
         untaken += less
         if why:
-            unlooked.append("an answer of his the record notes, in the session whose transcript is " + transcript
-                            + ", could not be read back: " + why)
+            unlooked.append(why)
     if found and not payload.get("agent_id"):
         failed = _append([dict(f, at=_now()) for f in found])
-        if failed:
+        if failed and any(f.get("kind") == "decided" for f in found):
             notes.append("Dan's answer about whether a feature is announced to agents was read from his picker, but it "
                          "could not be saved: " + failed + ". It counts for this call, but a call that cannot read this "
                          "session's transcript will not know of it until that record can be written.")
@@ -2026,7 +2251,7 @@ def main(argv):
         try:
             payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
         except ValueError:
-            # Not a JSON object, which note_answer says in its own words: it is never left in silence.
+            # Not a JSON object, so there is no picker to note, which note_answer says in its own words.
             payload = None
         noted, why = note_answer(payload, time.monotonic() + NOTE_SECONDS)
         json.dump({"noted": noted, "why": why or ""}, sys.stdout)
@@ -2074,11 +2299,11 @@ def main(argv):
                      "the record only | check --repo <owner/name> --hash <sha256> --pr <number> --claim, with the hook payload "
                      "on standard input | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
                      "[--unread <why>] | answered, with the PostToolUse payload on standard input | decision --repo "
-                     "<owner/name> --feature <name> [--milestone <number>] | milestone-line --repo <owner/name> --feature "
-                     "<name> --answer <yes|no|unasked> [--description-file <file>] | finishes --repo <owner/name> --pr "
-                     "<number> --answer-file <file> [--unmerged <number>,<number>], each reading the record only "
-                     "unless it carries --hook, with the "
-                     "hook payload on standard input\n")
+                     "<owner/name> --feature <name> [--milestone <number>] [--hook] | milestone-line --repo <owner/name> "
+                     "--feature <name> --answer <yes|no|unasked> [--description-file <file>] | finishes --repo "
+                     "<owner/name> --pr <number> --answer-file <file> [--unmerged <number>,<number>] [--hook]. "
+                     "milestone-line reads the record only and takes no --hook. decision and finishes read the record "
+                     "only unless they carry --hook, with the hook payload on standard input\n")
     return 2
 
 
