@@ -239,6 +239,31 @@ check "and his approval is written to the record" "$(grep -q "\"hash\": \"$H\"" 
 r="$(run "$EDIT")"
 check "so a later session's command goes through on the record" "$(passed "$r" && echo ok || echo "$r")"
 forget
+# The picker's question must tell him to save the file (#3742 item 7): an edit he left unsaved in
+# the window is not in the wording that is hashed, so his Approve in a picker that does not say so
+# puts the label on nothing.
+F="$(aaf_shown "$WORK/nosave" "$WORK/nosave.jsonl" "$POST")"
+aaf_talk "$WORK/nosave.jsonl" ask acme/widget "$F" "" nosave
+r="$(TALK="$WORK/nosave.jsonl" run "$EDIT")"
+check "R10 his Approve in a picker whose question does not tell him to save the file puts no label on" "$(asks_dan "$r" && [[ "$r" == *"did not tell him to save the file"* ]] && echo ok || echo "$r")"
+check "and nothing is written to the record for it" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+aaf_talk "$WORK/nosave.jsonl" bash "$AAF_BBEDIT --front-window $F"
+aaf_talk "$WORK/nosave.jsonl" ask acme/widget "$F"
+r="$(TALK="$WORK/nosave.jsonl" run "$EDIT")"
+check "R10 still possible: asked again with the sentence, the command goes through" "$(passed "$r" && echo ok || echo "$r")"
+forget
+# An Approve with words typed beside it approves nothing (#3742 low 20; Dan, 2026-11-26): what he
+# typed is a change he wants, so the label goes on nothing and the refusal gives his words.
+F="$(aaf_shown "$WORK/typed" "$WORK/typed.jsonl" "$POST")"
+aaf_talk "$WORK/typed.jsonl" ask acme/widget "$F" "" "typed:approve, but fix line 2"
+r="$(TALK="$WORK/typed.jsonl" run "$EDIT")"
+check "R10 his Approve with words typed beside it puts no label on, and the refusal gives his words" "$(asks_dan "$r" && [[ "$r" == *"approve, but fix line 2"* && "$r" == *"approves nothing"* ]] && echo ok || echo "$r")"
+check "and no approval is written to the record for it" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+aaf_talk "$WORK/typed.jsonl" bash "$AAF_BBEDIT --front-window $F"
+aaf_talk "$WORK/typed.jsonl" ask acme/widget "$F"
+r="$(TALK="$WORK/typed.jsonl" run "$EDIT")"
+check "R10 still possible: asked again and approved with nothing typed, the command goes through" "$(passed "$r" && echo ok || echo "$r")"
+forget
 
 echo "one approval covers one pull request (Dan, 2026-11-25: \"One approval, one pull request\")"
 # Pull request 7 merged on his one approval of this wording: the merge gate recorded it as the one
@@ -403,6 +428,7 @@ forget
 for cmd in "$FORGED | python3 $LIBRARY check --repo acme/widget --hash $H --pr 7 --claim" \
            "$FORGED | python3 -B ~/.claude/hooks/lib/announce-approval.py check --claim --repo acme/widget --hash $H" \
            "python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "printf '{}' | python3 $LIBRARY answered" \
            "cd $DIR && /usr/bin/python3 -B -I lib/announce-approval.py used --repo acme/widget --hash $H --pr 7 --unread x" \
            "env ANNOUNCE_APPROVALS_DIR=/tmp/other python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
            "$FORGED | xargs -0 python3 $LIBRARY check --claim" \
