@@ -1,10 +1,13 @@
 import { expect, mock } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
+// #3817: the words for a held steps card, on a line of their own so the close card's line below
+// stays as other branches find it.
+import { CHECK_CARRIED, carriedReason } from '../hooks/close.ts'
 import * as request from '../hooks/request.ts'
 import type { On, Register } from 'claude-code'
 import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
-import { CHECK_CARRIED, CLOSE_HEADING, CLOSE_TITLE, PROCESS_TIMEOUT_MS, QUIET_MS, carriedReason } from '../hooks/close.ts'
+import { CLOSE_HEADING, CLOSE_TITLE, PROCESS_TIMEOUT_MS, QUIET_MS } from '../hooks/close.ts'
 
 // The Goal accomplished box (claude-config#1563) in a session: shown once when a /goal is met (the
 // session is sent a prompt of its own asking for it once the turn has ended, since the met record
