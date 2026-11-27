@@ -55,10 +55,14 @@ their draft they are. It reads the decisions from step 1 itself, so a kind Dan a
 never to offer is marked `decided before` without anything being passed. Read the result by its
 exit code first:
 
-- Exit 4: nothing was measured. The read results are laid out in a way it does not read, or the text
-  of the messages is not where it looks. Run it once more with `--shapes` added, tell Dan what both
-  runs printed, and stop. Then record that it happened, in these words and no others:
-  `bash ~/.claude/hooks/lib/issue-spool.sh note . "draft-edit-diff.py exited 4 on this Mac: the Slack read layout is not one it reads. The --shapes output is in the session that ran it." "draft-edit-review"`
+- Exit 4: nothing was measured, and the run's own "Nothing was measured" line says which of three
+  things stopped it. The read results are laid out in a way it does not read; or the text of the
+  messages is not where it looks; or most of his posts begin or end in a line shaped like a label
+  that the draft did not hold. That third one cannot tell a line the connector writes from one he
+  adds by hand to most drafts, such as an opening "Update: ...", so do not tell him the layout is at
+  fault: tell him both readings, as the run words them. Run it once more with `--shapes` added, tell
+  Dan what both runs printed, and stop. Then record that it happened, in these words and no others:
+  `bash ~/.claude/hooks/lib/issue-spool.sh note . "draft-edit-diff.py exited 4 on this Mac: nothing was measured. Which of its reasons it gave is in the session that ran it, with the --shapes output." "draft-edit-review"`
   Never put a line of either run's output in that note. The note becomes an issue on a public
   repository, and Dan already has the output in front of him.
 - Exit 3 or 2: tell Dan what it said and stop.

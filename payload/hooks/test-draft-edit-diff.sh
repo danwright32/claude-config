@@ -234,6 +234,24 @@ check_eq "alerts: most messages beginning and ending in a label line, none of th
 check "alerts: his twelve are read as sent" "sent as drafted: 12 of 12 pairs" "$out"
 check "alerts: the messages that end so are counted" "last line shaped like a label: 21;" "$out"
 check "alerts: and no pair is set aside" "$SET_ASIDE_FOR_LABEL: 0" "$out"
+# A habit of his that the draft does NOT hold stops the run the same way (third review, S2): "Update: "
+# put by hand in front of 7 of 12 posts, in a layout that is exactly as measured. The reader cannot
+# tell that line from one the connector writes, so the run still stops. What it may not do is say the
+# layout is at fault: the words name both readings and blame neither.
+fixture own_most || { echo "FAIL: fixture own_most could not be built"; fail=$((fail + 1)); }
+out="$(run own_most)"; rc=$?
+check_eq "own most: a line he adds by hand to most posts still stops the run, since nothing tells it from the connector's" "4" "$rc"
+check "own most: with the count it stopped on" "Nothing was measured: most of the posts paired with a draft (7 of 12) begin or end in a line shaped like a label" "$out"
+check "own most: it says it cannot tell two things apart" "This cannot tell two things apart." "$out"
+check "own most: one reading is a line of the connector's" "Either the connector writes such a line around a message, and the text of a message is not where this looks for it" "$out"
+check "own most: the other is a line he adds by hand, with the layout as measured" "or he adds such a line by hand to most of what he sends (an opening like \"Update: ...\"), and the layout is as measured and these are his own edits" "$out"
+check "own most: and it says what would point one way or the other" "A line of the connector's is on other people's messages too" "$out"
+check_not "own most: the layout is not blamed outright" "which is how the connector writes its own lines" "$out"
+check_not "own most: nor is the text said flatly to be somewhere else" ", so the text of a message is not where this looks for it" "$out"
+check_not "own most: and no pair is counted" "pairs:" "$out"
+check "first label: a line that IS the connector's stops with the same two readings" "This cannot tell two things apart." "$(run first_label)"
+check "most wordless: the other exits still say flatly where the text is not" "have no text under their Message TS line, so the text of a message is not where this looks for it" "$(run most_wordless)"
+check_not "most wordless: and offer no second reading" "cannot tell two things apart" "$(run most_wordless)"
 # The two exits for text that is somewhere else, each reached with text in SOME messages (second review, S1).
 out="$(run most_wordless)"; rc=$?
 check_eq "most wordless: most messages with no text is a failure, though some have it" "4" "$rc"

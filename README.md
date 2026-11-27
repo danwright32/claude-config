@@ -6497,7 +6497,10 @@ pieces turn the edits he keeps making into written rules, each one his to accept
   in a line shaped like one of the connector's own (a word or three and a colon) is set aside and
   counted, unless the draft holds a line with the same label at that end, which makes it his; a
   run in which most pairs were set aside that way exits 4 too. That is judged over the pairs and
-  not the messages, so a channel of alerts that all begin "Alert:" does not stop a run.
+  not the messages, so a channel of alerts that all begin "Alert:" does not stop a run. That exit
+  cannot tell a line of the connector's from one Dan adds by hand to most drafts ("Update: " in
+  front of 7 of 12 stops the run, on a layout that is as measured), so its words name both
+  readings and blame neither, and the note the skill files says only that nothing was measured.
   `--shapes` prints what the results are made of: counts, and a field or label name only when it
   is in a fixed list in the script, never a key or a line it does not know. `--differences`
   counts, for the pairs changed but not heavily, how many would be the same with one more thing
@@ -6542,7 +6545,8 @@ draft; a post a session sent as him; an edit he made after sending; a read resul
 short; and the other Mac's sessions. Three things it reads wrongly, each on purpose or for want of
 a measurement. A line of his own shaped like a label ("Update: ...") that opens or ends what he
 sent, and that the draft did not hold there, is set aside with the lines that may be the
-connector's, so that pair is in no count. A line of the connector's that is not shaped like a
+connector's, so that pair is in no count; when most of his pairs are so, the run stops and no kind
+is counted on that Mac, which is a decision still open with Dan (pull request 3848). A line of the connector's that is not shaped like a
 label, and is not the Reactions line, is read as his words. And "@Name" typed in a draft and made
 a real mention by hand reads as an edit, which it is.
 

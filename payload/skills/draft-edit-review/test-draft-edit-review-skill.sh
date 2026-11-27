@@ -208,6 +208,13 @@ check "for the skill file one more question shows the final sentence and the fil
 check_eq "and that question comes before the edit" "1" "$(follows 'ask one more AskUserQuestion that shows the final sentence in full' 'Then make the edit yourself, with the Edit tool')"
 # The reader's output never goes into an issue (S1), and the reader reads the decisions itself (S2).
 check "the note filed on exit 4 holds no line of the reader's output" "Never put a line of either run's output in that note" "$body"
+# The third review's S2: the run also stops when he adds a line like "Update: ..." by hand to most
+# drafts, with the layout as measured. The skill may not tell him, or the issue it files, that the
+# layout is at fault.
+check "exit 4: the skill says the label exit cannot tell his own line from the connector's" "cannot tell a line the connector writes from one he adds by hand" "$body"
+check "exit 4: and to tell him both readings" "do not tell him the layout is at fault: tell him both readings" "$body"
+check "exit 4: the note it files says nothing was measured, and blames nothing" '"draft-edit-diff.py exited 4 on this Mac: nothing was measured. Which of its reasons it gave is in the session that ran it, with the --shapes output."' "$body"
+check_not "exit 4: the note no longer says the layout is one it does not read" "the Slack read layout is not one it reads" "$body"
 check_not "the skill no longer hands the reader skip arguments" "<skip arguments>" "$body"
 check "it says the reader reads the decisions itself" "It reads the decisions from step 1 itself" "$body"
 check_not "a line about one unreadable result is not called nothing measured" "or a line saying read results were in a layout it cannot read" "$body"

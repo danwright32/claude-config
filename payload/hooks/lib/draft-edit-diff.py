@@ -91,7 +91,8 @@ WHAT IT CANNOT SEE, so nobody reads more into a count than it measured.
     he makes, and it reads as the opening changed when the name opens the message.
   * His own line shaped like a label ("Update: ...", "Next step: ...") when it is the first or the
     last line of what he sent and the draft did not hold it there. The pair is set aside with the
-    lines that may be the connector's, since nothing can tell the two apart.
+    lines that may be the connector's, since nothing can tell the two apart. When that is most of
+    his pairs, on one pair of one as on seven of twelve, the run exits 4 and no kind is counted.
   * A line of the connector's own, under or over the text, that is NOT shaped like a label and is
     not the Reactions line. It is read as his words. --differences counts how many pairs a first or
     a last line could explain.
@@ -151,7 +152,10 @@ line, less any Reactions line. The connector's own account of a read says its de
     line above the Message TS line that is neither From nor Time, or when most of the posts paired
     with a draft were set aside for such a label line. That last one is judged over the pairs and
     not the messages: most messages beginning "Alert: ..." in a channel a program posts to, or his
-    own habit of opening with "Update: ...", is no fault in the layout;
+    own habit of opening with "Update: ..." where the draft holds that line too, is no fault in the
+    layout. It cannot tell a line of the connector's from one he ADDS by hand to most of what he
+    sends: that stops the run the same way, with the layout as measured, so its words name both
+    readings and blame neither (the third review of pull request 3848, S2);
   * --shapes counts the lines of text under and above the Message TS lines, and names a label line
     only when its name is in KNOWN_LABELS, a fixed list. Any other is counted by its length alone.
     It says where each label line sits: alone, first, last or inside the text.
@@ -884,6 +888,11 @@ def main():
     # "Alert: ...", neither of which is a fault in the layout, and either would have stopped every run
     # on that Mac. A line the connector adds is in his posts as in everybody's and in no draft, so
     # the pairs see it. How many messages begin or end so is still printed, and --shapes names them.
+    #
+    # What that exit CANNOT tell (third review, S2): a line the connector writes, from one he adds by
+    # hand to most of what he sends. "Update: " put in front of 7 of 12 drafts stops the run exactly as
+    # a connector's line does, with the layout as measured. So its words name both readings and blame
+    # neither. Whether it should stop at all on a habit of his is Dan's to decide, and is not decided here.
     misplaced = ""
     with_draft = len(pairs) + left["doubtful"]
     if 2 * wordless > found:
@@ -891,9 +900,15 @@ def main():
     elif 2 * shape[ABOVE] > found:
         misplaced = "most of the messages found hold a line above their Message TS line that is neither From nor Time"
     elif 2 * left["doubtful"] > with_draft:
-        misplaced = ("most of the posts paired with a draft (%d of %d) begin or end in a line shaped like a label "
-                     "(a word or three and a colon) that the draft does not hold there, which is how the "
-                     "connector writes its own lines" % (left["doubtful"], with_draft))
+        print("Nothing was measured: most of the posts paired with a draft (%d of %d) begin or end in a line shaped "
+              "like a label (a word or three and a colon) that the draft does not hold there. This cannot tell two "
+              "things apart. Either the connector writes such a line around a message, and the text of a message "
+              "is not where this looks for it; or he adds such a line by hand to most of what he sends (an opening "
+              "like \"Update: ...\"), and the layout is as measured and these are his own edits, left out because "
+              "nothing here can tell them from the connector's. A line of the connector's is on other people's "
+              "messages too: the line above says how many of all the messages found begin or end so, and --shapes "
+              "says where each such line sits." % (left["doubtful"], with_draft))
+        return 4
     if misplaced:
         print("Nothing was measured: %s, so the text of a message is not where this looks for it. Run this with "
               "--shapes to see how the lines are laid out." % misplaced)

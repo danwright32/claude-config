@@ -33,7 +33,9 @@ NOT seen either (the third review of pull request 3848): "phone" and "link_as_wo
 read back as a link, and a link read back as its words and its address) and "two_lines" (two lines
 of the connector's over the text, the first not shaped like a label). Each is twelve drafts posted
 word for word that the reader still reads as twelve changed openings, with none of them under any
-of the differences it lists. They hold the wording of that count to what it measures.
+of the differences it lists. They hold the wording of that count to what it measures. "own_most"
+is his own "Update: " put by hand in front of 7 of 12 posts: the run stops on it, and the fixture
+holds the words it stops with to both readings (his habit, or a line of the connector's).
 """
 import datetime
 import json
@@ -266,6 +268,8 @@ def word_for_word(folder, layout, wordless=0, fields=None, own="", alerts=0):
     is a single "Update: ..." line, and one that ends in a "Next step: ..." line. With own "drafted"
     the draft holds those lines too, so the truth is still twelve sent as drafted. With own "added"
     the draft is without them: he put them in by hand, and nothing can tell them from the connector's.
+    With own "most" he put "Update: " in front of 7 of the 12 by hand and changed nothing else: a
+    habit of his, in a layout that is as measured.
 
     alerts adds that many posts by SOMEBODY ELSE to each thread, each beginning and ending in a line
     shaped like a label, as an alert a program posts does. They are most of the messages, and none
@@ -283,6 +287,9 @@ def word_for_word(folder, layout, wordless=0, fields=None, own="", alerts=0):
             draft = sent = WORD_FOR_WORD % k
             if own == "every":               # every post of his is one "Update: ..." line, as drafted
                 draft = sent = OWN_FIRST % k
+            elif own == "most":              # he put "Update: " in front of 7 of the 12 by hand
+                if k < 2 or (t == 0 and k == 2):
+                    sent = "Update: " + draft
             elif own and k == 1:
                 sent = OWN_FIRST % k
                 draft = sent if own == "drafted" else sent[len("Update: "):]
@@ -602,6 +609,8 @@ def main():
         word_for_word(folder, "thread", own="added")
     elif which == "own_every":       # every post of his is one such line, and the draft held it
         word_for_word(folder, "thread", own="every")
+    elif which == "own_most":        # "Update: " put in front of 7 of his 12 posts by hand
+        word_for_word(folder, "thread", own="most")
     elif which == "alerts":          # seven posts by somebody else in each thread that begin and end in a label line
         word_for_word(folder, "thread", alerts=7)
     elif which == "no_messages_field":
