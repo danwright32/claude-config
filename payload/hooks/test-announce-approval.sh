@@ -1425,6 +1425,34 @@ T="$WORK/d-nofeature.jsonl"; new_talk "$T"
 talk "$T" decide acme/widget "Hand back" "Not announcing" nofeature
 r="$(decided "$T" acme/widget "Hand back")"
 check "R9 a picker whose question does not name the feature its metadata names decides nothing" "$([[ "$r" == "none|"* && "$r" == *"did not name the feature"* ]] && echo ok || echo "$r")"
+# The name must stand in the question as a name of its own: between quotation marks or with no
+# letter or digit against either end. As a run of letters inside a longer name it named another
+# feature, and his answer about that one was recorded about this one (review of #3669, low 8).
+STORE_USED="$WORK/store-d-within"
+T="$WORK/d-within.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand" "Not announcing" within
+r="$(decided "$T" acme/widget "Hand")"
+check "R9 #3669 F a question that holds the feature's name only inside a longer name decides nothing about it" "$([[ "$r" == "none|"* && "$r" == *"did not name the feature"* ]] && [ "$(grep -c '"answer": "other"' "$STORE_USED/record.jsonl" 2>/dev/null)" = 1 ] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-d-unquoted"
+T="$WORK/d-unquoted.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" unquoted
+check "still possible #3669 F: the name with no quotation marks, standing as words of its own, is the feature named" "$([[ "$(decided "$T" acme/widget "Hand back")" == "no|Not announcing|"* ]] && echo ok || decided "$T" acme/widget "Hand back")"
+STORE_USED="$WORK/store-d-edges"
+T="$WORK/d-edges.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back (v2)" "Announce it"
+check "still possible #3669 F: a name that ends in a mark, between quotation marks, is the feature named" "$([[ "$(decided "$T" acme/widget "Hand back (v2)")" == "yes|Announce it|"* ]] && echo ok || decided "$T" acme/widget "Hand back (v2)")"
+# And the question must have offered him both options: with two ways to decline, or one option
+# swapped for another, his choice was not between announcing and not announcing.
+STORE_USED="$WORK/store-d-twono"
+T="$WORK/d-twono.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" twono
+r="$(decided "$T" acme/widget "Hand back")"
+check "R9 #3669 F a picker whose two options both decline is no decline of his, and the answer says both options must be offered" "$([[ "$r" == "none|"* && "$r" == *'did not offer both `Announce it` and `Not announcing`'* ]] && [ "$(grep -c '"answer": "other"' "$STORE_USED/record.jsonl" 2>/dev/null)" = 1 ] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-d-otherlabel"
+T="$WORK/d-otherlabel.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Announce it" otherlabel
+r="$(decided "$T" acme/widget "Hand back")"
+check "R9 #3669 F nor is his Announce it a yes where the other option was not Not announcing" "$([[ "$r" == "none|"* && "$r" == *"did not offer both"* ]] && echo ok || echo "$r")"
 STORE_USED="$WORK/store-d-unread"
 T="$WORK/d-unread.jsonl"; new_talk "$T"
 talk "$T" decide acme/widget "Hand back" "Not announcing" unread

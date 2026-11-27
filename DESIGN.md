@@ -3369,9 +3369,10 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   one writer and one reader, both in the library, and holds no name: the answer, his option's words
   and the day in US Eastern time, so the helper never writes a work app's name into a description.
   What counts as his yes or no is every rule of an approval that has a meaning without a file, and
-  two of this picker's own: the question must hold the words "agents must or can act differently"
-  and must name the feature in the metadata's very words, so an answer is never recorded about
-  something the question did not say. An answer that breaks a rule is recorded as `other`: it
+  three of this picker's own: the question must hold the words "agents must or can act differently",
+  must name the feature in the metadata's very words as a name of its own (a run of letters inside
+  a longer name is another feature's name), and must have offered both options, so an answer is
+  never recorded about something the question did not say or as a choice he was not given. An answer that breaks a rule is recorded as `other`: it
   decides nothing and, being his last answer, stands in front of an earlier yes or no. Ruled out:
   a new hook to read his answer in before the helper runs (more registrations and tables; the
   label hook, which already sees every Bash call, does it on a call naming the helper); letting

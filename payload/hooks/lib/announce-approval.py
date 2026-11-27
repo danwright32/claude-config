@@ -1739,6 +1739,35 @@ def _day(stamp):
         return at.strftime("%Y-%m-%d") + " UTC"
 
 
+def _names_feature(shown, feature):
+    """Whether the question he was shown names the feature as a name of its own: its metadata's very
+    words with no letter or digit against either end, which a name between quotation marks is too.
+    As a run of letters inside a longer name it is another feature's name, and an answer about that
+    one is not an answer about this one."""
+    return re.search(r"(?<!\w)" + re.escape(feature) + r"(?!\w)", shown) is not None
+
+
+def _offers_both(p):
+    """Whether picker p's one question offered him both ANNOUNCE_IT and NOT_ANNOUNCING, in every
+    copy of the question the transcript holds that lists options (the call's, and the result's
+    when it has one), with at least one copy listing them. A picker of two ways to decline, or with one option
+    swapped for something else, did not put the choice between announcing and not to him."""
+    held = 0
+    for holder in (p["result"], p["ask"]):
+        questions = holder.get("questions") if isinstance(holder, dict) else None
+        if not isinstance(questions, list) or not questions or not isinstance(questions[0], dict):
+            continue
+        options = questions[0].get("options")
+        if not isinstance(options, list):
+            # A copy that lists no options says nothing about them; the call's own always does.
+            continue
+        labels = {o["label"].strip() for o in options if isinstance(o, dict) and isinstance(o.get("label"), str)}
+        if not {ANNOUNCE_IT, NOT_ANNOUNCING} <= labels:
+            return False
+        held += 1
+    return held > 0
+
+
 def decisions(session_id, transcript_path, deadline=None, done=(), sought=()):
     """(lines, untaken, None) for the session's pickers of DISCOVERY, or ([], [], why they could
     not be looked for). This is the DISCOVERY source's judge, as approvals() is SOURCE's. lines is
@@ -1826,9 +1855,14 @@ def decisions(session_id, transcript_path, deadline=None, done=(), sought=()):
         elif THE_TEST not in shown:
             why = ("the picker's question did not state the test, so what he was deciding was not in front of him. "
                    "Ask again with a question that holds the words `" + THE_TEST + "`")
-        elif feature not in shown:
+        elif not _names_feature(shown, feature):
             why = ("the picker's question did not name the feature its metadata names (" + json.dumps(feature) + "), so "
-                   "his answer cannot be taken as being about it. Ask again with that name in the question, word for word")
+                   "his answer cannot be taken as being about it. Ask again with that name in the question, word for word"
+                   ", between quotation marks or as words of its own, not as part of a longer name")
+        elif not _offers_both(p):
+            why = ("the picker did not offer both `" + ANNOUNCE_IT + "` and `" + NOT_ANNOUNCING + "` as options of its "
+                   "question, so his choice was not between announcing it and not. Ask again with those two options, "
+                   "worded exactly so")
         else:
             judged.append((p, line, chosen))
             continue

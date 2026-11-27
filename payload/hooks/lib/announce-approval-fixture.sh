@@ -63,8 +63,12 @@
 #                                    is given, and naming a milestone's number in its metadata when
 #                                    one is given. The shapes: timeout, prefilled, two, error, unread,
 #                                    typed:<words>, notest (its question does not state the test),
-#                                    nofeature (its question does not name the feature) and nometa
-#                                    (its metadata names no feature).
+#                                    nofeature (its question does not name the feature), within (its
+#                                    question holds the feature's name only as the start of a longer
+#                                    name), unquoted (the name with no quotation marks round it),
+#                                    twono (both of its options decline), otherlabel (its second
+#                                    option is not the declining one) and nometa (its metadata names
+#                                    no feature).
 #       decide-put <repo> <feature> [shape] [session] [milestone]
 #       decide-answer <id> <repo> <feature> [answer] [shape] [session] [milestone]
 #       decide-late <id> <repo> <feature> [shape] [session] [milestone]
@@ -160,6 +164,11 @@ def deciding(repo, feature, answer, shape, milestone):
     q = 'Will "%s" be announced to agents when it ships?' % feature
     if shape == "nofeature":
         q = "Will this feature be announced to agents when it ships?"
+    if shape == "within":
+        # The feature's name only as the first letters of a longer name: a question about another feature.
+        q = 'Will "%sover notes export" be announced to agents when it ships?' % feature
+    if shape == "unquoted":
+        q = "Will %s be announced to agents when it ships?" % feature
     if shape != "notest":
         q += " The test: agents must or can act differently."
     if shape == "unread":
@@ -170,6 +179,10 @@ def deciding(repo, feature, answer, shape, milestone):
            "metadata": {"source": "announce-discovery", "repo": repo, "feature": feature}}
     if milestone:
         ask["metadata"]["milestone"] = int(milestone) if milestone.isdigit() else milestone
+    if shape == "twono":
+        ask["questions"][0]["options"][0] = {"label": "Skip the post", "description": "It ships with no post for agents"}
+    if shape == "otherlabel":
+        ask["questions"][0]["options"][1] = {"label": "Decide later", "description": "Ask again at the merge"}
     result = {"questions": ask["questions"], "answers": {q: answer}, "annotations": {}}
     if shape == "timeout":
         result["afkTimeoutMs"] = 60000
