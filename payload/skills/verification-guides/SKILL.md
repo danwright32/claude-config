@@ -114,7 +114,8 @@ receipt folder holds screenshots of private apps. Beside it are the screenshots,
 of every record `record render` wrote from this run, which the merge check matches the posted
 record against), and the copies of areas.json and the guides the run used. It records the machine, the head and the commit checked out, when serve
 started, became ready and stopped and why (`stop`, `ready_failed`, `serve_exited`, `deadline`,
-`recovered`, `start_failed`, `start_error`, `start_interrupted`, `supervisor_error`), the build
+`recovered`, `start_failed`, `start_error`, `start_interrupted`, `supervisor_error`, and
+`caller_gone`, which only a run started with a lifeline, as the tests start theirs, can record), the build
 stamp, and `egress` (below). The three `start_` reasons mean setup failed before serve started, and
 `worktree_removed` says whether the worktree went: `start_failed` a named refusal, `start_error` any other error (a full disk, a
 failed copy), `start_interrupted` an interrupt. `stop_detail` carries the error itself and any

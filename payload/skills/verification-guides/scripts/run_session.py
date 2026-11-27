@@ -27,6 +27,16 @@ fails. If the supervisor is killed outright, `stop` sees its lock free with no s
 does the same work itself, by the process group it recorded (L1011). Waiting for the end of a run
 is waiting for that lock, never a poll of a fixed length (L290).
 
+The supervisor starts in a session of its own because the run must outlive `start`: `start`
+returns once serve is ready, and `drive` and `stop` come later from other processes, so in real use
+the supervisor's parent is always gone and a signal to the caller's process group must not reach
+it. A caller that wants the run to end with it instead, a test suite above all (claude-config#3682),
+passes a LIFELINE: the read end of a pipe whose write end only it holds, named by
+VERIFICATION_LIFELINE_FD. The supervisor reads it, and when every holder of the write end is gone,
+killed outright or as a group included, the kernel ends the pipe and the supervisor stops the run as
+`stop` would, recorded as `caller_gone`. No pid is watched, so none can be recycled (L1011, L409).
+A run started without one, every run a session starts by the skill, is unchanged.
+
 One run per project at a time: the supervisor also holds a lock keyed by the checkout's path, so a
 second `start` is refused with the live run's receipt id rather than fighting it for the port.
 
@@ -62,8 +72,10 @@ import os
 import secrets
 import shutil
 import signal
+import stat
 import subprocess
 import sys
+import threading
 import time
 import traceback
 
@@ -75,7 +87,7 @@ import verification as v  # noqa: E402
 EGRESS_WHY = "the run has not stopped yet, and its egress verdict is written when it does"
 EGRESS_RECOVERED = ("the supervisor was gone without stopping serve, and the egress monitor it ran went with"
                     " it, so this run's connections were not all seen")
-STOP_REASONS = ("stop", "ready_failed")
+STOP_REASONS = ("stop", "ready_failed", "caller_gone")
 READY_ATTEMPT_MAX_S = 30
 GONE_POLL_S = 0.05
 
@@ -193,14 +205,19 @@ def stop_wait_s(timeouts):
             + egress.finish_budget_s(timeouts.get("egress_s", v.TIMEOUT_DEFAULTS["egress_s"])))
 
 
-def request_stop(rdir, reason):
+def record_stop_reason(rdir, reason):
+    """Record why the run is being stopped. False when an earlier request stands, whose reason is the one kept."""
     try:
         fd = os.open(os.path.join(rdir, "stop-reason"), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
     except FileExistsError:
-        fd = None  # an earlier request stands, and its reason is the one recorded
-    if fd is not None:
-        os.write(fd, reason.encode("utf-8", "replace"))
-        os.close(fd)
+        return False
+    os.write(fd, reason.encode("utf-8", "replace"))
+    os.close(fd)
+    return True
+
+
+def request_stop(rdir, reason):
+    record_stop_reason(rdir, reason)
     rec = read_receipt(rdir)
     pid = rec.get("supervisor_pid")
     # Signal only a supervisor whose lock is held, so a recycled pid is never signalled (L1011).
@@ -347,7 +364,30 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None)
 # supervise (the detached process start launches)
 
 
-def supervise(rdir, repo_lock_fd, pipe_w):
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+
+
+def watch_lifeline(rdir, fd):
+    """Stop this supervisor once every holder of its caller's lifeline is gone (claude-config#3682).
+
+    The read ends only when the kernel ends the pipe, which it does when the last holder of the
+    write end dies, however it died. Anything written down the pipe is not a goodbye and is read
+    past. The stop goes the way `stop`'s does, a recorded reason and then a signal, so the run ends
+    by the one path every stop takes; the signal is aimed at the main thread, where the wait it
+    must interrupt is, and is not sent when an earlier stop request already stands. The thread is
+    born with the stop signals blocked, so one sent from outside always lands on the main thread."""
+    try:
+        while os.read(fd, 4096):
+            pass
+        why = "every holder of the lifeline it was started with is gone"
+    except OSError as e:
+        why = "its lifeline could not be read (%s: %s)" % (type(e).__name__, e)
+    print("verification: supervisor stopping the run: %s" % why, file=sys.stderr, flush=True)
+    if record_stop_reason(rdir, "caller_gone"):
+        signal.pthread_kill(threading.main_thread().ident, signal.SIGTERM)
+
+
+def supervise(rdir, repo_lock_fd, pipe_w, lifeline_fd=None):
     # repo_lock_fd stays open, unread, for this process's whole life: holding it is the point.
     sup = open(os.path.join(rdir, "supervisor.lock"), "a", errors="replace")
     fcntl.flock(sup, fcntl.LOCK_EX)
@@ -355,10 +395,16 @@ def supervise(rdir, repo_lock_fd, pipe_w):
     def on_signal(signum, frame):
         raise StopRequested()
 
-    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    for s in STOP_SIGNALS:
         signal.signal(s, on_signal)
     proc, reason, detail, monitor = None, "supervisor_error", None, None
     try:
+        if lifeline_fd is not None:
+            signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)  # inherited by the thread made next
+            try:
+                threading.Thread(target=watch_lifeline, args=(rdir, lifeline_fd), daemon=True).start()
+            finally:
+                signal.pthread_sigmask(signal.SIG_UNBLOCK, STOP_SIGNALS)
         with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
             doc = json.load(f)
         rec = read_receipt(rdir)
@@ -474,6 +520,26 @@ def abandon_start(err, repo, rdir, wt, lock_fd, opened=()):
     raise err
 
 
+def caller_lifeline():
+    """The descriptor VERIFICATION_LIFELINE_FD names, or None when it is unset (claude-config#3682).
+
+    Refused unless it is the READ end of a pipe: a write end held by the supervisor itself would keep
+    the pipe open for ever, and anything else never ends when its caller does, so either would read
+    as a lifeline that simply had not fired."""
+    raw = os.environ.get("VERIFICATION_LIFELINE_FD", "")
+    if raw == "":
+        return None
+    try:
+        fd = int(raw)
+        mode, flags = os.fstat(fd).st_mode, fcntl.fcntl(fd, fcntl.F_GETFL)
+    except (ValueError, OSError) as e:
+        v.fail("lifeline-bad", "VERIFICATION_LIFELINE_FD=%r names no open descriptor (%s)" % (raw, e))
+    if not stat.S_ISFIFO(mode) or flags & os.O_ACCMODE != os.O_RDONLY:
+        v.fail("lifeline-bad", "VERIFICATION_LIFELINE_FD=%r is not the read end of a pipe, so the run could"
+               " never see its caller go" % raw)
+    return fd
+
+
 def start(repo, sha, areas_csv):
     if not v.SHA_RE.match(sha or ""):
         v.fail("bad-sha", "%r is not a full 40 character commit SHA (use the PR's headRefOid)" % sha)
@@ -497,6 +563,7 @@ def start(repo, sha, areas_csv):
     if unknown:
         v.fail("area-unknown", "%s %s not defined in areas.json at %s (it defines %s)"
                % (", ".join(unknown), "is" if len(unknown) == 1 else "are", sha[:7], ", ".join(v.area_names(doc))))
+    lifeline = caller_lifeline()
 
     home = v.verification_home()
     lock_fd = os.open(repo_lock(home, repo), os.O_RDWR | os.O_CREAT, 0o600)
@@ -543,8 +610,13 @@ def start(repo, sha, areas_csv):
         opened.extend((r_fd, w_fd))
         log = open(os.path.join(rdir, "supervisor.log"), "ab")
         opened.append(log)
+        # A lifeline goes to the supervisor alone, as an argument: serve and the commands it runs
+        # neither hold it nor see the variable naming it.
+        tie = [] if lifeline is None else [lifeline]
+        sup_env = {k: val for k, val in os.environ.items() if k != "VERIFICATION_LIFELINE_FD"}
         sup = subprocess.Popen([sys.executable, os.path.abspath(__file__), "_supervise", rdir, str(lock_fd),
-                                str(w_fd)], pass_fds=(lock_fd, w_fd), start_new_session=True,
+                                str(w_fd)] + [str(fd) for fd in tie], pass_fds=(lock_fd, w_fd, *tie),
+                               start_new_session=True, env=sup_env,
                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, cwd=rdir)
     except BaseException as e:
         abandon_start(e, repo, rdir, wt, lock_fd, opened)
@@ -666,8 +738,8 @@ def status(rid):
 
 
 def main(argv):
-    if argv[:1] == ["_supervise"] and len(argv) == 4:
-        return supervise(argv[1], int(argv[2]), int(argv[3]))
+    if argv[:1] == ["_supervise"] and len(argv) in (4, 5):
+        return supervise(argv[1], int(argv[2]), int(argv[3]), int(argv[4]) if len(argv) == 5 else None)
     if argv[:1] == ["drive"]:
         # Written out rather than argparse, whose remainder would swallow --area: exactly
         # `drive <receipt id> --area <name> -- <helper arguments>`.

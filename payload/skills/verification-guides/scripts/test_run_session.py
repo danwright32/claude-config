@@ -148,10 +148,19 @@ class RunFixture(unittest.TestCase):
         os.mkfifo(os.path.join(self.fake, "ready.fifo"))
         git(self.repo, "init", "-q")
         self.started = []
+        # Every run a test starts is tied to this process (claude-config#3682): it holds the write
+        # end, and when it dies, killed with its whole suite included, each run's supervisor sees the
+        # pipe end and stops its run. tearDown's stop never runs in a suite killed outright.
+        self.tie = os.pipe() if self.lifeline else None
+
+    lifeline = True
 
     def tearDown(self):
         for rid in self.started:
             subprocess.run(self.cli("stop", rid), capture_output=True, text=True, env=self.env())
+        if self.tie:
+            for fd in self.tie:
+                os.close(fd)
         self.tmp.cleanup()
 
     def commit(self, **commands):
@@ -194,14 +203,19 @@ class RunFixture(unittest.TestCase):
     doc_over = {}
 
     def env(self, scale="1", deadline="1"):
-        return dict(os.environ, VERIFICATION_HOME=self.home, FAKE_DIR=self.fake,
-                    VERIFICATION_TIME_SCALE=scale, VERIFICATION_DEADLINE_SCALE=deadline, **self.extra_env)
+        env = dict(os.environ, VERIFICATION_HOME=self.home, FAKE_DIR=self.fake,
+                   VERIFICATION_TIME_SCALE=scale, VERIFICATION_DEADLINE_SCALE=deadline, **self.extra_env)
+        env.pop("VERIFICATION_LIFELINE_FD", None)
+        if self.tie:
+            env["VERIFICATION_LIFELINE_FD"] = str(self.tie[0])
+        return env
 
     def cli(self, *args):
         return [sys.executable, os.path.join(HERE, "run_session.py")] + list(args)
 
     def run_cli(self, *args, scale="1", deadline="1"):
-        return subprocess.run(self.cli(*args), capture_output=True, text=True, env=self.env(scale, deadline))
+        return subprocess.run(self.cli(*args), capture_output=True, text=True, env=self.env(scale, deadline),
+                              pass_fds=self.tie[:1] if self.tie else ())
 
     def start(self, sha, scale="1", areas="invoices", deadline="1"):
         r = self.run_cli("start", "--repo", self.repo, "--sha", sha, "--areas", areas, scale=scale,
@@ -209,6 +223,11 @@ class RunFixture(unittest.TestCase):
         if r.returncode == 0:
             self.started.append(json.loads(r.stdout)["receipt_id"])
         return r
+
+    def cut_lifeline(self):
+        """Close this process's write end of the lifeline, as its death would."""
+        os.close(self.tie[1])
+        self.tie = self.tie[:1]
 
     def receipt(self, rid):
         with open(os.path.join(self.home, "receipts", rid, "receipt.json")) as f:
@@ -316,6 +335,38 @@ class RunSessionTests(RunFixture):
         self.assert_fully_stopped(self.receipt(rid), "deadline")
         if r.returncode != 0:
             self.assertIn("serve-stopped", r.stderr)
+
+    def test_a_lifeline_that_is_not_a_pipes_read_end_is_refused_before_anything_starts(self):
+        sha = self.commit()
+        cases = [(self.tie[1], "not the read end of a pipe"), ("x", "names no open descriptor"),
+                 (999, "names no open descriptor")]
+        with open(os.path.join(self.fake, "plain-file"), "w") as plain:
+            cases.append((plain.fileno(), "not the read end of a pipe"))
+            for fd, said in cases:
+                env = dict(self.env(), VERIFICATION_LIFELINE_FD=str(fd))
+                r = subprocess.run(self.cli("start", "--repo", self.repo, "--sha", sha, "--areas", "invoices"),
+                                   capture_output=True, text=True, env=env,
+                                   pass_fds=(fd,) if isinstance(fd, int) and fd != 999 else ())
+                self.assertEqual(r.returncode, 4, (fd, r.stderr))
+                self.assertIn("lifeline-bad", r.stderr)
+                self.assertIn(said, r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "receipts")), "a refused start made a receipt")
+
+    def test_something_written_down_the_lifeline_does_not_stop_the_run(self):
+        r = self.start(self.commit())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["receipt_id"]
+        os.write(self.tie[1], b"still here\n")
+        # Wait on the condition, the supervisor having read it all, never a fixed time (L290).
+        deadline = time.monotonic() + 30
+        while pipe_pending(self.tie[0]) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(pipe_pending(self.tie[0]), 0, "the supervisor never read its lifeline")
+        self.assertTrue(run_session.supervisor_alive(os.path.join(self.home, "receipts", rid)))
+        self.assertIsNone(self.receipt(rid)["stopped_at"])
+        s = self.run_cli("stop", rid)
+        self.assertEqual(s.returncode, 0, s.stderr)
+        self.assert_fully_stopped(self.receipt(rid), "stop")
 
     def test_stop_recovers_when_the_supervisor_was_killed_outright(self):
         r = self.start(self.commit())
@@ -755,6 +806,18 @@ class NativeRunTests(RunFixture):
         self.assertTrue(rec["worktree_removed"])
         self.assertTrue(os.path.exists(os.path.join(self.fake, "stop-ran")))
 
+    def test_a_native_run_ends_when_its_lifeline_is_cut(self):
+        # With nothing served the supervisor sleeps out its deadline, and the stop must still wake it.
+        r = self.start(self.commit(**self.native))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["receipt_id"]
+        self.cut_lifeline()
+        run_session.wait_for_supervisor(os.path.join(self.home, "receipts", rid), timeout_s=60)
+        rec = self.receipt(rid)
+        self.assertEqual(rec["stopped_by"], "caller_gone", rec)
+        self.assertTrue(rec["worktree_removed"])
+        self.assertTrue(os.path.exists(os.path.join(self.fake, "stop-ran")))
+
     def test_a_mixed_project_without_serve_is_refused_before_anything_starts(self):
         areas = NATIVE_AREAS + [{"name": "clients", "guide": ".claude/verification/guides/invoices.md",
                                  "owns": ["web/**"], "screens": [{"name": "list", "path": "/clients", "seed": "demo"}]}]
@@ -915,6 +978,120 @@ class StartSetupFailureTests(RunFixture):
         self.assertIn("disk-full", err.getvalue())
         self.assertIn("No space left on device", err.getvalue())
         self.assert_abandoned("start_error", "No space left on device")
+
+
+# A test suite, as payload/hooks/test-skill-python-tests.sh runs one: this process builds the
+# fixture the tests above use, starts a run through it exactly as they do, says what it started, and
+# then waits to be killed. argv: the scripts folder, then "tied" (the fixture's lifeline in place, as
+# every test above has it) or "untied" (no lifeline, as every real run Dan's sessions start has it).
+SUITE = r'''
+import json, os, signal, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import test_run_session as t
+f = t.RunFixture()
+f.lifeline = sys.argv[2] == "tied"
+f.setUp()
+r = f.start(f.commit())
+print(json.dumps({"base": os.path.dirname(f.repo), "home": f.home, "code": r.returncode,
+                  "out": r.stdout, "err": r.stderr}), flush=True)
+while True:
+    signal.pause()
+'''
+
+
+def alive(pid):
+    """Whether the pid names a process that is not a zombie, read straight from ps."""
+    out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    stat = out.stdout.strip()
+    return bool(stat) and not stat.startswith("Z")
+
+
+def pipe_pending(fd):
+    """How many bytes sit unread in the pipe whose read end is `fd`."""
+    import struct
+    import termios
+    return struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+
+
+def wait_gone(pids, limit_s=30):
+    """Wait on the condition, none of `pids` alive, and return those still alive at the limit."""
+    deadline = time.monotonic() + limit_s
+    while True:
+        left = [p for p in pids if p and alive(p)]
+        if not left or time.monotonic() >= deadline:
+            return left
+        time.sleep(0.05)
+
+
+class SuiteStoppedAsAGroupTests(unittest.TestCase):
+    """A suite killed as a process group must not leave a run of its own behind (claude-config#3682).
+
+    The supervisor starts in a session of its own, so a signal to the suite's group never reaches
+    it. Every process here is stopped by a pid or receipt this test recorded, never by matching a
+    command line (L1011), and nothing waits a fixed time (L290).
+    """
+
+    def run_suite(self, tie):
+        suite = subprocess.Popen([sys.executable, "-B", "-c", SUITE, HERE, tie], stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, start_new_session=True, text=True)
+        self.addCleanup(self.end_suite, suite)
+        line = suite.stdout.readline()  # the suite prints once its run is up, or dies saying why
+        self.assertTrue(line, "the suite printed nothing: %s" % suite.stderr.read() if suite.poll() is not None else "")
+        said = json.loads(line)
+        self.addCleanup(shutil.rmtree, said["base"], True)
+        self.assertEqual(said["code"], 0, said["err"])
+        rid = json.loads(said["out"])["receipt_id"]
+        rdir = os.path.join(said["home"], "receipts", rid)
+        with open(os.path.join(rdir, "receipt.json")) as f:
+            rec = json.load(f)
+        self.addCleanup(self.stop_run, said["home"], rid, rec)
+        self.assertTrue(run_session.supervisor_alive(rdir), "the run was not up when the suite said it was")
+        os.killpg(suite.pid, signal.SIGKILL)  # stopped as a group, the way a cut short push gate does
+        suite.wait()
+        return rdir, rec
+
+    def end_suite(self, suite):
+        if suite.poll() is None:
+            os.killpg(suite.pid, signal.SIGKILL)
+        suite.wait()
+        suite.stdout.close()
+        suite.stderr.close()
+
+    def stop_run(self, home, rid, rec):
+        """Stop the run by its receipt (which signals only the supervisor whose lock is held), then
+        confirm by the pids it recorded that nothing it started is left."""
+        env = dict(os.environ, VERIFICATION_HOME=home, VERIFICATION_TIME_SCALE="1", VERIFICATION_DEADLINE_SCALE="1")
+        env.pop("VERIFICATION_LIFELINE_FD", None)
+        subprocess.run([sys.executable, os.path.join(HERE, "run_session.py"), "stop", rid],
+                       capture_output=True, text=True, env=env)
+        self.assertEqual(wait_gone([rec["supervisor_pid"], rec["serve_pid"]]), [], "the run's processes outlived its stop")
+        for pgid in (rec["serve_pgid"], rec.get("egress_monitor_pgid")):
+            if pgid:
+                self.assertEqual(live_members(pgid), [], "process group %s outlived the stop" % pgid)
+
+    def test_a_run_ends_when_the_suite_that_started_it_is_stopped_as_a_group(self):
+        rdir, rec = self.run_suite("tied")
+        try:
+            run_session.wait_for_supervisor(rdir, timeout_s=60)
+        except v.VerificationError as e:
+            self.fail("the supervisor outlived the suite that started it: %s" % e)
+        with open(os.path.join(rdir, "receipt.json")) as f:
+            done = json.load(f)
+        self.assertEqual(done["stopped_by"], "caller_gone", done)
+        self.assertEqual(wait_gone([rec["serve_pid"]]), [], "serve outlived the supervisor that stopped it")
+        self.assertEqual(live_members(rec["serve_pgid"]), [], "serve's group outlived the stop")
+        self.assertTrue(done["worktree_removed"], done)
+
+    def test_a_run_with_no_lifeline_outlives_the_suite_that_started_it(self):
+        # Every real run: start returns, and the run must keep serving for the drive and stop calls
+        # that come in later processes, until stop, serve exiting or its deadline.
+        rdir, rec = self.run_suite("untied")
+        self.assertTrue(run_session.supervisor_alive(rdir), "a run with no lifeline ended with its caller")
+        self.assertTrue(alive(rec["supervisor_pid"]))
+        self.assertTrue(live_members(rec["serve_pgid"]), "serve ended with the caller of a run that has no lifeline")
+        with open(os.path.join(rdir, "receipt.json")) as f:
+            self.assertIsNone(json.load(f)["stopped_at"])
 
 
 if __name__ == "__main__":
