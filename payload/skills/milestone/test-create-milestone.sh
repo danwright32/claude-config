@@ -908,6 +908,10 @@ check_eq "#3669 M and that refusal leaves no temporary file behind either" "0" "
 check_eq "#3669 M R9 and makes no label for the plan it refused" "0" "$(grep -c '^label create' "$TMP/calls.log")"
 out="$(WAS="Old words." arun "$TMP/existing.json" "$(plan_with apart-unasked '.announce = "unasked" | .title = "On boarding revamp"')")"; rc=$?
 check_eq "#3669 M R9 and so is unasked under a title that is not the milestone's own" "12 0 Old words." "$rc $(milestone_touched) $(desc_line)"
+# Nobody asked him about an unasked plan and the plan says so, so its refusal names the one remedy,
+# the title, and never tells the session to ask him.
+check "#3669 M an unasked plan is refused for its title, naming both" 'ANNOUNCE-TITLE-APART the plan is titled "On boarding revamp" and its milestone on GitHub is "Onboarding revamp"' "$out"
+check_eq "#3669 M and is not told to ask him" "0" "$(printf '%s\n' "$out" | grep -c -i 'ask him')"
 out="$(STORE="$ANN/apart" WAS="Old words." DRY_RUN=1 arun "$TMP/existing.json" "$APART")"; rc=$?
 check_eq "#3669 M R9 a dry run refuses it too" "12" "$rc"
 check_eq "#3669 M R9 and previews no line the real run would not write" "0" "$(printf '%s\n' "$out" | grep -c 'WOULD-WRITE-ANNOUNCE-LINE')"
