@@ -9,7 +9,10 @@
 //   gather.js gather [--config P] [--state P] [--now ISO] [--only NAME] [--out P]
 //                    [--live owner/name=SHA@ISO]... [--since ISO [--confirm-skip]]
 //   gather.js commit-state --gathered P --draft P --repo owner/name
-//                    [--listed N,N,...] [--headings 'A|B'] [--state P]
+//                    [--listed N,N,...] [--headings 'A|B'] [--outcomes N=OUTCOME,...] [--drafts DIR] [--state P]
+//   gather.js posted --gathered P --repo owner/name --number N --read FILE[,FILE...]
+//   gather.js draftable --gathered P --repo owner/name --number N --drafts DIR
+//   gather.js drafted --gathered P --repo owner/name --number N --drafts DIR [--tool-error yes]
 //   gather.js gh [--config P] -- <gh command naming its repo with --repo owner/name>
 //
 // gather prints one JSON document (and writes it to --out): per repo, its window, every merged
@@ -46,6 +49,9 @@ const ENTRY_PATH = path.join(__dirname, '..', '..', 'hooks', 'lib', 'changelog-e
 // The one reader of the registry, shared with the same gate (claude-config#1526): where this Mac
 // keeps it (never the shared config, because it names work repositories) and how it is read.
 const REGISTRY_PATH = path.join(__dirname, '..', '..', 'hooks', 'lib', 'dev-update-registry.js');
+// The one comparison of an announcement with what Slack holds, words only (claude-config#3668),
+// shared since #3667 with the is it live mod, which judges a draft of one through its command line.
+const COMPARE_PATH = path.join(__dirname, '..', '..', 'hooks', 'lib', 'announce-compare.js');
 
 const PER_PAGE = 100;
 const MAX_PAGES = 200;             // 20,000 PRs, far past any repo here; a guard against a loop
@@ -456,8 +462,21 @@ function recordOf(entry, repoCfg, pr) {
   // The gate judged each merge by the local day it ran on, so the same day is used here, through
   // the parser's own helper, or a merge late on the evening before the cutover reads as a gap.
   if (!from || entry.localDay(new Date(pr.merged_at)) < from) return { kind: 'unrecorded' };
+  // parseEntry and never the merge gate's own gateRefusal: this reads what MERGED, on whichever Mac,
+  // so it must not ask this Mac's registry whether a label was allowed (claude-config#3665). A
+  // refusal here is a gap, "something merged around the gate", which a change that passed the gate
+  // on the other Mac is not.
   const parsed = entry.parseEntry({ labels: pr.labels, body: pr.body });
-  if (parsed.ok) return { kind: parsed.kind, line: parsed.line };
+  if (parsed.ok) {
+    // Whether managers would notice it is decided HERE, in code, from the parser's own map of the
+    // kinds, so a kind the skill's text has never heard of still arrives sorted (R5). SKILL.md's
+    // label table and section 5 sort by this field, never by the label's name (claude-config#3668).
+    // A gap, a dependency update and a record judged by hand carry no such field: nothing decided
+    // it for them.
+    const record = { kind: parsed.kind, line: parsed.line, managerVisible: entry.isManagerVisible(parsed.kind) };
+    if (parsed.announcement !== undefined) record.announcement = parsed.announcement;
+    return record;
+  }
   return { kind: 'gap', code: parsed.code, reason: parsed.reason };
 }
 
@@ -470,6 +489,9 @@ function gatherRepo(ctx, repoCfg) {
     stateLastEnd: prior.lastEnd || null,
     window: null, deploy: { kind: 'none' }, prs: [], heldBack: [], seed: null,
     counts: null, notes: [],
+    // null until every announce change has been read: a first appearance lists none, and a refused
+    // or unreachable repo's are unknown, which is never shown as an empty list (claude-config#3668).
+    announcements: null,
   };
 
   // The window: strictly after lastEnd, up to now. A repo with no lastEnd is a first appearance.
@@ -600,7 +622,94 @@ function gatherRepo(ctx, repoCfg) {
   }
   if (counts.unchecked) out.notes.push(repoCfg.name + ' has no deploy record, so whether its ' + counts.unchecked + ' PR(s) reached production could not be checked.');
   if (counts.gaps) out.notes.push(counts.gaps + ' PR(s) merged after the changelog cutover carry no valid record: something merged around the gate.');
+  // Announce records in a repository this Mac's registry names no announcements channel for
+  // (claude-config#3665). The merge gate refuses that label there, so either they merged from a Mac
+  // whose registry names the channel, or this Mac's entry lost its key, and from here the two look
+  // the same. They are read as the records they are either way; this says so, where to draft them
+  // being the thing this Mac cannot tell. Judged by the registry's one reader of the key.
+  const announced = out.prs.filter(function (p) { return p.record.kind === ctx.entry.ANNOUNCE; }).length;
+  if (announced) {
+    const reader = loadRegistryReader();
+    const channel = reader.announceChannelOf(repoCfg);
+    const check = 'node ~/.claude/hooks/lib/dev-update-registry.js announce-channel ' + slug;
+    if (channel.bad) {
+      out.notes.push(announced + ' PR(s) carry changelog/announce, and ' + reader.badAnnounceWhy(slug, channel.value)
+        + ', so there is no channel to draft their announcements in. Fix announceChannel in its entry (check it with: ' + check + ').');
+    } else if (!channel.channel) {
+      out.notes.push(announced + ' PR(s) carry changelog/announce, and this Mac\'s registry names no announcements channel for '
+        + repoCfg.name + ' (announceChannel in its entry), so there is no channel to draft their announcements in. Either they '
+        + 'merged on a Mac whose registry names one, or this entry lost its key. Check it with: ' + check + '.');
+    }
+  }
+  out.announcements = announcementsOf(ctx, repoCfg, out, prior, byNumber, deployOf);
   return out;
+}
+
+// ---------------------------------------------------------------- announcements (claude-config#3668)
+//
+// Every announce change this run can see: the window's (and heldBack's), plus every one an earlier
+// run kept in the state file because it was only drafted or had no outcome, whatever its merge
+// date. The dev update is the safety net for an announcement nobody sent (Dan, 2026-11-25: "an
+// unsent one is seen"), so commit-state refuses to record the run until each one that is out has an
+// outcome (R6).
+//
+// What is owed, and where, is asked of the merge gate's own reader (announcementOwed in
+// hooks/lib/changelog-entry.js), never worked out here a second time: `owed` with the channel and
+// the post, or `unknown` with why, the post still given wherever it could be read.
+const OUTCOMES = ['sent', 'drafted', 'not-announcing'];
+// What --outcomes carries for "Draft it now" (#3667): not an outcome the state keeps, but a claim
+// that this run's own draft call saved it, which commit-state judges again before recording drafted.
+const DRAFTED_NOW = 'drafted-now';
+// An outcome after which nothing more is asked about it. Drafted is not one: a draft can sit unsent.
+const SETTLED = ['sent', 'not-announcing'];
+// The two deploy verdicts under which a change cannot be listed as shipped, so nothing is owed yet.
+const NOT_OUT = ['held', 'unconfirmed'];
+
+function announcementsOf(ctx, repoCfg, out, prior, byNumber, deployOf) {
+  const kept = new Map();
+  // Absent is a repo no run has kept one for. Present and not a list is a state file somebody broke,
+  // and reading it as "none kept" would drop every unsent announcement in it, so it refuses (L11).
+  if (prior.announcements !== undefined && !Array.isArray(prior.announcements)) {
+    refuse('announcements in the state file for ' + repoCfg.repo + ' is not a list, so which announcements for agents are still unsent cannot be told. Nothing was changed.');
+  }
+  (prior.announcements || []).forEach(function (a) {
+    if (!a || !Number.isInteger(a.number)) refuse('announcements in the state file for ' + repoCfg.repo + ' holds an entry with no pull request number: ' + JSON.stringify(a) + '.');
+    kept.set(a.number, a);
+  });
+  const listed = new Map(out.prs.map(function (p) { return [p.number, p]; }));
+  const numbers = new Set();
+  out.prs.forEach(function (p) { if (p.record.kind === ctx.entry.ANNOUNCE) numbers.add(p.number); });
+  kept.forEach(function (a, n) { numbers.add(n); });
+
+  const read = loadRegistryReader().readRegistry(ctx.configPath);
+  const today = ctx.entry.localDay(new Date(ctx.nowMs));
+  const found = [];
+  numbers.forEach(function (n) {
+    const pr = byNumber.get(n);
+    if (!pr) refuse('announcements in the state file names #' + n + ', which GitHub does not show as a merged PR in ' + repoCfg.repo + '.');
+    const owed = ctx.entry.announcementOwed({ labels: pr.labels, body: pr.body }, read, repoCfg.repo, today);
+    if (owed.state === 'none') {
+      out.notes.push('#' + n + ' was kept as an announcement for agents and no longer carries changelog/announce, so it is dropped from the announcements.');
+      return;
+    }
+    const mergedMs = Date.parse(pr.merged_at);
+    if (Number.isNaN(mergedMs)) refuse('#' + n + ' has a merge time GitHub gave as ' + JSON.stringify(pr.merged_at) + ', which does not parse, so the channel cannot be read from it.');
+    const inPost = listed.get(n);
+    const deploy = inPost ? inPost.deploy : deployOf(pr);
+    const before = kept.has(n) ? (kept.get(n).outcome || null) : null;
+    found.push({
+      number: n, title: pr.title, mergedAt: pr.merged_at,
+      // The Slack timestamp of the merge, for slack_read_channel's `oldest`: nothing posted before
+      // the change merged can be its announcement.
+      oldest: String(Math.floor(mergedMs / 1000)),
+      deploy: deploy, live: deploy === 'live', carried: !inPost,
+      state: owed.state, channel: owed.channel, text: owed.text, why: owed.why,
+      previousOutcome: before,
+      needsOutcome: NOT_OUT.indexOf(deploy) === -1 && SETTLED.indexOf(before) === -1,
+    });
+  });
+  found.sort(function (a, b) { return Date.parse(a.mergedAt) - Date.parse(b.mergedAt) || a.number - b.number; });
+  return found;
 }
 
 // ---------------------------------------------------------------- gather
@@ -630,7 +739,7 @@ function cmdGather(args) {
     if (repos.length === 0) refuse('--only ' + args.only + ' names no repo in ' + configPath + '.');
   }
 
-  const ctx = { state: state || {}, nowMs: nowMs, entry: entry, live: live, sinceMs: sinceMs, since: args.since, confirmSkip: !!args.confirmSkip };
+  const ctx = { state: state || {}, nowMs: nowMs, entry: entry, live: live, sinceMs: sinceMs, since: args.since, confirmSkip: !!args.confirmSkip, configPath: configPath };
   const result = {
     v: 1, generatedAt: iso(nowMs), statePath: statePath, stateExisted: state !== undefined, configPath: configPath, repos: [],
   };
@@ -640,7 +749,7 @@ function cmdGather(args) {
     catch (e) {
       if (!(e instanceof Refusal) && !(e instanceof Unreachable)) throw e;
       r = { name: repoCfg.name, repo: repoCfg.repo, status: e instanceof Unreachable ? 'unreachable' : 'refused', reason: e.message,
-        stateLastEnd: (ctx.state[repoCfg.repo] || {}).lastEnd || null, prs: [], heldBack: [], notes: [] };
+        stateLastEnd: (ctx.state[repoCfg.repo] || {}).lastEnd || null, prs: [], heldBack: [], notes: [], announcements: null };
     }
     result.repos.push(r);
   });
@@ -656,6 +765,8 @@ function cmdGather(args) {
       line += ', ' + r.prs.length + ' PR(s) from ' + r.window.start + ' to ' + r.window.end + ': ' + c.recorded + ' carried a record, '
         + c.handJudged + ' judged by hand, ' + c.gaps + ' gap(s), ' + c.dependency + ' dependency update(s); ' + c.held + ' held back'
         + (c.unconfirmed ? ', ' + c.unconfirmed + ' unconfirmed' : '');
+      const owing = r.announcements.filter(function (a) { return a.needsOutcome; }).length;
+      if (r.announcements.length) line += '; ' + r.announcements.length + ' announcement(s) for agents, ' + owing + ' needing an outcome';
     } else if (r.status === 'first_appearance') {
       line += r.seed ? ', introduced in general; boundary would seed at #' + r.seed.number + ' (' + r.seed.mergedAt + ')' : '';
     } else {
@@ -669,6 +780,65 @@ function cmdGather(args) {
 }
 
 // ---------------------------------------------------------------- commit-state
+
+// --outcomes 70=sent,71=drafted,72=not-announcing: what became of each announcement this run, as
+// Dan answered or as the channel read showed. Refused, naming each one, while an announcement that
+// is out has no outcome (R6), and for any value or number that is not one of this run's.
+// 73=drafted-now is "Draft it now": recorded as drafted only when the draft's own files, in the
+// folder --drafts names, are judged saved here, again, so it never rests on the session's word that
+// it was. A call `drafted` was told failed is judged as failed here too, from the file it left.
+function announcementOutcomes(repo, given, drafts) {
+  const outcomes = new Map();
+  const pairs = given ? given.split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [];
+  if (repo.status !== 'ok') {
+    if (pairs.length) refuse(repo.repo + ' is a first appearance: it lists no announcements, so --outcomes does not apply.');
+    return outcomes;
+  }
+  if (!Array.isArray(repo.announcements)) {
+    refuse(repo.repo + ' in the gathered file has no announcements list, so whether an announcement for agents is still unsent cannot '
+      + 'be told. It was gathered by an older gather.js: gather again. Nothing was written.');
+  }
+  const byNumber = new Map(repo.announcements.map(function (a) { return [a.number, a]; }));
+  pairs.forEach(function (pair) {
+    const m = /^#?(\d+)=([a-z-]+)$/.exec(pair);
+    if (!m) refuse('--outcomes holds ' + JSON.stringify(pair) + ', which is not <PR number>=<outcome>.');
+    const n = Number(m[1]);
+    if (OUTCOMES.indexOf(m[2]) === -1 && m[2] !== DRAFTED_NOW) refuse('--outcomes gives #' + n + ' the outcome ' + JSON.stringify(m[2]) + ', which is not one of ' + OUTCOMES.concat(DRAFTED_NOW).join(', ') + '.');
+    if (!byNumber.has(n)) refuse('--outcomes names #' + n + ', which is not among the announcements gathered for ' + repo.repo + '.');
+    if (outcomes.has(n)) refuse('--outcomes gives #' + n + ' two outcomes.');
+    if (m[2] !== DRAFTED_NOW) { outcomes.set(n, m[2]); return; }
+    if (!drafts) refuse('--outcomes gives #' + n + ' ' + DRAFTED_NOW + ', which needs --drafts <the folder holding its draft\'s files>, so the draft can be judged. Nothing was written.');
+    const v = draftedVerdict(repo, byNumber.get(n), drafts);
+    if (v.state !== 'saved') refuse('#' + n + ' is not recorded as drafted: ' + v.said + ' Nothing was written.');
+    outcomes.set(n, 'drafted');
+  });
+  const missing = repo.announcements.filter(function (a) { return a.needsOutcome && !outcomes.has(a.number); });
+  if (missing.length) {
+    refuse('The run is not recorded while an announcement for agents that is out has no outcome: '
+      + missing.map(function (a) { return '#' + a.number + ' (merged ' + a.mergedAt + ')'; }).join(', ')
+      + '. Settle each (SKILL.md section 11) and pass --outcomes <number>=sent|drafted|not-announcing, or <number>=' + DRAFTED_NOW + ' with --drafts for one this run drafted. Nothing was written.');
+  }
+  return outcomes;
+}
+
+// What the state keeps of this run's announcements. One only drafted, or with no outcome, is always
+// kept, so the next run lists it again whatever its merge date. One sent or not being announced is
+// kept only while it could come back (merged after the new lastEnd, or still held back), so it is
+// never asked about, or drafted, a second time; otherwise it is done with and dropped.
+function keptAnnouncements(repo, outcomes, updated) {
+  const boundary = updated.lastEnd ? Date.parse(updated.lastEnd) : -Infinity;
+  const held = new Set(updated.heldBack || []);
+  const kept = [];
+  repo.announcements.forEach(function (a) {
+    const outcome = outcomes.get(a.number) || a.previousOutcome || null;
+    const settled = SETTLED.indexOf(outcome) !== -1;
+    // Dropped only when its merge time is known to sit at or below the boundary: a time that does
+    // not parse compares false, and the entry is kept, the side that asks again rather than loses it.
+    if (settled && Date.parse(a.mergedAt) <= boundary && !held.has(a.number)) return;
+    kept.push({ number: a.number, mergedAt: a.mergedAt, outcome: outcome });
+  });
+  return kept;
+}
 
 function cmdCommitState(args) {
   if (!args.gathered) refuse('commit-state needs --gathered, the file gather wrote with --out.');
@@ -700,6 +870,9 @@ function cmdCommitState(args) {
   const listed = args.listed ? args.listed.split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [];
   listed.forEach(function (s) { if (!/^\d+$/.test(s)) refuse('--listed holds ' + JSON.stringify(s) + ', which is not a PR number.'); });
   const listedNums = listed.map(Number);
+  // R6: no run is recorded while an announce change that is out has no outcome. Checked before the
+  // state is read, so a refusal leaves it exactly as it was.
+  const outcomes = announcementOutcomes(repo, args.outcomes, args.drafts);
 
   const state = readJson(statePath, 'The state file');
   if (state === undefined && gathered.stateExisted) {
@@ -742,11 +915,203 @@ function cmdCommitState(args) {
     said.push('nothing listed, so lastEnd stays at ' + entryNow.lastEnd);
   }
   updated.heldBack = repo.heldBack.slice();
+  if (repo.status === 'ok') {
+    updated.announcements = keptAnnouncements(repo, outcomes, updated);
+    said.push(updated.announcements.length
+      ? 'announcements kept for the next run ' + JSON.stringify(updated.announcements.map(function (a) { return '#' + a.number + ' ' + (a.outcome || 'no outcome'); }))
+      : 'no announcement kept');
+  }
   if (headings) updated.headings = headings;
   next[repo.repo] = updated;
   writeJsonAtomic(statePath, next);
   process.stderr.write(repo.name + ': ' + said.join('; ') + '; heldBack ' + JSON.stringify(updated.heldBack)
     + (headings ? '; headings ' + JSON.stringify(headings) : '') + '. Written to ' + statePath + '\n');
+  return 0;
+}
+
+// ---------------------------------------------------------------- posted
+
+// One gathered announcement, by repo and number, for the commands that act on one.
+function gatheredAnnouncement(args) {
+  const gathered = readJson(args.gathered, 'The gathered file');
+  if (gathered === undefined) refuse('The gathered file is not at ' + args.gathered + '.');
+  const repo = (gathered.repos || []).filter(function (r) { return r.repo.toLowerCase() === args.repo.toLowerCase(); })[0];
+  if (!repo) refuse(args.repo + ' is not in ' + args.gathered + '.');
+  const n = Number(args.number);
+  if (!Array.isArray(repo.announcements)) {
+    refuse(repo.repo + '\'s announcements were not read when gathered (' + repo.status + (repo.reason ? ': ' + repo.reason : '') + '), so there is nothing to look for.');
+  }
+  const ann = repo.announcements.filter(function (a) { return a.number === n; })[0];
+  if (!ann) refuse('#' + args.number + ' is not among the announcements gathered for ' + repo.repo + '.');
+  return { repo: repo, ann: ann, n: n };
+}
+
+// Is a gathered announcement already in the channel? `--read` is a file holding what
+// slack_read_channel returned, word for word, once per page read (SKILL.md section 11). The
+// announcement comes from the gathered file, never retyped, and the comparison is
+// hooks/lib/announce-compare.js's, of words only. Not found says only that: whether the read
+// reached every message since the merge is the session's to say, and a read that failed or was
+// cut short is never handed here.
+function cmdPosted(args) {
+  if (!args.gathered || !args.repo || !args.number || !args.read) {
+    refuse('Usage: gather.js posted --gathered P --repo owner/name --number N --read FILE (one page of the channel read per file; repeat as --read FILE,FILE).');
+  }
+  const one = gatheredAnnouncement(args);
+  const repo = one.repo;
+  const ann = one.ann;
+  const n = one.n;
+  if (!ann.text) refuse('#' + n + ' has no announcement text that could be read (' + (ann.why || 'no reason given') + '), so it cannot be looked for.');
+  const text = args.read.split(',').map(function (file) {
+    let t;
+    try { t = fs.readFileSync(file, 'utf8'); }
+    catch (e) { refuse('The channel read is not at ' + file + ' (' + e.code + '), so nothing was compared.'); }
+    if (!t.trim()) refuse('The channel read at ' + file + ' is empty. An empty read is not a read that found nothing; read the channel again.');
+    return t;
+  }).join('\n');
+  let got;
+  try { got = require(COMPARE_PATH).foundPosted(ann.text, text); }
+  catch (e) { refuse('#' + n + ' could not be compared: ' + e.message + '.'); }
+  const said = got.found
+    ? 'found posted: every word of #' + n + '\'s announcement is in the channel read, in order. The read just before it: ' + JSON.stringify(got.before)
+    : 'not found in what was read. This says nothing about messages the read did not reach.';
+  process.stdout.write(JSON.stringify({ repo: repo.repo, number: n, found: got.found, words: got.words, before: got.before, said: said }, null, 2) + '\n');
+  return 0;
+}
+
+// ---------------------------------------------------------------- Draft it now (claude-config#3667)
+//
+// Dan's fourth answer for an announcement that is live and was never drafted (2026-11-25, by picker:
+// "Draft it now"). The session makes the one call that drafts an announcement (Slack's draft tool,
+// the channel, no thread, the wording exactly), and this file decides the two things around it,
+// neither worked out here: whether the wording may be drafted at all, which is the hooks' one check
+// that it is the wording the pull request merged on (claimedNow in hooks/lib/announce-compare.js),
+// and whether the call left a draft, which is the hooks' one judgement of Slack's answer (judgeDraft
+// in the same file: a draft counts only when the answer holds a draft_id).
+//
+// The files of one announcement's draft, in the folder --drafts names: its wording as gathered,
+// written by `draftable` for the session to pass on unretyped; Slack's answer to the draft call,
+// written by the session exactly as the tool returned it; and, only when `drafted` was told the call
+// failed, a file saying so, so the state commit judges the answer with what `drafted` was told.
+function draftFiles(dir, n) {
+  return {
+    message: path.join(dir, 'announce-' + n + '-message.txt'),
+    answer: path.join(dir, 'announce-' + n + '-answer.txt'),
+    failed: path.join(dir, 'announce-' + n + '-call-failed.txt'),
+  };
+}
+
+// Removes one of a draft's files, where it is there. A file that is there and cannot be removed is
+// refused, since what it says would be judged as this attempt's.
+function removeDraftFile(file, n) {
+  try { fs.rmSync(file, { force: true }); }
+  catch (e) { refuse(file + ', left by an earlier attempt to draft #' + n + ', could not be removed (' + e.code + '), so it would be judged as this attempt\'s. Nothing was written.'); }
+}
+
+// Whether an announcement may be drafted from here now: `said` is why not, each cause in its own
+// words (L11). A record of approvals that could not be read is said as that, never as an approval.
+function draftableNow(repo, ann) {
+  const no = function (said) { return { draftable: false, said: said }; };
+  const tag = '#' + ann.number;
+  if (SETTLED.indexOf(ann.previousOutcome) !== -1) return no(tag + ' is already settled (' + ann.previousOutcome + '), so nothing is drafted for it.');
+  if (!ann.live) return no(tag + ' is not confirmed live (its deploy reads ' + ann.deploy + '), and an announcement is drafted only once its change is live.');
+  if (ann.state !== 'owed' || !ann.channel || !ann.text) {
+    return no(tag + ' cannot be drafted from this Mac: ' + (ann.why || 'its channel or its wording was not read') + '.');
+  }
+  let claim;
+  try { claim = require(COMPARE_PATH).claimedNow(repo.repo, ann.number, ann.text); }
+  catch (e) { return no('Whether ' + tag + '\'s announcement is the wording Dan approved could not be checked (' + e.message + '), so it is not drafted: he must be asked again.'); }
+  if (claim.state === 'changed') return no(tag + '\'s announcement was changed in its pull request after Dan approved it, so it is not drafted: he must be asked again.');
+  if (claim.state !== 'approved') return no('Dan\'s approval of ' + tag + '\'s announcement could not be read (' + claim.why + '), so it is not drafted: he must be asked again.');
+  return { draftable: true, said: '' };
+}
+
+// Before the picker: may "Draft it now" be offered for this announcement? Where it may, its wording
+// is written to its message file, exactly as gathered, and whatever an earlier attempt left of
+// Slack's answer is removed first, so the only answer judged is one written after this. Where it may
+// not, nothing is written, so no session holds a file of wording that must not be drafted.
+function cmdDraftable(args) {
+  if (!args.gathered || !args.repo || !args.number || !args.drafts) {
+    refuse('Usage: gather.js draftable --gathered P --repo owner/name --number N --drafts DIR (a folder in the scratchpad for the draft\'s files).');
+  }
+  const one = gatheredAnnouncement(args);
+  const files = draftFiles(args.drafts, one.n);
+  const verdict = draftableNow(one.repo, one.ann);
+  const out = { repo: one.repo.repo, number: one.n, draftable: verdict.draftable, channel: one.ann.channel || '', messageFile: null, answerFile: null, said: verdict.said };
+  if (verdict.draftable) {
+    // Outside the try below, so one that cannot be removed is refused in its own words (L11).
+    removeDraftFile(files.answer, one.n);
+    removeDraftFile(files.failed, one.n);
+    try {
+      fs.mkdirSync(args.drafts, { recursive: true });
+      fs.writeFileSync(files.message, one.ann.text);
+    } catch (e) { refuse('The wording of #' + one.n + ' could not be written to ' + files.message + ' (' + e.code + '), so there is nothing to draft from.'); }
+    out.messageFile = files.message;
+    out.answerFile = files.answer;
+    out.said = '"Draft it now" may be offered for #' + one.n + '. If Dan picks it, call slack_send_message_draft with channel_id "' + one.ann.channel
+      + '", no thread_ts, and message set to exactly the contents of ' + files.message + ', every line and blank line as written. Then write the tool\'s answer, '
+      + 'exactly as it returned it, to ' + files.answer + ' and run gather.js drafted.';
+  }
+  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+  return 0;
+}
+
+// After the draft call: did it leave a draft of the approved wording? `state` is `saved` (and only
+// then is `outcome` drafted), `differs`, `not-kept` or `error` as judgeDraft tells them apart, or
+// `not-draftable` when the wording may not be drafted at all. Used by `drafted`, which says it, and
+// by commit-state, which records drafted-now on nothing less than `saved`. The call is judged as one
+// that failed when the file `drafted` leaves for that is there, so both judge it alike.
+function draftedVerdict(repo, ann, dir) {
+  const tag = '#' + ann.number;
+  const again = ' It is not recorded as drafted: ask the picker again without "Draft it now".';
+  const may = draftableNow(repo, ann);
+  if (!may.draftable) return { state: 'not-draftable', outcome: null, draftId: '', said: may.said + again };
+  const files = draftFiles(dir, ann.number);
+  const read = function (file, what) {
+    try { return fs.readFileSync(file, 'utf8'); }
+    catch (e) { refuse(what + ' is not at ' + file + ' (' + e.code + '), so whether ' + tag + ' was drafted cannot be judged.'); }
+  };
+  const message = read(files.message, 'The wording passed to the draft call for ' + tag);
+  const answer = read(files.answer, 'The draft tool\'s answer for ' + tag);
+  if (!answer.trim()) refuse('The draft tool\'s answer at ' + files.answer + ' is empty. An empty answer is not a draft that was not kept: write down what the tool returned.');
+  let j;
+  try { j = require(COMPARE_PATH).judgeDraft({ text: ann.text, message: message, answer: { text: answer, isError: fs.existsSync(files.failed) } }); }
+  catch (e) { refuse(tag + '\'s draft could not be judged: ' + e.message + '.'); }
+  const where = 'channel ' + ann.channel;
+  if (j.state === 'saved') {
+    return { state: 'saved', outcome: 'drafted', draftId: j.draftId, said: tag + '\'s announcement is saved as a Slack draft in ' + where + ' (Slack\'s id for it is ' + j.draftId
+      + '). Its outcome is drafted: tell Dan it waits in his Drafts for him to send and that nothing was sent, and pass ' + ann.number + '=' + DRAFTED_NOW + ' to the state commit. The next run lists it again until it is sent.' };
+  }
+  if (j.state === 'differs') {
+    return { state: 'differs', outcome: null, draftId: j.draftId || '', said: 'The draft Slack kept for ' + tag + ' differs from the wording Dan approved: ' + j.why
+      + '. Tell Dan the draft now in ' + where + ' is not the approved wording.' + again };
+  }
+  if (j.state === 'not-kept') {
+    return { state: 'not-kept', outcome: null, draftId: '', said: 'No draft was saved for ' + tag + ': ' + j.why + '. Tell Dan a draft is already waiting in ' + where
+      + ', which Slack did not show, so whether it is this announcement is not known. Do not tell him to delete it.' + again };
+  }
+  return { state: 'error', outcome: null, draftId: '', said: 'No draft was saved for ' + tag + ': ' + j.why + '. Tell Dan that, with the reason.' + again };
+}
+
+function cmdDrafted(args) {
+  if (!args.gathered || !args.repo || !args.number || !args.drafts) {
+    refuse('Usage: gather.js drafted --gathered P --repo owner/name --number N --drafts DIR [--tool-error yes] (the folder gather.js draftable wrote the wording to, now also holding the tool\'s answer).');
+  }
+  const one = gatheredAnnouncement(args);
+  // What the session says of the call is kept beside its answer, written or removed on every run, so
+  // the state commit, which is told nothing of it, judges this answer as it is judged here.
+  const failed = draftFiles(args.drafts, one.n).failed;
+  const flag = args['tool-error'];
+  if (flag !== undefined && flag !== 'yes' && flag !== 'no') {
+    refuse('--tool-error takes yes or no, not ' + JSON.stringify(flag) + ': a failed call written any other way would be judged as one that did not fail. Nothing was judged.');
+  }
+  if (flag === 'yes') {
+    try { fs.writeFileSync(failed, 'gather.js drafted was told the draft call for #' + one.n + ' failed.\n'); }
+    catch (e) { refuse('That the draft call for #' + one.n + ' failed could not be written to ' + failed + ' (' + e.code + '), so the state commit would judge its answer as one that did not fail. Nothing was judged.'); }
+  } else {
+    removeDraftFile(failed, one.n);
+  }
+  const v = draftedVerdict(one.repo, one.ann, args.drafts);
+  process.stdout.write(JSON.stringify({ repo: one.repo.repo, number: one.n, state: v.state, outcome: v.outcome, draftId: v.draftId, said: v.said }, null, 2) + '\n');
   return 0;
 }
 
@@ -806,7 +1171,13 @@ function main(argv) {
   if (cmd === 'gather') return cmdGather(args);
   if (cmd === 'commit-state') return cmdCommitState(args);
   if (cmd === 'gh') return cmdGh(args);
-  refuse('Usage: gather.js gather [options] | gather.js commit-state --gathered P --draft P --repo owner/name [--listed N,N] [--headings \'A|B\']'
+  if (cmd === 'posted') return cmdPosted(args);
+  if (cmd === 'draftable') return cmdDraftable(args);
+  if (cmd === 'drafted') return cmdDrafted(args);
+  refuse('Usage: gather.js gather [options] | gather.js commit-state --gathered P --draft P --repo owner/name [--listed N,N] [--headings \'A|B\'] [--outcomes N=sent|drafted|not-announcing|drafted-now,...] [--drafts DIR]'
+    + ' | gather.js posted --gathered P --repo owner/name --number N --read FILE'
+    + ' | gather.js draftable --gathered P --repo owner/name --number N --drafts DIR'
+    + ' | gather.js drafted --gathered P --repo owner/name --number N --drafts DIR [--tool-error yes]'
     + ' | gather.js gh [--config P] -- <gh command with --repo owner/name>');
 }
 

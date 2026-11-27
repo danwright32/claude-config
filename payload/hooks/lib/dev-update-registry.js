@@ -91,10 +91,61 @@ function readChannel(file) {
   return { state: 'ok', file: got.file, why: '', channel: value };
 }
 
+// The Slack channel one repository's announcements for agents are drafted in (claude-config#3665),
+// recorded on that repository's OWN entry as `announceChannel`, a channel id. It is per repository
+// where slackChannel is one for the file, because only an app whose entry names one uses the
+// changelog/announce label at all: the merge gate refuses that label everywhere else. The id is a
+// work name, so it lives here and never in the public repository.
+//
+// Three answers, kept apart (L11, L98): a channel id; none named (`channel` empty, `bad` false); and
+// one present that is not a channel id (`bad`), which is a config error and must never read as none
+// named, or a typo would switch the label off with nothing said. This is the ONE judge of the key:
+// the merge gate (repoScope in changelog-entry.js), the command line below and the skill all ask it.
+function announceChannelOf(entry) {
+  const value = entry && typeof entry === 'object' ? entry.announceChannel : undefined;
+  if (value === undefined || value === null || value === '') return { channel: '', bad: false };
+  if (typeof value !== 'string' || !CHANNEL_ID.test(value)) return { channel: '', bad: true, value: value };
+  return { channel: value, bad: false };
+}
+
+// The sentence for a channel that is not one, said the same way wherever it is met.
+function badAnnounceWhy(slug, value) {
+  return 'The announceChannel of ' + slug + ' in the dev update registry is ' + JSON.stringify(value)
+    + ', which is not a Slack channel id (C or G followed by capital letters and digits)';
+}
+
+function readAnnounceChannel(slug, file) {
+  const got = readRegistry(file);
+  if (got.state !== 'ok') return { state: got.state, file: got.file, why: got.why, channel: '' };
+  const want = String(slug || '').trim().toLowerCase();
+  const found = got.registry.repos.filter(function (r) {
+    return r && String(r.repo || '').trim().toLowerCase() === want;
+  })[0];
+  if (!found) {
+    return { state: 'ok', file: got.file, channel: '',
+      why: slug + ' is not listed in the dev update registry at ' + got.file + ', so it has no announcements channel.' };
+  }
+  const judged = announceChannelOf(found);
+  // `bad` keeps a channel that is not one apart from none named, for a caller that must not read a
+  // config error as "does not announce" (skills/milestone/create-milestone.sh, claude-config#3669).
+  if (judged.bad) return { state: 'ok', file: got.file, channel: '', bad: true, why: badAnnounceWhy(slug, judged.value) + '. The file is ' + got.file + '.' };
+  if (!judged.channel) {
+    return { state: 'ok', file: got.file, channel: '',
+      why: 'The entry for ' + slug + ' in the dev update registry at ' + got.file + ' names no announceChannel, so '
+        + 'the changelog/announce label is not in use there and the merge gate refuses it. If the entry '
+        + 'used to name one, the key was lost: add "announceChannel": "<channel id>" to that entry, the id '
+        + 'of the channel the announcements for agents are posted in (in Slack, the channel\'s details, at the bottom).' };
+  }
+  return { state: 'ok', file: got.file, why: '', channel: judged.channel };
+}
+
 module.exports = {
   registryPath: registryPath,
   readRegistry: readRegistry,
   readChannel: readChannel,
+  announceChannelOf: announceChannelOf,
+  badAnnounceWhy: badAnnounceWhy,
+  readAnnounceChannel: readAnnounceChannel,
   missingWhy: missingWhy,
   FILE_NAME: FILE_NAME,
   SKILL_DIR: SKILL_DIR,
@@ -107,10 +158,19 @@ module.exports = {
 //                 names out of the public repository (hooks/lib/work-names.py, claude-config#1568)
 //   channel [file] the same, plus `channel`, the Slack channel id the skill saves its draft to, or
 //                 "" with `why` saying what is missing (claude-config#2564)
+//   announce-channel <owner/name> [file]
+//                 the same, plus `channel`, the id of the channel that repository's announcements for
+//                 agents are drafted in, or "" with `why` (claude-config#3665). It is what the merge
+//                 gate's refusal of a changelog/announce label says to run, to tell a repository that
+//                 never announced from one whose key was lost. `bad` is true when the entry names a
+//                 channel that is not a channel id, which is no answer to "does it announce".
 if (require.main === module) {
   const cmd = process.argv[2];
   if (cmd === 'path') {
     process.stdout.write(registryPath() + '\n');
+  } else if (cmd === 'announce-channel' && typeof process.argv[3] === 'string' && process.argv[3].trim()) {
+    const got = readAnnounceChannel(process.argv[3], process.argv[4] || registryPath());
+    process.stdout.write(JSON.stringify({ state: got.state, file: got.file, why: got.why || '', channel: got.channel, bad: got.bad === true }) + '\n');
   } else if (cmd === 'channel') {
     const got = readChannel(process.argv[3] || registryPath());
     process.stdout.write(JSON.stringify({ state: got.state, file: got.file, why: got.why || '', channel: got.channel }) + '\n');
@@ -124,7 +184,7 @@ if (require.main === module) {
     }
     process.stdout.write(JSON.stringify(out) + '\n');
   } else {
-    process.stderr.write('Usage: dev-update-registry.js path | state [file] | repos [file] | channel [file]\n');
+    process.stderr.write('Usage: dev-update-registry.js path | state [file] | repos [file] | channel [file] | announce-channel <owner/name> [file]\n');
     process.exit(2);
   }
 }

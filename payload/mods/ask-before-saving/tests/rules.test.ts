@@ -2583,3 +2583,72 @@ test("the time a hook gives its looks holds the move's own, and twice over with 
   expect(2 * LOOKS_MS + WORDS_MS).toBeLessThanOrEqual(7000)
   expect(NO_ANSWER.message).toBe('the disk did not answer in time')
 })
+
+// ---- #3505, the loss named ----
+// Measured on this Mac's disk on 2026-11-25 with plain files in a scratch folder (7 commands, each
+// run once): `mv memory/a.md full/A.md archive/` and `mv memory/a.md exact/a.md archive/` each left
+// archive/a.md holding the other file's text and no file holding the note's, and `cp` of the two
+// with `rm` of the note the same; `mv -n` kept both, and with the note named last the note was the
+// one kept. So what is true of every one of them is that only one of the two is kept at the name,
+// and that the note may be the one lost. Until this the question was a deletion's with no word of
+// why, for a command that says mv.
+const SENT = '~/Desktop/archive/a.md'
+const LOSS_ONE = `The command sends it to ${SENT}, and another file the same command names may land on that name too. Only one of the two would be kept there, so this file may be lost.`
+test('a note the command sends onto a name another of its files may take is a candidate that says where, by exact name and by letter case (#3505)', async () => {
+  const at = async (command: string) => (await removalCandidates(commandWrites(command, SLATE, HOME), HOME, checkouts().inCheckout, command, async () => false)).map(c => [c.file, c.how, c.to ?? '', c.sharedAt ?? ''])
+  expect(await at(`mv ${MEM}/a.md ~/Desktop/exact/a.md ~/Desktop/archive/`)).toEqual([[`${MEM}/a.md`, 'delete', '', SENT]])
+  expect(await at(`mv ${MEM}/a.md ~/Desktop/full/A.md ~/Desktop/archive/`)).toEqual([[`${MEM}/a.md`, 'delete', '', SENT]])
+  expect(await at(`mv ~/Desktop/full/A.md ${MEM}/a.md ~/Desktop/archive`)).toEqual([[`${MEM}/a.md`, 'delete', '', SENT]])
+  expect(await at(`mv -n ${MEM}/a.md ~/Desktop/full/A.md ~/Desktop/archive/`)).toEqual([[`${MEM}/a.md`, 'delete', '', SENT]])
+  expect(await at(`cp ${MEM}/a.md ~/Desktop/exact/a.md ~/Desktop/archive/ && rm ${MEM}/a.md`)).toEqual([[`${MEM}/a.md`, 'delete', '', SENT]])
+  // Not said, and pinned so a change is seen: the note named last of two sources of exactly one
+  // name. The reader gives the second of two sources of one path no write of its own, so no write
+  // names the note as its source, and the question is a deletion's with no word of the place.
+  expect(await at(`mv ~/Desktop/exact/a.md ${MEM}/a.md ~/Desktop/archive/`)).toEqual([[`${MEM}/a.md`, 'delete', '', '']])
+  // A folder no path names is said as the command spells it.
+  expect(await at(`mv ${MEM}/a.md ~/Desktop/full/A.md "$DEST"/`)).toEqual([[`${MEM}/a.md`, 'delete', '', '$DEST/a.md']])
+  // The controls: a file of another name beside it, a note moved alone and a note deleted say no such place.
+  expect(await at(`mv ${MEM}/a.md ~/Desktop/exact/other.md ~/Desktop/archive/`)).toEqual([[`${MEM}/a.md`, 'move', SENT, '']])
+  expect(await at(`mv ${MEM}/a.md ~/Desktop/archive/`)).toEqual([[`${MEM}/a.md`, 'move', SENT, '']])
+  expect(await at(`rm ${MEM}/a.md`)).toEqual([[`${MEM}/a.md`, 'delete', '', '']])
+  // A copy of its own somewhere else is where it goes, whatever the shared name holds.
+  expect(await at(`cp ${MEM}/a.md ~/Desktop/exact/a.md ~/Desktop/archive/ && cp ${MEM}/a.md ~/Desktop/keep/ && rm ${MEM}/a.md`)).toEqual([[`${MEM}/a.md`, 'move', '~/Desktop/keep/a.md', '']])
+})
+
+test('the question says a note may be lost where another file of the command may land on its name, and never that it can be moved back (#3505)', async () => {
+  const lost = gone(`${MEM}/a.md`, { sharedAt: SENT })
+  expect(removalSaid([lost])).toBe(`${LOSS_ONE} Git does not hold it, so once deleted it cannot be got back from git.`)
+  expect(removalSaid([{ ...lost, back: 'git' }])).toBe(`${LOSS_ONE} Git holds it unchanged, so it can be restored from git.`)
+  expect(removalSaid([lost])).not.toContain('moved back')
+  // Several files: each is named, and one deleted outright says nothing of another file.
+  const other = '~/.claude/projects/q/memory/a.md'
+  expect(removalSaid([lost, gone(other, { sharedAt: SENT }), gone('~/Apps/slate/CLAUDE.md')])).toBe(
+    `The command sends ${MEM}/a.md to ${SENT}, and another file the same command names may land on that name too. Only one of the two would be kept there, so ${MEM}/a.md may be lost. Git does not hold ${MEM}/a.md, so once deleted it cannot be got back from git. ` +
+      `The command sends ${other} to ${SENT}, and another file the same command names may land on that name too. Only one of the two would be kept there, so ${other} may be lost. Git does not hold ${other}, so once deleted it cannot be got back from git. ` +
+      'Git does not hold ~/Apps/slate/CLAUDE.md, so once deleted it cannot be got back from git.',
+  )
+  // The answers and the question's kind stay a deletion's.
+  expect(removalWords([lost]).label).toBe('Delete')
+  expect(removalOptions([lost])).toEqual([{ label: 'Keep as is', description: 'Nothing is deleted' }, { label: 'Delete', description: `Deletes ${MEM}/a.md` }])
+  // What Claude is told says why a command that moves is asked about as a deletion, after the words every deletion's refusal opens with.
+  const told = removalInstruction('t1', [lost])
+  expect(told.startsWith(`Not deleted yet: this deletes lasting memory (${MEM}/a.md), so Dan decides first. The command sends ${MEM}/a.md to ${SENT}, and another file it names may land on that name too, so only one of the two would be kept there. `)).toBe(true)
+  expect(told).toContain('Why it may be lost, and whether git can bring it back, are added to your question as they are read then, so leave them out.')
+  expect(removalInstruction('t1', [gone(`${MEM}/a.md`)])).not.toContain('may land on that name')
+  // Read from the words alone, once the disk did not answer: the place is still said, and nothing is claimed of git.
+  const command = `mv ${MEM}/a.md ~/Desktop/full/A.md ~/Desktop/archive/`
+  const w = commandWrites(command, SLATE, HOME)
+  const late = removalsUnseen(await removalCandidates({ ...w, changes: (w.changes ?? []).map(({ to: _to, ...c }) => c) }, HOME, async () => true, command, async () => true), HOME)
+  expect(late).toEqual([{ file: `${MEM}/a.md`, how: 'delete', sharedAt: SENT, back: 'unknown', why: 'the disk did not answer in time' }])
+  expect(removalSaid(late)).toBe(`${LOSS_ONE} Whether git holds it could not be read (the disk did not answer in time), so take it that it cannot be got back.`)
+})
+
+test("Dan's Delete for a note said to be deleted outright does not cover the same note once another file may land on its name, nor the other way round (#3505)", () => {
+  const plain = gone(`${MEM}/a.md`)
+  const lost = gone(`${MEM}/a.md`, { sharedAt: SENT })
+  const approval = (removes: AskBeforeSavingRemoval[]): AskBeforeSavingApproval => ({ id: 'q1', key: 'k', files: [], until: 1, removes })
+  expect(coversRemoval(approval([plain]), [lost], [])).toBe(false)
+  expect(coversRemoval(approval([lost]), [plain], [])).toBe(false)
+  expect(coversRemoval(approval([lost]), [gone(`${MEM}/a.md`, { sharedAt: '~/Desktop/other/a.md' })], [])).toBe(false)
+  expect(coversRemoval(approval([lost]), [lost], [])).toBe(true)
+})

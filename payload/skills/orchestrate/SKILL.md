@@ -13,6 +13,17 @@ Number every item and say it back in one line, in Dan's words. Settle what you c
 
 Record where each item came from, so it can be answered there (see "Answering each item at its source" below): for a Slack alert, post or thread, the channel id and message ts of the message it started from; for a Slack list row, the list id and record id; for a GitHub issue, the repo and issue number. An item Dan typed into the chat has no source, and the board says so.
 
+For every item whose source is not a GitHub issue and that has a repository, look for an open issue or pull request that already covers it (claude-config#3555): someone may have filed the alert already, or another session may have its fix open. Run, with the item's text in the message's words, inside a quoted heredoc so nothing in it is run by the shell:
+
+    bash ~/.claude/skills/orchestrate/find-existing.sh <owner/repo or a folder in its checkout> <<'ITEM'
+    <the item's text>
+    ITEM
+
+- Exit 0, nothing printed: no open issue or pull request shares the item's wording. It matches on words, so this is not proof that nothing covers it.
+- Exit 0, `MAY ALREADY BE COVERED`: read each one it names (at most three, issues and pull requests both) and decide; the script never rules an item a duplicate. When an issue covers it, its number goes on the board beside the Slack source, a `build` item is claimed on that issue as in "Claiming an issue before its builder starts", and the reply at the source links the issue. When an open pull request covers it, the item is already in hand: its row shows `covered by #<n>` and no builder is dispatched for it.
+- A `READ ONLY THE NEWEST` line: a list filled the read limit, and older items were not compared. Say so on the board.
+- Exit 2, `COULD NOT LOOK`: show the reason it prints on the board. Never read it as nothing covering the item.
+
 ## 2. Dispatch board
 
 Build the board, one row per item:
@@ -37,11 +48,19 @@ On 2026-11-19 two sessions, one on each Mac, built the same fix, because a branc
 
     bash ~/.claude/skills/orchestrate/claim-issue.sh claim <owner/repo> <issue number> <branch>
 
-It reads the issue's claims, the open pull requests naming it and the remote branches carrying its number, and posts the claim (which Mac, the time in ET, the branch) only when none of them shows another session at work. Dispatch on exit 0 only:
+It reads the issue's claims, the open pull requests built for it and the remote branches carrying its number, and posts the claim (which Mac, the time in ET, the branch) only when none of them shows another session at work. A pull request is built for an issue when its branch or its title names the issue, or its body names it straight after a closing keyword, "Part of" or "Refs". One that only mentions the number is printed as a `mentioned, not held` line and holds nothing (claude-config#3788). Dispatch on exit 0 only:
 
-- Exit 0, `CLAIMED` or `ALREADY CLAIMED`: dispatch the builder.
+- Exit 0, `CLAIMED` or `ALREADY CLAIMED`: dispatch the builder. A `mentioned, not held` line under it names a pull request to glance at, never a reason to hold the item back.
 - Exit 1, `HELD` or `CLOSED`: the item is not started. Its board row shows `held by <who>`, taken from the lines the script prints, and Dan is told in one line.
 - Exit 2, `COULD NOT CHECK`: the item is not started, and nothing was claimed unless the message says a claim may have been posted, when it names the release command to run straight away. Show the reason it prints on the board and run it again later; never read a failed check as free.
+
+A claim names the session that made it (claude-config#3804), because two sessions on one Mac write the same branch name from an issue's title. So `ALREADY CLAIMED` is this session's own claim and nobody else's, and a claim by another session on the same Mac is `HELD`, like one from the other Mac. The session is the one Claude Code names in `CLAUDE_CODE_SESSION_ID`, which every command this session and its agents run carries: it is the same after a compaction, and a new one after a `/clear`. After a restart of the session (`claude --resume`) the transcript goes on under the same id, and that is what was measured: the variable itself was not read in a restarted session. A restarted session that is told `HELD` by a claim it posted has been given a new id, and is then a session that is not the claimant (below); `takeover` does not help it, since the claim names the earlier id. The claim carries a short name made from that id, never the id. A script that cannot read its session stops with exit 2. A pull request or a remote branch under the very branch name being claimed is `HELD` as well, unless this session's own claim on that name, live, stale or released, accounts for it: a name already on GitHub that this session never claimed is not a name to start a builder on. So a session that is not the claimant (another session, this conversation after a `/clear`, a fork, or a fresh session started from `handoff.md`) is held by the claim until it is released or 24 hours old, and by the claimant's pushed branch or open pull request for as long as it is up: until the pull request merges or the branch is deleted, whatever the claim's age. Where the claim names its session, no command of this script lets it through.
+
+A claim with no session recorded was posted before claims named their session and is `HELD` for every session. `release` never ends a claim with no session recorded. Under one from this Mac, where this session has no claim of its own on that branch, it posts nothing, answers `NOT RELEASED`, exit 1, and names the take over command. Where it has one, it releases that claim alone, answers `RELEASED`, exit 0, and says the claim with no session recorded still stands. A claim from the other Mac changes nothing in what `release` answers, since it is never this session's to take over. Only the session that knows such a claim is its own takes it over, on purpose, and then claims again:
+
+    bash ~/.claude/skills/orchestrate/claim-issue.sh takeover <owner/repo> <issue number> <branch> "<reason>"
+
+`takeover` ends a claim from this Mac with no session recorded. It never ends a claim that names another session, and never the other Mac's; this session's own claim on that branch, if it has one, ends with it, because the comment names this session. Never run it to clear a `HELD` or a `NOT RELEASED` for a claim this session does not know to be its own.
 
 A `check` or `investigate` item changes nothing and needs no claim. `claim-issue.sh check` does the same reads and posts nothing, for a look before the board is shown.
 
@@ -49,19 +68,30 @@ A claimed item that ends any way other than a merged pull request that closes it
 
     bash ~/.claude/skills/orchestrate/claim-issue.sh release <owner/repo> <issue number> <branch> "<reason>"
 
-A claim with no release stops counting after 24 hours; an open pull request or remote branch naming the issue blocks whatever the claim's age.
+A claim with no release stops counting after 24 hours; an open pull request built for the issue, or a remote branch naming it, blocks whatever the claim's age.
 
 ### Which model a builder runs on
 
 A builder agent's model is set by the kind of task (Dan, 2026-11-01, claude-config#1961), in three tiers since Fable became his default model (Dan, 2026-11-09, claude-config#2547), keeping ordinary builders off Fable to limit usage. This section is the rule's one home: the global CLAUDE.md, and anything else that dispatches builders, points here instead of restating it.
 
 - Sonnet, with `model: "sonnet"` on the Agent call, only for work that needs no judgement: a rename or move that changes no behaviour, a comment or wording fix, filling in tests for code that already exists. A fix for a review finding that changes logic or behaviour runs on Opus, or on Fable where it changes what a design, security or compliance control decides or shows (Dan, 2026-11-19, claude-config#3290: "why are we using sonnet? we basically should only ever be using fable or opus", then "if it's just comment fixes, renames, etc. Things that any idiot could do, sonnet is fine").
-- Fable, with `model: "fable"`, for work that changes what a design, security or compliance control decides or shows a person, and for reviews of such a change (Dan, 2026-11-24, claude-config#3393, choosing "Narrow to what a guard decides" after 8 of 50 sampled Fable briefs changed neither). A guard that enforces process or quality, such as the design round guard or the area check, counts as a security control. Follow on work on such an item that changes neither (a red check, a test flake, a cost case, a comment or wording fix, finishing a merge or a push) runs on Opus, or on Sonnet where it needs no judgement. So what the change does decides the tier, not the item it belongs to or its kind: a wording fix to the message a guard shows a person runs on Fable, a comment fix inside that guard does not.
+- Fable, with `model: "fable"`, for work that changes what a design, security or compliance control decides or shows a person, and for reviews of such a change (Dan, 2026-11-24, claude-config#3393, choosing "Narrow to what a guard decides" after 8 of 50 sampled Fable briefs changed neither). A guard that enforces process or quality, such as the design round guard or the area check, counts as a security control. Follow on work on such an item that changes neither (a red check, a test flake, a cost case, a comment or wording fix, finishing a merge or a push) runs on Opus, or on Sonnet where it needs no judgement. So what the change does decides the tier, not the item it belongs to or its kind: a wording fix to the message a guard shows a person outside Slack runs on Fable, a comment fix inside that guard does not.
 - Opus, with `model: "opus"`, for everything else.
 - A fork ignores `model` and runs on the session's own model, so a builder whose tier is not the session's model is never a fork.
 - To run one brief on another model, suggest it to Dan with the reason: on the board, as that row's Model with the reason beside it, or before dispatching when there is no board.
 
-What counts as each, as the #3393 sample classed it. Security decides who or what may act, or keeps secrets or private data in; any change to what a guard, gate or permission reader refuses or allows counts, whatever it guards, and a change only to a gate's speed, timing or test runs does not. Compliance is an obligation set outside the codebase (a law, a licence, a vendor's terms); a repository's own rules are not. Design is how something looks or how a person uses it, wording a person reads included when that wording is the main task; how code works inside is not. A brief is classed by its main task, and a review by what it looks at.
+What counts as each, as the #3393 sample classed it. Security decides who or what may act, or keeps secrets or private data in; any change to what a guard, gate or permission reader refuses or allows counts, whatever it guards, and a change only to a gate's speed, timing or test runs does not. Compliance is an obligation set outside the codebase (a law, a licence, a vendor's terms); a repository's own rules are not. Design is how something looks or how a person uses it, wording a person reads included when that wording is the main task; how code works inside is not. Writing or rewording a message that code posts to Slack (an alert, an all clear, a reminder, a report) is not design under this rule and runs on Opus: the `slack-alerts` skill and its checker hold the standard (Dan, 2026-11-26). A brief is classed by its main task, and a review by what it looks at.
+
+### Which agent type a builder runs as
+
+A `build` item is dispatched as the builder agent type, with `subagent_type: "builder"` on the Agent call, when the Agent tool's list of agent types names `builder`. Where the list does not name it, leave the type out, as every builder was dispatched before the type existed: a type the list lacks fails the call. A `check` or `investigate` item never uses it, because it may need a connected server and the builder type has none.
+
+The builder type starts with less than a general purpose agent (Dan, 2026-11-25, claude-config#3389: "Servers and rule files (Recommended)"). It lists no connected servers. It does not load the rule files: its own prompt carries the lessons core and the rules a builder must follow from the global CLAUDE.md, written from those files by `render-builder-type.py` in this folder, and `builder-type-rules.tsv` beside it records each section carried or left out and why. For the session dispatching it:
+
+- The model rule above holds for it unchanged. The type sets no model, so every dispatch names one, and `hooks/builder-model-gate.sh` counts a dispatch of the type as a builder whatever else it carries.
+- It does not load the project's CLAUDE.md or AGENTS.md, and is told to read that file first. It does not load the project's memory index at all, so part 2 of its brief names any memory file the item depends on, by path.
+- It cannot reach Slack, a database or any other connector, so an item that needs one is not dispatched as this type.
+- It does not carry the global rules' two UI sections, "Progress & Feedback (UI)" and "Building UI" (Dan, 2026-11-25: "Cut the UI sections first"). The brief for an item that builds or changes anything a person sees on a screen says to read those two sections of `~/.claude/CLAUDE.md` before writing it.
 
 ## 3. Briefs
 
@@ -75,7 +105,7 @@ Every brief has exactly these parts, in this order, and nothing else:
 6. What done means for this item, and what must come back to Dan instead of being done. Wording does not come back to him by default, never "any new sentence a person reads" (claude-config#2570): a Slack alert's wording follows the `slack-alerts` skill and passes its checker, and a repo wide rewrite of alerts merges when its checks and the lessons review pass, with nothing brought back to him (Dan, 2026-11-17: "it should literally just go through in every repo (separate issues for each repo) and update all alerts without me"). For a `build` item whose issue carries a `Must always be true` list, done includes what keeps each of its rules true, built and seen to fail, and a pull request body that passes the built check, both as `~/.claude/skills/milestone/MUST-ALWAYS-BE-TRUE.md` says. When the issue has no such list, say so in the brief and have the builder write one into `pr-body.md` before it builds.
 7. For a `build` item only: the `Claude-Session:` line for commits and the session link line for the PR body, copied from this session's attribution note.
 
-The rules every agent shares live in `agent-rules.md`, so a brief never restates them. Send a whole wave in one message, one `Agent` call per agent, all in the background, each carrying the `model` its board row shows.
+The rules every agent shares live in `agent-rules.md`, so a brief names only what is particular to its item (the load limit, the suites to run, the files off limits) and never restates a shared rule (claude-config#3542). Send a whole wave in one message, one `Agent` call per agent, all in the background, each carrying the `model` its board row shows.
 
 ## 4. While agents run
 
@@ -111,7 +141,7 @@ When nothing is running or queued:
 - A final table: item, outcome in one sentence, pull request and live status, and anything that still needs Dan.
 - Each draft reply saved, with its link, so Dan knows where to find and send it; and each list row whose Status moved, with the value it now holds.
 - One git status line per repo.
-- Every claim this session posted for an item that ended without closing its issue, released with `claim-issue.sh release` (see "Claiming an issue before its builder starts").
+- Every claim this session posted for an item that ended without closing its issue, released with `claim-issue.sh release` (see "Claiming an issue before its builder starts"). A release that answers `NOT RELEASED` found a claim that records no session, which may be another session's: leave it standing and say so in the final table. `takeover` is never part of finishing.
 - Each decision left for Dan as its own picker, one at a time.
 - Stop anything this session started in the background, and say so.
 - Then `/next-issue`.

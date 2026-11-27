@@ -1,5 +1,7 @@
 import type { EngineInterface, On } from 'claude-code'
+import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { IsItLiveOwed, IsItLiveThread } from '../types/index.d.ts'
+import { announcementDrafted, withAnnouncementLine } from './announcing.ts'
 import { MOD } from './card.ts'
 import { errorText } from './mod-kit/skew.ts'
 import {
@@ -243,15 +245,17 @@ export async function draftHold($: EngineInterface, e: { stop_hook_active?: bool
 export function registerDrafts(on: On): void {
   // #2653: the tool a session says its merges are unrelated with (registered by
   // registerUnrelated from register.ts's session.start, the one an event may have), answered here.
-  on('tool.call', { tool: UNRELATED_TOOL }, async ($, e) => declareUnrelated($, e.agentId))
+  on('tool.call', { tool: UNRELATED_TOOL }, async ($, e) => declareUnrelated($, e.agentId)).catch(($, e, next) => cutOwn('the is it live mod', next))
 
   // A thread Dan links to in his own words is where the session started (mod-kit's isDans: only
   // what he types, never a notification or another plugin's prompt), when in his first prompt and
   // before any merge; one linked later is recorded as pasted mid session (#2578). His prompts are
   // counted as far as the second, so isDans is asked of no later prompt without a link.
   on('prompt.submit', async ($, e, next) => {
-    const r = await next(e)
-    if (r.drop !== undefined) return r
+    const beneath = await next(e)
+    if (beneath.drop !== undefined) return beneath
+    // #3667: the session's first prompt also carries the line about announcements still owed.
+    const r = await withAnnouncementLine($, beneath)
     try {
       const found = threadsIn(String(e.text ?? ''))
       const typed = (await $.state.get(promptsRef)).value ?? 0
@@ -299,6 +303,13 @@ export function registerDrafts(on: On): void {
         await changeThreads($, ts => (ts.length ? ts : [{ ...t, from: 'read', at, step, ...mid }]))
         return done
       }
+      // #3667, the channel case: a draft to a channel with no thread, by anyone in the session, is
+      // judged as the draft of the announcement for agents that channel is owed (announcing.ts). It
+      // counts only when Slack's answer holds a draft_id and the draft is the approved wording, which
+      // draftSaved below does not ask: it reads any answer naming no error as saved.
+      if (typeof input.channel_id === 'string' && (input.thread_ts === undefined || input.thread_ts === null || input.thread_ts === '')) {
+        return await announcementDrafted($, { channel: input.channel_id, message: input.message }, done)
+      }
       // A draft saved to a recorded thread, by anyone in the session, settles it.
       if (typeof input.channel_id !== 'string' || typeof input.thread_ts !== 'string' || !draftSaved(done)) return done
       const t = { channel: input.channel_id, ts: input.thread_ts }
@@ -307,5 +318,5 @@ export function registerDrafts(on: On): void {
       $.ui.log(`is-it-live: could not record a Slack thread call: ${msg(err)}`, { to: 'debug' })
     }
     return done
-  })
+  }).catch(watchesOnly)
 }

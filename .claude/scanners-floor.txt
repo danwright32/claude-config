@@ -18,6 +18,7 @@ payload/hooks/test-check-home-paths.sh
 payload/hooks/test-check-root-guard.sh
 payload/hooks/test-checkout-root.sh
 payload/hooks/test-db-write-ask-git-fails.sh
+payload/hooks/test-embedded-python-quotes.sh
 payload/hooks/test-fail-margin.sh
 payload/hooks/test-hand-rolled-heredoc-marker.sh
 payload/hooks/test-hand-rolled-wait.sh
@@ -58,5 +59,4 @@ WHEN-A-SUITE-CHANGES payload/hooks/test-scan-subshell-globals.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-skill-helper-exits.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-skill-integrity.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-skill-python-tests.sh
-WHEN-A-SUITE-CHANGES payload/hooks/test-slack-drafts-only-gate-runners.sh
 WHEN-A-SUITE-CHANGES payload/skills/design-rounds/test-headless-chrome.sh

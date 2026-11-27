@@ -1,5 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
+import { type Asked, pressedOf, unreadOf } from './announce.ts'
+import { announcementAtCard, announcementHold, announcementList, announcementPressed, announcementUnread, announcementsAtStart, noteAnnouncement } from './announcing.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, draftKeyOf, draftLineOf, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
 import { draftHold, markLanded, noteCard, recordedThreads, registerDrafts, registerUnrelated, relateCard } from './drafts.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
@@ -222,6 +225,22 @@ const textsOf = async ($: EngineInterface, repo: string, pr: number): Promise<{ 
   return Number.isNaN(opened) ? { texts } : { texts, opened }
 }
 
+// #3667: what a merged pull request owes agents, kept in the store under a key of its own
+// (announce.ts says why). GitHub is asked for its labels and description as each account, and only
+// while nothing that reads is kept for it; announcing.ts runs the merge gate's reader on the answer.
+// Asked when the merge lands and again when its card is made, so a merge this session did not see
+// land (another session's, or one made before this mod knew of announcements) is still kept.
+const announcementOf = async ($: EngineInterface, repo: string, pr: number): Promise<Asked | undefined> => {
+  try {
+    if (!(await announcementUnread($, repo, pr))) return undefined
+    return await noteAnnouncement($, repo, pr, await readGitHub($, ['pr', 'view', String(pr), '--repo', repo, '--json', 'labels,body']))
+  } catch (err) {
+    const why = `what is kept for it could not be read or written: ${msg(err)}`
+    $.ui.toast(unreadOf({ repo, pr }, why))
+    return { kind: 'unread', why }
+  }
+}
+
 // #2436: a merge landed. Said to Dan when it cannot be kept, since the draft reply it owes would
 // otherwise never be asked for. #2578: it is for a thread pasted mid session only when its PR, or an
 // issue it closes, links that thread. #2849: in a session started from a thread, one linking no
@@ -230,6 +249,8 @@ const textsOf = async ($: EngineInterface, repo: string, pr: number): Promise<{ 
 // between; a read it refuses is said once the landing is kept, and links no thread, so the merge owes
 // the latest thread recorded by the time it landed.
 const landed = async ($: EngineInterface, merged: { repo?: string; pr: number }[]) => {
+  // #3667: first, what each owes agents is kept, whatever becomes of the thread's reply below.
+  for (const m of merged) if (m.repo) await announcementOf($, m.repo, m.pr)
   try {
     const threads = await recordedThreads($)
     const ask = threads.some(t => t.mid)
@@ -466,7 +487,10 @@ export const register: Register = on => {
     await $.tool.register({ name: 'card', description: DESCRIPTION, inputSchema: SCHEMA })
     await registerUnrelated($)
     await $.command.register({ name: 'live', description: "This project's recent change cards, and the messages not yet sent." })
-    return next(e)
+    const started = await next(e)
+    // #3667: a session started in a project that still owes an announcement for agents says so.
+    await announcementsAtStart($)
+    return started
   })
 
   // Answered here and never passed down, so the guards beneath (the secret guard) are asked through
@@ -616,8 +640,13 @@ export const register: Register = on => {
     if (waiting)
       notes.push(`The message for ${waiting.name} is held, not shown to Dan, until a card for #${input.pr} says live: once you confirm it is live, call this again with deploy "live"${kept.message ? '' : ' and the message'}.`)
 
+    // #3667: the announcement for agents this pull request owes. GitHub is asked here too, so a
+    // merge this session never saw land is kept; only a card saying the change is out asks for its
+    // draft, and a deploying card settles nothing (announcing.ts).
+    notes.push(...(await announcementAtCard($, repo, input.pr, state, await announcementOf($, repo, input.pr))))
+
     const { requester: _r, message: _m, slack: _s, ...rest } = input
-    const shown = { ...rest, ...(waiting ? { requester: waiting } : {}), state, title, url: kept.url }
+    const shown ={ ...rest, ...(waiting ? { requester: waiting } : {}), state, title, url: kept.url }
     try {
       await $.modkit.card({ toolUseId: String(toolUseId ?? ''), ...cardOf(shown) })
     } catch (err) {
@@ -628,7 +657,7 @@ export const register: Register = on => {
       result: cardText(shown),
       context: [...notes, SEEN],
     }
-  })
+  }).catch(($, e, next) => cutOwn('the is it live mod', next))
 
   // #1244: a Bash call that merges carries a line saying to show the card, once GitHub says what
   // the merge did. Passed down first and changed only by that line, so every guard beneath still
@@ -662,7 +691,7 @@ export const register: Register = on => {
       $.ui.log(`is-it-live: could not read whether a Bash call merged a PR: ${msg(err)}`, { to: 'debug' })
       return { ...done, context: [...(done.context ?? []), `is it live could not tell whether this command merged a pull request (${msg(err)}). If it did, show Dan its is it live card: load the card tool with ToolSearch with the query "select:${TOOL}".`] }
     }
-  })
+  }).catch(watchesOnly)
 
   // #1244: the turn does not end while a PR merged in this session has no card. Asked after the
   // hooks beneath (wind down, the overnight driver), whose block is kept beside this one. Refused
@@ -679,6 +708,12 @@ export const register: Register = on => {
       ours.push(await draftHold($, e, await owedOf($)))
     } catch (err) {
       $.ui.toast(`Is it live could not check whether a Slack thread is owed a draft reply: ${msg(err)}`)
+    }
+    // #3667: and the announcement for agents this session's own card found live and asked a draft of.
+    try {
+      ours.push(await announcementHold($, e))
+    } catch (err) {
+      $.ui.toast(`Is it live could not check whether an announcement for agents is still owed its draft: ${msg(err)}`)
     }
     const block = [r.block, ...ours].filter((s): s is string => typeof s === 'string' && s !== '').join('\n\n')
     return block ? { ...r, block } : r
@@ -699,8 +734,15 @@ export const register: Register = on => {
 
   // Copy and Mark sent, on any message this mod pinned, pressed by a click or by /press (#939):
   // mod-kit raises both as modkit.press. One hook for all of them: the buttons are named after their
-  // card, so they cannot be listed when the module loads.
+  // card, so they cannot be listed when the module loads. #3667: the buttons of an announcement's
+  // row (named announce-, which the message row's never are) are answered here too, since the
+  // engine takes one hook on this event from a mod.
   on('modkit.press', async ($, e, next) => {
+    const announced = pressedOf(MOD, String(e.element ?? ''))
+    if (announced) {
+      await announcementPressed($, announced, e.surface)
+      return { value: { isAnswered: true } }
+    }
     const m = new RegExp(`^${MOD}:(copy|sent)-(.+)$`).exec(String(e.element ?? ''))
     if (!m) return next(e)
     // A copy, or a card saved and its row cleared: well inside a noun's 10 s (#744), so the press is
@@ -766,6 +808,7 @@ export const register: Register = on => {
     for (const { c, owing } of shown) if (owing) await pin($, { ...owing, state: c.state })
     const cards = shown.map(({ c, owing }) => (owing && owing !== c ? { ...c, requester: owing.requester, message: owing.message, sentAt: undefined } : c))
     const unasked = now.error !== undefined ? `\n\nGitHub could not be asked for the name this repository has now (${now.error}), so any cards kept under another name for it may be missing.` : ''
-    return { text: liveList(cards) + unasked }
+    // #3667: then the announcements for agents the project still owes, which outlive their cards.
+    return { text: liveList(cards) + (await announcementList($, names)) + unasked }
   })
 }
