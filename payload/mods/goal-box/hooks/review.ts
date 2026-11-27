@@ -118,6 +118,13 @@ export const reviewWait = (q: { read: ReviewRead; work: TurnWork | undefined; co
 export const shownUnreadText = (why: string): string => `The Goal accomplished box was shown without waiting for the end of turn review: ${why}.`
 
 /**
+ * What Dan is told when the one message was sent at a turn's end over a record that could not be
+ * read: a review he has not answered would have stopped it, and whether there is one is not known.
+ */
+export const askedUnreadText = (why: string): string =>
+  `The session was asked to call the Goal accomplished box again without knowing whether an end of turn review is waiting for Dan: the end of turn review's record could not be read (${why}).`
+
+/**
  * What the session is told, once per request, when a box was refused until the review had been
  * answered and the turn then ended with no box shown.
  */

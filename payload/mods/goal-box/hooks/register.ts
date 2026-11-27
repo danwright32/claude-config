@@ -5,7 +5,7 @@ import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
 import { WORK_TEST_MS, alreadyShownText, answered, workRead, workTestArgv, type WorkRead } from './request.ts'
-import { REVIEWS_OFF_SUFFIX, REVIEW_STATE_MS, answeredCommand, askAgainText, canBeTurnWork, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, type ReviewRead, type ReviewWait } from './review.ts'
+import { REVIEWS_OFF_SUFFIX, REVIEW_STATE_MS, answeredCommand, askAgainText, askedUnreadText, canBeTurnWork, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, type ReviewRead, type ReviewWait } from './review.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { askPr } from './mod-kit/prmerged.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
@@ -525,17 +525,18 @@ const asleepNow = async ($: EngineInterface): Promise<boolean> => {
 }
 
 /**
- * Whether the end of turn review holds a box that would otherwise show (review.ts). While Dan is
- * asleep the review hooks stand down, and with their switch file beside this conversation's
- * transcript they are off for it, so in both nothing is held and the record is not asked. A switch
- * that cannot be checked is taken as not set: the box then waits as usual, and the message at the
- * turn's end covers a review that never comes. The record is read by its one owner, for the
- * transcript this session's /goal was just read from.
+ * What the review's record says of this turn, read by its one owner for this session's transcript,
+ * with the last step's command for that transcript; or null where no review can be handed over, so
+ * the record is not asked: while Dan is asleep the review hooks stand down, and with their switch
+ * file beside this conversation's transcript they are off for it. A switch that cannot be checked is
+ * taken as not set: the box then waits as usual, and the message at the turn's end covers a review
+ * that never comes. Both places that ask the record ask it here: a call for the box, and the turn's
+ * end before the one message is sent.
  */
-const reviewNow = async ($: EngineInterface): Promise<ReviewWait> => {
+const recordNow = async ($: EngineInterface): Promise<{ read: ReviewRead; command: string } | null> => {
   if (await asleepNow($)) return null
   const t = await transcriptNow($)
-  if ('why' in t) return { unread: `the end of turn review's record could not be read (this session's transcript, which it is kept beside, was not found: ${t.why})` }
+  if ('why' in t) return { read: { unread: `this session's transcript, which it is kept beside, was not found: ${t.why}` }, command: '' }
   try {
     if (await $.fs.exists(`${t.path}${REVIEWS_OFF_SUFFIX}`)) return null
   } catch (err) {
@@ -548,9 +549,16 @@ const reviewNow = async ($: EngineInterface): Promise<ReviewWait> => {
   } catch (err) {
     read = { unread: errorText(err, MOD) }
   }
+  return { read, command: answeredCommand(t.path) }
+}
+
+/** Whether the end of turn review holds a box that would otherwise show (review.ts). */
+const reviewNow = async ($: EngineInterface): Promise<ReviewWait> => {
+  const record = await recordNow($)
+  if (!record) return null
   const seq = (await $.state.get(closeSeqRef)).value ?? 0
   const work = (await $.state.get(reviewWorkRef)).value
-  return reviewWait({ read, work: work?.seq === seq ? work : undefined, command: answeredCommand(t.path) })
+  return reviewWait({ read: record.read, work: work?.seq === seq ? work : undefined, command: record.command })
 }
 
 /** Remembers that a call was refused until the review was answered, under the request it was made in. */
@@ -569,6 +577,14 @@ const noteReviewHeld = async ($: EngineInterface, prompts: number): Promise<void
  * issue). Once per request: claimed before it is sent, so two turn ends at once send one, and
  * released when it did not enter, so a passing failure is asked again at the next turn end (L368).
  * It asks what the turn end's other question asks, so that one is marked asked too. True when sent.
+ *
+ * The record is asked first (the review of pull request 3869). A review handed over this turn that
+ * Dan has not answered (he closed its picker, it closed while he was away, the session asked in
+ * prose and stopped) sends nothing: the message would be the next prompt, the record reads none
+ * under a new prompt, and the box would show behind a review nobody answered. The request's one
+ * message is spent there without being sent, so no later turn end of the same request sends it
+ * either, and his own next message starts the new request. A record that cannot be read sends the
+ * message, since a box that never shows is the worse fault, and says so where Dan can see it.
  */
 const askAfterReview = async ($: EngineInterface): Promise<boolean> => {
   const held = (await $.state.get(reviewHeldRef)).value
@@ -578,9 +594,16 @@ const askAfterReview = async ($: EngineInterface): Promise<boolean> => {
   if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= held)) return false
   if ((await boxHolds($)).length) return false
   const prompts = (await $.state.get(promptsRef)).value ?? 0
+  const record = await recordNow($)
+  const unanswered = record !== null && 'state' in record.read && record.read.state === 'handed'
   if (!(await $.state.set(reviewAskedRef, prompts, { ifVersion: asked.version })).isSet) return false
+  if (unanswered) {
+    debug($, 'an end of turn review was handed over this turn and Dan has not answered it, so the session is not asked to call the Goal accomplished box again for this request')
+    return false
+  }
   const failed = await sendHeld($, 'ask-after-review', 'the prompt asking for the Goal accomplished box again', askAgainText())
   if (failed === undefined) {
+    if (record !== null && 'unread' in record.read) $.ui.log(askedUnreadText(record.read.unread))
     for (let i = 0; i < 10; i++) {
       const done = await $.state.get(askedDoneRef)
       if (done.value !== undefined && done.value >= prompts) break

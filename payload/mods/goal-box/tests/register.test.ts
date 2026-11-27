@@ -2635,7 +2635,91 @@ test('a review handed over and never answered does not hold his next request: th
   w.review = reviewSays('none')
   await says($, 'Never mind that. Is it done?')
   expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+  // And the mod never asked for the box behind the review he left unanswered.
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toEqual([])
+})
+
+// ---- The review of pull request 3869: the one message asks the record first ----
+// Before it, the message went out at any turn end after a refused call. Where the review had been
+// handed over and Dan had closed its picker, that message was the next prompt, the record read none
+// under it, and the box showed behind a review nobody had answered.
+test("a review handed over and left unanswered when the turn ends: the mod sends nothing, at that turn end or a later one of the same request, and no box shows (#3843)", withKit, async ($, on) => {
+  const { w, cards, submitted, reviewAsks, logs } = world(on)
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  expect(reviewAsks).toHaveLength(1)
+  // The turn ends, the hooks hand the review over, and Dan closes its picker without answering.
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  // The record was asked at the turn's end, by its one owner, for this session's transcript.
+  expect(reviewAsks).toEqual([['python3', '-I', '-B', REVIEW_FILE, 'state', '--transcript', T], ['python3', '-I', '-B', REVIEW_FILE, 'state', '--transcript', T]])
+  expect(logs.filter(l => /handed over this turn and Dan has not answered it, so the session is not asked to call the Goal accomplished box again for this request/.test(l))).toHaveLength(1)
+  // A turn somebody else starts (a job's notice) ends with nothing handed over: still nothing sent,
+  // since the review of this request went unanswered.
+  w.review = reviewSays('none')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  expect(await cards()).toEqual([])
+  // His own next message is a new request, and can earn its own message.
+  await says($, 'Now make the status bar quieter')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(asked()).toHaveLength(1)
+})
+
+test("a review answered by the turn's end, with no box shown since: the session is still asked once (#3843)", withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.review = reviewSays('answered')
+  await turnEnds($)
   expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+})
+
+test("the record cannot be read at the turn's end: the message is sent, and Dan is told it was sent without knowing (#3843)", withKit, async ($, on) => {
+  const { w, submitted, logs } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.review = { exitCode: 3, stdout: '', stderr: 'review-record: the transcript could not be read (timed out)' }
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  const told = logs.filter(l => l.startsWith('The session was asked to call the Goal accomplished box again without knowing whether an end of turn review is waiting for Dan: '))
+  expect(told).toHaveLength(1)
+  expect(told[0]).toMatch(/the end of turn review's record could not be read \(review-record: the transcript could not be read \(timed out\)\)/)
+})
+
+test("a record read cleanly at the turn's end says nothing of the kind (#3843)", withKit, async ($, on) => {
+  const { w, submitted, logs } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  expect(logs.filter(l => /without knowing/.test(l))).toEqual([])
+})
+
+test("Dan asleep by the turn's end, after a box was held while he was awake: no review will be handed over, so the record is not asked and the message is sent (#3843)", withAll, async ($, on) => {
+  const { w, submitted, reviewAsks } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.asleep = true
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  expect(reviewAsks).toHaveLength(1)
 })
 
 test('the tool says in its description that it waits for the review (#3843)', withKit, async ($, on) => {
