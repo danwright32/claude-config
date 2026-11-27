@@ -21,7 +21,7 @@ describe('turnIn', () => {
       user('p1'), said('An earlier turn, already judged at its own end.'),
       user('p2'), said('One thing is still yours to do.'), tool, user('p2'), said('Done with the rest.'),
     ].join('\n')
-    expect(turnIn(out)).toEqual({ texts: ['One thing is still yours to do.', 'Done with the rest.'], isOurs: false, promptId: 'p2', refused: 0 })
+    expect(turnIn(out)).toEqual({ texts: ['One thing is still yours to do.', 'Done with the rest.'], isOurs: false, promptId: 'p2', refused: 0, refusedMet: 0, isPinned: false })
   })
 
   test('Stop hook feedback keeps the prompt\'s promptId, so a reflection after it is the same turn', () => {
@@ -36,8 +36,8 @@ describe('turnIn', () => {
   })
 
   test('a window holding no prompt record names no prompt, so the turn it read cannot be told from nothing read', () => {
-    expect(turnIn([said('a'), said('b')].join('\n'))).toEqual({ texts: ['a', 'b'], isOurs: false, promptId: null, refused: 0 })
-    expect(turnIn('')).toEqual({ texts: [], isOurs: false, promptId: null, refused: 0 })
+    expect(turnIn([said('a'), said('b')].join('\n'))).toEqual({ texts: ['a', 'b'], isOurs: false, promptId: null, refused: 0, refusedMet: 0, isPinned: false })
+    expect(turnIn('')).toEqual({ texts: [], isOurs: false, promptId: null, refused: 0, refusedMet: 0, isPinned: false })
   })
 
   test('this mod\'s own block already given in the turn is reported, so it is never given twice', () => {
@@ -74,7 +74,7 @@ describe('turnAt', () => {
   // and the refused call, so a turn holding any of them is never blocked by this mod again.
   test('reads the transcript\'s last bytes through perl, the path and each mark as arguments, never in the program', async () => {
     const { asked, run } = runs(ok([user('p1'), said('hello')].join('\n')))
-    expect(await turnAt(T, run)).toEqual({ state: 'read', texts: ['hello'], isOurs: false, promptId: 'p1', refused: 0 })
+    expect(await turnAt(T, run)).toEqual({ state: 'read', texts: ['hello'], isOurs: false, promptId: 'p1', refused: 0, refusedMet: 0, isPinned: false })
     const argv = asked[0] ?? []
     expect(argv.slice(0, 2)).toEqual(['perl', '-e'])
     expect(argv.slice(3)).toEqual(['--', String(TURN_BYTES), T, 'mcp__manual-steps__steps', PROSE_MARK, PAGE_MARK, REFUSED_MARK])
@@ -147,6 +147,32 @@ describe('a call the permission check refused in the turn (#3842)', () => {
     expect(turnIn([user('p1'), denied('automode-blocked'), byMain, user('p1'), said('It is on the card.')].join('\n')).refused).toBe(0)
   })
 
+  // Review of pull request 3854: the count (tools/steps-phrase-count.ts) kept its own copy of the
+  // test for a refused call and for a steps tool call, and the copies differed from these. The
+  // reader now reports both, so the count asks it.
+  test('every refused call it met in the turn is reported beside those left open', () => {
+    const t = turnIn([user('p1'), denied('automode-blocked'), pinned, user('p1'), denied('automode-blocked'), said('x')].join('\n'))
+    expect([t.refusedMet, t.refused]).toEqual([2, 1])
+    const answered = turnIn([user('p1'), denied('automode-blocked'), pinned, user('p1'), said('It is on the card.')].join('\n'))
+    expect([answered.refusedMet, answered.refused]).toEqual([1, 0])
+    // The turn before's, a subagent's, another kind and one under no prompt are not met.
+    const others = [user('p0'), denied('automode-blocked', 'p0'), said('Stopped.'), user('p1'), denied('permission-rule'), denied('automode-blocked', 'p1', { isSidechain: true }), denied('automode-blocked', 'p1', { promptId: undefined }), said('x')]
+    expect(turnIn(others.join('\n')).refusedMet).toBe(0)
+  })
+
+  test('whether the main conversation called the steps tool in the turn is reported', () => {
+    expect(turnIn([user('p1'), pinned, user('p1'), said('x')].join('\n')).isPinned).toBe(true)
+    expect(turnIn([user('p1'), pinnedWhole, user('p1'), said('x')].join('\n')).isPinned).toBe(true)
+    expect(turnIn([user('p1'), said('x')].join('\n')).isPinned).toBe(false)
+    // A subagent's call inside the main record is not the main conversation's.
+    const byAgent = JSON.stringify({ type: 'assistant', isSidechain: true, isPinning: true })
+    expect(turnIn([user('p1'), byAgent, user('p1'), said('x')].join('\n')).isPinned).toBe(false)
+    // A call after the turn before's last record of its prompt is the turn before's.
+    expect(turnIn([user('p0'), said('Pinning it.'), pinned, user('p1'), said('x')].join('\n')).isPinned).toBe(false)
+    // A window that starts inside the turn: a call before the first record it holds is the turn's.
+    expect(turnIn([pinned, user('p1'), said('x')].join('\n')).isPinned).toBe(true)
+  })
+
   test('no verdict, a hook\'s or a rule\'s refusal, a prompt Dan declined and a cancelled call are not it', () => {
     for (const kind of ['automode-unavailable', 'permission-rule', 'user-rejected', 'cancelled', 'interrupted'])
       expect(turnIn([user('p1'), denied(kind), said('Carrying on.')].join('\n')).refused).toBe(0)
@@ -169,7 +195,7 @@ describe('a call the permission check refused in the turn (#3842)', () => {
       asked.push([...argv])
       return { exitCode: 0, stdout: [user('p1'), denied('automode-blocked')].join('\n'), stderr: '', isStdoutTruncated: false }
     }
-    expect(await turnAt('/t.jsonl', run)).toEqual({ state: 'read', texts: [], isOurs: false, promptId: 'p1', refused: 1 })
+    expect(await turnAt('/t.jsonl', run)).toEqual({ state: 'read', texts: [], isOurs: false, promptId: 'p1', refused: 1, refusedMet: 1, isPinned: false })
     expect(asked[0]?.slice(3)).toEqual(['--', String(TURN_BYTES), '/t.jsonl', 'mcp__manual-steps__steps', PROSE_MARK, PAGE_MARK, REFUSED_MARK])
     expect(asked[0]?.[2]).toContain('toolDenialKind')
     expect(asked[0]?.[2]).not.toContain('mcp__manual-steps__steps')

@@ -413,6 +413,14 @@ describe('the wordings that handed Dan a step after a refused call (#3842)', () 
     expect(waitingPhrase('The one step left for you, clearing the goal, is on the card.')).toBe('The one step left for you')
   })
 
+  // Review of pull request 3854: a count of none is no step, and a count of some still is.
+  test('"0 steps left for you" does not fire, and a count that begins with another digit does', () => {
+    for (const said of ['Card status: 0 steps left for you.', 'That leaves 0 more steps left for you.', '00 steps left for you.'])
+      expect(waitingPhrase(said)).toBeNull()
+    expect(waitingPhrase('2 steps left for you, both on the card.')).toBe('2 steps left for you')
+    expect(waitingPhrase('10 steps left for you.')).toBe('10 steps left for you')
+  })
+
   // Dan's answer on 2026-11-27: "Set" does not join the words that begin a numbered step, so two
   // numbered lines of which one begins with Set are still not two steps.
   test('a numbered line beginning with Set still does not count as a step line', () => {

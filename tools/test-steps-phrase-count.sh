@@ -38,8 +38,24 @@ said(){ printf '{"parentUuid":"u","isSidechain":false,"type":"assistant","messag
 # A call of a tool: $2 is the tool, $3 is true when a subagent made it inside the main record.
 called(){ printf '{"parentUuid":"u","isSidechain":%s,"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"%s","input":{}}]}}\n' "${3:-false}" "$2"; }
 result(){ printf '{"parentUuid":"u","isSidechain":false,"promptId":"%s","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"%s"}]},"toolUseResult":{"stdout":"ok"}}\n' "$1" "${2:-ok}"; }
-# A refused call: $2 is the kind Claude Code records, $3 extra keys.
-refused(){ printf '{"parentUuid":"u","isSidechain":%s,"promptId":"%s","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":"Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Destructive or Unwanted Actions]."}]},"toolDenialKind":"%s","permissionDecision":{"decision":"reject","reasonType":"classifier","reasonCode":"classifier:auto-mode","source":"config"},"toolUseResult":"Error: Permission for this action was denied by the Claude Code auto mode classifier."}\n' "${3:-false}" "$1" "$2"; }
+# A hold of the mod's own, as the turn's record keeps it: Stop hook feedback that begins with one
+# of the mod's marks, which is what the reader looks for.
+feedback(){ printf '{"parentUuid":"u","isSidechain":false,"promptId":"%s","type":"user","message":{"role":"user","content":"Stop hook feedback:\\nYour reply leaves Dan a step in prose, and no steps card holds it."}}\n' "$1"; }
+# The sentence the result of a call the permission check refused begins with: 22 of 22 on the
+# personal MacBook, and in no record of another kind (2026-11-27). The count's cross check finds a
+# refused call by it, and never by the kind the mod reads.
+DENIED='Permission for this action was denied by the Claude Code auto mode classifier.'
+# A refused call's record: $1 the prompt's id, written with its key ("promptId":"p1") or empty,
+# $2 the kind as the record writes it, key and all, $3 what the result says, $4 true when a
+# subagent's. Written out in full so a record that has drifted can be made.
+record(){ printf '{"parentUuid":"u","isSidechain":%s,%s"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":"%s"}]},%s,"permissionDecision":{"decision":"reject","reasonType":"classifier","reasonCode":"classifier:auto-mode","source":"config"},"toolUseResult":"Error: %s"}\n' "${4:-false}" "$1" "$3" "$2" "$3"; }
+# A refused call as Claude Code records it: $2 is the kind, $3 true when a subagent's. What a
+# result of another kind says is made up; only the permission check's own sentence is measured.
+refused(){
+  local said='The call did not run.'
+  [ "$2" = automode-blocked ] && said="$DENIED Reason: [Destructive or Unwanted Actions]."
+  record "\"promptId\":\"$1\"," "\"toolDenialKind\":\"$2\"" "$said" "${3:-false}"
+}
 STEPS=mcp__manual-steps__steps
 {
   # 1: a new phrase alone, nothing pinned: newly read, and the most it would newly hold.
@@ -68,7 +84,44 @@ STEPS=mcp__manual-steps__steps
   # 12: refused, then a subagent pinned a step of its own inside the main record: not answered, so
   # held (review of pull request 3854; the reader marks whose call it was, and this runs the reader).
   prompt p12; called p12 Bash; refused p12 automode-blocked; called p12 "$STEPS" true; said p12 'The agent finished.'
+  # 13: a new phrase in a turn where only a subagent called the steps tool: the main conversation
+  # pinned nothing, so it is among the most the phrase would newly hold.
+  prompt p13; called p13 "$STEPS" true; said p13 'Two steps left for you, and the agent is done.'
+  # 14: refused, and the turn already holds one of the mod's own holds, so the check may not have
+  # held it for the refusal: left out of the low figure, kept in the high one.
+  prompt p14; refused p14 automode-blocked; said p14 'The deploy is waiting on you.'; feedback p14; said p14 'Carrying on.'
 } > "$W/projects/one/s1.jsonl"
+# The cross check's records, in a folder of their own: results that begin with the permission
+# check's sentence, some in a record the mod's reader would not read as refused.
+mkdir -p "$W/drift/one"
+{
+  prompt d1
+  # Read as refused: the record as Claude Code writes it today.
+  refused d1 automode-blocked
+  # Not read: the kind written with a space after its colon.
+  record '"promptId":"d1",' '"toolDenialKind": "automode-blocked"' "$DENIED Reason: [Other]."
+  # Not read: the key renamed.
+  record '"promptId":"d1",' '"denialKind":"automode-blocked"' "$DENIED Reason: [Other]."
+  # Not read: the record carries no prompt id, so it is in no turn.
+  record '' '"toolDenialKind":"automode-blocked"' "$DENIED Reason: [Other]."
+  # Not counted at all: a subagent's inside the main record, a result that only quotes the
+  # sentence further in, and a prompt of Dan's that begins with it.
+  refused d1 automode-blocked true
+  result d1 "12: $DENIED"
+  printf '{"parentUuid":null,"isSidechain":false,"promptId":"d2","type":"user","message":{"role":"user","content":"%s Why?"},"uuid":"u2"}\n' "$DENIED"
+  said d2 'It was the push.'
+} > "$W/drift/one/d.jsonl"
+# A refused call whose result no longer begins with the sentence: the cross check finds nothing to
+# check, and must say so rather than read as a clean zero.
+mkdir -p "$W/reworded/one"
+{ prompt r1; record '"promptId":"r1",' '"toolDenialKind":"automode-blocked"' 'The permission check said no.'; said r1 'Stopped.'; } > "$W/reworded/one/r.jsonl"
+# The same beside a refused call that still begins with it, as while a new wording is coming in:
+# the cross check still has something to check, and must say it no longer sees every refusal.
+mkdir -p "$W/mixed/one"
+{ prompt m1; refused m1 automode-blocked; record '"promptId":"m1",' '"toolDenialKind":"automode-blocked"' 'The permission check said no.'; said m1 'Stopped.'; } > "$W/mixed/one/m.jsonl"
+# The folder under a home folder, for what the first line prints of it.
+mkdir -p "$W/home/kept/one"
+{ prompt h1; said h1 'Nothing here.'; } > "$W/home/kept/one/h.jsonl"
 # A subagent's own record, in its folder: never read.
 { prompt q1; refused q1 automode-blocked; said q1 'The row still needs you to set Status to Done.'; } > "$W/projects/one/s1/subagents/a.jsonl"
 # The same session's record under a second project folder, as Claude Code keeps one when a session
@@ -83,34 +136,64 @@ before="$(find "$W" -type f | sort | xargs cksum)"
 out="$(node "$TOOL" --projects "$W/projects" --where 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "the count runs, exit 0" ok || check "the count runs, exit 0" "exit=$code: $out"
 has "two records read, the old one and the subagent's passed over" "$out" "2 session records last written in 30 days read"
-has "twelve turns, the one kept in both records counted once" "$out" "; 12 turns of the main conversation, 1 more kept in a second record and counted once."
+has "fourteen turns, the one kept in both records counted once" "$out" "; 14 turns of the main conversation, 1 more kept in a second record and counted once."
 has "the one only you can do: said in 2, newly read in 1, would newly hold 1" "$out" 'phrase "the one only you can do": said in 2; newly read in 1; would newly hold at most 1.'
-has "step left for you: said in 2, one of them in a turn that pinned a step, so it would newly hold 1" "$out" 'phrase "step left for you": said in 2; newly read in 2; would newly hold at most 1.'
+has "step left for you: said in 3, one of them in a turn the main conversation pinned a step in, so it would newly hold 2" "$out" 'phrase "step left for you": said in 3; newly read in 3; would newly hold at most 2.'
 has "--where names the turn a phrase alone would hold" "$out" "  s1.jsonl turn 1"
+has "--where names the turn only a subagent pinned in" "$out" "  s1.jsonl turn 13"
 lacks "a wording the check does not read is not counted: Still yours" "$out" "Still yours"
 lacks "nor needs you to set" "$out" "needs you to set"
 lacks "nor because my update was refused" "$out" "because my"
-has "the refused call: 5 turns, 1 answered by a pin, 1 by the line, 3 held, 1 of them with a new phrase too" "$out" "a call the permission check refused: in 5 turns; answered by a steps tool call after it in 1; answered in words in 1; would be held once each: 3, of which 0 the check had already held for another reason and 1 a new phrase would hold too."
+has "the refused call: 6 turns, 1 answered by a pin, 1 by the line, 4 left, 1 of them held already and 1 with a new phrase too, so between 3 and 6" "$out" "a call the permission check refused: in 6 turns; answered by a steps tool call after it in 1; answered in words in 1; left unanswered at the turn's end in 4, of which 1 the check had already held for another reason and 1 a new phrase would hold too; would be held once each: between 3 and 6."
+has "the second line says the refused call figure is a range, and why" "$out" "the refused call figure is between two numbers"
+lacks "and no longer calls every figure the most it could be" "$out" "Every figure is the most it could be"
 has "--where names the record and the turn" "$out" "  s1.jsonl turn 2"
 has "--where names the turn held for both" "$out" "  s1.jsonl turn 9"
 has "--where names the turn a subagent's pin did not answer" "$out" "  s1.jsonl turn 12"
+has "the cross check: each refused call's result begins with the sentence, and the check reads every one" "$out" "cross check: 6 tool results of the main conversation begin with the permission check's \"denied\" sentence; 0 of them the check would not read as a refused call. Of the 6 refused calls the check did read, 0 have a result that does not begin with it."
 lacks "no word of what was said is printed" "$out" "Waiting"
 lacks "nor of the reply" "$out" "deploy"
+lacks "nor of a refusal's result" "$out" "Permission for this action"
 after="$(find "$W" -type f | sort | xargs cksum)"
 [ "$before" = "$after" ] && check "it writes no file and changes none" ok || check "it writes no file and changes none" "the folder changed"
 
 # The days asked for decide which records are read.
 out="$(node "$TOOL" --projects "$W/projects" --days 9999 2>&1)"
 has "a longer window reads the older record too" "$out" "3 session records last written in 9999 days read"
-has "and its refused call" "$out" "a call the permission check refused: in 6 turns"
+has "and its refused call" "$out" "a call the permission check refused: in 7 turns"
+has "and its result, in the cross check" "$out" "cross check: 7 tool results"
+
+# The cross check: a result that begins with the permission check's sentence in a record the mod's
+# reader would not read as refused (the kind respaced, renamed, or under no prompt) is counted and
+# said, since the refused call figures would otherwise read as a quiet month.
+out="$(node "$TOOL" --projects "$W/drift" --where 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "the count runs on records that have drifted, exit 0" ok || check "the count runs on records that have drifted, exit 0" "exit=$code: $out"
+has "the check reads one refused call there" "$out" "a call the permission check refused: in 1 turns"
+has "the cross check finds four results and says three were not read" "$out" "cross check: 4 tool results of the main conversation begin with the permission check's \"denied\" sentence; 3 of them the check would not read as a refused call, so the refused call figures above are too low."
+has "and that the one it did read begins with the sentence" "$out" "Of the 1 refused calls the check did read, 0 have a result that does not begin with it."
+has "--where names the record holding them" "$out" "  d.jsonl"
+out="$(node "$TOOL" --projects "$W/reworded" 2>&1)"
+has "a sentence found nowhere beside a refused call is said to check nothing" "$out" "cross check: no tool result of the main conversation begins with the permission check's \"denied\" sentence, so this line checked nothing, though the check read 1 refused calls: the sentence has changed."
+out="$(node "$TOOL" --projects "$W/mixed" 2>&1)"
+has "a refused call whose result does not begin with the sentence is said, beside one that does" "$out" "Of the 2 refused calls the check did read, 1 have a result that does not begin with it, so the sentence no longer covers every refusal and this line misses some."
 
 out="$(node "$TOOL" --projects "$W/empty" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "a folder holding no session record is counted as none, exit 0" ok || check "a folder holding no session record is counted as none, exit 0" "exit=$code"
 has "and says it read none" "$out" "0 session records last written in 30 days read"
 has "a phrase said nowhere counts zero" "$out" 'phrase "the one only you can do": said in 0; newly read in 0; would newly hold at most 0.'
+has "and its cross check says it checked nothing" "$out" "cross check: no tool result of the main conversation begins with the permission check's \"denied\" sentence, so this line checked nothing."
 out="$(node "$TOOL" --projects "$W/missing" 2>&1)"; code=$?
 [ "$code" -eq 3 ] && check "a folder that cannot be read exits 3" ok || check "a folder that cannot be read exits 3" "exit=$code"
 has "and says nothing was counted" "$out" "so nothing was counted"
+
+# The folder is printed from the home folder on, never with the home folder's own path, which
+# holds the Mac's user name and would go wherever the first line is pasted.
+out="$(HOME="$W/home" node "$TOOL" --projects "$W/home/kept" 2>&1)"
+has "a folder under the home folder is printed from the tilde" "$out" "1 session records last written in 30 days read in ~/kept;"
+lacks "and the home folder's path is not printed" "$out" "$W/home"
+out="$(HOME="$W/home" node "$TOOL" --projects "$W/home/missing" 2>&1)"
+has "the folder that cannot be read is printed the same way" "$out" "~/missing could not be read"
+lacks "and its error does not print the home folder either" "$out" "$W/home"
 out="$(node "$TOOL" --days nine 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "an argument it does not understand exits 2" ok || check "an argument it does not understand exits 2" "exit=$code"
 

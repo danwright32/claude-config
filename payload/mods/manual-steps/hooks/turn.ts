@@ -23,12 +23,17 @@ const MARKS = [PROSE_MARK, PAGE_MARK, REFUSED_MARK]
 // 2.1.332): 22 `automode-blocked` (the permission check's verdict; each one's result began with
 // its "denied by the auto mode classifier" sentence), 93 `automode-unavailable` (it gave no
 // verdict, which is sent once more by rule and is no step for Dan), 1,938 `permission-rule` (a
-// hook's or a rule's refusal, which says what to do in its place), 65 `user-rejected` (Dan declined
+// hook's or a rule's refusal: too many to hold for, so a step one leaves is caught only by the
+// wording check; what each said in its place was not measured), 65 `user-rejected` (Dan declined
 // a prompt, so he knows) and 12 cancelled or interrupted; 10 more `automode-blocked` were in
 // subagents' own records, which this reader is never handed. Only the first counts here. No hook on the refusal
 // itself is used: a mod's hook on `classic.PermissionDenied` needs an entry on two lists of
 // exceptions (tools/sec-default-bypassed-hooks.tsv, tests/test-sleep-silence.sh), and what that
 // event calls no verdict is the word "Classifier unavailable", read by scope modes alone.
+// Claude Code documents neither the field nor its spelling, and the reader finds it by its exact
+// unspaced text, so a release that renames or respaces it would stop this hold with nothing said.
+// The count's last line (tools/steps-phrase-count.ts) finds refused calls a second way, by the
+// sentence their result begins with, and says how many of those this reader would not read.
 export const REFUSED_KIND = 'automode-blocked'
 /** The tool whose call after a refusal answers it: the step went on the card. */
 export const STEPS_TOOL = 'mcp__manual-steps__steps'
@@ -92,11 +97,22 @@ export type TurnRead = {
   promptId: string | null
   /** The calls of the turn the permission check refused, with no call of the steps tool after them (#3842). */
   refused: number
+  /** Every call of the turn the permission check refused, answered or not. Read by the count (tools/steps-phrase-count.ts), not by the check. */
+  refusedMet: number
+  /** The main conversation called the steps tool in the turn. Read by the count, not by the check, which reads the card itself. */
+  isPinned: boolean
 }
 
 type Rec = { type?: unknown; promptId?: unknown; isOurs?: unknown; isSidechain?: unknown; isPinning?: unknown; toolDenialKind?: unknown; message?: { content?: unknown } }
 
-/** Whether this record of Claude's holds a call of the steps tool: the reader's own mark, or the call in a record kept whole. */
+/**
+ * Whether this record of Claude's holds a call of the steps tool: the reader's own mark, or the call
+ * in a record kept whole. It is the call that is seen, never its result, so a call the steps tool
+ * refused (a step with no place, say) still answers a refusal before it; rare, and the tool's own
+ * refusal already tells Claude what to do. The reader's mark is by the words `"name":"<the tool>"`
+ * anywhere in the record, so another tool whose input holds those words would be marked too
+ * (review of pull request 3854, cases 19 and 17: neither met in the records measured).
+ */
 const pins = (r: Rec): boolean => {
   if (r.isPinning === true) return true
   const c = r.message?.content
@@ -110,7 +126,11 @@ const textOf = (r: Rec): string | null => {
   return parts.length ? parts.join('\n\n') : null
 }
 
-/** The turn now ending, from what the reader printed: its texts, whether this mod already blocked in it. */
+/**
+ * The turn now ending, from what the reader printed: its texts, whether this mod already blocked in
+ * it, the prompt it answers, and the calls in it the permission check refused (#3842), those left
+ * with no steps tool call after them and all of them.
+ */
 export const turnIn = (out: string): TurnRead => {
   const recs: Rec[] = []
   for (const line of out.split('\n')) {
@@ -132,12 +152,20 @@ export const turnIn = (out: string): TurnRead => {
   // Walking back, so a call of the steps tool already met is one made later than the record in hand.
   // One met past the turn's first record belongs to the turn before, whose refusals are not counted.
   let isPinnedLater = false
+  // Whether a steps tool call met is the turn's is known, like a text, only once a record of the
+  // turn's prompt is met before it, or the window turns out to start inside the turn.
+  let isPinned = false
+  let isPinPending = false
   let refused = 0
+  let refusedMet = 0
   for (let i = recs.length - 1; i >= 0; i--) {
     const r = recs[i] as Rec
     if (r.type === 'assistant') {
       if (r.isSidechain === true) continue
-      if (pins(r)) isPinnedLater = true
+      if (pins(r)) {
+        isPinnedLater = true
+        isPinPending = true
+      }
       const t = textOf(r)
       if (t !== null) pending.unshift(t)
       continue
@@ -149,12 +177,20 @@ export const turnIn = (out: string): TurnRead => {
       break
     }
     if (r.isOurs === true) isOurs = true
-    if (r.toolDenialKind === REFUSED_KIND && r.isSidechain !== true && !isPinnedLater) refused++
+    if (r.toolDenialKind === REFUSED_KIND && r.isSidechain !== true) {
+      refusedMet++
+      if (!isPinnedLater) refused++
+    }
     texts.unshift(...pending)
     pending = []
+    if (isPinPending) isPinned = true
+    isPinPending = false
   }
-  if (!isBounded) texts.unshift(...pending)
-  return { texts, isOurs, promptId, refused }
+  if (!isBounded) {
+    texts.unshift(...pending)
+    if (isPinPending) isPinned = true
+  }
+  return { texts, isOurs, promptId, refused, refusedMet, isPinned }
 }
 
 /**

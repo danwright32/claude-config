@@ -899,7 +899,8 @@ export const register: Register = on => {
   // in a chain another Stop hook started; unread, it falls back to the last message and to that chain.
   // #3652: a slash command handed to Dan to type is answered only by an unfinished step naming it.
   // #3842: a call the permission check refused in the turn is answered only by a step pinned after
-  // it, or by one line saying nothing from it is Dan's, whatever words the reply used.
+  // it, by the one line saying nothing from it is Dan's, or by the line saying none of the steps
+  // are his now, which answers every ask here. No other words of the reply answer it.
   on('classic.Stop', async ($, e, next) => {
     const r = await pagesAtStop($, e, next, interactive)
     if (!interactive) return r

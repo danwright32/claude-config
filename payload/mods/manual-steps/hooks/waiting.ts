@@ -107,8 +107,10 @@ const notQuoted = (plain: string, at: number): boolean => !quotedOnLine(plain.sl
 // refused in is held for the refusal itself, whatever its words (hooks/turn.ts).
 // "One step left for you.", "The one step left for you": a step counted or singled out. The bare
 // words "step left for you" were also said of none ("no manual step left for you") and of an
-// issue's title ("a step left for you after a refusal"), so neither is it.
-const STEP_LEFT_FOR_YOU = /\b(?:one|two|three|four|five|\d+|the (?:one|last|only)) (?:(?:more|manual|small|last) )?steps? left for you\b/gi
+// issue's title ("a step left for you after a refusal"), so neither is it. A count in figures
+// begins with a digit other than 0, so "0 steps left for you" is the none it says (review of pull
+// request 3854).
+const STEP_LEFT_FOR_YOU = /\b(?:one|two|three|four|five|[1-9]\d*|the (?:one|last|only)) (?:(?:more|manual|small|last) )?steps? left for you\b/gi
 // "the one only you can do", naming one thing; never "something only you can do", said of a rule.
 const ONLY_YOU_CAN_DO = /\b(?:the|that|this|one) (?:(?:one|last|only|remaining) )?(?:one|step|thing|part) only you can do\b/gi
 /** #3842's wordings the check reads, each by the name the count prints for it. */
