@@ -25329,6 +25329,39 @@ check "#606 a Mac that never had mods publishes no mods placeholder, and changes
 MDB_LISTED=eps-mod CLAUDE_HOME="$MD2HB" SYNC_REPO="$MD2BB" SYNC_CLAUDE_BIN="$MDFAKE" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
 check "#606 so the other Mac keeps its mod" "[ -f '$MD2HB/mods/eps-mod/.claude-plugin/plugin.json' ]"
 
+section "== a mod check that timed out notifies only on the fifth sync in a row for that mod (#3759) =="
+# The row for SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY in DESIGN.md is proved here, at the shipped default:
+# four time outs in a row notify nobody, the fifth does, and in words that never say not loading.
+# Everything else about the record (status, an unreadable record, the outcomes that still notify at
+# once) is tests/test-sync-mod-check-timeouts.sh, kept out of this file for its length (#2463).
+# The stand in answers late the way the bound ends a validation: it raises the alarm it inherited.
+M59R="$WORK/mods3759-repo"; M59H="$WORK/mods3759-home"
+mkdir -p "$M59R/payload/mods/late-mod/.claude-plugin" "$M59H/mods/late-mod/.claude-plugin"
+printf '{ "name": "late-mod" }\n' > "$M59R/payload/mods/late-mod/.claude-plugin/plugin.json"
+cp "$M59R/payload/mods/late-mod/.claude-plugin/plugin.json" "$M59H/mods/late-mod/.claude-plugin/plugin.json"
+echo '{"hooks":{}}' > "$M59H/settings.json"
+M59C="$WORK/mods3759-claude"
+cat > "$M59C" <<'M59FAKE'
+#!/bin/bash
+case "$1 $2" in
+  "plugin list") echo '[{"id":"late-mod@inline","enabled":true}]' ;;
+  "plugin validate") exec perl -e 'alarm 0 or exit 3; kill "ALRM", $$; sleep 60' ;;
+  *) exit 2 ;;
+esac
+M59FAKE
+chmod +x "$M59C"
+M59N="$WORK/mods3759-notified"; : > "$M59N"
+printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -message ] && { printf "%%s\\n" "$2" >> "%s"; shift; }; shift; done\n' "$M59N" > "$WORK/mods3759-notifier"
+chmod +x "$WORK/mods3759-notifier"
+_m59pull(){ env -u SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY SYNC_NO_GIT=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$WORK/mods3759-notifier" SYNC_CLAUDE_BIN="$M59C" \
+  CLAUDE_HOME="$M59H" SYNC_REPO="$M59R" bash "$SCRIPT" pull > "$WORK/mods3759-out" 2>&1 < /dev/null; }
+for _m59 in 1 2 3 4; do _m59pull; done
+check "#3759 the bound stopped the stand in's validation, so the check ran" "grep -q 'could not check mod late-mod' '$WORK/mods3759-out'"
+check "#3759 four time outs in a row for one mod notify nobody" "[ ! -s '$M59N' ]"
+_m59pull
+check "#3759 the fifth in a row notifies, naming the mod" "grep -q 'could not check mod late-mod' '$M59N'"
+check "#3759 and never says a mod is not loading" "! grep -q -i 'not loading' '$M59N'"
+
 section "== a file left at an earlier release is stale, never a local edit (#638) =="
 # 2026-10-04: after PR #636 merged, this Mac's applied marker named the merge while seven mod files
 # under ~/.claude were still byte for byte the previous release. The next pull called them local
