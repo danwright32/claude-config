@@ -84,6 +84,22 @@ if (typeof judge === 'function') {
   j = judge({ text: POST, message: POST, answer: { text: '{"ok":false}' } });
   check(j.state === 'error', 'an answer saying ok false is not judged an error', JSON.stringify(j));
 
+  // claude-config#3845: an answer saved exactly as the tool returned it is JSON, where each line break
+  // of anything it echoes is a backslash and an n. Only the answer's draft_id and error are read from
+  // it; the words compared are the message file's, which is the wording as gathered, never Slack's
+  // answer. So an echoed post with escaped line breaks changes nothing, and nesting one level deeper
+  // (the answer inside a JSON string, its quotes escaped) hides neither the id nor ok false.
+  const echoed = JSON.stringify({ result: 'Draft created', draft_id: 'Dr0RAW01', channel_link: 'https://example.slack.com/archives/C0123456789', message: POST });
+  check(/\\n/.test(echoed), 'the fixture echoes the post with each line break escaped, as a raw answer would', echoed);
+  j = judge({ text: POST, message: POST, answer: { text: echoed } });
+  check(j.state === 'saved' && j.draftId === 'Dr0RAW01', 'a raw answer echoing the post with escaped line breaks is not judged saved with its id', JSON.stringify(j));
+  j = judge({ text: POST, message: POST.replace('pick a reason', 'choose a reason'), answer: { text: echoed } });
+  check(j.state === 'differs', 'and the words judged are the message\'s, never the echo in the answer', JSON.stringify(j));
+  j = judge({ text: POST, message: POST, answer: { text: JSON.stringify({ content: [{ type: 'text', text: '{"ok":false}' }] }) } });
+  check(j.state === 'error', 'ok false inside a JSON string, its quotes escaped, is not judged an error', JSON.stringify(j));
+  j = judge({ text: POST, message: POST, answer: { text: JSON.stringify({ content: [{ type: 'text', text: '{"ok":false,"error":"channel_not_found"}' }] }) } });
+  check(j.state === 'error' && j.error === 'channel_not_found', 'an error named inside a JSON string is not judged as that error', JSON.stringify(j));
+
   // What cannot be judged is refused, never judged saved (L98): no wording, no draft text, no answer.
   [{ message: POST, answer: KEPT }, { text: '   ', message: POST, answer: KEPT }, { text: '**', message: POST, answer: KEPT },
     { text: POST, answer: KEPT }, { text: POST, message: POST }, { text: POST, message: POST, answer: {} }, null, 'x'].forEach(function (input) {
@@ -105,6 +121,8 @@ let c = cli(['draft'], JSON.stringify({ text: POST, message: POST, answer: KEPT 
 check(c.status === 0 && c.json && c.json.state === 'saved' && c.json.draftId === 'Dr0123ABC', 'the draft command did not judge a kept draft saved', JSON.stringify(c));
 c = cli(['draft'], JSON.stringify({ text: POST, message: POST, answer: NOT_KEPT }));
 check(c.status === 0 && c.json && c.json.state === 'not-kept', 'the draft command did not exit 0 on a draft that was not kept', JSON.stringify(c));
+c = cli(['draft'], JSON.stringify({ text: POST, message: POST, answer: { text: JSON.stringify({ result: 'Draft created', draft_id: 'Dr0RAW02', message: POST }) } }));
+check(c.status === 0 && c.json && c.json.state === 'saved' && c.json.draftId === 'Dr0RAW02', 'the draft command did not judge a raw answer, its echoed line breaks escaped, saved (#3845)', JSON.stringify(c));
 c = cli(['draft'], 'not json');
 check(c.status === 2 && c.json === null && /could not be read as JSON/.test(c.stderr), 'the draft command judged an input that is not JSON', JSON.stringify(c));
 c = cli(['draft'], JSON.stringify({ message: POST, answer: KEPT }));

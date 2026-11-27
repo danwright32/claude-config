@@ -889,7 +889,10 @@ For each announcement:
 
   It takes the post from the gathered file, never retyped, and compares words only, because a post
   read back from Slack has its markup, links, bullets and blank lines changed and opens `<!here>`
-  (measured 2026-11-25, claude-config#3664). Where it says `found`, say "#<n> found posted at
+  (measured 2026-11-25, claude-config#3664). One answer goes in each file, never two: the tool's
+  answer is JSON, in which every line break is written as a backslash and an n, and a file that
+  parses as JSON holding a `messages` string is compared as that string, decoded, while any other
+  file is compared as the text it is (claude-config#3845). Where it says `found`, say "#<n> found posted at
   <time>", the time of the message it is in, which the read shows just before it (`before`),
   given in ET; its outcome is `sent` and nothing is asked. Where it says not found, ask the picker.
 
