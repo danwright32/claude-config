@@ -2522,15 +2522,18 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   turn (`hooks/turn.ts`): the record of a refused call carries `toolDenialKind`, and only
   `automode-blocked`, the permission check's verdict, counts. `automode-unavailable` is the check
   giving no verdict, which is sent once more by rule and leaves Dan nothing; `permission-rule` is a
-  hook's or a rule's refusal, which says what to do in its place; `user-rejected` is a prompt Dan
-  declined himself. Measured on 2026-11-27 over the main conversations' records of 30 days on the
+  hook's or a rule's refusal, which at 1,938 in the 30 days below cannot be held for, so a step
+  one leaves is left to the wording check (what each said in its place was not measured);
+  `user-rejected` is a prompt Dan declined himself. Measured on 2026-11-27 over the main conversations' records of 30 days on the
   personal MacBook (Claude Code 2.1.311 to 2.1.332): 22 `automode-blocked` (Bash 20, Agent 1,
   SendMessage 1, each result beginning with the check's own "denied" sentence), 93
   `automode-unavailable`, 1,938 `permission-rule`, 65 `user-rejected`, 12 cancelled or
   interrupted; 10 more `automode-blocked` sat in subagents' own records, which the main session's
   check never reads. A turn holding one, with no call of the `steps` tool after it, is blocked
   once and told both ways out: pin what the refusal left for Dan, or say "Nothing from the refusal
-  is yours to do." A card pinned before the refusal holds some other step and does not answer it.
+  is yours to do." The line the check already read, "None of these steps are yours to do now.",
+  answers it as well, as it answers every ask of this check. A card pinned before the refusal
+  holds some other step and does not answer it, and neither does a step a subagent pinned.
   The block begins with its own mark (`REFUSED_MARK`), so a turn holding it is never blocked by
   this mod again, and a turn that could not be read names no refusal. Not built: a hook on
   `classic.PermissionDenied`. A mod's hook there needs a line on two lists of exceptions
@@ -2542,10 +2545,24 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   Counted with the check's own reader and matcher (`tools/steps-phrase-count.ts`, which prints
   counts and never a message's text) on 2026-11-27 over the personal MacBook's 7,594 session
   records of 30 days, 10,491 turns: 19 turns held a call the permission check refused, 3 were
-  answered by a call of the `steps` tool after it, and 16 would be held, once each, about one every
-  two days. Read one by one, 3 of the 16 left Dan a step no card held (2 said so in prose), 9 left
-  him nothing and would be answered by the one line, and 4 could not be told from the turn. A
-  phrase stays only if what it catches are steps for Dan, so the five wordings were counted twice
+  answered by a call of the `steps` tool by the turn's end, and 16 were not. The count judges a
+  turn once, at its end, and the check at every turn end inside it, so a step pinned only after a
+  first turn end was held first: between 16 and 19 turns would be held, once each, about one every
+  two days. Read one by one, 2 of the 16 left Dan a step no card held and said so in prose, 1 more
+  probably did, 9 left him nothing and would be answered by the one line, and 4 could not be told
+  from the turn. A hold costs Dan more than Claude's one line, since a Stop hook's block is printed
+  to him as well: 644 characters for a refusal alone, and 1,836 when a typed command, a prose step
+  and two refusals are asked about together (measured in the review of pull request 3854,
+  2026-11-27).
+  The kind is a field Claude Code does not document, and the reader finds it by its exact text, so
+  a release that renamed or respaced it would stop the hold with nothing said. The count's last
+  line therefore finds refused calls a second way, by the "denied" sentence their result begins
+  with, and says both directions. On the personal MacBook on 2026-11-27 (7,779 session records of
+  30 days, 10,688 turns): 20 such results, 0 of them not read by the check, and of the 20 refused
+  calls the check read, 0 whose result begins otherwise. It takes a record kept under two project
+  folders once; the 22 above was counted over every folder, and whether its two extra are such
+  copies was not checked.
+  A phrase stays only if what it catches are steps for Dan, so the five wordings were counted twice
   that day: as first written, and again (7,603 records, 10,501 turns) after two were narrowed to
   leave out what they had wrongly caught. Counts are turns, and "newly held" is the most it could
   be, since the card as it stood is not in the record:
