@@ -2480,3 +2480,21 @@ describe('the commands the reader missed (#3496)', () => {
     expect(pipeline(`p1 $(( \${#a} + 1 )) "b"`).some(c => c.unread !== undefined)).toBe(false)
   })
 })
+
+// #3770: a command a lone & ends runs in the background, and outlives a foreground Bash call that
+// runs it, so the close this session card asks the reader which commands it put there.
+describe('the commands a lone & puts in the background (#3770)', () => {
+  const bg = (cmd: string) => pipeline(cmd).filter(c => c.background).map(c => c.words[0])
+  test('a trailing or inner & marks the command it ends, and what that command runs', () => {
+    expect(bg('sleep 5 &')).toEqual(['sleep'])
+    expect(bg('sleep 5& echo hi')).toEqual(['sleep'])
+    expect(bg('p1 & p2 ; p3')).toEqual(['p1'])
+    expect(bg('(p1; p2) &')).toEqual([')'])
+    expect(bg("bash -c 'p1 &'")).toEqual(['p1'])
+    expect(bg('p1 $(p2) &')).toEqual(['p2', 'p1'])
+  })
+  test('&&, a redirect, |&, a case clause\'s ;& and a quoted or escaped & mark nothing', () => {
+    for (const cmd of ['p1 && p2', 'p1 > f 2>&1', 'p1 &> f', 'p1 |& p2', "case x in a) p1 ;& b) p2 ;; esac", "echo 'a & b'", 'echo "a & b"', 'echo a\\&b', 'p1 >&2'])
+      expect(bg(cmd)).toEqual([])
+  })
+})

@@ -10926,7 +10926,12 @@ a toast, and so it does when that prompt starts no turn at all (dropped from the
 refused by a prompt hook) once no main turn has run for two minutes (#734). Unfinished steps are
 kept per project (the repository root, the main checkout's for a worktree) in the mod's store and
 held at the next session start there until Claude re-checks them, a step held under both the root
-and a pre-#708 worktree key listed once; a reload mid session keeps the live card. While Dan is
+and a pre-#708 worktree key listed once; a reload mid session keeps the live card. Another mod adds
+a step through `$.manualSteps.add`, takes it off as done with `finish` and as withdrawn with
+`withdraw` (#3770: drawn "taken off, not done", the card going when nothing is left); a step it adds
+with `sessionOnly` is never kept for the next session, and one with `noDone` is drawn with no Done
+and leaves the heading without "waiting on you" (the goal box's close this session card). While
+Dan is
 away, a new card goes to the scope modes mod's held card (`$.scopeModes.hold`) instead of the Mac. A
 card pinned with a step Dan can do now also sends him a macOS notification through the goal
 tracker's `$.goalTracker.waitingOnYou` ("<project> is waiting on you", naming the heading and the
@@ -11078,7 +11083,9 @@ a secret never reaches the status bar. A
 dispatched agent's stop (`classic.SubagentStop`) is refused while it still holds background work it
 started (a Bash job, a Monitor, an agent it ran in the background), telling it to wait in the
 foreground, finish, or stop the work with TaskStop, then hand back. What is in flight is Claude
-Code's own list sent with the stop, which carries the whole session's work (measured on 2.1.302), so
+Code's own list sent with the stop, which carries the whole session's work (measured on 2.1.302),
+read, with the statuses that end a task, through mod-kit's one list of what is in flight
+(`hooks/mod-kit/inflight.ts`, #3770), which the goal box's close this session card reads too; so
 whose work is whose comes from the calls the watcher saw each agent make. A stop is refused at most
 twice in a row; the third goes ahead and this conversation is told what the agent left. A list that
 is missing or not a list falls back to the watcher's own record of the agent's Bash jobs and is said
@@ -11470,8 +11477,8 @@ thing that shipped. Shown by the mod's `goal_accomplished` tool, offered in full
 interactive session. A `/goal` met by Claude Code's own check (read through `$.modkit.goal`'s `met`)
 is shown under its condition: since that record lands after the Stop hooks (measured on 2.1.310),
 the session is sent one prompt of the mod's own once the turn has ended, asking it to call the tool;
-once per met goal. The mod hooks no classic event (#875), and reads the transcript from the
-session's own session registry record. With no `/goal` set, the session calls the tool when it
+once per met goal. It reads the transcript from the session's own session registry record. With
+no `/goal` set, the session calls the tool when it
 judges the work Dan asked for finished, reminded by the SESSION REFLECTION's last line after every
 turn that changed something (#1749). Refused, naming what, while a `/goal` is still set or cannot be
 read, an agent the session started is still running, is it live's record shows a merge owed its card
@@ -11488,11 +11495,36 @@ holds nothing, as is it live lets it go. A merge GitHub confirmed holds the box 
 since it merged is in is it live's verdicts, which the box reads too, since is it live crosses a
 carded merge off its record only at a turn end. At most one box per request: a second needs a new
 message typed by Dan, and two calls at once show one. Where the card is not drawn, the result is the
-same box as text, shaped like SESSION REFLECTION.
+same box as text, shaped like SESSION REFLECTION. What holds the box is read through mod-kit's one
+list of what is in flight (`hooks/mod-kit/inflight.ts`, #3770), asked for the box's three kinds.
+The close this session card (#3770, Dan's answers of 2026-11-26): a manual steps card headed
+"Nothing this session can see is running or waiting", whose one step, "Close this session if you
+have nothing more for it", is for this session alone and has no Done. At the main conversation's
+turn end in an interactive session a quiet period of 3 minutes 30 seconds starts (`QUIET_MS` in
+`hooks/close.ts`, on the engine's clock: the subagent harvest's 180 second `timeout` in
+`settings.hooks.json` plus a 30 second margin, held together by
+`tests/test-close-card-quiet-period.sh`); any turn start or message of any origin ends it. At its
+end the card is pinned, once per request of Dan's, only when the box was shown for his latest
+request and every kind in mod-kit's list reads clean: no agent running, waiting or idle (one a mod
+started included), nothing in the stop's `background_tasks` or `session_crons` (recorded at the
+main `classic.Stop`, which runs only while the managed settings file is in place, #876), no job on
+the job watcher's list, no merge, deploy or open pull request the box would refuse for, no
+`/goal` set, no step on a steps card not done, no compact queued or its note owed, no prompt a
+mod holds its reload for, and an answer that does not end on a question. Two readings of a
+process a command left behind can only withhold it: any process of this user carrying this
+session's id (`CLAUDE_CODE_SESSION_ID`, read through the kernel, five second limit; a failed look
+says nothing), and any main conversation Bash call, not run in the background, that mod-kit's
+reader marks as putting something in the background, running nohup, setsid or disown, or cannot
+read in full, which withholds it for the rest of the session. A reading that cannot be taken
+withholds it. Each reason is written to `~/.claude/state/close-session/<session id>.json`, newest
+replacing the one before. The next turn start takes the card down as withdrawn; it comes back
+only after the next box. Invisible to both readings: a program that detaches itself without the
+command saying so, and an Apple signed program (a shell, sleep) left behind, whose environment
+the kernel does not show.
 
 </td><td>
 
-#1563, #1749, #1818
+#1563, #1749, #1818, #3770
 
 </td></tr>
 </tbody>
