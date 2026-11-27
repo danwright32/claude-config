@@ -9249,7 +9249,11 @@ next session start to `~/.claude/state/sessions-archive/<the UTC day it ended>`,
 the way, unless it still names background jobs, which the job watcher reads for its full 7 days; a
 day's folder goes once that whole day is 7 days past (#633). The list reads again only the open
 records and files the folder listing shows changed, and answers inside a limit of its own, short of
-the engine's, or refuses, which the collision guard turns into a refusal of the call (#911). After
+the engine's, or refuses, which the collision guard turns into a refusal of the call (#911). A
+list Claude Code itself cuts off, at the limit it gives any call to another mod (10 seconds,
+measured 2026-10-05, docs/mods-design.md standing rule 4), the collision guard asks once more, and
+judges the call on the second answer as it would have on the first; a second silence refuses the
+call, saying the list was asked twice (#3673). After
 a /clear or a resume, which go on under a new session id with no session start, the new
 conversation's record is made once the /clear's (or the /resume's) own command has run, or at the
 first write or read of the list, never left to the next beat (#735). Never from the classic
