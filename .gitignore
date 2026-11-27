@@ -58,6 +58,8 @@ state/
 .trees-seen
 .hooks-refused
 .hooks-file-keys-told
+.mod-check-timeouts
+.mod-check-timeouts.*
 
 # The TypeScript compiler pinned for the mods type check (#803), installed per checkout with
 # npm ci --prefix tools/typescript

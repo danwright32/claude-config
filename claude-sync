@@ -7116,6 +7116,98 @@ run_bounded(){
     exit 124 if ($? & 127) == 14;
     exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' "$@"
 }
+# THE MOD CHECKS THAT DID NOT FINISH (claude-config#3759). A validation the bound stopped says nothing
+# about the mod, only that claude was too slow to answer: on 2026-11-26 at 11:14 AM ET one did at a
+# load average of about 60, and "a mod is not loading on this Mac" was shown with no mod failing. So a
+# time out is said as could not check, and notifies only once the same mod's check has timed out on
+# SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY syncs in a row, so a check that can never finish is still heard
+# (L13) while one slow answer under load is not news (Dan's rule on alerts). A mod not listed, or
+# refused, still notifies at once.
+#
+# MOD_CHECK_TIMEOUTS_FILE: per Mac and gitignored, one line per mod whose last check timed out,
+# "<mod> TAB <syncs in a row> TAB <epoch of the first> TAB <told 0|1>". Absent is no time outs. A
+# record that is there and cannot be read is NEVER read as none (L98): the run says so, a time out it
+# meets notifies since nothing can say it is the first, and the record is kept aside as .unreadable.
+MOD_CHECK_TIMEOUTS_FILE="$SYNC_REPO/.mod-check-timeouts"
+mod_check_timeouts_read(){   # sets MCT_LINES; returns 1, MCT_LINES empty, when the record cannot be read
+  MCT_LINES=""
+  [ -e "$MOD_CHECK_TIMEOUTS_FILE" ] || [ -L "$MOD_CHECK_TIMEOUTS_FILE" ] || return 0
+  { [ -f "$MOD_CHECK_TIMEOUTS_FILE" ] && [ -r "$MOD_CHECK_TIMEOUTS_FILE" ]; } || return 1
+  local body
+  body="$(cat "$MOD_CHECK_TIMEOUTS_FILE" 2>/dev/null)" || return 1
+  is_blank "$body" && return 0
+  awk -F'\t' 'NF != 4 || $1 == "" || $2 !~ /^[1-9][0-9]*$/ || $3 !~ /^[0-9]+$/ || ($4 != "0" && $4 != "1") { bad = 1 }
+    END { exit bad }' <<< "$body" || return 1
+  MCT_LINES="$body"
+}
+mod_check_span_words(){   # $1 = syncs in a row  $2 = epoch of the first -> "on the last sync" and the like
+  if [ "$1" = 1 ]; then printf 'on the last sync'; return 0; fi
+  local when; when="$(date_from_epoch "$2" '%Y-%m-%d %H:%M')"
+  printf 'on the last %s syncs in a row, the first at %s' "$1" "${when:-an unknown time}"
+}
+# status: every mod the last syncs could not check, and a record that cannot be read. Silent when
+# every check finished, which is what an absent record means.
+report_mod_checks_unfinished(){
+  local name n since told
+  if ! mod_check_timeouts_read; then
+    echo "--- mods the sync could not check ---"
+    echo "  The record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be read, so how many syncs in a row could not check a mod is not known. The next sync that checks the mods keeps it as $MOD_CHECK_TIMEOUTS_FILE.unreadable and starts a new one."
+    return 0
+  fi
+  is_blank "$MCT_LINES" && return 0
+  echo "--- mods the sync could not check ---"
+  while IFS=$'\t' read -r name n since told; do
+    [ -n "$name" ] || continue
+    if [ "$n" -ge "$SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY" ]; then
+      echo "  could not check mod $name $(mod_check_span_words "$n" "$since"): 'claude plugin validate' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT). Whether it loads is not known. That is $SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY or more in a row, which notifies; run 'claude plugin validate $CLAUDE_HOME/mods/$name' to see how long it takes."
+    else
+      echo "  could not check mod $name $(mod_check_span_words "$n" "$since"): 'claude plugin validate' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT). Whether it loads is not known. A notification comes if $SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY syncs in a row cannot check it."
+    fi
+  done <<< "$MCT_LINES"
+}
+# After every mod has an outcome: notify for each mod whose time outs just reached the number in a row
+# (once, recorded as told only when the notification really posted, L368), say a record that could
+# not be read, and write the new record. $1 = 1 when the old record was read  $2 = the new record's
+# lines  $3 = the mods due a notification, space separated  $4 = the mods that timed out while the old
+# record could not be read, comma separated.
+mod_check_timeouts_settle(){
+  local ok="$1" new="$2" due="$3" blind="$4" name n since told tmp
+  for name in $due; do
+    IFS=$'\t' read -r _ n since told <<< "$(awk -F'\t' -v n="$name" '$1 == n' <<< "$new")"
+    sync_log_line "could not check mod $name $(mod_check_span_words "$n" "$since"): 'claude plugin validate' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s each time. Whether it loads is not known."
+    [ -t 2 ] && continue
+    if notify_posted "could not check mod $name on the last $n syncs in a row"; then
+      new="$(awk -F'\t' -v n="$name" 'BEGIN { OFS = "\t" } $1 == n { $4 = 1 } { print }' <<< "$new")"
+    fi
+  done
+  if [ "$ok" != 1 ]; then
+    local aside="$MOD_CHECK_TIMEOUTS_FILE.unreadable"
+    if [ -e "$aside" ] || [ -L "$aside" ] || ! mv "$MOD_CHECK_TIMEOUTS_FILE" "$aside" 2>/dev/null; then
+      # Never deleted to make room (L5): the run says so, and keeps counting nothing until it is moved.
+      echo "claude-sync: the record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be read, and could not be set aside as $aside either (one is already there, or the move failed), so it was left as it is and no syncs in a row are being counted. Look at both, then remove them." >&2
+      sync_log_line "the record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be read or set aside, so no syncs in a row are being counted"
+      [ -t 2 ] || notify "the record of mod checks that did not finish could not be read"
+      return 0
+    fi
+    echo "claude-sync: the record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be read, so how many syncs in a row could not check a mod is not known. It is kept as $aside, and a new record counts from this sync." >&2
+    sync_log_line "the record of mod checks that did not finish could not be read; kept as $aside, and a new record counts from this sync"
+    # Nothing can say a time out it met is the first, so it is heard rather than counted from zero.
+    [ -z "$blind" ] || [ -t 2 ] || notify "could not check mod $blind, and how many syncs in a row could not is not known"
+  fi
+  if is_blank "$new"; then
+    rm -f "$MOD_CHECK_TIMEOUTS_FILE" 2>/dev/null || true
+    [ ! -e "$MOD_CHECK_TIMEOUTS_FILE" ] && return 0
+  else
+    tmp="$MOD_CHECK_TIMEOUTS_FILE.writing.$$"
+    if [ ! -d "$MOD_CHECK_TIMEOUTS_FILE" ] && printf '%s\n' "$new" > "$tmp" 2>/dev/null && mv -f "$tmp" "$MOD_CHECK_TIMEOUTS_FILE" 2>/dev/null; then
+      return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  echo "claude-sync: the record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be updated, so the next sync counts time outs in a row from what it held before this one." >&2
+  sync_log_line "the record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be updated"
+  return 0
+}
 check_mods_loaded(){
   local dirs bin listed d name out bad="" names=""
   dirs="$(mod_dirs_here)"
@@ -7160,6 +7252,11 @@ ALL
     [ -t 2 ] || notify "no mod is listed as loaded on this Mac"
     return 0
   fi
+  # From here every mod gets an outcome, so the record of time outs in a row is read here and
+  # rewritten below; a check that could not run at all (the returns above) leaves it as it was.
+  local mct_ok=1 mct_new="" mct_now mct_line mct_n mct_since mct_told mct_due="" mct_blind="" mct_said
+  mod_check_timeouts_read || mct_ok=0
+  mct_now="$(date +%s)"
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     name="$(mod_name "$d")"
@@ -7170,8 +7267,24 @@ ALL
     fi
     rc=0; out="$(run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" "$bin" plugin validate "$d" 2>&1)" || rc=$?
     if [ "$rc" -eq 124 ]; then
-      bad=1
-      echo "claude-sync: could not check mod $name: 'claude plugin validate' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT) and was stopped." >&2
+      # Could not check, which is not the same as refused: it never sets bad (#3759).
+      mct_line=""
+      [ "$mct_ok" = 1 ] && mct_line="$(awk -F'\t' -v n="$name" '$1 == n' <<< "$MCT_LINES")"
+      if [ -n "$mct_line" ]; then
+        IFS=$'\t' read -r _ mct_n mct_since mct_told <<< "$mct_line"
+        mct_n=$((mct_n + 1))
+      else
+        mct_n=1; mct_since="$mct_now"; mct_told=0
+      fi
+      mct_new="$mct_new${mct_new:+$'\n'}$name	$mct_n	$mct_since	$mct_told"
+      if [ "$mct_ok" != 1 ]; then
+        mct_blind="$mct_blind${mct_blind:+, }$name"
+        mct_said="How many syncs before this one could not check it is not known, because the record of them could not be read."
+      else
+        [ "$mct_n" -ge "$SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY" ] && [ "$mct_told" = 0 ] && mct_due="$mct_due${mct_due:+ }$name"
+        mct_said="Syncs in a row that could not check it: $mct_n, and $SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY in a row notify."
+      fi
+      echo "claude-sync: could not check mod $name: 'claude plugin validate' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT) and was stopped, so whether it loads is not known. $mct_said" >&2
       continue
     fi
     if [ "$rc" -ne 0 ]; then
@@ -7183,7 +7296,9 @@ ALL
   done <<MODS
 $dirs
 MODS
+  # Not listed or refused: at once, as before. A time out never reaches this (#3759).
   [ -n "$bad" ] && { [ -t 2 ] || notify "a mod is not loading on this Mac"; }
+  mod_check_timeouts_settle "$mct_ok" "$mct_new" "$mct_due" "$mct_blind"
   if [ -n "$MODS_SETTINGS_CHANGED" ] && [ -n "$names" ]; then
     echo "claude-sync: mods configured on this Mac: $names. They take effect in a new session; a session already running keeps what it loaded."
   fi
@@ -15738,6 +15853,7 @@ payload/$rel
   fi
   report_automatic_jobs
   report_hook_suite_result
+  report_mod_checks_unfinished
   report_outage_tally
   report_stray_processes
   report_scratch_leftovers
@@ -15921,6 +16037,21 @@ if [ -n "$_sct_given" ] && ! _wn_got="$(whole_above_zero "$SYNC_CLAUDE_CHECK_TIM
   exit 2
 fi
 [ -z "$_wn_got" ] || SYNC_CLAUDE_CHECK_TIMEOUT="$_wn_got"
+# How many syncs in a row a mod's check must time out before that notifies (claude-config#3759; the
+# number and its measurement are in DESIGN.md's table of limits). Refused when it cannot be read,
+# like the bound above, rather than run with a count nobody chose.
+_mctn_given="${SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY:-}"
+SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY="${SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY:-5}"
+_wn_got=""
+if [ -n "$_mctn_given" ] && ! _wn_got="$(whole_above_zero "$SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY")"; then
+  if [ -n "$WHOLE_NUMBER_MISSING" ]; then
+    echo "claude-sync: SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY='$SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY' could not be read: $WHOLE_NUMBER_MISSING. Refusing to run rather than counting time outs against a number nobody read." >&2
+    exit 2
+  fi
+  echo "claude-sync: SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY='$SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY' is not a positive whole number of syncs. Refusing to run rather than counting time outs against a number nobody can read." >&2
+  exit 2
+fi
+[ -z "$_wn_got" ] || SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY="$_wn_got"
 
 SYNC_SCRATCH_DU_TIMEOUT="${SYNC_SCRATCH_DU_TIMEOUT:-30}"
 case "$SYNC_SCRATCH_DU_TIMEOUT" in
