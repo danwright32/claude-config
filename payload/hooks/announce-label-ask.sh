@@ -31,10 +31,12 @@ set -uo pipefail
 payload="$(cat)"
 
 # Every Bash call and every file edit reaches this hook, so the commonest call leaves here, before
-# anything is loaded: only one naming the label, the record's folder, or the library that writes the
-# record (lib/announce-approval.py, by its file name) is judged. The library's name was missing
-# here, so a command running it to write an approval from a made up transcript named none of the
-# three and left at this test (claude-config#3703). Matched in the C
+# anything is loaded: only one naming the label, the record's folder, the library that writes the
+# record (lib/announce-approval.py, by its file name), or the milestone helper (create-milestone.sh,
+# by its file name, claude-config#3669: the case below says what such a call is judged for) is
+# judged. The library's name was missing here, so a command running it to write an approval from a
+# made up transcript named none of the three there were then and left at this test
+# (claude-config#3703). Matched in the C
 # locale, so a byte that is not UTF-8 cannot hide the words after it, and in any letter case, since
 # GitHub matches a label's name in either. A slash JSON wrote as an escape is matched too.
 # The match in any letter case is this test's alone: it is switched off again before returning, so

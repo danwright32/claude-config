@@ -3340,8 +3340,69 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   note is now its first picker of any kind. What it costs: the record gains a line for every
   picker and one more once judged, and nothing shortens it (README, "What bounds it").
 
+- **Whether a feature is announced is Dan's answer in a second picker, carried by the milestone
+  (#3669).** His words, 2026-11-25: "also, it should ask me before applying the label. It can be
+  part of the new feature discovery". Until then nothing asked him whether a feature would be
+  announced, so a yes could only be inferred at the last pull request, and a yes nobody acted on was
+  silently dropped. Chosen: feature discovery asks one picker of its own source
+  (`announce-discovery`); the plan handed to `create-milestone.sh` carries `announce` as `yes`, `no`
+  or `unasked`; the helper takes `yes` and `no` only when the approval library finds that answer of
+  his on the record, and writes one line into the milestone's description; and the merge gate
+  refuses the pull request that closes the milestone's last open issue under another label while
+  the line says yes, unless the record holds an announcement let through for that milestone that
+  GitHub says merged, or his `Not announcing` in a picker naming that milestone (R9). The line has
+  one writer and one reader, both in the library, and holds no name: the answer, his option's words
+  and the day in US Eastern time, so the helper never writes a work app's name into a description.
+  What counts as his yes or no is every rule of an approval that has a meaning without a file, and
+  two of this picker's own: the question must hold the words "agents must or can act differently"
+  and must name the feature in the metadata's very words, so an answer is never recorded about
+  something the question did not say. An answer that breaks a rule is recorded as `other`: it
+  decides nothing and, being his last answer, stands in front of an earlier yes or no. Ruled out:
+  a new hook to read his answer in before the helper runs (more registrations and tables; the
+  label hook, which already sees every Bash call, does it on a call naming the helper); letting
+  the helper read a transcript itself, which #3703 closed, since a session's command reads the
+  record only; letting the override clear R9, which would make the override the way a yes is
+  dropped; an exception for a pull request the dependency bot opened, which can close a last issue
+  like any other; and counting a `used` line as an announcement, since that line says the gate let
+  a merge go ahead and never that GitHub merged it, so the gate asks GitHub about each such pull
+  request and asks the library again naming the ones that have not merged. A pull request that
+  closes no issue is settled by GitHub's answer alone, before the library is needed, so a broken
+  library cannot refuse every merge in a repository that announces. A description or answer file
+  handed to the library is read whole or refused, never cut: the helper writes what comes back into
+  the milestone. Known edge: a feature whose last open issue is cleanup rather than the release
+  asks him at that point.
+
+- **The second picker joins the note path with a judge of its own (#3669 on #3789).** As first
+  built, this picker's note carried its source, repository, feature and milestone, written by a
+  hook that could tell what the picker asked. #3789 measured that the hook can tell nothing, so
+  that note would never have been written. Chosen: the discovery picker is noted like any other, by
+  its ids alone, and its source is the second name in `NOTED_SOURCES`, with `decisions()` as its
+  judge beside `approvals()`. Each judge gives a line to a noted picker of its own source, settles
+  one of no source the record reads, and gives the other source's picker nothing at all, so
+  whichever hook reads a session first, the other judge still finds its picker unjudged. Both read
+  back the same sessions by one rule (`_read_back`), and a picker the record holds any outcome for
+  (`approved`, `withdrawn`, `settled`, `decided`) is read back by neither. The note carries nothing
+  beside its ids for this picker: there is no file to hash, and a feature the hook's copy named
+  would not be believed over the transcript's own call. Ruled out: one judge that gives both kinds
+  their lines on every call, which would have a call that runs the milestone helper write
+  approvals of wording, a job that call is not judged for; and keeping `"source"` on the note,
+  which exists only on the path the measurement says does not happen. What it costs: a session
+  whose only unjudged picker belongs to the other judge is read again by this one, and counts
+  among the sessions one call reads, until the other judge has asked.
+
+- **One call reads back fifty sessions, and a call that stops short says so (#3669).** Dan, by
+  picker, 2026-11-26: "Raise it to 50 (Recommended)". At five, his approval was missed, and he was
+  asked again, whenever five or more other sessions had a picker answered between his Approve and
+  a merge that names no session. The number is chosen, not measured; one pass over a 20 MB
+  transcript was measured at 0.009 seconds on 2026-11-26 (above). What bounds the whole read is
+  the call's 12 seconds (`CHECK_SECONDS`), not the number: sessions are read newest first, a call
+  out of time stops before the next one, and the sessions left unread, for either reason, are
+  counted in the call's answer. Ruled out: stopping in silence, which would make a refusal after a
+  short read indistinguishable from one that looked everywhere and found no approval.
+
 `hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh`,
-`hooks/test-announce-answer-note.sh` and the #3666 section of `hooks/test-changelog-tag.sh` hold it.
+`hooks/test-announce-answer-note.sh`, the #3666 and #3669 sections of `hooks/test-changelog-tag.sh`
+and `skills/milestone/test-create-milestone.sh` hold it.
 
 ## Things known to be wrong and left that way
 

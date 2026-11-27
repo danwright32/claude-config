@@ -632,14 +632,16 @@ if [ "$carries" = no ]; then
   esac
 fi
 
-# THE OVERRIDE'S ONE EXCEPTION (the head of this file). The labels have been read, so the override is
-# settled here and nowhere later: a pull request that is not an announcement takes it, exactly as it
-# always did, whatever is wrong with its record. One that is an announcement does not, and from this
-# line on it is judged as if the override had not been typed. Where the label could not be told the
-# merge goes through and that is said.
-#
-# One thing the override does not cover for a pull request that is no announcement
-# (claude-config#3669): finishing a feature Dan said yes to announcing. So it is asked that first.
+# THE OVERRIDE'S TWO EXCEPTIONS (the head of this file). The labels have been read, so the override
+# is settled here and nowhere later. It does not cover two things:
+#   1. a pull request that is an announcement. From this line on it is judged as if the override had
+#      not been typed.
+#   2. a pull request that is no announcement and finishes a feature Dan said yes to announcing
+#      (claude-config#3669). So that is asked first, and it is refused with or without the override.
+#      Only where whether it finishes one could not be read does the override let it through, and
+#      that is said (finishes_announced_feature).
+# Any other pull request that is no announcement takes the override, whatever is wrong with its
+# record. Where the label could not be told the merge goes through and that is said.
 if [ "$overridden" = true ]; then
   case "$carries" in
     no) finishes_announced_feature; exit 0 ;;
