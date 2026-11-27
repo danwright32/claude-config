@@ -126,6 +126,18 @@ Dan does not write code or live in the terminal. When a step genuinely requires 
 - TypeScript everywhere. Avoid `any`.
 - **Consolidate from the start.** Before building something, check whether it duplicates logic that already exists (or that you are about to write twice) and reuse/share one implementation instead. Do not create a second copy of the same behavior and leave consolidation as a later cleanup. Dan has flagged repeated "two things doing the same job" more than once.
 - **Interlocking screen state goes in a tested reducer.** When a screen holds many pieces of state that change together (roughly ten or more, or a multi step flow with loading, failed and retry states), keep the rules for how it changes in one pure function the UI only sends events to, and test that function directly. A simple form or a few independent values stays as plain state. (Dan, 2026-10-16. Evaluation issues in the personal app repos may refine this.)
+- **Code comments** (Dan, 2026-11-27, claude-config#3857). The standard for new and changed code only, with no cleanup sweep of old comments:
+  - Write a comment only for something the code cannot show: a hidden constraint, an invariant, a workaround, behaviour that would surprise a reader.
+  - Give the reason and leave out the story: the bug, the task, the fix, the date, who asked. One issue number is allowed as a pointer when the reason is a past failure.
+  - Cite nothing a reader cannot look up from the repository, lesson ids in app code included.
+  - Never state a count or a list of other code as fact.
+  - A comment that puts work off names its issue, and is deleted when the work is done or dropped.
+  - No commented out code.
+  - When code changes, the comment on it is updated or deleted in the same change.
+  - Leave the comments on code you did not change as they are, and never delete a comment that gives a reason in order to have fewer comments.
+  - A file header says what the file is for and what callers can rely on, and holds no history.
+  - In tests, the behaviour goes in the test name.
+  - Before: `// Fixed the double send bug, 2026-11-03.` After: `// A retried job reaches this row again, so a row already sent is skipped.`
 
 ## Bug Fixes & Learning
 
