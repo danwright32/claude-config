@@ -823,6 +823,24 @@ run claim "$REPO" 3317 "$MINE"
 is "#3804 our release of our own claim beside a claim with no session recorded: exit 1" 1 "$code"
 has "#3804 our release of our own claim beside a claim with no session recorded: its branch holds" "remote branch: $MINE (the branch name being claimed" "$out"
 
+# Taking over a claim that itself never held the issue (it was posted under another session's live
+# claim) gives the name to nobody, and must not stop the name passing later: this session's next
+# claim on it holds the issue, so the branch its builder then pushes is its own.
+new_case
+{
+  theirs 9000 claim fix/3317-other-name
+  unnamed 8000 claim
+  theirs 7000 release fix/3317-other-name
+  unnamed 6000 release
+  mine 6000 release
+  mine 5000 claim
+} >"$FAKE/markers"
+printf 'main\n%s\n' "$MINE" >"$FAKE/branches"
+run claim "$REPO" 3317 "$MINE"
+is "#3804 a claim after taking over one that never held the issue: exit 0" 0 "$code"
+has "#3804 a claim after taking over one that never held the issue: already claimed" "ALREADY CLAIMED" "$out"
+has "#3804 a claim after taking over one that never held the issue: the branch is its own" "this session's own, by its claim on the issue: remote branch $MINE" "$out"
+
 # A release never ends another session's claim, and says whose it is.
 new_case
 theirs 600 claim >"$FAKE/markers"

@@ -209,7 +209,9 @@ live_claims() {
         if (s == "-") {
           ended = (key in when) ? b " " h " " $1 : ""
         } else {
-          if (ended == b " " h " " $1 && name[b] == h " -") name[b] = h " " s
+          # (b in name) first: reading name[b] alone would create it empty, and a name that
+          # exists is never listed again, so a later claim that holds the issue would not get it.
+          if (ended == b " " h " " $1 && (b in name) && name[b] == h " -") name[b] = h " " s
           ended = ""
         }
         delete when[key]
