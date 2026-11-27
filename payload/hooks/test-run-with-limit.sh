@@ -872,12 +872,15 @@ attempt("stand in: a command the system collected from under the runner", collec
 # TWO CALLS THAT MEET. The runner and the process that waits to become the command both ask the
 # system to make that process the leader of a new group, at the same moment, and macOS now and
 # then refuses one of the two (EPERM). Measured on 2026-11-27 on the personal MacBook (macOS
-# 26.6.2, python 3.14.4), 13000 children in two runs of a probe that makes only those two calls:
-# the child's own call was refused 10 times and the parent's 10 times, never both, and every child
-# led its own group by the time its parent let it go (one of the ten did not yet when its own
-# call came back). A runner that took the child's refusal as the end ran nothing and came back
-# 125: one stand in run of this suite on 2026-11-27, and 1 of 100 runs through the launcher.
-# The stand ins refuse what the system refused. The command writes down whether it leads its group.
+# 26.6.2, python 3.14.4) at loads of 20 to 83, 13000 children in two runs of a probe that makes
+# only those two calls: the child's own call was refused 10 times and the parent's 10 times, never
+# both, and every child led its own group by the time its parent let it go (one of the ten did not
+# yet when its own call came back). Why macOS refuses was not found. A runner that took the
+# child's refusal as the end ran nothing and came back 125: 1 of 100 runs through the launcher
+# that day, whose line named the refusal. One stand in run of this suite the same day came back
+# 125 with nothing said by the runner, and its child's words were not kept, so that one is read
+# as the same fault and was not seen to be. The stand ins refuse what the system refused. The
+# command writes down whether it leads its group.
 LEADS = "import os, sys; open(sys.argv[1], 'w').write('leads' if os.getpgrp() == os.getpid() else 'does not lead'); sys.exit(5)"
 def wrote(path):
     try:
@@ -885,6 +888,12 @@ def wrote(path):
             return f.read()
     except OSError:
         return "nothing written"
+
+def child_said():
+    """The lines the last process the runner started said on this run's standard error (note,
+    above, sends a child's words there, and the file is the one beside the work folder)."""
+    started = [e[1] for e in log if e[0] == "fork"]
+    return [line for line in wrote(work + ".err").split("\n") if started and line.startswith("the runner's child %d said: " % started[-1])]
 
 def calls_meet():
     d = case_dir("calls-meet")
@@ -899,30 +908,61 @@ def calls_meet():
     let_go(d)
 attempt("stand in: the system refuses the waiting process's own call for a new group", calls_meet)
 
-# Both refused when they met. Once it is let go the waiting process asks again, alone (the runner's
-# call has come back by then), and that call goes through.
-def calls_meet_twice():
-    d = case_dir("calls-meet-twice")
-    asked_by_child = []
+# BOTH REFUSED WHEN THEY MET (0 of the 13000). Let go, the waiting process does not lead a group
+# of its own, and it does NOT ask again: a group made after the runner let go is one the runner
+# never looked at, and a stop, a limit or a fault in that span would find no group to end. So
+# nothing is run: 125, and the waiting process says why. The stand in would grant a second call
+# and writes every call down, so a runner that asked again shows twice: the command runs, and the
+# file holds two calls.
+def calls_both_refused():
+    d = case_dir("calls-both-refused")
+    asks = os.path.join(d, "asks")
     def refused_once(pid, pgid):
         if os.getpid() == driver:
             raise PermissionError(1, "Operation not permitted")
-        asked_by_child.append(1)
-        if len(asked_by_child) == 1:
+        with open(asks, "a") as f:
+            f.write("asked\n")
+        if wrote(asks) == "asked\n":
             raise PermissionError(1, "Operation not permitted")
         return real["setpgid"](pid, pgid)
     os.setpgid = refused_once
-    rc = run(["30", sys.executable, "-c", LEADS, os.path.join(d, "group")])
-    result("stand in: the system refuses both calls for a new group when they meet: the waiting process asks again once it is let go, and the command runs as the leader of its group",
-           rc == 5 and wrote(os.path.join(d, "group")) == "leads" and not said and not faults(log), (rc, wrote(os.path.join(d, "group")), said, faults(log)))
+    ran = os.path.join(d, "ran")
+    rc = run(["30"] + touches(ran))
+    words = child_said()
+    result("stand in: the system refuses both calls for a new group when they meet: 125, the command never ran, the waiting process asked once and never again, and its one line says it does not lead a group of its own",
+           rc == 125 and not os.path.exists(ran) and wrote(asks) == "asked\n" and not faults(log) and not said
+           and len(words) == 1 and "nothing was run" in words[0] and "does not lead a process group of its own" in words[0],
+           (rc, os.path.exists(ran), wrote(asks), faults(log), said, words))
     let_go(d)
-attempt("stand in: the system refuses both calls for a new group when they meet", calls_meet_twice)
+attempt("stand in: the system refuses both calls for a new group when they meet", calls_both_refused)
 
-# THE OTHER SIDE OF IT: a system that refuses every such call. The command must never run outside
-# a group of its own, where nothing could end what it starts: 125, the command never ran, and the
-# waiting process says why (its words are on this run's standard error, the file beside the work
-# folder). This holds with or without the two cases above, so it is the limit on them: a refusal
-# is passed over only when the process leads its own group all the same.
+# ONLY THAT REFUSAL IS PASSED OVER. Any other error from the waiting process's own call is one
+# nothing here has measured: 125 with its line, even where the runner's call went through and
+# the process does lead its group. The stand in answers EACCES (13 on macOS and on Linux), which
+# python raises as the same PermissionError as EPERM, so a runner that passed over the kind of
+# error and not the number would start the command.
+def call_other_error():
+    d = case_dir("call-other-error")
+    def child_fails(pid, pgid):
+        if os.getpid() != driver:
+            raise PermissionError(13, "Permission denied")
+        return real["setpgid"](pid, pgid)
+    os.setpgid = child_fails
+    ran = os.path.join(d, "ran")
+    rc = run(["30"] + touches(ran))
+    words = child_said()
+    result("stand in: the waiting process's call for a new group answers an error that is not EPERM: 125, the command never ran, and its one line names the error",
+           rc == 125 and not os.path.exists(ran) and not faults(log) and not said
+           and len(words) == 1 and "nothing was run" in words[0] and "Errno 13" in words[0],
+           (rc, os.path.exists(ran), faults(log), said, words))
+    let_go(d)
+attempt("stand in: the waiting process's call for a new group answers an error that is not EPERM", call_other_error)
+
+# A SYSTEM THAT REFUSES EVERY SUCH CALL. The command must never run outside a group of its own,
+# where nothing could end what it starts: 125, the command never ran, and the waiting process says
+# why (its words are on this run's standard error, the file beside the work folder). With no
+# second call made, this walks the same steps as the both refused case above, which is the one of
+# the two that was seen to fail.
 def calls_all_refused():
     d = case_dir("calls-refused")
     def refused(pid, pgid):
@@ -930,8 +970,7 @@ def calls_all_refused():
     os.setpgid = refused
     ran = os.path.join(d, "ran")
     rc = run(["30"] + touches(ran))
-    started = [e[1] for e in log if e[0] == "fork"]
-    words = [line for line in wrote(work + ".err").split("\n") if started and line.startswith("the runner's child %d said: " % started[-1])]
+    words = child_said()
     result("stand in: a system that refuses every call for a new group: 125, the command never ran, nothing was signalled against the rule, and the one line is the waiting process saying nothing was run",
            rc == 125 and not os.path.exists(ran) and not faults(log) and not said and len(words) == 1 and "nothing was run" in words[0],
            (rc, os.path.exists(ran), faults(log), said, words))
