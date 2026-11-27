@@ -2228,6 +2228,30 @@ takes the line out of the base, so the payload's copy reads as not yet seen here
 refusal on one Mac must never travel as a deletion that unregisters the gate on the Mac whose script
 is fine. The first pull that finds the script registers it and clears the record.
 
+### A key beside the hooks block is named, kept, and never applied (#3741)
+
+The file is the hooks block's home and nothing else's, but nothing stopped somebody putting another
+top level key in it. Measured on 2026-11-26 with a `permissions` block in a throwaway folder: the
+pull read `.hooks` alone and said nothing, so the key reached neither Mac, and the next send rewrote
+the file as `{hooks: ...}`, deleting the key from the repository with no word either.
+
+So the pull names every such key, in its output and the sync log on each pull and in a notification
+once per set of keys (`.hooks-file-keys-told`), and the send writes its merged block into the object
+it read, so whatever else the file holds stays exactly as it was.
+
+Rejected along the way:
+
+- **Refusing the whole file on the pull, as `settings.shared.json` refuses a key off its list.** That
+  file holds nothing but optional settings, so refusing it whole costs a setting or two. This one
+  holds every gate, and since #1899 a removed or renamed gate has to be taken out of `settings.json`
+  for the Mac to keep working, so holding the block back over a key the sync does not read would stall
+  every hook change on both Macs for as long as the key stood.
+- **Refusing the send while the key is there.** The send rewrites the file on every run, so it would
+  have held this Mac's hook changes back on every edit until somebody removed the key, while the key
+  itself does no harm sitting in the repository. Keeping it costs nothing and loses nothing.
+- **Applying the key.** That is carrying a setting between Macs, which is what `settings.shared.json`
+  and its list exist to decide, one setting at a time with Dan's sign off.
+
 ## A conflict in a file this tool GENERATES is not a conflict
 
 The lessons index is derived: it is rebuilt from `LESSONS.md` on every send and every apply. When it

@@ -5019,6 +5019,47 @@ hooks_refused_here(){   # -> the recorded refusals as a JSON array, or [] when t
   printf '%s' "${r:-[]}"
 }
 
+# THE OTHER KEYS IN settings.hooks.json (claude-config#3741). The sync reads only the hooks block from
+# that file, so a top level key somebody puts beside it (a permissions block, measured 2026-11-26) is
+# applied on neither Mac. Until #3741 the pull met one in silence and the next send rewrote the file
+# as the hooks block alone, deleting the key from the repository. Now the pull names it and the send
+# writes its hooks block into the file it read. The sync still never CARRIES such a key: a setting
+# both Macs share goes in settings.shared.json, and only once it is on SHARED_SETTINGS_ALLOWED.
+#
+# payload_hooks_file_object: the payload's settings.hooks.json with this Mac's home put back, compact,
+# when it is a JSON object; {} when there is no file; and a failure, printing nothing, otherwise.
+payload_hooks_file_object(){
+  [ -f "$PAYLOAD/settings.hooks.json" ] || { printf '{}'; return 0; }
+  local w
+  w="$(detok < "$PAYLOAD/settings.hooks.json" | jq -c 'if type == "object" then . else error("not an object") end' 2>/dev/null)" || return 1
+  [ -n "$w" ] || return 1
+  printf '%s' "$w"
+}
+# HOOKS_FILE_KEYS_TOLD_FILE: the keys the last notification about them named, per Mac and gitignored,
+# so the notification is posted once per set of keys rather than on every pull (L36), and a new key
+# is news again. Absent or unreadable means the next pull that meets a key notifies, the loud side.
+HOOKS_FILE_KEYS_TOLD_FILE="$SYNC_REPO/.hooks-file-keys-told"
+hooks_file_other_keys(){   # -> the payload file's top level keys other than hooks, comma separated
+  local w
+  w="$(payload_hooks_file_object)" || return 0
+  jq -r '[keys_unsorted[] | select(. != "hooks")] | join(", ")' <<< "$w" 2>/dev/null || true
+}
+report_hooks_file_other_keys(){   # $1 = hooks_file_other_keys' answer
+  if [ -z "$1" ]; then
+    rm -f "$HOOKS_FILE_KEYS_TOLD_FILE" 2>/dev/null || true
+    return 0
+  fi
+  # Every pull that meets it says so, in its output and the log, since each one leaves it out again.
+  echo "claude-sync: the shared config's settings.hooks.json holds $1 beside the hooks block. The sync applies only the hooks block from that file, so $1 was NOT applied to settings.json on this Mac, or on any other, and a send keeps it in that file rather than deleting it. A setting both Macs share belongs in settings.shared.json, once it is on that file's list of shared settings; otherwise take it out of payload/settings.hooks.json." >&2
+  sync_log_line "settings.hooks.json holds $1 beside the hooks block, and it was NOT applied to settings.json: the sync applies only the hooks block from that file"
+  [ "$(cat "$HOOKS_FILE_KEYS_TOLD_FILE" 2>/dev/null || true)" = "$1" ] && return 0
+  [ -t 2 ] && return 0
+  if notify_posted "settings.hooks.json holds $1, which the sync does not apply"; then
+    printf '%s\n' "$1" > "$HOOKS_FILE_KEYS_TOLD_FILE" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # The hooks block of the commit this Mac LAST APPLIED, which is the base both directions compare
 # against. Without it there is no way to tell "the other Mac removed this" from "this Mac has not
 # seen it yet", so an empty base means keep, in both directions.
@@ -5598,7 +5639,7 @@ PROT
   # hooks block of settings.json, with this Mac's home path tokenized, MERGED against what the
   # payload already holds rather than replacing it (claude-config#300). See merge_hook_blocks.
   if [ -f "$CLAUDE_HOME/settings.json" ]; then
-    local _sh_local _sh_pay _sh_base _sh_merged
+    local _sh_local _sh_pay _sh_base _sh_merged _sh_whole
     _sh_local="$(jq -c '.hooks // {}' "$CLAUDE_HOME/settings.json" 2>/dev/null || true)"
     # The shared copy, read the same way. It used to fall back to an empty block when it could not
     # be parsed, and the merge then published this Mac's block over it, losing whatever it held
@@ -5646,8 +5687,16 @@ PROT
           "it could not be checked"*) notify "held back the hooks block: it could not be checked" ;;
           *) notify "held back the hooks block: a hook is registered for tools its header does not declare" ;;
         esac
+      elif [ -n "$_sh_merged" ] && _sh_whole="$(payload_hooks_file_object)"; then
+        # Written INTO the file it was read from, never as the hooks block alone (claude-config#3741):
+        # rewriting it as {hooks: ...} deleted every other top level key somebody had put there from
+        # the repository, on the first send after it arrived, and said nothing. Such a key is not
+        # applied by a pull (report_hooks_file_other_keys says so); the send only keeps it.
+        jq -n --argjson h "$_sh_merged" --argjson w "$_sh_whole" '$w | .hooks = $h' | tok > "$PAYLOAD/settings.hooks.json"
       elif [ -n "$_sh_merged" ]; then
-        printf '%s' "$_sh_merged" | jq '{hooks: .}' | tok > "$PAYLOAD/settings.hooks.json"
+        note_held_back settings.hooks.json
+        echo "claude-sync: the shared config's settings.hooks.json could not be read as a JSON object a second time, so this Mac's hooks block was NOT published into it and the repo keeps the copy it has. Check it with 'jq . $PAYLOAD/settings.hooks.json'." >&2
+        sync_log_line "the hooks block was NOT published, because the shared config's settings.hooks.json could not be read as a JSON object to write it into"
       else
         note_held_back settings.hooks.json
         echo "claude-sync: the hooks block could not be merged for publishing, so the repo keeps the copy it had and this Mac's hook changes have NOT been sent. Check $CLAUDE_HOME/settings.json and the payload's settings.hooks.json with jq." >&2
@@ -7608,6 +7657,9 @@ MOVED
     # merge kept nothing the base held and unregistered every hook on this Mac. It leaves hk_target
     # empty, and the second half says which file could not be read.
     hk_inc="$(detok < "$PAYLOAD/settings.hooks.json" | jq -c '.hooks // {}' 2>/dev/null)" || hk_inc=""
+    # Any other key in the file is left out of settings.json, and said so, naming it (#3741). A file
+    # that cannot be read names none: the second half says it could not be read.
+    report_hooks_file_other_keys "$(hooks_file_other_keys)"
     hk_bas="$(last_applied_hook_block)"
     # The SAME rule the send applies, with the roles the other way round: what is arriving is
     # primary, what is registered here is secondary (claude-config#300, see merge_hook_blocks). No
