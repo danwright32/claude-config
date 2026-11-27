@@ -983,8 +983,12 @@ OPENED_PATH = r"open\(\s*([\"\x27][^\"\x27]+[\"\x27])\s*,\s*[\"\x27][wa]"
 # So the string is read the way a command typed directly is, by the same two readers and no third:
 # it is cut into commands by lib/shell-words.py, the reader every gate shares, and each is judged by
 # the loop below, the one that judges a typed command, in the directory the script runs in. The
-# string is only ever ADDED to what is read: every segment read before is still read, so nothing
-# refused before can be let through by this (L42).
+# string is ADDED to what is read: every segment read before is still read. That alone did not
+# keep every refusal. The segments of a string also filled the set of paths the read of the whole
+# command leaves out, and a write the gate on main refused was let through that way until the
+# string was given no say in that set (placed_own, below). With that, the 99 made up commands of
+# the review of 2026-11-27 hold none that main refuses and this gate lets through; that is a
+# measurement over those commands, and no proof for every command (L42).
 #
 # A string put together as the script runs is read as far as its words go, each value marked as
 # one only the shell knows, so a path with one in it is judged as a typed path holding a variable
@@ -1227,6 +1231,9 @@ def read_strings(text, bases, cut):
                     untold("a command string an inline script hands to a shell: " + whole[:80], UNTOLD_STRING, b)
     return out
 
+# How many segments the command itself holds: every one after them is added from a command string
+# or a list of words, here or as the loop below reads on.
+OWN_SEGMENTS = len(segments)
 try:
     for extra in read_strings(shell_text, ALL_BASES, True):
         segments.append(extra)
@@ -1234,9 +1241,20 @@ except Exception:
     untold("a command string an inline script hands to a shell", UNTOLD_STRING, cwd)
 
 placed = set()
+# WHAT THE SEGMENTS OF THE COMMAND ITSELF PLACED, AND NOTHING A STRING ADDED (claude-config#3775). The read
+# of the whole command, below the loop, leaves out a path a segment placed. A segment added from a
+# command string or a list of words filled the one set too, at the directory this gate believes the
+# script runs in. So an open( call written over two lines, which only the read of the whole command
+# sees, was let through when a string in the same script named the same path in an open( call
+# after a cd this gate follows and the shell does not, one in brackets or a pushd and a popd: a
+# write to the checkout the command runs in, which the gate on main refused (found in review,
+# 2026-11-27). Such a segment still fills placed, for the segments read after it, and never this
+# set, so that read leaves out exactly what it left out before any string was read.
+placed_own = set()
 # The list grows as it is read: a command string found in a segment is added to its end, with the
 # directory it runs in before it, and read in its turn (claude-config#3689, STRINGS_MAX).
-for seg in segments:
+for at, seg in enumerate(segments):
+    typed = at < OWN_SEGMENTS
     if isinstance(seg, tuple) and seg[0] is CD_TO:
         base = seg[1]
         continue
@@ -1248,6 +1266,8 @@ for seg in segments:
     for m in (re.finditer(SCRIPT_PATH, seg) if WRITE_SCRIPT else ()):
         add(m.group(1), base)
         placed.add(m.group(1))
+        if typed:
+            placed_own.add(m.group(1))
     for m in (re.finditer(MAYBE_PATH, seg) if WRITE_SCRIPT else ()):
         if m.group(1) not in placed:
             add_maybe(m.group(1), base)
@@ -1264,6 +1284,8 @@ for seg in segments:
     for m in re.finditer(OPENED_PATH, seg):
         add(m.group(1), base)
         placed.add(m.group(1))
+        if typed:
+            placed_own.add(m.group(1))
     words = seg.split()
     if not words:
         continue
@@ -1288,13 +1310,14 @@ for seg in segments:
         add(w, base)
 
 # Read over the whole command too, for a script path the cut into segments split (a quoted path
-# holding a ; or |): one no segment placed is judged where the session is, as it always was,
-# rather than not at all (L42).
+# holding a ; or |): one no segment of the command itself placed is judged where the session is,
+# as it always was, rather than not at all (L42). Asked of placed_own, never placed: a path a
+# command string placed is still judged here.
 for m in (re.finditer(SCRIPT_PATH, shell_text) if WRITE_SCRIPT else ()):
-    if m.group(1) not in placed:
+    if m.group(1) not in placed_own:
         add(m.group(1), cwd)
 for m in re.finditer(OPENED_PATH, shell_text):
-    if m.group(1) not in placed:
+    if m.group(1) not in placed_own:
         add(m.group(1), cwd)
 
 # A LINK MADE BY A SCRIPT FILE THE COMMAND RUNS (claude-config#3689).
@@ -1320,7 +1343,11 @@ for m in re.finditer(OPENED_PATH, shell_text):
 # never one a script file runs. A file the command writes from a heredoc of its own is read from
 # that text, which is in the command. A compiled program is no script and is left as it was.
 #
-# Held to a count: at most FILES_MAX script files are read here from one command.
+# Held to a count: at most FILES_MAX script files are OPENED BY THIS GATE from one command. Those
+# are a python, perl, ruby, node, php, deno or bun script, a file run by its path whose first line
+# names no shell, and a shell script larger than the shared reader takes. A shell script the shared
+# reader takes is read by that reader and is not counted here, however many the command runs: on
+# 2026-11-27 a command running eleven of them was read through, and the link in the last refused.
 #
 # WHAT COUNTS IS A FILE THIS GATE GOES ON TO OPEN (claude-config#3775). The count went up for every
 # occurrence of a script being run, before anything was known about the file: a name holding a
@@ -1557,9 +1584,19 @@ try:
                         add_placed(w, b)
             script_links(body, b, False)
     if unread:
+        # ONLY THE WORD WHERE A SCRIPT IS RUN IS TAKEN OUT (claude-config#3775, found in review
+        # 2026-11-27). Every occurrence of every script path the command runs was taken out as plain
+        # text before a payload path was looked for, so a script named a took each letter a out of
+        # payload/, and a script run by its payload path took out the same path given as a word to
+        # the script that could not be read: both let through, against the answer recorded in the
+        # pull request of #3689 ("3.103.1 Keep refusing it"). Now a path is taken out only where it
+        # stands as a whole word, and once for each time the command runs it. Which of several
+        # equal words goes makes no difference to what is left to search.
         rest_of_it = cmd
         for p in own_scripts:
-            rest_of_it = rest_of_it.replace(p, " ")
+            if p:
+                rest_of_it = re.sub(r"(?:^|(?<=[\s\"\x27`;&|()<>]))" + re.escape(p) + r"(?=[\s\"\x27`;&|()<>]|$)",
+                                    " ", rest_of_it, count=1)
         written = heredoc_written()
         for path, full, why_not, b in unread:
             if full in written:

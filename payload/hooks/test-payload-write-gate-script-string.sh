@@ -561,6 +561,82 @@ EOF
 bash $FIX/scripts/made.sh $FIX/dev/payload/hooks/x.sh" "$FIX/elsewhere"
 allowed "#3689 control: a script the command writes from its own text, and then runs, is read from that text"
 
+# ANOTHER SCRIPT'S NAME INSIDE THE PAYLOAD PATH (claude-config#3775, found in review 2026-11-27).
+# The payload path the command names "besides the script itself" was looked for in the command
+# with every occurrence of every script path it runs taken out as plain text. So a script named a
+# took every letter a out of payload/, and a script run by its payload path took out the same path
+# given to the script that cannot be read. Only the word where a script is run is taken out now.
+# shellcheck disable=SC2016  # the names are meant to reach the gate with their values unfilled
+runbash 'bash a; bash $X payload/hooks/x.sh' "$FIX/elsewhere"
+refused "#3775 a script named by a value and given a payload path is refused beside a script named a"
+says "#3775 in words that say it could not read the script" "could not read the script file"
+runbash "bash load; bash $FIX/scripts/gone.sh payload/hooks/x.sh" "$FIX/elsewhere"
+refused "#3775 a script that is not there and given a payload path is refused beside a script named load"
+# shellcheck disable=SC2016
+runbash "bash $FIX/dev/payload/hooks/x.sh; python3 \"\$TOOL\" $FIX/dev/payload/hooks/x.sh" "$FIX/elsewhere"
+refused "#3775 a script named by a value is refused when given the path of a payload script the command also runs"
+runbash "bash $FIX/dev/payload/hooks/gone.sh $FIX/dev/payload/hooks/gone.sh" "$FIX/elsewhere"
+refused "#3775 a script that is not there is refused when given its own payload path as a word besides"
+# shellcheck disable=SC2016
+runbash 'bash $X payload/hooks/x.sh' "$FIX/elsewhere"
+refused "#3775 control: the first of those without the other script was refused before, and is"
+# shellcheck disable=SC2016
+runbash "python3 \"\$TOOL\" $FIX/dev/payload/hooks/x.sh" "$FIX/elsewhere"
+refused "#3775 control: the third without the other script was refused before, and is"
+# shellcheck disable=SC2016
+runbash "bash $FIX/dev/payload/hooks/x.sh; python3 \"\$TOOL\"" "$FIX/elsewhere"
+allowed "#3775 control: a payload script run beside one named by a value, no payload path besides, is let through"
+runbash "bash \"$FIX/dev/payload/hooks/gone.sh\"" "$FIX/elsewhere"
+allowed "#3775 control: a script that is not there, its own quoted name the only payload path, is let through"
+runbash "bash $FIX/dev/payload/hooks/gone.sh; bash $FIX/dev/payload/hooks/gone.sh" "$FIX/elsewhere"
+allowed "#3775 control: the same script that is not there run twice, no payload path besides, is let through"
+runbash "(bash $FIX/dev/payload/hooks/gone.sh)>$FIX/elsewhere/a.txt" "$FIX/elsewhere"
+allowed "#3775 control: and run inside brackets with its output sent elsewhere"
+
+echo "a path in a command string takes nothing from the read of the whole command"
+
+# WHAT A STRING'S SEGMENTS PLACE (claude-config#3775, found in review 2026-11-27). An open( call
+# written over two lines is in no one segment, so only the read of the whole command sees it, and
+# that read leaves out a path a segment already placed. The segments of a command string filled
+# the same set: a string naming the same path in an open( call, after a cd this gate follows and
+# the shell does not (one in brackets, or a pushd and a popd), placed it elsewhere, and the write
+# to the checkout the command really runs in was let through. The gate on main refused all three.
+TWO_LINE_OPEN="$(cat <<'EOF'
+python3 -c 'import os
+open("payload/hooks/x.sh",
+"w").write("x")'
+EOF
+)"
+STRING_NAMES_IT="$(cat <<'EOF'
+python3 -c 'import os
+os.system("echo open(\"payload/hooks/x.sh\", \"w\")")
+open("payload/hooks/x.sh",
+"w").write("x")'
+EOF
+)"
+STRING_NAMES_IT_WITH="$(cat <<'EOF'
+python3 -c 'import os
+os.system("echo open(\"payload/hooks/x.sh\", \"w\")")
+with open(
+"payload/hooks/x.sh", "w") as f: f.write("x")'
+EOF
+)"
+runbash "(cd $FIX/elsewhere); $TWO_LINE_OPEN" "$FIX/dev"
+refused "#3775 control: an open over two lines, after a cd in brackets, is refused where the session is"
+runbash "pushd $FIX/elsewhere; popd; $TWO_LINE_OPEN" "$FIX/dev"
+refused "#3775 control: and after a pushd and a popd"
+runbash "$STRING_NAMES_IT" "$FIX/dev"
+refused "#3775 control: and with a command string naming the same path, with no cd at all"
+runbash "(cd $FIX/elsewhere); $STRING_NAMES_IT" "$FIX/dev"
+refused "#3775 a command string naming the same path does not let it through after a cd in brackets"
+says "#3775 and the refusal names the file in the checkout the command runs in" "$FIX/dev/payload/hooks/x.sh"
+runbash "pushd $FIX/elsewhere; popd; $STRING_NAMES_IT" "$FIX/dev"
+refused "#3775 nor after a pushd and a popd"
+runbash "pushd $FIX/elsewhere; popd; $STRING_NAMES_IT_WITH" "$FIX/dev"
+refused "#3775 nor written as a with open( whose path is on the next line"
+runbash "cd $FIX/elsewhere; $STRING_NAMES_IT" "$FIX/dev"
+refused "#3775 and after a cd the shell does follow it is refused as the gate on main refuses it"
+
 case "$(ps -o command= -p "$WPID" 2>/dev/null || true)" in
   *claude-sync*watch*) check "the stand in watcher lived to the end of the suite" ok ;;
   *) check "the stand in watcher lived to the end of the suite" "it had gone, so every answer after that was given with no watcher and proves nothing" ;;

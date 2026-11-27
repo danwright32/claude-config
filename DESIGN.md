@@ -2542,8 +2542,23 @@ too large) is refused in its own words when the call names a `payload/` path bes
 and only for a script the command itself runs. One the command writes from its own heredoc is
 read from that text.
 
-The reading of script files is held to 8, and what counts toward the 8 is a file the gate goes on
-to open (#3775). As first shipped the count went up for every occurrence of a script being run,
+Two faults in these readings were found in review on 2026-11-27 and closed before the change
+merged (#3775). The segments of a command string filled the set of paths that the read of the
+whole command leaves out, so an `open(` call written over two lines was let through when a string
+in the same script named the same path after a cd the gate follows and the shell does not (one in
+brackets, or a `pushd` and a `popd`): a write to the checkout the command runs in, which main
+refused. That read now asks only what the segments of the command itself placed. And the payload
+path named besides a script that could not be read was looked for with every occurrence of every
+script path the command runs taken out as plain text, so a script named `a` hid `payload/`, and a
+script run by its payload path hid the same path given as a word to the unread script. Only the
+word where a script is run is taken out now, once for each time the command runs it. Over the 99
+made up commands of that review, none that main refuses is let through after the first fix (four
+before it); that is a measurement over those commands and no proof for every command.
+
+The reading of script files is held to 8 files the gate opens itself (a python, perl, ruby, node,
+php, deno or bun script, a file run by its path whose first line names no shell, and a shell
+script too large for the shared reader); a shell script that reader takes is not counted. What
+counts toward the 8 is a file the gate goes on to open (#3775). As first shipped the count went up for every occurrence of a script being run,
 before anything was known about the file, and the loop stopped at the ninth. A test suite runs
 its hook by a name holding a value (`bash "$HOOK"`) dozens of times, and the gate opens none of
 those, so the stop refused the run for want of reading files it would never have read. Measured

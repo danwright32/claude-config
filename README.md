@@ -897,7 +897,9 @@ a link).
 `hooks/test-payload-write-gate-script-string.sh` holds the cases, on stand in files.
 
 What counts toward the limit of 8 script files is a file the gate goes on to open, once for each
-directory it is run in (#3775). A name holding a value (`bash "$HOOK"`), which the gate never
+directory it is run in (#3775). The gate opens a python, perl, ruby, node, php, deno or bun script,
+a file run by its path whose first line names no shell, and a shell script too large for
+`lib/shell-words.py`; a shell script that reader takes is read by it and is not counted. A name holding a value (`bash "$HOOK"`), which the gate never
 opens, a file that is not there and the same file run again in the same directory do not count
 and do not stop the reading. As first shipped the count went up for every occurrence, so a plain
 run of a test suite was refused at its ninth: measured on 2026-11-26 on the personal MacBook, 84
