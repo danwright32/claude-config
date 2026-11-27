@@ -7,7 +7,7 @@ import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
 import { clearTurnPages, notePinned, pagesAtStop, registerPages } from './pages.ts'
 import { PROSE_MARK, TURN_TIMEOUT_MS, turnAt } from './turn.ts'
 import { saysNoneNow, waitingPhrase } from './waiting.ts'
-import { onCard, typedCommands } from './typed.ts'
+import { apartFromTyped, onCard, typedCommands } from './typed.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { turnNow } from './mod-kit/turnnow.ts'
@@ -919,8 +919,11 @@ export const register: Register = on => {
     }
     const shown = card && !card.isCarried ? card : null
     const missing = commands.filter(c => !onCard(shown, c))
-    // Both are given when both are found: the phrase may be about another step than the command.
-    const asks = [missing.length ? typedStep(missing) : null, phrase && !(shown && nextStep(shown) !== undefined) ? proseStep(phrase) : null].filter(a => a !== null)
+    // One step gets one ask (review of pull request 3677): a phrase found only in the words that hand
+    // a held command over is that command's step, which the command's ask already covers. A phrase
+    // anywhere else in the turn is another step, and keeps its own ask.
+    const other = missing.length ? (said.map(t => waitingPhrase(apartFromTyped(t, missing))).find(p => p !== null) ?? null) : phrase
+    const asks = [missing.length ? typedStep(missing) : null, other && !(shown && nextStep(shown) !== undefined) ? proseStep(other) : null].filter(a => a !== null)
     if (!asks.length) return r
     const ours = asks.join('\n\n')
     return { ...r, block: r.block ? `${r.block}\n\n${ours}` : ours }

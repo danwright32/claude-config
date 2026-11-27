@@ -4,7 +4,9 @@ import type { Mounted as KitMounted } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow, ModKitPane } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { DROPPED_AFTER_MS } from '../hooks/card.ts'
+import { PAGE_MARK } from '../hooks/page.ts'
 import { ASKED_PANE, FOLLOW_MS, UNASKED_PANE } from '../hooks/place.ts'
+import { PROSE_MARK } from '../hooks/turn.ts'
 import { STEPS_DESCRIPTION, VERDICT_DESCRIPTION, VERDICT_INPUT } from '../hooks/register.tsx'
 import type { StepsCard } from '../types/index.d.ts'
 
@@ -1325,16 +1327,29 @@ test('a command to type that the prose check already knows is still blocked whil
   world(on)
   await start($)
   const said = 'Type `/plan-council` with the brief below.'
-  // With no card both checks find it: the command's ask, and the prose one ("type" before a code
-  // span, #863), which is all that held it before #3652.
+  // With no card both checks find it: the command's, and the prose one ("type" before a code span,
+  // #863), which is all that held it before #3652. It is one step, so it gets one ask, the command's:
+  // two asks gave Dan about 1,200 characters and two different locations for it (review of 3677).
   const bare = (await turnStop($, said)).block ?? ''
   expect(bare).toMatch(/a command to type himself \(`\/plan-council`\)/)
-  expect(bare).toMatch(/\("Type"\), and no steps card holds it/)
+  expect(bare).not.toMatch(/no steps card holds it/)
+  expect(bare.split(PROSE_MARK).length - 1).toBe(1)
   // Once a card of other steps is pinned the prose check passes, and only the command's ask holds it.
   await hand($, [SHARE, DRAFT])
   const pinned = (await turnStop($, said)).block ?? ''
   expect(pinned).toMatch(/`\/plan-council`/)
   expect(pinned).not.toMatch(/no steps card holds it/)
+})
+
+test('with no card, a command to type and another step left in prose are two steps and get an ask each (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  const said = `Type \`/plan-council\` with the brief below.\n\n${PROSE_STEP}`
+  const both = (await turnStop($, said)).block ?? ''
+  expect(both).toMatch(/a command to type himself \(`\/plan-council`\)/)
+  expect(both).toMatch(/\("waiting on you"\), and no steps card holds it/)
+  // The command's own words are not what the prose ask names.
+  expect(both).not.toMatch(/\("Type"\)/)
 })
 
 test('with no card at all, the command to type blocks the turn end (#3652)', withKit, async ($, on) => {
@@ -1347,13 +1362,13 @@ test('once an unfinished step on the card holds the command, the same reply pass
   world(on)
   await start($)
   const typed = { title: 'Start the planning panel', location: 'paste it where you type your messages to me', value: "/plan-council Plan the import of last season's galleries", checked: 'not-done' }
-  await hand($, [SHARE, DRAFT, typed])
+  await hand($, [typed, SHARE, DRAFT])
   expect((await turnStop($, TYPED_STEP)).block).toBeUndefined()
-  // A finished step no longer holds it: the card closing is not the command being typed.
+  // A finished step no longer holds it. Only the command's step is finished here, and the card still
+  // shows the other two unfinished, so it is the finished step, not a closed card, that is tested
+  // (review of 3677: with all three finished the card was gone, which is the no card case again).
   await call($, VERDICT, { step: 1, checked: 'checked' })
-  await call($, VERDICT, { step: 2, checked: 'checked' })
-  await call($, VERDICT, { step: 3, checked: 'checked' })
-  expect((await turnStop($, TYPED_STEP)).block).toMatch(/`\/plan-council`/)
+  expect((await turnStop($, TYPED_STEP)).block).toMatch(/a command to type himself \(`\/plan-council`\)/)
 })
 
 test('a reply that only names a slash command, or offers one, passes (#3652)', withKit, async ($, on) => {
@@ -1403,6 +1418,26 @@ test('once this mod has blocked in a turn, it never blocks that turn again, so i
   world(on, { turn: [prompt(), wrote(DOWNBEAT_STEP), prompt(true), wrote('Nothing is left for Dan to do now.')].join('\n') })
   await start($)
   expect((await turnStop($, 'Nothing is left for Dan to do now.', true)).block).toBeUndefined()
+})
+
+// In a live session the turn is read from its transcript, and then only the mark stops a second hold:
+// `stop_hook_active` is not consulted (review of 3677). The transcript reader calls a record this
+// mod's own when its text holds one of the marks, so the ask's own words are what is tested here.
+test('the ask for a command to type carries the once a turn mark, so a turn that holds it is never held again (#3652)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [prompt(), wrote(TYPED_STEP)].join('\n') })
+  await start($)
+  const first = (await turnStop($, TYPED_STEP)).block ?? ''
+  expect(first).toMatch(/`\/plan-council`/)
+  expect(first.startsWith(PROSE_MARK)).toBe(true)
+  // The feedback record as Claude Code writes it, judged as the reader judges it (hooks/turn.ts).
+  const feedback = JSON.stringify({ type: 'user', promptId: 'p1', message: { role: 'user', content: `Stop hook feedback:\n${first}` } })
+  const isOurs = [PROSE_MARK, PAGE_MARK].some(mark => feedback.includes(mark))
+  expect(isOurs).toBe(true)
+  w.turn = [prompt(), wrote(TYPED_STEP), prompt(isOurs), wrote('It is not on the card yet.')].join('\n')
+  expect((await turnStop($, 'It is not on the card yet.')).block).toBeUndefined()
+  // The control: a turn whose feedback record is another hook's is held, so the mark is what stops it.
+  w.turn = [prompt(), wrote(TYPED_STEP), prompt(false), wrote('It is not on the card yet.')].join('\n')
+  expect((await turnStop($, 'It is not on the card yet.')).block).toMatch(/`\/plan-council`/)
 })
 
 test('a step said in the turn before this one is not judged again (#1608)', withKit, async ($, on) => {
