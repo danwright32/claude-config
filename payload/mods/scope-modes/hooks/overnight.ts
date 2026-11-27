@@ -1,6 +1,7 @@
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, inScratch, operations, type Cmd } from './nobuild.ts'
 import { browserRefusal, type Browser } from './browser.ts'
+import { gitEnvNamed, gitEnvSpelled, gitGlobals, gitPlace, type GitRead } from './gitplace.ts'
 
 // Sleep mode phase 3 (#834): what is refused while the Mac sleeps, judged by what a call DOES and
 // by the repository it reaches, never by a phrase anywhere in it (L673). Dan's decision, 2026-10-06
@@ -236,10 +237,16 @@ export const tempWords = (raw: string): ((word: string) => string) => {
 // run somewhere other than the folder it names with -C or a cd, so that folder being a temp one
 // says nothing. Read from the words before the subcommand mod-kit's reading found, never from a
 // list of git's options here: anything there but one -C and its folder counts.
-const gitElsewhere = (words: readonly string[], g: NonNullable<Cmd['git']>, raw: string): boolean => {
-  const globals = g.sub === undefined ? words.slice(1) : words.slice(1, words.length - g.args.length - 1)
+// `envNamed` is whether the call names one of those variables at all (gitEnvNamed, #3398): given a
+// value, or handed to a command that sets or exports it with no `=` (`read GIT_DIR; export GIT_DIR`),
+// which reaches git the same and was read until then as naming nothing.
+// `raw` is the call's text, asked beside it (gitEnvSpelled) as it has been since #1124: gitEnvNamed
+// reads a commit message or an echo quoting `GIT_DIR=` as naming nothing (the review of #3532), and
+// an allowance that text took away before #3398 is not given back by that reading.
+const gitElsewhere = (words: readonly string[], g: NonNullable<Cmd['git']>, envNamed: boolean, raw: string): boolean => {
+  const globals = gitGlobals(words, g)
   const plain = globals.length === 0 || (globals.length === 2 && globals[0] === '-C')
-  return !plain || /(?:^|[^\w$])GIT_(?:DIR|WORK_TREE|COMMON_DIR)=/.test(raw)
+  return !plain || envNamed || gitEnvSpelled(raw)
 }
 // The repositories a push writes to, as git names them: the repository after its flags, and
 // --repo. Each a temp path, as written or relative to the folder git runs in: a remote's name or a
@@ -628,14 +635,19 @@ const GIT_PUTS_BACK = new Set(['checkout', 'restore', 'rm', 'mv', 'apply', 'am']
 
 // How a call reads the temp folder (#1124): `temp`, its words as tempWords reads them; `elsewhere`,
 // whether git was told to use another repository's git folder or work tree; `worktrees`, whether
-// any git in the line adds or moves a worktree, which can put a real repository's branches there.
-type TempReading = { temp: (w: string) => string; elsewhere: boolean; worktrees: boolean }
-const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: string, look: Look, t: TempReading): Promise<string | undefined> => {
+// any git in the line adds or moves a worktree, which can put a real repository's branches there;
+// `envNamed`, whether the call names GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR anywhere (#3398).
+type TempReading = { temp: (w: string) => string; elsewhere: boolean; worktrees: boolean; envNamed: boolean }
+const gitRefusal = async (g: GitRead, dir: string | null, home: string, look: Look, t: TempReading): Promise<string | undefined> => {
   const sub = g.sub ?? ''
   const args = g.args
   if (GIT_PUTS_BACK.has(sub) && args.some(isLessons)) return 'write to LESSONS.md'
-  // The folder git runs in, and whether it is a throwaway repository under the temp folder.
-  const where = g.dir === undefined ? dir : resolveIn(g.dir, dir, home, t.temp)
+  // Where the command acts, from mod-kit's one reading of it (gitplace.ts, #3398).
+  const place = gitPlace(g, dir, (w, from) => resolveIn(w, from, home, t.temp), t.envNamed)
+  // The folder the last -C alone names, and whether it is a throwaway repository under the temp
+  // folder. It is where git runs whenever `elsewhere` is false (one -C or none, nothing named
+  // apart), which is the only time the temp folder's allowances below are given.
+  const where = place.asRead
   const throwaway = !t.elsewhere && inTemp(where)
   // A branch deleted there is one of its own only in a repository of its own: a linked worktree
   // of a real repository under the temp folder shares that repository's branches (lessons review
@@ -660,9 +672,22 @@ const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: 
   if (sub === 'update-ref' && args.includes('-d') && args.some(a => a.startsWith('refs/heads/'))) return (await ownBranches()) ? undefined : 'delete a branch'
   if (sub === 'switch' || (sub === 'checkout' && checkoutMoves(args))) {
     if (throwaway) return undefined
-    const primary = where === null ? null : await look.isPrimary(where)
-    if (primary === null) return `run git ${sub} where it could not be told whether this is a primary checkout`
-    return primary ? `run git ${sub} in a primary checkout` : undefined
+    const untold = `run git ${sub} where it could not be told whether this is a primary checkout`
+    // #3398: git moves the checkout of the repository the command names, never the folder the call
+    // was typed in. A repository or a working folder named apart (--git-dir, --work-tree, GIT_DIR,
+    // GIT_WORK_TREE, or one of those variables named anywhere in the call) is one no folder answers
+    // for: until #3398 the folder it was typed in was asked, so a linked worktree let
+    // `git --git-dir=<the primary checkout>/.git --work-tree=<it> checkout main` move the primary one.
+    if (place.apart) return untold
+    // The folder the last -C alone names is still asked first, in the same words, so nothing
+    // refused before #3398 runs now; then the folder every -C leads to, where that is another
+    // (`git -C /a -C b` runs in /a/b, and was asked about <the folder it runs in>/b alone).
+    for (const at of place.runs === where ? [where] : [where, place.runs]) {
+      const primary = at === null ? null : await look.isPrimary(at)
+      if (primary === null) return untold
+      if (primary) return `run git ${sub} in a primary checkout`
+    }
+    return undefined
   }
   return undefined
 }
@@ -1014,6 +1039,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   const stack: (string | null)[] = []
   const temp = tempWords(call.raw)
   const worktrees = call.commands.some(c => c.git?.sub === 'worktree')
+  const envNamed = gitEnvNamed(call.raw, call.commands)
   // What rtk's proxy runs is read by mod-kit as that command, marked proxied (#2983). Every command
   // mod-kit marks unread is refused whole, with mod-kit's own reason (#3021): the word rtk's proxy
   // splits, and eval, a command a value names, an alias, ssh and a trap whose text the shell
@@ -1058,7 +1084,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // path (`grep gh README.md`, `ls gh`, `grep -n -e gh -e x src`) runs nothing.
     if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && ghRunsFrom(words.slice(i + 2)))) return UNRESOLVED
     if (c.git) {
-      const why = await gitRefusal(c.git, dir, call.home, look, { temp, elsewhere: gitElsewhere(c.words, c.git, call.raw), worktrees })
+      const why = await gitRefusal(c.git, dir, call.home, look, { temp, elsewhere: gitElsewhere(c.words, c.git, envNamed, call.raw), worktrees, envNamed })
       if (why) return why
       continue
     }

@@ -274,6 +274,20 @@ and settles its own surfaces in rounds of its own before it is built.
 | A judgment that cannot be had | Stop, as specced (picker) |
 | The note cannot be delivered (2026-10-04, picker) | Tried once more; if that fails too, the card gets a dim line under the safe way, "The other session could not be told: <reason>.", which Claude also reads. The block stands either way. |
 
+A read left unanswered is asked once more (#3673, built 2026-11-26). Claude Code cuts a call to
+another mod's noun off at 10 seconds (standing rule 4), in the words "did not answer within
+10000ms". In the personal MacBook's session records, 2026-10-26 to 2026-11-26, that was all 12
+calls this guard refused as not checked (11 the session list, 1 mod-kit's git reader), none a
+fault in its reading of the call: each came while other agents kept the Mac busy, and each of the
+11 sent again unchanged went through. So the session list and mod-kit's five reads (commands, git,
+pipeline, writes and its walk for the checkout around a repository), which change nothing however
+often they are asked, are each asked a second time when the first ask got no answer, and the call
+is judged on the second answer by the same rules. Nothing is let through on a failure: a second silence refuses the call with the words "and
+again when asked a second time", which a later count can tell from a refusal after one ask, and a
+read failing in any other words refuses at once, as does the registry's own refusal inside its 8
+seconds, seen 0 times in those records. Not known: how often the second ask answers, which leaves
+no trace in a session record.
+
 A session silent for five minutes counts as closed; its latest request is read from its transcript,
 never copied into the registry. The transcript is found where it is read (2026-10-04, picker): in
 Claude Code's folder for the session's starting directory, else by its session id, and only if that
@@ -2909,8 +2923,9 @@ mod-kit's reader gives such a word as the one name it spells and marks it `unexp
 `handedToUnknown` dropped the mark, so the guard read the parenthesis and its bar as a group and
 the `$(` as a command's output, and held the word as a name that may be any screen file. The mark
 is now kept, and `patternMayBeLook(word, asWritten)` reads such a word as the characters it spells,
-its groups as each name they can spell, as any other word is. Only a word inside a script's own
-text is read so: the same word typed whole on a command line is judged as before, and a word that
+its groups as each name they can spell, as any other word is. That change read only a word inside
+a script's own text so (the same word typed whole on a command line is read by the mark since
+#3620, below), and a word that
 spells a screen file, one handed over beside it, or a suite that writes a stylesheet, is still
 held. This makes the guard hold less. Counted the same day over the personal MacBook's records
 (one run, 2026-11-25: 70,279 shell calls from 2026-10-24 to 2026-11-25, 63,186 distinct; 9,052
@@ -2924,6 +2939,36 @@ guard reads the same with the change and passed before too. No call passed befor
 now. Still held: a suite whose helper is handed a fixture file's name and writes it under the
 suite's own work folder (test-lessons-advisory.sh, test-pr-review.sh), 4 calls, which needs the
 shared rule for a temporary folder to vouch for that folder, and it does not on the real suites.
+
+**The same word typed whole on a command line (#3620), built 2026-11-26 for the design round
+guard.** #3602 left one case held on purpose: the same marked word typed whole, as in
+`mystery "x \$(a | b) y"`, which the guard still read as a group and a command's output. The
+target a command line gives a run already carried the reader's mark; `judged` now reads it there
+too, whichever run is handed the word (a program the reader does not know, a script file, a tool).
+Two things are stricter typed whole than in a script's text. A word that names a look changing
+file anywhere in its text (`mentionedLookFiles`) is judged as before and so held: a program that
+runs what it is handed as a command (a remote shell, a helper that evaluates its argument) would
+write that file, and `mystery "cp x app/page.css; echo y/\$(a|b)"` was held only by the old
+reading. And only the reader's own `true` is the mark, here and in `handedToUnknown`: a word with
+no mark, or with any other value in its place, is judged as one the shell may fill in. Still held,
+each with a test: a word whose last part spells a screen file, a screen file beside the word, and
+a script file or tool handed a substitution that really runs. Not changed, and passed before as
+now: a program the reader does not know handed a substitution that really runs, which the reader
+cannot place. This makes the guard hold less. What it newly passes is a text that names no screen
+file; the same text with no bar inside its parenthesis (`mystery "x \$(a) y"`) passed before.
+Counted on the personal MacBook (one run of each stage, 2026-11-26: 8,381 record files, 76,866
+shell calls from 2026-10-26 to 2026-11-26, 68,898 distinct by folder and command), every rule
+asked of the guard's own modules. 96 distinct calls hand a run a marked word, 33 of them one
+holding a `$(` or a backtick, and 3 (3 calls, all agents', 2026-11-14 and 2026-11-25) hold a word
+the change reads differently: each hands a script file a finding or a command as text, none a
+program the reader does not know and none a tool. No word read as no screen file before is held
+now, and no recorded word is kept held only by the rule for a name anywhere in the text. The 33
+were then judged whole by the guard at the base and with the change, in the test file's stand-in
+world: none changes verdict (30 pass both ways, the 3 with a moved word among them; 3 are held
+both ways as could not check). Twelve planted controls went through the same judging and read as
+required: three that must move (held, then passed), four that change or sit beside a screen file
+(held both ways), a script file handed a live substitution (held both ways), and four that pass
+both ways. Not established: the work MacBook's records, and any call older than 2026-10-26.
 
 **The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
 to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was
@@ -3043,6 +3088,11 @@ ones marked open are the builder's choice, waiting on Dan.
   both names is listed once, as its newest card, still carrying any message an older card under
   the other name owes, pinned from that card so Mark sent finds it (#720). When GitHub cannot be
   asked it lists what is kept under the remote's name and says the rest may be missing.
+- **An announcement owed is kept beside the cards, not among them** (#3667): an announce merge's
+  owed Slack draft is kept in the same store under keys of its own per pull request
+  (`announce:`, `announce-out:`, `announce-done:`), outside the newest 50, so cards piling up
+  never drop it. The README section "An approved announcement is owed as a Slack draft until it is
+  settled (#3667)" holds the rules.
 - **The card is mod-kit's boxed card** (`$.modkit.card`, #663), since only mod-kit draws a result
   row: the state word leads the bold title in its colour (green `success`, grey, amber `warning`),
   then why live could not be confirmed, what changed, "See it:" and the link, and the numbered
@@ -5027,10 +5077,11 @@ whatever the number said.
   a run of short options) hold the command, with how to write it. A commit with no such parent is
   one git cannot answer for, and is held.
 - Known limits. A session's own environment may already carry `GIT_DIR` or `GIT_WORK_TREE` before
-  any command is typed, which no reader sees. Scope modes places a git command by `-C` alone and
-  is unchanged here. The collision guard did too until #3398 (below), which has it ask about every
-  checkout the command acts on. The shared reader kept only the last `-C`, while git reads each
-  from the one before it, and #3398 added the folder a chain of them leads to.
+  any command is typed, which no reader sees. Scope modes placed a git command by `-C` alone and
+  was unchanged here; since the scope modes part of #3398 (below) it places one by every naming
+  the reader hands on. The collision guard did too until #3398 (below), which has it ask about
+  every checkout the command acts on. The shared reader kept only the last `-C`, while git reads
+  each from the one before it, and #3398 added the folder a chain of them leads to.
 
 ### What #3398 changed: the folder more than one -C leads to, 2026-11-22
 
@@ -5054,9 +5105,9 @@ placed `git -C /a -C b merge y`, which runs in `/a/b`, in `<the folder it runs i
 - `dir` is unchanged: the last `-C` as written. A mod that places a git command by `dir` judges
   exactly the calls it judged before, so nothing held under the old reading passes because the
   reader moved. A mod moves to `chained` in its own change, and decides there whether it goes on
-  judging `dir` too. The collision guard is the first (below). The design round guard, the write
-  reader's placing of what git itself writes, and scope modes still place a chained command by
-  `dir`.
+  judging `dir` too. The collision guard was the first and scope modes the second (both below).
+  The design round guard and the write reader's placing of what git itself writes still place a
+  chained command by `dir`.
 - Where the chain cannot be worked out, `chained` is null, the mark `pipeline` gives the folder of
   a command behind a `cd` it cannot follow, and never a guess. That is a value the shell fills in
   after another `-C` (`-C /a -C "$B"`: absolute or relative, which only the shell knows), a folder
@@ -5177,6 +5228,61 @@ main` each ran unjudged beside a session at work in `/other`.
 - Not covered: the files such a command writes are still placed by the write reader, by `dir`.
   A session's own environment carrying either variable before any command is typed is seen by
   no reader.
+
+Scope modes placed a git command by the last `-C` alone, in seven places, each in its own words:
+the merge and deploy rules, sleep mode's rule for a checkout or a switch, the reading a command
+carries, the three notes kept for winding down (the branch a commit lands on, the files a patch
+changes, the files a stash gives back) and winding down's agreed cleanup branch, which placed
+the start nowhere. So `GIT_DIR=/other/.git git push` was judged by the branch of the folder it
+was typed in, a checkout naming a primary checkout by `--git-dir` ran overnight from a linked
+worktree, and a commit into another repository made this session's branch its own to finish.
+Since the scope modes part of #3398 (2026-11-24):
+
+- One file, `scope-modes/hooks/gitplace.ts`, says where a git command acts, from the reading
+  `$.modkit.git` hands on, and every rule in the mod asks it. `readCommands` hands the reader
+  the settings in front of the command and carries the whole reading (`dir`, `chained`, `gitDir`,
+  `workTree`). It first asks the reader about a line whose answer is known, and a mod-kit loaded
+  before it could say all of that throws, which every rule judging a call refuses on. The patch
+  note, which asks the reader for itself, asks the same line.
+- A repository or working folder named apart (`--git-dir`, `--work-tree`, `GIT_DIR`,
+  `GIT_WORK_TREE`, or one of those variables or `GIT_COMMON_DIR` named anywhere else in the
+  call, by one predicate, `gitEnvNamed`) is one that cannot be told, everywhere in the mod. That
+  predicate reads the words of `echo`, `printf`, `grep` and `rg`, and the value of a commit's
+  `-m`, as plain data: a commit message or a searched pattern quoting `GIT_DIR=` names nothing,
+  but only where nothing in the call could carry the text on (no `$` or backtick, `eval` or
+  `source`, redirect, pipe, `xargs`, function or command the reader cannot read). Anywhere else
+  the text is believed, as before. The merge and deploy rules close on it, and on any word before
+  the subcommand that only spells `--git-dir` or `--work-tree` (`gitSpellsNaming`, kept beside
+  the reading because main's rule closed on those words), sleep mode refuses the checkout, the
+  three notes note nothing and each says so (the branch, patch and stash notes, one line a call)
+  and the cleanup branch is refused. It is not followed by asking
+  git, as the collision guard follows it: a mod shares code only through mod-kit, and
+  `whereGit` and `namedFolder` live in the collision guard.
+- A chain of `-C` is followed by the three notes, to the folder `chained` gives. Sleep mode asks
+  about that folder and about the last `-C` alone, as before, and either refusing refuses, so
+  nothing refused under the old reading passes. The merge and deploy rules still take more than
+  one `-C` for a repository that cannot be told, exactly as before: placing it where the chain
+  leads is the right reading and a loosening, left for Dan in the pull request.
+- The branch note places each commit, and each push naming no branch, by its own reading. Until
+  then the first git command in the call that named a place answered for them all, so a read of
+  this checkout in front of a commit into a repository named apart still made this checkout's
+  branch the session's own.
+- The agreed cleanup branch starts only where `dirsOf` and `$.modkit.workingTree` say the command
+  acts on the checkout Dan agreed to it for. Anywhere else it is refused, with where it would
+  have started, and his answer is kept.
+- Counted on the personal MacBook on 2026-11-24, each rule asked of the mod's own modules from
+  the base and from the change, over 66,149 recorded Bash calls dated 2026-10-25 to 2026-11-24:
+  of 19,293 git commands in 14,867 calls, 19,292 are placed the same, 1 is judged more (a diff
+  in a call naming a git variable, now one that cannot be told, with no verdict moved) and none
+  is judged less. Every call is judged the same by the merge and deploy rules and by sleep
+  mode under each stand in for the disk and the night's lists, and every note reads the same
+  folder. No recorded git command has more than one `-C` or names its repository apart. The
+  count's controls plant one command of each direction, and it stops if one is not reported.
+- Not covered: a working folder named by a configuration key on the command line
+  (`-c core.worktree=`), which the reader does not hand on; a gh command under `GIT_DIR`,
+  still placed by the folder it runs in; `GIT_INDEX_FILE` and `GIT_NAMESPACE`, read by no
+  rule; and a session whose own environment carries one of the variables before any command
+  is typed.
 
 ### What #3280 changed: a file put back exactly as the default branch holds it, 2026-11-21
 
