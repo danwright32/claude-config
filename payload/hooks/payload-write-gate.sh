@@ -1141,11 +1141,14 @@ def shell_runs(text, start, shown=None, depth=0):
             for member in members:
                 try:
                     string = _sw.wrapped(_sw.command_rest(member)[0])
-                    if string and string[1] is not None:
-                        for d in dirs:
-                            out += shell_runs(string[1], d, None, depth + 1)
                 except Exception:
-                    pass
+                    string = None
+                # Outside the try: a string the reader cannot vouch for raises here, to the caller,
+                # so the whole command is judged in every folder as one it cannot read is. Caught
+                # here, the string was read by nothing new and said nothing (L42).
+                if string and string[1] is not None:
+                    for d in dirs:
+                        out += shell_runs(string[1], d, None, depth + 1)
         target = _sw.cd_target(t)
         change = ("cd", target) if target is not None else stack_change(t)
         if change is None or p["how"] == "&":

@@ -700,6 +700,12 @@ refused "#3855 and after a cd the shell would keep, since which folder it runs i
 # that refused every command it cannot read that names one would refuse it.
 runbash "(cd $FIX/elsewhere); rm $FIX/elsewhere/payload/a.txt \"left open" "$FIX/dev"
 allowed "#3855 control: a command the reader cannot read that names a payload folder outside any checkout is let through"
+# The same when the part that cannot be read is a string handed to a shell: the command around it
+# reads well, and the string is still judged every way (found by the lessons review of this change).
+runbash "bash -c 'true & rm payload/hooks/x.sh \"left open'" "$FIX/dev"
+refused "#3855 a string handed to a shell that the reader cannot read is judged after a single & too"
+runbash "bash -c '(cd $FIX/elsewhere); rm $FIX/elsewhere/payload/a.txt \"left open'" "$FIX/dev"
+allowed "#3855 control: such a string that names a payload folder outside any checkout is let through"
 runbash "sleep 1& rm payload/hooks/x.sh" "$FIX/dev"
 refused "#3855 a command after a single & that follows a digit is judged, in a command the reader can read"
 # What really moved is still judged where it moved to, and what was refused before still is.
