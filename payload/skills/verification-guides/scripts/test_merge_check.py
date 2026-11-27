@@ -96,6 +96,17 @@ def write(path, text):
         f.write(text)
 
 
+def modes_answer(table):
+    """GitHub's GraphQL answer giving the mode of each (commit, path) in `table`, in the shape measured
+    on the real API: one aliased object per commit holding its oid, and in it one aliased tree entry
+    per file holding its path, its mode as a number, and its type."""
+    commits = sorted({c for c, _ in table})
+    return {"data": {"repository": {
+        "c%d" % i: dict({"oid": c}, **{"f%d" % j: {"path": p, "mode": m, "type": "blob"}
+                                         for j, ((at, p), m) in enumerate(sorted(table.items())) if at == c})
+        for i, c in enumerate(commits)}}}
+
+
 class Fixture:
     """A bundle as the hook writes it, and a receipt home holding this machine's receipts."""
 
@@ -114,6 +125,9 @@ class Fixture:
         # GitHub's compare of any two commits, by (from, to): None for a read that failed, a string
         # for an answer written as it is (#3574).
         self.diffs = {}
+        # GitHub's answer about file modes (#3574), by (commit, path): None for no answer yet, "fail"
+        # for a read that failed, a string for an answer written as it is.
+        self.modes = None
         self.pin = "required " + HEAD
         # The screenshots reads (#2516): GitHub's answer about the repository, each folder listing
         # of the pr-screenshots branch by commit (None for a failed read), and the override.
@@ -172,6 +186,11 @@ class Fixture:
             else:
                 write(os.path.join(self.dir, "compare", "%s...%s.json" % (a, b)),
                       cmp if isinstance(cmp, str) else json.dumps(cmp))
+        if self.modes == "fail":
+            write(os.path.join(self.dir, "modes.err"), "gh: Server Error (HTTP 502)")
+        elif self.modes is not None:
+            write(os.path.join(self.dir, "modes.json"),
+                  self.modes if isinstance(self.modes, str) else json.dumps(modes_answer(self.modes)))
         if self.repo == "fail":
             write(os.path.join(self.dir, "repo.err"), "gh: Server Error (HTTP 502)")
         elif self.repo is not None:
@@ -450,7 +469,7 @@ class Judging(unittest.TestCase):
         self.f.save()
         out = mc.verdict(self.f.dir, home=self.f.home)
         self.assertEqual(out["need"], {"guides": [{"area": "invoices", "path": ".claude/verification/guides/invoices.md"}],
-                                       "compares": [OLD], "diffs": [], "listings": [], "repo": False})
+                                       "compares": [OLD], "diffs": [], "modes": None, "listings": [], "repo": False})
 
     def test_a_need_left_unanswered_on_the_final_call_is_unreadable_not_a_crash(self):
         self.f.guides = {}
@@ -462,6 +481,10 @@ class Judging(unittest.TestCase):
 PATH = "src/invoices/list.ts"
 MB_THEN = "4444444444444444444444444444444444444444"   # where the branch left main, as of the record
 MB_NOW = "5555555555555555555555555555555555555555"    # the commit of main the branch merged since
+# A file's mode as GitHub's GraphQL API gives it, a number: measured 33188 and 33261 either side of
+# commit 3e651bc2ba of this repository, which only made payload/hooks/announce_label_gate.py executable.
+PLAIN, EXEC, LINK = 0o100644, 0o100755, 0o120000
+RETRY = "Try the merge again, or run this area again at %s" % HEAD[:7]
 
 
 def rows(n=40):
@@ -537,15 +560,35 @@ class MainMerged(unittest.TestCase):
             (MB_THEN, MB_NOW): {"status": "ahead", "merge_base_commit": {"sha": MB_THEN},
                                 "files": entries(lambda t, r, n, h: (t, n))},
         }
+        # Every file an ordinary one whose mode nobody changed, unless a test says otherwise.
+        self.f.modes = {(c, p): PLAIN for c in (MB_THEN, OLD, MB_NOW, HEAD) for p, *_ in files}
 
     def clean_merge(self):
         self.merged(rows(), edit(rows(), *OWN), edit(rows(), *MAINS), edit(rows(), *OWN, *MAINS))
+
+    def modes(self, then, at_record, now, at_head, path=PATH):
+        """The file's mode on main at the record and on the branch at the record, then on main at
+        the head's merge base and on the branch at the head."""
+        self.f.modes.update({(MB_THEN, path): then, (OLD, path): at_record, (MB_NOW, path): now, (HEAD, path): at_head})
+
+    def unreadable(self, out, *says):
+        self.assertEqual(kinds(out), ["github-unreadable"])
+        self.assertEqual((out["passed"], out["decision"]), (False, "refuse"))
+        for needle in says + (RETRY,):
+            self.assertIn(needle, out["text"])
 
     def stale(self, out, *says):
         self.assertEqual(kinds(out), ["stale-record"])
         self.assertEqual((out["passed"], out["decision"]), (False, "refuse"))
         for needle in says:
             self.assertIn(needle, out["text"])
+
+    def untold(self, out, *says):
+        """Stale because whose change it was could not be told, which is never said as a change the
+        pull request made (L11)."""
+        self.stale(out, "whether this pull request changed %s in this area since then could not be told" % PATH,
+                   "Run it again there", *says)
+        self.assertNotIn("since then this pull request changed", out["text"])
 
     # -- the record still describes the head -------------------------------------------------
 
@@ -569,6 +612,21 @@ class MainMerged(unittest.TestCase):
         self.clean_merge()
         self.f.diffs[(BASE, HEAD)]["merge_base_commit"]["sha"] = BASE
         self.f.diffs[(MB_THEN, BASE)] = self.f.diffs.pop((MB_THEN, MB_NOW))
+        self.f.modes[(BASE, PATH)] = PLAIN
+        self.assertTrue(self.f.judge(final=True)["passed"])
+
+    def test_a_mode_only_main_changed_leaves_the_record_standing(self):
+        # Main made the file executable and changed its text elsewhere: both are main's change.
+        self.clean_merge()
+        self.modes(PLAIN, PLAIN, EXEC, EXEC)
+        out = self.f.judge(final=True)
+        self.assertEqual(out["problems"], [])
+        self.assertEqual((out["passed"], out["decision"]), (True, "allow"))
+
+    def test_a_mode_the_pull_request_changed_before_the_run_leaves_the_record_standing(self):
+        # The run saw the pull request's change of mode, and it is the same change at the head.
+        self.clean_merge()
+        self.modes(PLAIN, EXEC, PLAIN, EXEC)
         self.assertTrue(self.f.judge(final=True)["passed"])
 
     # -- the record is still stale: every one of these the old rule refused too --------------
@@ -618,7 +676,8 @@ class MainMerged(unittest.TestCase):
         now = ["row();"] * 8
         self.merged(then, edit(then, (6, 0, ["extra();"])), now, edit(now, (6, 0, ["extra();"])))
         self.assertEqual(self.f.diffs[(BASE, OLD)]["files"][0]["patch"], self.f.files[0]["patch"])
-        self.stale(self.f.judge(final=True), "sits on other lines")
+        self.stale(self.f.judge(final=True), "since then this pull request changed " + PATH, "in a different place",
+                   "puts its hunk at line 1 of the file, and it is at line 3")
 
     def test_main_changing_a_line_the_pull_requests_hunk_rests_on_is_stale(self):
         # Kept refused on purpose: main changed a line right beside the pull request's, so the
@@ -641,12 +700,13 @@ class MainMerged(unittest.TestCase):
         self.clean_merge()
         self.f.diffs[(BASE, HEAD)]["merge_base_commit"]["sha"] = MB_THEN
         del self.f.diffs[(MB_THEN, MB_NOW)]
-        self.stale(self.f.judge(), "took in nothing")
+        # What was measured is that the two merge bases are one commit, and no more is said than that.
+        self.untold(self.f.judge(), "from the same commit of main (%s) at the record and at the head" % MB_THEN[:7])
 
     def test_merge_bases_github_does_not_place_one_after_the_other_are_stale(self):
         self.clean_merge()
         self.f.diffs[(MB_THEN, MB_NOW)]["status"] = "diverged"
-        self.stale(self.f.judge(final=True), "diverged")
+        self.untold(self.f.judge(final=True), "is not a later commit than", "diverged")
 
     def test_a_file_with_no_patch_text_is_stale(self):
         # GitHub gives no patch for a binary file or a very large one.
@@ -654,13 +714,13 @@ class MainMerged(unittest.TestCase):
             with self.subTest(side=side):
                 self.clean_merge()
                 del self.f.diffs[side]["files"][0]["patch"]
-                self.stale(self.f.judge(final=True), "no patch")
+                self.untold(self.f.judge(final=True), "no patch")
 
     def test_a_patch_cut_short_is_stale(self):
         self.clean_merge()
         entry = self.f.diffs[(BASE, HEAD)]["files"][0]
         entry["patch"] = "\n".join(entry["patch"].split("\n")[:-2])
-        self.stale(self.f.judge(final=True), "no patch")
+        self.untold(self.f.judge(final=True), "no patch")
 
     def test_patches_that_stop_after_a_whole_hunk_are_stale(self):
         # The pull request's second hunk changed since the record, and both patches stop after the
@@ -671,39 +731,204 @@ class MainMerged(unittest.TestCase):
         for side in ((BASE, OLD), (BASE, HEAD)):
             entry = self.f.diffs[side]["files"][0]
             entry["patch"] = entry["patch"].split("\n@@ ")[0]
-        self.stale(self.f.judge(final=True), "no patch")
+        self.untold(self.f.judge(final=True), "no patch")
 
     def test_a_patch_with_no_count_of_its_lines_is_stale(self):
         self.clean_merge()
         del self.f.diffs[(MB_THEN, MB_NOW)]["files"][0]["additions"]
-        self.stale(self.f.judge(final=True), "no patch")
+        self.untold(self.f.judge(final=True), "no patch")
 
     def test_a_renamed_file_is_stale(self):
         self.clean_merge()
         for side in ((BASE, OLD), (BASE, HEAD)):
             self.f.diffs[side]["files"][0].update(status="renamed", previous_filename="src/invoices/old.ts")
-        self.stale(self.f.judge(final=True), "added, removed or renamed")
+        self.untold(self.f.judge(final=True), "added, removed or renamed")
 
     def test_a_file_the_pull_request_did_not_change_at_the_record_is_stale(self):
         self.clean_merge()
         self.f.diffs[(BASE, OLD)]["files"] = []
-        self.stale(self.f.judge(final=True), "by this pull request at the record")
+        self.stale(self.f.judge(final=True), "since then this pull request changed " + PATH,
+                   "by this pull request at the record")
+
+    def test_a_patch_that_starts_from_an_empty_file_is_stale_and_not_called_moved(self):
+        # A hunk that rests on no line has nothing to be placed by, and is not said to be in a
+        # different place. Answers that agree with each other cannot bring one this far (a file main
+        # changed is not empty at the head's merge base), so the head's patch here is written by
+        # hand: the guard is for answers that do not agree.
+        self.merged([], ["const a = 1;"], ["// header"], ["// header", "const a = 1;"])
+        self.assertEqual(self.f.diffs[(BASE, OLD)]["files"][0]["patch"], "@@ -0,0 +1 @@\n+const a = 1;")
+        self.f.diffs[(BASE, HEAD)]["files"][0].update(patch="@@ -0,0 +1 @@\n+const a = 1;", additions=1, deletions=0)
+        out = self.f.judge(final=True)
+        self.untold(out, "starts from an empty file")
+        self.assertNotIn("different place", out["text"])
+
+    def test_the_refusal_keeps_what_was_measured_apart_from_what_could_not_be_told(self):
+        # One file whose patch differs, which is measured, and one GitHub gave no patch for.
+        other = "src/invoices/total.ts"
+        own_now = ((20, 1, ["const row20 = 2001;"]), OWN[1])
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *MAINS), edit(rows(), *own_now, *MAINS),
+                    more=[(other, rows(9), edit(rows(9), (4, 1, ["const total = 1;"])),
+                           edit(rows(9), (8, 1, ["const row8 = 80;"])),
+                           edit(rows(9), (4, 1, ["const total = 1;"]), (8, 1, ["const row8 = 80;"])))])
+        del self.f.diffs[(BASE, HEAD)]["files"][1]["patch"]
+        self.stale(self.f.judge(final=True), "since then this pull request changed %s in this area, and whether it"
+                   " changed %s could not be told" % (PATH, other), "Run it again there")
+
+    # -- the file's mode, which no compare shows -----------------------------------------------
+
+    def test_a_mode_the_pull_request_changed_after_the_run_is_stale(self):
+        # The one record the line by line rule accepted and the old rule refused: the pull request
+        # changed the file's text, the run was made, then the pull request made the file executable
+        # and main, which changed the file elsewhere, was merged in. GitHub's three compares are
+        # those of the clean merge, patch for patch, because a compare carries no mode.
+        self.clean_merge()
+        self.modes(PLAIN, PLAIN, PLAIN, EXEC)
+        self.stale(self.f.judge(final=True), "since then this pull request changed " + PATH,
+                   "change to its mode is not the one the run saw",
+                   "at the record 100644 on the base branch and 100644 on this branch, at the head 100644 and 100755")
+
+    def test_a_mode_the_pull_request_dropped_after_the_run_is_stale(self):
+        self.clean_merge()
+        self.modes(PLAIN, EXEC, PLAIN, PLAIN)
+        self.stale(self.f.judge(final=True), "change to its mode is not the one the run saw")
+
+    def test_a_mode_main_changed_and_the_pull_request_put_back_is_stale(self):
+        # The head's mode is the one the run saw, but only because the pull request undid main's
+        # change of it after the run: main's text with that mode is what nobody has seen.
+        self.clean_merge()
+        self.modes(EXEC, EXEC, PLAIN, EXEC)
+        self.stale(self.f.judge(final=True), "change to its mode is not the one the run saw")
+
+    def test_a_file_that_is_not_a_regular_file_is_stale(self):
+        # A symbolic link (or a submodule) at any of the four commits is not compared line by line.
+        for commit in (MB_THEN, OLD, MB_NOW, HEAD):
+            with self.subTest(commit=commit):
+                self.clean_merge()
+                self.f.modes[(commit, PATH)] = LINK
+                self.untold(self.f.judge(final=True), "not a regular file", "mode 120000")
+
+    def test_a_mode_github_could_not_be_read_for_is_unreadable_never_still_describing(self):
+        self.clean_merge()
+        self.f.modes = "fail"
+        self.unreadable(self.f.judge(final=True), "GitHub could not be read for the mode of " + PATH, "HTTP 502")
+
+    def test_a_mode_missing_from_githubs_answer_is_unreadable(self):
+        for commit in (MB_THEN, OLD, MB_NOW, HEAD):
+            with self.subTest(commit=commit):
+                self.clean_merge()
+                del self.f.modes[(commit, PATH)]
+                self.unreadable(self.f.judge(final=True), "GitHub gave no mode for %s at %s" % (PATH, commit[:7]))
+
+    def test_a_mode_answer_that_cannot_be_trusted_whole_is_unreadable(self):
+        whole = modes_answer({(c, PATH): PLAIN for c in (MB_THEN, OLD, MB_NOW, HEAD)})
+        for what, answer in (("not JSON", "<html>502 Bad Gateway</html>"),
+                             ("not an object", "[]"),
+                             ("no repository", json.dumps({"data": {"repository": None}})),
+                             ("an error reported beside the modes", json.dumps(dict(whole, errors=[{"type": "NOT_FOUND"}]))),
+                             ("a mode that is not a number", json.dumps(whole).replace(str(PLAIN), '"100644"', 1)),
+                             ("a mode that is true", json.dumps(whole).replace(str(PLAIN), "true", 1))):
+            with self.subTest(what=what):
+                self.clean_merge()
+                self.f.modes = answer
+                self.unreadable(self.f.judge(final=True))
+
+    def test_a_mode_never_answered_is_unreadable_on_the_final_ask(self):
+        self.clean_merge()
+        self.f.modes = None
+        self.unreadable(self.f.judge(final=True), "no answer from GitHub was recorded for the mode of " + PATH)
+
+    def test_a_repository_name_that_cannot_be_asked_about_is_unreadable(self):
+        self.clean_merge()
+        self.f.modes = None
+        self.f.save()
+        write(os.path.join(self.f.dir, "slug"), "widget")
+        self.unreadable(mc.verdict(self.f.dir, home=self.f.home), "names no owner and repository")
+
+    # -- a compare whose list of files GitHub cut short ------------------------------------------
+
+    def test_a_file_missing_from_a_compare_at_githubs_cap_is_not_told_whose_change_it_was(self):
+        # GitHub lists 300 files of a compare at most. A file that is not in a list that long may be
+        # among those left out, so its absence says nothing about who changed it.
+        for side, what in (((BASE, OLD), "this pull request's patch at the record"),
+                           ((BASE, HEAD), "this pull request's patch at the head"),
+                           ((MB_THEN, MB_NOW), "the base branch's change since the record")):
+            with self.subTest(side=side):
+                self.clean_merge()
+                self.f.diffs[side]["files"] = [{"filename": "docs/%03d.md" % i, "status": "modified"}
+                                               for i in range(mc.COMPARE_FILES_CAP)]
+                out = self.f.judge(final=True)
+                self.untold(out, "GitHub lists only the first 300 files of " + what, "it is not among them")
+                self.assertNotIn("lists no change to it", out["text"])
+
+    def test_a_file_listed_in_a_compare_at_githubs_cap_is_still_judged(self):
+        # What a full list does say stands: the file's own entry is whole whatever the list left out.
+        self.clean_merge()
+        for side in self.f.diffs:
+            self.f.diffs[side]["files"] += [{"filename": "docs/%03d.md" % i, "status": "modified"}
+                                            for i in range(mc.COMPARE_FILES_CAP)]
+        self.assertTrue(self.f.judge(final=True)["passed"])
 
     # -- what it costs, and what a failed read does ------------------------------------------
 
-    def test_it_asks_for_three_more_compares_and_only_once_a_file_calls_for_them(self):
+    def test_it_asks_for_three_more_compares_then_the_modes_and_only_once_a_file_calls_for_them(self):
         self.clean_merge()
         answers, self.f.diffs = self.f.diffs, {}
+        modes, self.f.modes = self.f.modes, None
         out = self.f.judge()
         self.assertEqual(out["need"]["diffs"], [{"from": BASE, "to": OLD}, {"from": BASE, "to": HEAD}])
+        self.assertIsNone(out["need"]["modes"])
         self.f.diffs = {k: answers[k] for k in ((BASE, OLD), (BASE, HEAD))}
         out = self.f.judge()
-        self.assertEqual(out["need"], {"guides": [], "compares": [], "listings": [], "repo": False,
+        self.assertEqual(out["need"], {"guides": [], "compares": [], "listings": [], "repo": False, "modes": None,
                                        "diffs": [{"from": MB_THEN, "to": MB_NOW}]})
+        # Only now, with every compare read and the file one the record would outlive, the modes:
+        # one read for the file at the four commits compared.
         self.f.diffs = answers
+        out = self.f.judge()
+        self.assertEqual({k: val for k, val in out["need"].items() if k != "modes"},
+                         {"guides": [], "compares": [], "listings": [], "repo": False, "diffs": []})
+        ask = out["need"]["modes"]
+        self.assertTrue(ask["query"].startswith("query("))
+        self.assertEqual(ask["query"].count("file(path:"), 4)
+        asked = ask["variables"]
+        self.assertEqual((asked["owner"], asked["name"]), ("acme", "widget"))
+        self.assertEqual(sorted(val for k, val in asked.items() if k.startswith("c")), sorted([MB_THEN, OLD, MB_NOW, HEAD]))
+        self.assertEqual([val for k, val in asked.items() if k.startswith("p")], [PATH])
+        # No commit or path is written into the query's own text, so neither can change what it asks.
+        for value in asked.values():
+            self.assertNotIn(value, ask["query"])
+        self.f.modes = modes
         out = self.f.judge()
         self.assertNotIn("need", out)
         self.assertTrue(out["passed"])
+
+    def test_the_modes_are_not_asked_for_a_record_that_is_stale_anyway(self):
+        # One file whose patch the pull request changed, and one the record would outlive: the area
+        # needs a new run whatever the second file's mode, so GitHub is asked nothing more.
+        other = "src/invoices/total.ts"
+        own_now = ((20, 1, ["const row20 = 2001;"]), OWN[1])
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *MAINS), edit(rows(), *own_now, *MAINS),
+                    more=[(other, rows(9), edit(rows(9), (4, 1, ["const total = 1;"])),
+                           edit(rows(9), (8, 1, ["const row8 = 80;"])),
+                           edit(rows(9), (4, 1, ["const total = 1;"]), (8, 1, ["const row8 = 80;"])))])
+        self.f.modes = None
+        out = self.f.judge()   # not final: a verdict here means nothing more was asked of GitHub
+        self.stale(out, "since then this pull request changed " + PATH)
+        self.assertNotIn(other, out["text"])
+
+    def test_two_areas_ask_for_their_modes_in_one_read(self):
+        other = "src/clients/list.ts"
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *MAINS), edit(rows(), *OWN, *MAINS),
+                    more=[(other, rows(), edit(rows(), *OWN), edit(rows(), *MAINS), edit(rows(), *OWN, *MAINS))])
+        self.f.comments = [comment(record(sha=OLD, rid=RID_OLD), record(area="clients", sha=OLD, rid=RID_OLD))]
+        self.f.receipt(RID_OLD, OLD, areas=["invoices", "clients"],
+                       drives=({"area": "invoices", "exit": 0}, {"area": "clients", "exit": 0}))
+        modes, self.f.modes = self.f.modes, None
+        ask = self.f.judge()["need"]["modes"]
+        self.assertEqual(ask["query"].count("file(path:"), 8)
+        self.assertEqual(sorted(val for k, val in ask["variables"].items() if k.startswith("p")), sorted([PATH, other]))
+        self.f.modes = modes
+        self.assertEqual(self.f.judge()["problems"], [])
 
     def test_a_merge_that_left_the_area_alone_asks_nothing_more(self):
         self.clean_merge()
@@ -729,10 +954,7 @@ class MainMerged(unittest.TestCase):
             with self.subTest(side=side):
                 self.clean_merge()
                 self.f.diffs[side] = None
-                out = self.f.judge(final=True)
-                self.assertEqual(kinds(out), ["github-unreadable"])
-                self.assertEqual((out["passed"], out["decision"]), (False, "refuse"))
-                self.assertIn("HTTP 502", out["text"])
+                self.unreadable(self.f.judge(final=True), "HTTP 502")
                 os.remove(os.path.join(self.f.dir, "compare", "%s...%s.err" % side))
 
     def test_a_compare_never_answered_is_unreadable_on_the_final_ask(self):
@@ -742,24 +964,27 @@ class MainMerged(unittest.TestCase):
                 answer = os.path.join(self.f.dir, "compare", "%s...%s.json" % side)
                 self.f.save()
                 os.remove(answer)
-                out = mc.verdict(self.f.dir, home=self.f.home, final=True)
-                self.assertEqual(kinds(out), ["github-unreadable"])
-                self.assertFalse(out["passed"])
+                self.unreadable(mc.verdict(self.f.dir, home=self.f.home, final=True))
 
     def test_a_compare_that_is_not_json_is_unreadable(self):
         self.clean_merge()
         self.f.diffs[(MB_THEN, MB_NOW)] = "<html>502 Bad Gateway</html>"
-        self.assertEqual(kinds(self.f.judge(final=True)), ["github-unreadable"])
+        self.unreadable(self.f.judge(final=True))
+
+    def test_a_compare_that_is_not_a_compare_is_unreadable(self):
+        self.clean_merge()
+        self.f.diffs[(MB_THEN, MB_NOW)] = "[]"
+        self.unreadable(self.f.judge(final=True), "was not a compare")
 
     def test_a_compare_naming_no_merge_base_is_unreadable(self):
         self.clean_merge()
         del self.f.diffs[(BASE, HEAD)]["merge_base_commit"]
-        self.assertEqual(kinds(self.f.judge(final=True)), ["github-unreadable"])
+        self.unreadable(self.f.judge(final=True))
 
     def test_a_pull_request_with_no_base_commit_reported_is_unreadable(self):
         self.clean_merge()
         self.f.view["baseRefOid"] = ""
-        self.assertEqual(kinds(self.f.judge(final=True)), ["github-unreadable"])
+        self.unreadable(self.f.judge(final=True))
 
     def test_no_answer_about_whose_change_it_was_is_never_a_pass(self):
         # Whatever leaves the question unanswered without saying why, the area is not passed.
@@ -769,9 +994,7 @@ class MainMerged(unittest.TestCase):
         try:
             for final in (True, False):
                 with self.subTest(final=final):
-                    out = self.f.judge(final=final)
-                    self.assertEqual(kinds(out), ["github-unreadable"])
-                    self.assertEqual((out["passed"], out["decision"]), (False, "refuse"))
+                    self.unreadable(self.f.judge(final=final))
         finally:
             mc._Verdict.own_changes = real
 

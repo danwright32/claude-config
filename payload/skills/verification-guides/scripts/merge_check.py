@@ -30,16 +30,21 @@ The bundle is a folder the hook writes:
                                record's area, which the pull request touches, changed since the
                                record and a merge commit came between, or may have: GitHub's list
                                of the commits between was cut short
-  repo.json | repo.err         gh api repos/<slug>, read only when a screenshots block links images,
+  modes.json | modes.err       GitHub's answer to the one GraphQL read the judge wrote (#3574): the
+                               mode of each file those compares would let a record outlive, at the
+                               four commits compared, since a compare shows no change of mode
+  repo.json | repo.err        gh api repos/<slug>, read only when a screenshots block links images,
                                for whether the repository is public (#2516)
   shots/<commit>.json | .err   the folder of pictures a screenshots block links, listed at that commit
   allow-no-screenshots         present when the merge command carries ALLOW_NO_SCREENSHOTS=1
 
 CLI: merge_check.py verdict <bundle> [--final]
-  Prints {"need": {"guides": [{area, path}], "compares": [sha], "diffs": [{from, to}], "listings":
-  [{commit, folder}], "repo": true or false}} while the bundle lacks something a verdict needs; the
-  hook fetches those (diffs into compare/<from>...<to>.json, listings into shots/<commit>.json, the
-  repository into repo.json) and asks again, since one answer can call for another, and the last time
+  Prints {"need": {"guides": [{area, path}], "compares": [sha], "diffs": [{from, to}], "modes":
+  null or {query, variables}, "listings": [{commit, folder}], "repo": true or false}} while the
+  bundle lacks something a verdict needs; the hook fetches those (diffs into
+  compare/<from>...<to>.json, the modes by sending that GraphQL query as it is and keeping the answer
+  in modes.json, listings into shots/<commit>.json, the repository into repo.json) and asks again,
+  since one answer can call for another, and the last time
   with --final, where anything still missing is GitHub unreadable. Otherwise the verdict: {"mode", "passed",
   "decision" (allow or refuse), "text", "problems" [{kind, area, message}], "touched_areas",
   "head_sha", "say" (hand the text to the session on an allow), "screenshots" {mode, problems,
@@ -78,6 +83,10 @@ LIST_MAX = 8   # files named in one message before "and N more"
 # A hunk's header in a patch: where it starts and how many lines it spans, old file then new. A
 # count left out is one line.
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+# The two modes git gives a regular file, as GitHub's GraphQL API reports a tree entry's mode: a
+# number (measured 33188 and 33261 either side of a commit that only made a file executable). Any
+# other is a symbolic link (120000), a submodule (160000) or a folder.
+REGULAR_MODES = (0o100644, 0o100755)
 
 
 def _read(path):
@@ -197,9 +206,16 @@ def _merge_base(cmp):
     return sha if v.SHA_RE.match(sha) else None
 
 
-def _why_own(then, now, base):
-    """Why a file changed since a record is the pull request's own change, or None when the base
-    branch alone changed it (claude-config#3574).
+def _cut(cmp):
+    """Whether a compare's list of files is at GitHub's cap, so a file may be among those left out."""
+    return isinstance(cmp.get("files"), list) and len(cmp["files"]) >= COMPARE_FILES_CAP
+
+
+def _why_own(then, now, base, cut=()):
+    """Why the text of a file changed since a record is not the base branch's change alone, as
+    (told, why), or None when it is (claude-config#3574). `told` is True where GitHub's answers show
+    the pull request's own change, and False where whose change it was could not be told, so the
+    refusal never says the pull request changed a file that was only never compared (L11).
 
     `then` and `now` are GitHub's entries for the file in the pull request's patch at the record's
     commit and at the head, each measured from where the branch last took in the base branch, and
@@ -212,26 +228,108 @@ def _why_own(then, now, base):
     adds a line above, and a hunk put back two rows down among identical lines, when the base dropped
     two lines above, has the same text and the same numbers. Only the base's own change says where
     each hunk belongs.
+
+    `cut` names which of "then", "now" and "base" came from a list at GitHub's cap. A file missing
+    from such a list may be among those left out, so its absence says nothing. An entry that is
+    there is whole whatever the list left out. The file's mode is not in any entry: _why_mode.
     """
-    if then is None:
-        return "GitHub lists no change to it by this pull request at the record"
-    if now is None:
-        return "GitHub lists no change to it by this pull request at the head"
-    if base is None:
-        return "GitHub lists no change to it by the base branch since the record, so the change is this pull request's own"
+    for entry, key, of, absent in (
+            (then, "then", "this pull request's patch at the record",
+             (True, "GitHub lists no change to it by this pull request at the record")),
+            (now, "now", "this pull request's patch at the head",
+             (False, "GitHub lists no change to it by this pull request at the head, though its list of this pull"
+                     " request's files names it")),
+            (base, "base", "the base branch's change since the record",
+             (True, "GitHub lists no change to it by the base branch since the record, so the change is this pull"
+                    " request's own"))):
+        if entry is None and key in cut:
+            return False, "GitHub lists only the first %d files of %s, and it is not among them" % (COMPARE_FILES_CAP, of)
+        if entry is None:
+            return absent
     if any(e.get("status") != "modified" or e.get("previous_filename") for e in (then, now, base)):
-        return "it was added, removed or renamed, which is not compared line by line"
+        return False, "it was added, removed or renamed, which is not compared line by line"
     a, b, moved = _whole(then), _whole(now), _whole(base)
     if a is None or b is None or moved is None:
-        return "GitHub gave no patch text for it that can be read whole (a binary or very large file)"
+        return False, "GitHub gave no patch text for it that can be read whole (a binary or very large file)"
     if [h["body"] for h in a] != [h["body"] for h in b]:
-        return "this pull request's patch to it differs from its patch at the record"
+        return True, "this pull request's patch to it differs from its patch at the record"
     blocks = _blocks(moved)
     for x, y in zip(a, b):
-        by = _carried(blocks, x["old"], x["olen"]) if x["olen"] else None
-        if by is None or (y["old"] - x["old"], y["new"] - x["new"]) != (by, by):
-            return "this pull request's patch to it sits on other lines than the base branch's change carries it to"
+        if not x["olen"]:
+            return False, "this pull request's patch to it starts from an empty file, which is not compared line by line"
+        by = _carried(blocks, x["old"], x["olen"])
+        if by is None:
+            return True, "the base branch changed lines inside the ones this pull request's patch to it rests on"
+        if (y["old"] - x["old"], y["new"] - x["new"]) != (by, by):
+            return True, ("this pull request's patch to it is the same text in a different place: the base branch's"
+                          " change puts its hunk at line %d of the file, and it is at line %d" % (x["old"] + by, y["old"]))
     return None
+
+
+def _why_mode(then, at_record, now, at_head):
+    """Why a file's mode at the head is not the base branch's change alone, as (told, why) like
+    _why_own, or None when it is (claude-config#3574, the review of pull request 3823).
+
+    GitHub's compare carries no mode: a commit that only makes a file executable is listed as
+    modified with no patch, and one that also changes its text shows the text patch alone (measured
+    on this repository's commits 3e651bc2ba and 9385db6afc). So a file whose patches say the base
+    alone changed it is asked about once more. The four modes are the base branch's at the record
+    (`then`) and at the head's merge base (`now`), and the branch's at the record and at the head.
+    The pull request's change of mode must be the one the run saw: none at both, or the same one at
+    both. A mode only the base branch changed is the base's change, like its text. A symbolic link
+    or a submodule at any of the four is refused, since its patch is not a file's lines.
+    """
+    odd = [m for m in (then, at_record, now, at_head) if m not in REGULAR_MODES]
+    if odd:
+        return False, ("it is not a regular file at every commit compared (GitHub gives mode %o, a symbolic link, a"
+                       " submodule or a folder), which is not compared line by line" % odd[0])
+    if (then, at_record) == (now, at_head) or (then == at_record and now == at_head):
+        return None
+    return True, ("this pull request's change to its mode is not the one the run saw (at the record %o on the base"
+                  " branch and %o on this branch, at the head %o and %o)" % (then, at_record, now, at_head))
+
+
+def _modes_request(slug, wanted):
+    """The one GraphQL read that gives the mode of every (commit, path) in `wanted`, as the body gh
+    sends: {query, variables}. Every commit and path travels as a variable, never in the query's own
+    text, so a file's name cannot change what is asked. Each commit answers with its own oid and each
+    file with its own path, so the answer is read by what it says, not by where it sits (_modes_read).
+    One call whatever the count, where the trees API takes one call a commit and the contents API
+    gives no mode at all (measured, 2026-11-27)."""
+    owner, _, name = slug.partition("/")
+    commits, paths = sorted({c for c, _ in wanted}), sorted({p for _, p in wanted})
+    variables = {"owner": owner, "name": name}
+    variables.update(("c%d" % i, c) for i, c in enumerate(commits))
+    variables.update(("p%d" % j, p) for j, p in enumerate(paths))
+    declared = ["$owner:String!", "$name:String!"] + ["$c%d:GitObjectID!" % i for i in range(len(commits))] \
+        + ["$p%d:String!" % j for j in range(len(paths))]
+    asked = " ".join("c%d:object(oid:$c%d){... on Commit{oid %s}}" % (i, i, " ".join(
+        "f%d:file(path:$p%d){path mode type}" % (j, j) for j, p in enumerate(paths) if (c, p) in wanted))
+        for i, c in enumerate(commits))
+    return {"query": "query(%s){repository(owner:$owner,name:$name){%s}}" % (",".join(declared), asked),
+            "variables": variables}
+
+
+def _modes_read(answer):
+    """{(commit, path): mode} out of GitHub's answer to _modes_request, or None when it is not an
+    answer to trust whole: not an object, one that reports an error beside its data, or one holding
+    no repository. A commit or a file GitHub did not find answers null and is simply not in the
+    result, which the caller refuses on."""
+    if not isinstance(answer, dict) or answer.get("errors") or not isinstance(answer.get("data"), dict):
+        return None
+    repo = answer["data"].get("repository")
+    if not isinstance(repo, dict):
+        return None
+    out = {}
+    for commit in repo.values():
+        if not isinstance(commit, dict):
+            continue
+        oid = str(commit.get("oid") or "").lower()
+        for entry in commit.values():
+            if isinstance(entry, dict) and isinstance(entry.get("path"), str) \
+                    and isinstance(entry.get("mode"), int) and not isinstance(entry.get("mode"), bool):
+                out[(oid, entry["path"])] = entry["mode"]
+    return out
 
 
 def _choose(entries, area, head):
@@ -260,7 +358,10 @@ class _Verdict:
     def __init__(self, bundle, home):
         self.bundle, self.home = bundle, home
         self.problems = []
-        self.need = {"guides": [], "compares": [], "diffs": [], "listings": [], "repo": False}
+        self.need = {"guides": [], "compares": [], "diffs": [], "modes": None, "listings": [], "repo": False}
+        # Every (commit, path) whose mode some area asked about in this pass, and whether one of them
+        # is not in the bundle yet. They are asked for together, in one read (asking).
+        self.modes_wanted, self.modes_missing = [], False
         self.shots = None
         view_text = _read(os.path.join(bundle, "view.json"))
         try:
@@ -332,16 +433,24 @@ class _Verdict:
                     if not final and sha not in self.need["compares"]:
                         self.need["compares"].append(sha)
         self.judge_screenshots(areas, touched, pr_files, final)
-        if not final and any(self.need.values()):
+        if not final and self.asking():
             return {"need": self.need}
 
         for name in touched:
             if name in chosen:
                 self.judge_area(areas, name, guides[name], chosen[name], pr_files, final)
-        if not final and any(self.need.values()):
+        if not final and self.asking():
             # An older record's area changed since, after a merge: GitHub is asked whose change it was.
             return {"need": self.need}
         return self.finish(mode, touched)
+
+    def asking(self):
+        """Whether this pass leaves something for the hook to fetch. The modes are asked for here,
+        once every area has said which it wants: the answer is one file, so each ask must name them
+        all, or one area's answer would replace another's."""
+        if self.modes_missing:
+            self.need["modes"] = _modes_request(self.slug, self.modes_wanted)
+        return any(self.need.values())
 
     def have(self, parts):
         kind, key = parts
@@ -484,15 +593,25 @@ class _Verdict:
             # Not told is never a record that still describes the head: unless GitHub is being asked
             # for more, or a reason was given, say so here, so no path through own_changes can leave
             # this area with nothing against it.
-            if len(self.problems) == said and (final or not self.need["diffs"]):
+            if len(self.problems) == said and (final or not (self.need["diffs"] or self.modes_missing)):
                 self.add("github-unreadable", name, "whether the changes since its newest record at %s are this pull"
-                         " request's own could not be told" % sha[:7])
+                         " request's own could not be told. %s" % (sha[:7], self.retry()))
             return False
         if own:
-            whys = ["%s: %s" % pw for pw in own if pw[1]]
-            self.add("stale-record", name, "its newest record is at %s, and since then this pull request changed %s"
-                     " in this area, so it says nothing about %s. Run it again there%s" % (
-                         sha[:7], _named([p for p, _ in own]), self.head[:7],
+            # What GitHub's answers show the pull request changed is said as that. What was only never
+            # compared is said as not told, never as a change the pull request made (L11).
+            changed, untold = ([p for p, told, _ in own if told is want] for want in (True, False))
+            if changed and untold:
+                what = "since then this pull request changed %s in this area, and whether it changed %s could not be" \
+                       " told" % (_named(changed), _named(untold))
+            elif changed:
+                what = "since then this pull request changed %s in this area" % _named(changed)
+            else:
+                what = "whether this pull request changed %s in this area since then could not be told" % _named(untold)
+            whys = ["%s: %s" % (p, why) for p, _, why in own if why]
+            self.add("stale-record", name, "its newest record is at %s, and %s, so it says nothing about %s. Run it"
+                     " again there%s" % (
+                         sha[:7], what, self.head[:7],
                          " (a merge into the branch came since, and a record outlives one only where each such"
                          " file's change is the base branch's alone. %s%s)" % (
                              "; ".join(whys[:LIST_MAX]),
@@ -500,11 +619,18 @@ class _Verdict:
             return False
         return True
 
+    def retry(self):
+        """What to do about a read of GitHub that the question of whose change it was depends on."""
+        return "Try the merge again, or run this area again at %s: a record made at the head needs none of these" \
+               " reads" % self.head[:7]
+
     def own_changes(self, name, sha, cmp, paths, final):
         """Of `paths` (files of this area that the pull request touches and that changed since the
-        record at `sha`): those the pull request itself changed, as (path, why), why None when no
-        merge came between. None when GitHub has more to answer first (asked for in self.need) or
-        could not be read (said), which is never a record that still describes the head.
+        record at `sha`): those that are not the base branch's change alone, as (path, told, why).
+        `told` is True where the pull request is shown to have changed the file and False where that
+        could not be told (_why_own), and why is None when no merge came between. None when GitHub
+        has more to answer first (asked for in self.need) or could not be read (said), which is never
+        a record that still describes the head.
 
         With no merge commit since the record every such change is the pull request's own, and
         nothing more is asked. After a merge, or when GitHub's list of the commits since was cut
@@ -512,18 +638,20 @@ class _Verdict:
         file was:
         GitHub's compare of the base commit with the record's commit and with the head (the pull
         request's patch at each, and where the branch last took in the base branch), and its compare
-        of those two merge bases (the base branch's own change). _why_own holds the rule.
+        of those two merge bases (the base branch's own change). _why_own holds the rule. A compare
+        shows no change of mode, so when those three leave every file as the base's change alone,
+        one more read gives each file's mode at the four commits, and _why_mode holds that rule.
         """
         commits = cmp.get("commits") if isinstance(cmp.get("commits"), list) else []
         total = cmp.get("total_commits")
         merged = any(isinstance(c, dict) and isinstance(c.get("parents"), list) and len(c["parents"]) > 1 for c in commits)
         cut = isinstance(total, int) and not isinstance(total, bool) and total > len(commits)
         if not merged and not cut:
-            return [(p, None) for p in paths]
+            return [(p, True, None) for p in paths]
         base = str(self.view.get("baseRefOid") or "").lower()
         if not v.SHA_RE.match(base):
             self.add("github-unreadable", name, "GitHub did not report this pull request's base commit, so whether the"
-                     " changes since its newest record at %s are its own cannot be told" % sha[:7])
+                     " changes since its newest record at %s are its own cannot be told. %s" % (sha[:7], self.retry()))
             return None
         then = self.diff(name, base, sha, final)
         now = self.diff(name, base, self.head, final)
@@ -532,20 +660,78 @@ class _Verdict:
         was, at = _merge_base(then), _merge_base(now)
         if was is None or at is None:
             self.add("github-unreadable", name, "GitHub's compare of %s with %s named no merge base, so whether the"
-                     " changes since its newest record are its own cannot be told" % (
-                         base[:7], (sha if was is None else self.head)[:7]))
+                     " changes since its newest record are its own cannot be told. %s" % (
+                         base[:7], (sha if was is None else self.head)[:7], self.retry()))
             return None
         branch = self.view.get("baseRefName") or "the base branch"
         if was == at:
-            return [(p, "the branch took in nothing from %s since the record" % branch) for p in paths]
+            # Said as what was measured, the two merge bases being one commit. That the branch took
+            # in nothing from the base is the usual cause, not the only one: a base commit GitHub
+            # reports from before the record's own merge base reads the same.
+            return [(p, False, "GitHub measures this pull request from the same commit of %s (%s) at the record and"
+                     " at the head, so a change of %s's since the record cannot be told from its own" % (
+                         branch, was[:7], branch)) for p in paths]
         moved = self.diff(name, was, at, final)
         if moved is None:
             return None
         if moved.get("status") != "ahead":
-            return [(p, "GitHub compares %s at %s with %s as %s, not as later" % (
-                branch, was[:7], at[:7], moved.get("status") or "unknown")) for p in paths]
-        whys = [(p, _why_own(_entry(then, p), _entry(now, p), _entry(moved, p))) for p in paths]
-        return [(p, why) for p, why in whys if why]
+            return [(p, False, "%s at %s is not a later commit than %s at %s (GitHub compares them as %s), so what %s"
+                     " changed between them cannot be told" % (
+                         branch, at[:7], branch, was[:7], moved.get("status") or "unknown", branch)) for p in paths]
+        capped = [key for key, c in (("then", then), ("now", now), ("base", moved)) if _cut(c)]
+        whys = [(p, _why_own(_entry(then, p), _entry(now, p), _entry(moved, p), capped)) for p in paths]
+        own = [(p,) + why for p, why in whys if why]
+        kept = [p for p, why in whys if why is None]
+        if own or not kept:
+            # Stale whatever the modes of the files left: nothing more is asked of GitHub.
+            return own
+        four = (was, sha, at, self.head)
+        modes = self.modes(name, [(c, p) for p in kept for c in four], final)
+        if modes is None:
+            return None
+        return [(p,) + why for p, why in ((p, _why_mode(*(modes[(c, p)] for c in four))) for p in kept) if why]
+
+    def modes(self, name, wanted, final):
+        """The mode of the file at each (commit, path) of `wanted`, as {(commit, path): mode} holding
+        every one of them. None when one is not in the bundle yet (asked for through self.need, or
+        said unreadable on the final ask) or GitHub could not be read for them (said): a mode that
+        was not read is never a mode nobody changed."""
+        self.modes_wanted += [w for w in wanted if w not in self.modes_wanted]
+        what = "the mode of %s at the commits compared, which says whether this pull request changed it since its" \
+               " newest record" % _named(sorted({p for _, p in wanted}))
+        err = _read(self.path("modes.err"))
+        if err is not None:
+            self.add("github-unreadable", name, "GitHub could not be read for %s: %s. %s" % (
+                what, err.strip().rstrip("."), self.retry()))
+            return None
+        raw = _read(self.path("modes.json"))
+        table = {}
+        if raw is not None:
+            try:
+                table = _modes_read(json.loads(raw))
+            except ValueError as e:
+                self.add("github-unreadable", name, "GitHub's answer for %s was not JSON: %s. %s" % (what, e, self.retry()))
+                return None
+            if table is None:
+                self.add("github-unreadable", name, "GitHub's answer for %s reported an error or named no repository."
+                         " %s" % (what, self.retry()))
+                return None
+        missing = [w for w in wanted if w not in table]
+        if not missing:
+            return table
+        if final and raw is None:
+            self.add("github-unreadable", name, "no answer from GitHub was recorded for %s. %s" % (what, self.retry()))
+        elif final:
+            self.add("github-unreadable", name, "GitHub gave no mode for %s at %s%s, so whether this pull request"
+                     " changed it since its newest record cannot be told. %s" % (
+                         missing[0][1], missing[0][0][:7],
+                         " (nor for %d more)" % (len(missing) - 1) if len(missing) > 1 else "", self.retry()))
+        elif not re.fullmatch(r"[^/\s]+/[^/\s]+", self.slug):
+            self.add("github-unreadable", name, "the repository this merge is in (%s) names no owner and repository,"
+                     " so GitHub cannot be asked for %s. %s" % (self.slug or "none given", what, self.retry()))
+        else:
+            self.modes_missing = True
+        return None
 
     def diff(self, name, a, b, final):
         """GitHub's compare of commit `a` with commit `b`, as the bundle holds it. None when it is not
@@ -555,22 +741,25 @@ class _Verdict:
         what = "the changes from %s to %s, which say whether the changes since its newest record are its own" % (a[:7], b[:7])
         err = _read(self.path("compare", key + ".err"))
         if err is not None:
-            self.add("github-unreadable", name, "GitHub could not be read for %s: %s" % (what, err.strip()))
+            self.add("github-unreadable", name, "GitHub could not be read for %s: %s. %s" % (
+                what, err.strip().rstrip("."), self.retry()))
             return None
         raw = _read(self.path("compare", key + ".json"))
         if raw is None:
             if final:
-                self.add("github-unreadable", name, "no answer from GitHub was recorded for %s" % what)
+                self.add("github-unreadable", name, "no answer from GitHub was recorded for %s. %s" % (what, self.retry()))
             elif {"from": a, "to": b} not in self.need["diffs"]:
                 self.need["diffs"].append({"from": a, "to": b})
             return None
         try:
             cmp = json.loads(raw)
         except ValueError as e:
-            self.add("github-unreadable", name, "GitHub's compare of %s with %s was not JSON: %s" % (a[:7], b[:7], e))
+            self.add("github-unreadable", name, "GitHub's compare of %s with %s was not JSON: %s. %s" % (
+                a[:7], b[:7], e, self.retry()))
             return None
         if not isinstance(cmp, dict):
-            self.add("github-unreadable", name, "GitHub's compare of %s with %s was not a compare" % (a[:7], b[:7]))
+            self.add("github-unreadable", name, "GitHub's compare of %s with %s was not a compare. %s" % (
+                a[:7], b[:7], self.retry()))
             return None
         return cmp
 

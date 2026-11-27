@@ -303,11 +303,12 @@ judge_failed(){
 
 judge || judge_failed
 # The judge asks for what it lacks and is asked again once it is fetched. One round is the rule. An
-# older record whose area changed since, after a merge into the branch, takes two more (#3574): the
-# pull request's patch at the record's commit and at the head, then the base branch's own change
-# between the two commits those name. The last round's answer is final: what is still missing then
-# is GitHub unreadable, never a pass.
-NEED_ROUNDS=3
+# older record whose area changed since, after a merge into the branch, takes up to three more
+# (#3574): the pull request's patch at the record's commit and at the head, then the base branch's
+# own change between the two commits those name, then, only when those leave every file as the base
+# branch's change alone, each such file's mode at the four commits, which no compare shows. The last
+# round's answer is final: what is still missing then is GitHub unreadable, never a pass.
+NEED_ROUNDS=4
 round=0
 while [ "$(printf '%s' "$verdict" | jq -r 'has("need")' 2>/dev/null)" = "true" ]; do
   round=$((round + 1))
@@ -347,6 +348,16 @@ LOOP_INPUT
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
+  # The modes of the files a record would otherwise outlive (#3574): one GraphQL read however many
+  # files and commits, since GitHub's compare shows no change of mode. The judge wrote the query,
+  # with every commit and path as a variable and none in the query's own text, and it is sent as it
+  # is. A read that fails leaves modes.err, which the judge refuses on.
+  modes_ask="$(printf '%s' "$verdict" | jq -c '.need.modes // empty' 2>/dev/null)" || modes_ask=""
+  if [ -n "$modes_ask" ]; then
+    printf '%s' "$modes_ask" > "$WORK/modes.ask"
+    vr_get "$WORK/modes.json" "the file modes" graphql --input "$WORK/modes.ask"
+    keep_or_fail "$WORK/modes.json" "$?"
+  fi
   # The screenshots check's reads (#2516), asked only when a pictures block makes them matter:
   # whether the repository is public, and each folder of pictures on the pr-screenshots branch at
   # the commit the block links.

@@ -84,6 +84,8 @@ case "$*" in
   *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
   *"pr view"*) answer view.json ;;
+  # The one GraphQL read of file modes (#3574). What was sent is kept, so a case can read it.
+  "api graphql --input "*) cp "${@: -1}" "$FAKE/modes.ask" 2>/dev/null; answer modes.json ;;
   *"contents/.claude/verification/areas.json"*) answer areas.json ;;
   *"contents/.claude/verification/guides/invoices.md"*) answer guide-invoices.md ;;
   *"contents/.claude/verification/guides/clients.md"*) answer guide-clients.md ;;
@@ -174,6 +176,13 @@ if spec.get("merged"):
                                        (MB_THEN, MB_NOW, "ahead", MB_THEN, then, now)):
         w(os.path.join(fake, "compare-%s...%s.json" % (a, b)), json.dumps({
             "status": status, "merge_base_commit": {"sha": mb}, "files": entry(old, new)}))
+    # The file's mode at the four commits compared, as GitHub's GraphQL API answers: main's at the
+    # record, the branch's at the record, main's at the head's merge base, the branch's at the head.
+    # 33188 is an ordinary file (100644) and 33261 an executable one (100755).
+    modes = spec.get("modes", [33188, 33188, 33188, 33188])
+    w(os.path.join(fake, "modes.json"), json.dumps({"data": {"repository": {
+        "c%d" % i: {"oid": c, "f0": {"path": "src/invoices/list.ts", "mode": m, "type": "blob"}}
+        for i, (c, m) in enumerate(zip((MB_THEN, OLD, MB_NOW, HEAD), modes))}}}))
 if not spec.get("no_receipt"):
     egress = {"verdict": "unmeasured", "why": "no egress monitor exists"} if spec.get("unmeasured") else {"verdict": "clean", "why": "measured"}
     w(os.path.join(home, "receipts", rid, "receipt.json"), json.dumps({
@@ -376,16 +385,36 @@ compares="$(grep -c "/compare/" "$FAKE/log")"
 for pair in "$OLD...$HEAD" "$BASE...$OLD" "$BASE...$HEAD" "$MB_THEN...$MB_NOW"; do
   [ "$(grep -c "compare/$pair" "$FAKE/log")" = 1 ] && pass || fail "#3574 the compare $pair was not asked exactly once: $(cat "$FAKE/log")"
 done
+# And one read more for the file's mode, which no compare shows: the four commits compared and the
+# file, each sent as a variable of the query.
+modes_asked="$(grep -c "^api graphql " "$FAKE/log")"
+[ "$modes_asked" = 1 ] && pass || fail "#3574 the merged case asked GitHub for the modes $modes_asked times, wanted 1: $(cat "$FAKE/log")"
+asked="$(jq -r '[.variables | to_entries[] | select(.key | test("^[cp][0-9]+$")) | .value] | sort | join(" ")' "$FAKE/modes.ask" 2>/dev/null)"
+[ "$asked" = "$HEAD $OLD $MB_THEN $MB_NOW src/invoices/list.ts" ] && pass || fail "#3574 the modes were asked for [$asked], wanted the four commits compared and the file"
 setup '{"older": true, "merged": "own"}'
 out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
 expect_deny "#3574 the pull request's own patch changed as well as the merge" "$out" "since then this pull request changed src/invoices/list.ts" "patch to it differs"
-# A compare that cannot be read is never a record that still describes the head.
+modes_asked="$(grep -c "^api graphql " "$FAKE/log")"
+[ "$modes_asked" = 0 ] && pass || fail "#3574 a record that is stale anyway asked GitHub for the modes $modes_asked times, wanted 0: $(cat "$FAKE/log")"
+# The pull request made the file executable after the run, and main, which changed the file
+# elsewhere, was merged in: every compare reads as the clean merge's, and only the mode shows it.
+setup '{"older": true, "merged": "clean", "modes": [33188, 33188, 33188, 33261]}'
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "#3574 the pull request changed the file's mode after the run" "$out" "since then this pull request changed src/invoices/list.ts" "change to its mode is not the one the run saw" "Run it again there"
+setup '{"older": true, "merged": "clean", "modes": [33188, 33188, 33261, 33261]}'
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_allow "#3574 a mode only main changed is main's change, so the record still describes the head" "$out"
+# A read that fails is never a record that still describes the head, and says what to do next.
 for pair in "$BASE...$OLD" "$BASE...$HEAD" "$MB_THEN...$MB_NOW"; do
   setup '{"older": true, "merged": "clean"}'
   printf 'gh: Server Error (HTTP 502)\n' > "$FAKE/compare-$pair.json.fail"
   out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
-  expect_deny "#3574 the compare $pair could not be read" "$out" "GitHub could not be read for the changes from ${pair:0:7} to" "HTTP 502" "ALLOW_UNVERIFIED_MERGE=1"
+  expect_deny "#3574 the compare $pair could not be read" "$out" "GitHub could not be read for the changes from ${pair:0:7} to" "HTTP 502" "Try the merge again, or run this area again at ${HEAD:0:7}" "ALLOW_UNVERIFIED_MERGE=1"
 done
+setup '{"older": true, "merged": "clean"}'
+printf 'gh: Server Error (HTTP 502)\n' > "$FAKE/modes.json.fail"
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "#3574 the file's mode could not be read" "$out" "GitHub could not be read for the mode of src/invoices/list.ts" "HTTP 502" "Try the merge again, or run this area again at ${HEAD:0:7}" "ALLOW_UNVERIFIED_MERGE=1"
 setup '{"unmeasured": true}'
 out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
 expect_deny "unmeasured egress is never clean" "$out" "egress as unmeasured"
