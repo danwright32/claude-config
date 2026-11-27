@@ -129,6 +129,16 @@ BLANK = " \t\n"
 DEV_NET = re.compile(r"/dev/(?:tcp|udp)\b")
 # What a refusal reads like when a file's imports are what reach the code that posts.
 IMPORTS = ", which imports "
+# What one reads like when a shell script was judged by a name in it and not by its commands
+# (claude-config#3476). The gate reads a shell script's commands wherever it reads the script, and
+# then says it "runs a command that posts". It says a shell script "posts to Slack (it names ...)"
+# only of one it did not read: one behind three other scripts, the most it reads in a chain (its
+# MAX_DEPTH), or a binary part of one. SHELL_EXT is the gate's own list of the endings it takes for
+# a shell script, copied here because this file is handed only the gate's folder; the route's suite
+# holds the copy to the gate's. A shell script known only by its first line is not matched, so its
+# refusal names no route, as before.
+SHELL_EXT = (".sh", ".bash", ".zsh", ".command")
+NAMED_UNREAD = re.compile(r"(?:" + "|".join(re.escape(e) for e in SHELL_EXT) + r") posts to Slack \(it names ")
 # What a later file is said to have been written by, where one may have been.
 UNDER = "the command run under the no network wrapper"
 
@@ -200,10 +210,14 @@ def make(here):
             return True
 
         def route_note(self, reason):
-            """The sentence a refusal gains when a file's imports are what reach code that posts: the
-            route by which a test or a check can still be run. "" for any other refusal, and where
-            no wrapper is installed, since a route that is not there must not be named (L111)."""
-            if not self.no_network or IMPORTS not in reason:
+            """The sentence a refusal gains when what the gate found is not a command it read: a
+            file's imports are what reach code that posts, or a shell script was judged by a name
+            in it, unread (NAMED_UNREAD, claude-config#3476: a plain run of the gate's own priority
+            suite, which reaches the gate's script behind three others). It is the route by which a
+            test or a check can still be run. "" for any other refusal, and where no wrapper is
+            installed, since a route that is not there must not be named (L111). It is asked only
+            once a call is refused and adds words to that refusal, so it moves no verdict."""
+            if not self.no_network or not (IMPORTS in reason or NAMED_UNREAD.search(reason)):
                 return ""
             return (" If the command is a test or a check that is meant to post nothing, run it again under the "
                     "no network wrapper, which this gate lets through because what runs under it has no network "

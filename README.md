@@ -5138,7 +5138,16 @@ command's own exit code comes through unchanged. The gate passes a call that is 
 and its command and nothing else, without reading what runs under it. The refusal of a file whose
 imports reach code
 that posts names the route and the path to write, in full, and `skills/orchestrate/agent-rules.md`
-lets an agent run a refused command again that way when the refusal says so.
+lets an agent run a refused command again that way when the refusal says so. Since #3476 one more
+refusal names it: that of a shell script the gate judged by a name in it and did not read as
+commands. The gate reads the commands of three scripts in a chain, and a shell script behind those
+three is refused where it names a send call, whatever it does. That refused a plain run of
+`test-slack-drafts-gate-qos.sh`, which starts itself again under `taskpolicy` and so reaches the
+gate's own script, which names the call it guards, behind three. The verdict is as it was; only the
+refusal's last sentence is new. A script that does post, reached that deep, gets the same sentence,
+since the gate cannot tell the two apart, and under the wrapper it has no network. No other refusal
+names the route: not a script whose commands the gate read, not a request, and not a file that is
+never read as commands (JavaScript, Python) and names the call.
 
 The gate does not read what runs under the wrapper, so the rule is no wider than this: the shell of
 the call starts the installed wrapper, by its real path, and everything the call runs is under it.
