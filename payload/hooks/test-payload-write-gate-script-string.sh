@@ -692,8 +692,16 @@ runbash "(cd $FIX/elsewhere); rm payload/hooks/x.sh \"left open" "$FIX/dev"
 refused "#3855 a command the reader cannot read is judged where the session is too, after a cd in brackets"
 runbash "true & rm payload/hooks/x.sh \"left open" "$FIX/dev"
 refused "#3855 and after a single &"
-runbash "(cd $FIX/elsewhere); rm $FIX/elsewhere/a.txt \"left open" "$FIX/dev"
-allowed "#3855 control: a command the reader cannot read that writes outside any checkout is let through"
+runbash "sleep 1& rm payload/hooks/x.sh \"left open" "$FIX/dev"
+refused "#3855 and after a single & that follows a digit"
+runbash "cd $FIX/elsewhere && rm payload/hooks/x.sh \"left open" "$FIX/dev"
+refused "#3855 and after a cd the shell would keep, since which folder it runs in cannot be read"
+# Judged in each folder, never refused outright: the path below names a payload folder, so a gate
+# that refused every command it cannot read that names one would refuse it.
+runbash "(cd $FIX/elsewhere); rm $FIX/elsewhere/payload/a.txt \"left open" "$FIX/dev"
+allowed "#3855 control: a command the reader cannot read that names a payload folder outside any checkout is let through"
+runbash "sleep 1& rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a command after a single & that follows a digit is judged, in a command the reader can read"
 # What really moved is still judged where it moved to, and what was refused before still is.
 runbash "( cd $FIX/elsewhere; echo x > payload/hooks/x.sh )" "$FIX/dev"
 allowed "#3855 control: a write inside the brackets, after the cd there, lands elsewhere and is let through"
@@ -713,6 +721,15 @@ runbash "cd $FIX/dev; (cd $FIX/elsewhere); rm payload/hooks/x.sh" "$FIX/elsewher
 refused "#3855 a remove after a kept cd into the checkout and an undone one out of it is judged in the checkout"
 runbash "python3 -c \"import os; os.system('(cd $FIX/elsewhere); rm payload/hooks/x.sh')\"" "$FIX/dev"
 refused "#3855 control: the same inside a command string an inline script runs was refused before, and is"
+runbash "bash -c 'pushd $FIX/dev; pushd $FIX/elsewhere; popd; rm payload/hooks/x.sh'" "$FIX/elsewhere"
+refused "#3855 two pushd and one popd inside a command string handed to a shell are judged where the first pushd went"
+# A COMMAND IS REFUSED WHEN ANY READING OF IT REFUSES. The reading that was there follows the
+# pushd into the checkout and knows no popd, so it judges the remove in the checkout. The new
+# reading goes back with the popd and judges it elsewhere. The first still refuses, so the gate does.
+runbash "pushd $FIX/dev; popd; rm payload/hooks/x.sh" "$FIX/elsewhere"
+refused "#3855 what the reading that was there refused is still refused: a remove after a pushd into the checkout and its popd"
+runbash "pushd $FIX/dev >/dev/null; popd >/dev/null; python3 -c 'open(\"payload/hooks/x.sh\",\"w\").write(\"x\")'" "$FIX/elsewhere"
+refused "#3855 and an inline script opening a payload file after that pushd and its popd"
 
 echo "a remove or an edit fed its paths by the command before it (claude-config#3855)"
 
@@ -737,6 +754,12 @@ runbash "echo payload/hooks/x.sh | xargs git rm" "$FIX/dev"
 refused "#3855 a git rm fed a payload path"
 runbash "echo payload/hooks/x.sh | sort | xargs rm" "$FIX/dev"
 refused "#3855 a path fed through another command on the way"
+runbash "echo payload/hooks/x.sh | sudo xargs rm" "$FIX/dev"
+refused "#3855 xargs run behind sudo"
+runbash "bash -c 'echo payload/hooks/x.sh | xargs rm'" "$FIX/dev"
+refused "#3855 xargs rm fed a payload path inside a command string handed to a shell"
+runbash "python3 -c \"import os; os.system('echo payload/hooks/x.sh | xargs rm')\"" "$FIX/dev"
+refused "#3855 and inside a command string an inline script runs"
 runbash "echo $FIX/elsewhere/a.txt | xargs rm" "$FIX/dev"
 allowed "#3855 control: xargs rm fed a path outside any checkout is let through"
 runbash "echo payload/hooks/x.sh | xargs cat" "$FIX/dev"

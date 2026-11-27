@@ -1169,6 +1169,7 @@ def shell_runs(text, start, shown=None, depth=0):
 
 base = cwd
 CD_TO = object()  # marks a segment that is a directory the commands after it run in
+AGAIN = object()  # marks segments added by claude-config#3855, read after every segment read before it
 crude = segments_of(shell_text)
 segments = list(crude)
 # The commands a shell runs from its -c string, eval from its words and env -S from its string
@@ -1356,13 +1357,17 @@ def string_segments(text, b):
     # And each command of the string in the folder the shell really runs it in (claude-config#3855,
     # shell_runs). A string that reading cannot vouch for has each segment judged where the string
     # starts as well, whatever cd it holds.
+    # Held back behind the AGAIN mark, as the same reading of the whole command is (below).
+    again = []
     try:
         for dirs, inner in shell_runs(text, b):
             for d in dirs:
-                out += [(CD_TO, d)] + segments_of(inner)
+                again += [(CD_TO, d)] + segments_of(inner)
     except Exception:
+        again = []
         for seg in own:
-            out += [(CD_TO, b), seg]
+            again += [(CD_TO, b), seg]
+    out.append((AGAIN, again))
     return out
 
 def program_is_value(text):
@@ -1526,16 +1531,28 @@ except Exception:
 # runs) has every segment judged in every folder a cd in it could have left the shell, the session
 # folder first, with no cd followed, and cut at a single & as well: which of those folders it runs
 # in cannot be read, so it is judged in each (L42).
+#
+# READ LAST, SO THE READING THAT WAS THERE IS NOT TOUCHED BY IT. These segments, those the same
+# reading adds for a command string (string_segments) and each one put together for an xargs (Fed)
+# are held back behind the AGAIN mark until every segment the gate read before this change has
+# been read, strings found on the way included. So those are read in the order and with the notes
+# (placed, the strings already read) they always had, and every destination they named is still
+# named. What is read after them can only name more. The step that refuses asks each destination
+# by itself and refuses on the first that is at risk, so a command is refused when ANY reading
+# of it names one.
 SINGLE_AMP = r"(?<![&>|<])&(?![&>])"
+again = []
 try:
     for dirs, text in shell_runs(cmd, cwd, shell_text):
         for d in dirs:
-            segments += [(CD_TO, d)] + segments_of(text)
+            again += [(CD_TO, d)] + segments_of(text)
 except Exception:
+    again = []
     for b in ALL_BASES:
         for seg in crude:
             for piece in dict.fromkeys([seg] + re.split(SINGLE_AMP, seg)):
-                segments += [(CD_TO, b), piece]
+                again += [(CD_TO, b), piece]
+segments.append((AGAIN, again))
 
 placed = set()
 # WHAT THE SEGMENTS OF THE COMMAND ITSELF PLACED, AND NOTHING A STRING ADDED (claude-config#3775). The read
@@ -1554,18 +1571,40 @@ read_at = set()
 # Any segment holding the letters of cd or pushd, however it is written: one too many is read
 # twice, and one too few would leave the segments after it in the wrong folder.
 FOLDER_CHANGE = re.compile(r"cd|pushd")
-for at, seg in enumerate(segments):
+# What claude-config#3855 added is held here until the list as it was has been read to its end,
+# and is then read in its turn (READ LAST, above).
+held_back = []
+reading_held = [False]
+def in_turn():
+    at = 0
+    while True:
+        if at == len(segments):
+            if reading_held[0] or not held_back:
+                return
+            reading_held[0] = True
+            segments.extend(held_back)
+            continue
+        yield at, segments[at]
+        at += 1
+for at, seg in in_turn():
     # A segment put together here from the words a pipeline feeds xargs (Fed) is no segment of the
     # command itself, wherever it stands in the list.
     typed = at < OWN_SEGMENTS and not isinstance(seg, Fed)
+    if isinstance(seg, tuple) and seg[0] is AGAIN:
+        (segments if reading_held[0] else held_back).extend(seg[1])
+        continue
+    if isinstance(seg, Fed) and not reading_held[0]:
+        # With the folder it stood in, since the segments held back are read after a cd of their own.
+        held_back.extend([(CD_TO, base), seg])
+        continue
     if isinstance(seg, tuple) and seg[0] is CD_TO:
         base = seg[1]
         continue
-    # A segment added after those of the command itself that was already read in this folder says nothing
-    # new, so it is not read twice (claude-config#3855: every command is added again in the folder
-    # the shell runs it in, which for most commands is the folder it was read in). Never one that
-    # changes folder, which moves the segments after it.
-    if at >= OWN_SEGMENTS and (base, seg.strip()) in read_at and not FOLDER_CHANGE.search(seg):
+    # A segment held back that was already read in this folder says nothing new, so it is not read
+    # twice (claude-config#3855: every command is added again in the folder the shell runs it in,
+    # which for most commands is the folder it was read in). Never one that changes folder, which
+    # moves the segments after it, and never a segment of the list as it was.
+    if reading_held[0] and (base, seg.strip()) in read_at and not FOLDER_CHANGE.search(seg):
         continue
     read_at.add((base, seg.strip()))
     # A redirect TARGET: the word after > or >> (or 2>, &>, a fd form), attached or separated.
