@@ -213,6 +213,10 @@ check "#3317 a held item is not started and the board says who holds it" "$(hold
 check "#3317 a failed check is not read as free" "$(holds "$claiming" 'nothing was claimed' 'no could not check rule')"
 check "#3317 the release command is written out" "$(holds "$claiming" 'bash ~/.claude/skills/orchestrate/claim-issue.sh release <owner/repo> <issue number> <branch>' 'no release command')"
 check "#3317 a read only item needs no claim" "$(holds "$claiming" 'needs no claim' 'no read only exemption')"
+# claude-config#3788: a pull request holds an issue only when it is built for it. The skill says
+# which pull requests those are, and that a `mentioned, not held` line is no reason to hold back.
+check "#3788 the skill says which pull requests hold an issue" "$(holds "$claiming" 'the open pull requests built for it' 'no built for wording')"
+check "#3788 the skill says a mention is a note that holds nothing" "$(holds "$claiming" '`mentioned, not held`' 'no mentioned, not held wording')"
 check "#3317 the board states include held by" "$(holds "$(section "## 4. While agents run")" '`held by <who>`' 'no held by state')"
 check "#3317 Finish releases claims left standing" "$(holds "$finish" 'claim-issue.sh release' 'Finish does not release claims')"
 check "#3317 the script the skill names is there and executable" "$([ -x "$DIR/claim-issue.sh" ] && echo ok || echo "$DIR/claim-issue.sh missing or not executable")"
