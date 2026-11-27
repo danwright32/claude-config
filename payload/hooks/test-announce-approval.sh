@@ -399,13 +399,18 @@ check "R2 #3846 nothing was written to the record as an approval of it" "$([ "$(
 # The rule of the markdown that was never measured to arrive, and the rule of his own voice. And
 # (the review of this change, B) a file holding a heading: a pull request's block ends at the next
 # heading, so that file could never be a block whole and the lines below it were judged by nothing.
+# And (the same review, A and E, the cases its L5 found missing): a block quote hidden behind a bare
+# carriage return, which the hash read as a line's end and the rules did not, and a file that begins
+# with a byte order mark, refused for its opener in words that name the mark. Those two are written
+# with $'...', so the file holds the real character.
 for each in 'code|ANNOUNCEMENT_MARKDOWN|code (a backtick)|@here
 Run `the thing` now.' 'dash|ANNOUNCEMENT_DASHES|dash as punctuation|@here
 Hand back - then pick a reason.' 'heading|WORDING_FILE_HEADING|holds a heading on line 4|@here
 Something changed.
 
 ## What to do
-- Do this'; do
+- Do this' $'cr|ANNOUNCEMENT_CARRIAGE_RETURN|carriage return in the middle of a line|@here\nSomething changed.\r> a quoted line' \
+  $'bom|ANNOUNCEMENT_NO_OPENER|begins with a byte order mark|\xef\xbb\xbf@here\nSomething changed.'; do
   name="${each%%|*}"; rest="${each#*|}"; code="${rest%%|*}"; rest="${rest#*|}"; needle="${rest%%|*}"; wording="${rest#*|}"
   STORE_USED="$WORK/store-rule-$name"
   F="$(shown_as "rule-$name" "$wording")"; T="$WORK/rule-$name.jsonl"
