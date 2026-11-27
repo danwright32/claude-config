@@ -237,6 +237,20 @@ out="$(score run --all --cases "$CASES" --results-dir "$RESULTS")"; rc=$?
 check "#3556 a known wrong finding raised one more time is named" "raised more often: invented-paginate w1" "$out"
 check "#3556 and one more is inside the noise" "CANNOT TELL" "$out"
 check_rc "#3556 so it exits 4" 4 "$rc"
+# The review of #3705: the same catches and the same known wrong findings, plus 120 findings that
+# match no judged item. The judged items show no difference, but nobody has judged the 120, so the
+# verdict must say the unchecked count moved, and --save-baseline must refuse the run and say why:
+# a noisier review is the likeliest bad change to the lessons review, and saved it would become the
+# yardstick the next run is judged against.
+noise="$(for i in $(seq 1 120); do printf 'shop/paginate.py:2: the module docstring is vague about screen %s. Should be: name it. [severity: minor]\n' "$i"; done)"
+answer paginate "shop/paginate.py" "$PAGINATE_GOOD
+$noise"
+base_before="$(cat "$RESULTS/baseline.json")"
+out="$(score run --all --save-baseline --cases "$CASES" --results-dir "$RESULTS")"; rc=$?
+check "3705 the verdict names a rise in the unchecked findings" "unchecked findings rose from 1 to 121" "$out"
+check "3705 and claims no difference only on the judged items" "NO DIFFERENCE on the judged items" "$out"
+check "3705 a run whose unchecked findings moved is refused as the baseline, saying why" "the unchecked findings moved (from 1 to 121), so it was not saved as the baseline" "$out"
+[ "$(cat "$RESULTS/baseline.json")" = "$base_before" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: 3705 --save-baseline must not make a run with 120 new unchecked findings the baseline"; }
 answer paginate "shop/paginate.py" "$PAGINATE_GOOD"
 
 # --- 6. a subset is compared only with the same cases in the baseline -----------------------------
@@ -443,6 +457,14 @@ check "#3556 with no defect flipped either way" "catch: 0 newly caught, 0 newly 
 check "#3556 both sides carry their ranges" "baseline: catch 3 of 5 (60%, 95% range 23% to 88%); wrong 2 of 5 checked findings (40%, 95% range 12% to 77%), 1 unchecked" "$out"
 check "#3556 the test used is named" "exact two sided sign test" "$out"
 check_rc "#3556 no difference exits 0" 0 "$rc"
+check_not "3705 an unchanged unchecked count adds nothing to the verdict" "unchecked findings rose" "$out"
+check_not "3705 nor says it fell" "unchecked findings fell" "$out"
+# Two tests, each at 5%, and either can give a verdict, so a run with no real change can still be
+# called a regression or an improvement up to about 1 time in 10. The output says so.
+check "3705 the test line says the two sides together can be wrong up to about 1 time in 10" "up to about 1 time in 10" "$out"
+mkrun "$R12/quiet.json" "$C11" '{"invented-paginate": [["p.d1", "p.d2", "p.w1"]], "invented-retry": [["r.d1", "r.w1"]]}'
+out="$(score rescore "$R12/quiet.json" --cases "$C11" --results-dir "$R12")"
+check "3705 a fall in the unchecked findings is named too" "unchecked findings fell from 1 to 0" "$out"
 mkrun "$R12/b.json" "$C11" '{"invented-paginate": [["p.d1", "p.w1", "p.x"]], "invented-retry": [["r.d1", "r.w1"]]}'
 out="$(score rescore "$R12/b.json" --cases "$C11" --results-dir "$R12")"; rc=$?
 check "#3556 the defect newly missed is named" "newly missed: invented-paginate d2" "$out"
@@ -463,7 +485,14 @@ out="$(score rescore "$R11/a.json" --cases "$C12g" --results-dir "$R12")"
 check "#3556 a case both runs measured but the case set no longer holds is named" "measured in both but not compared (gone from the case set, or failing its check): invented-retry" "$out"
 mkrun "$R12/rep.json" "$C11" '{"invented-paginate": [["p.d1", "p.d2", "p.w1", "p.x"], ["p.d1", "p.w1", "p.x"]], "invented-retry": [["r.d1", "r.w1"], ["r.d1", "r.w1"]]}'
 out="$(score rescore "$R12/rep.json" --cases "$C11" --results-dir "$R12")"
-check "#3556 a defect caught in fewer of its repeats counts as a flip down, with both sides' counts" "newly missed: invented-paginate d2 (1 in 1 then, 1 in 2 now)" "$out"
+# The review of #3705: d2 was caught in 1 of 2 reviews, so it was not missed. A partial change is
+# "caught less often", apart from a defect no review caught any more.
+check "3705 a defect caught in fewer of its repeats is caught less often, with both sides' counts" "caught less often: invented-paginate d2 (1 in 1 then, 1 in 2 now)" "$out"
+check_not "3705 and is never listed as newly missed" "newly missed: invented-paginate d2" "$out"
+check "3705 the catch line counts partial changes apart from whole ones" "catch: 0 newly caught, 0 newly missed, 0 caught more often, 1 caught less often, 4 the same" "$out"
+mkrun "$R12/rep0.json" "$C11" '{"invented-paginate": [["p.d1", "p.w1", "p.x"], ["p.d1", "p.w1", "p.x"]], "invented-retry": [["r.d1", "r.w1"], ["r.d1", "r.w1"]]}'
+out="$(score rescore "$R12/rep0.json" --cases "$C11" --results-dir "$R12")"
+check "3705 a defect no repeat caught any more is newly missed" "newly missed: invented-paginate d2 (1 in 1 then, 0 in 2 now)" "$out"
 # A set big enough for the test to decide: eight invented cases, each a copy of the sample's one.
 C12="$WORK/c12"; mkdir -p "$C12"
 for n in 1 2 3 4 5 6 7 8; do cp -R "$SAMPLE/invented-paginate" "$C12/p$n"; done
@@ -500,6 +529,74 @@ out="$(score rescore "$R12c/mixed2.json" --cases "$C12" --results-dir "$R12f")";
 check "#3556 the unclear side gives its own change count" "catch 0 newly caught, 1 newly missed (p = 1.000), 1 change, too few for the 95% level" "$out"
 check "#3556 and the side that did clear it is still said" "Also better: known wrong findings raised 0 more often, 8 less often" "$out"
 check_rc "#3556 one side unclear is cannot tell overall" 4 "$rc"
+# The review of #3705: a REGRESSION on one side still says what the other side did. Eight defects
+# newly missed while eight known wrong findings went away.
+out="$(score rescore "$R12c/worse.json" --cases "$C12" --results-dir "$R12f")"; rc=$?
+check "3705 a regression on one side is still a regression" "REGRESSION: catch 0 newly caught, 8 newly missed (p = 0.008)" "$out"
+check "3705 and the other side's improvement is said too" "Also better: known wrong findings raised 0 more often, 8 less often (p = 0.008)" "$out"
+check_rc "3705 and it exits 1" 1 "$rc"
+# Six changes split five one way and one the other: as many as the 95% level needs, but too evenly
+# split. The reason must say so, never "6 changes, too few ... needs at least 6", which contradicts
+# itself (the one mutant the review of #3705 saw survive moved this boundary).
+R12g="$WORK/r12g"; mkdir -p "$R12g"
+mkrun "$R12g/baseline.json" "$C12" "$(spec "$all3" "$all3" "$all3" "$all3" "$all3" "$two" "$all3" "$all3")"
+mkrun "$R12c/split6.json" "$C12" "$(spec "$two" "$two" "$two" "$two" "$two" "$all3" "$all3" "$all3")"
+out="$(score rescore "$R12c/split6.json" --cases "$C12" --results-dir "$R12g")"; rc=$?
+check "3705 six changes split five to one say they are too evenly split" "catch 1 newly caught, 5 newly missed (p = 0.219), too evenly split" "$out"
+check_not "3705 and never that six are too few" "6 changes, too few" "$out"
+check_rc "3705 six changes split five to one cannot be told apart" 4 "$rc"
+mkrun "$R12c/five.json" "$C12" "$(spec "$two" "$two" "$two" "$two" "$two" "$all3" "$all3" "$all3")"
+R12h="$WORK/r12h"; mkdir -p "$R12h"
+mkrun "$R12h/baseline.json" "$C12" "$(spec "$all3" "$all3" "$all3" "$all3" "$all3" "$all3" "$all3" "$all3")"
+out="$(score rescore "$R12c/five.json" --cases "$C12" --results-dir "$R12h")"
+check "3705 five changes all one way are too few" "5 changes, too few for the 95% level, which needs at least 6 all one way" "$out"
+# A comparison over cases that hold no item judged wrong says that side was not measured, rather
+# than that nothing judged wrong was raised more or less often; likewise for no real defect.
+C12i="$WORK/c12i"; mkdir -p "$C12i/p1"; cp "$SAMPLE/invented-paginate/input.diff" "$C12i/p1/"
+python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c["items"] = [i for i in c["items"] if i["verdict"] == "real"]
+json.dump(c, open(sys.argv[2], "w"))' "$SAMPLE/invented-paginate/case.json" "$C12i/p1/case.json"
+R12i="$WORK/r12i"; mkdir -p "$R12i"
+mkrun "$R12i/baseline.json" "$C12i" '{"p1": [["p.d1", "p.d2"]]}'
+out="$(score rescore "$R12i/baseline.json" --cases "$C12i" --results-dir "$R12i")"; rc=$?
+check "3705 no item judged wrong is said as that side not measured" "these cases hold no item judged wrong, so known wrong findings were not compared" "$out"
+check_not "3705 and never as nothing judged wrong raised more or less often" "no finding judged wrong was raised more or less often" "$out"
+check_rc "3705 the measured side alone still gives no difference" 0 "$rc"
+C12j="$WORK/c12j"; mkdir -p "$C12j/p1"; cp "$SAMPLE/invented-paginate/input.diff" "$C12j/p1/"
+python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c["items"] = [i for i in c["items"] if i["verdict"] == "wrong"]
+json.dump(c, open(sys.argv[2], "w"))' "$SAMPLE/invented-paginate/case.json" "$C12j/p1/case.json"
+R12j="$WORK/r12j"; mkdir -p "$R12j"
+mkrun "$R12j/baseline.json" "$C12j" '{"p1": [["p.w1"]]}'
+out="$(score rescore "$R12j/baseline.json" --cases "$C12j" --results-dir "$R12j")"
+check "3705 no real defect is said as that side not measured" "these cases hold no real defect, so catches were not compared" "$out"
+check_not "3705 and never as no defect caught or missed differently" "no defect was caught or missed differently" "$out"
+
+# --- 13. nothing to compare: exit 2, and save-baseline says why (the review of #3705) -------------
+# A comparison over cases holding no real defect and no item judged wrong is unmeasured, a third
+# cause of exit 2 beside no case set and no review succeeding. The reviews did run, so a refused
+# save must say nothing could be compared, never that nothing was measured.
+C13="$WORK/c13"; mkdir -p "$C13/invented-trivial"; cp "$SAMPLE/invented-paginate/input.diff" "$C13/invented-trivial/"
+python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c["items"] = [i for i in c["items"] if i["verdict"] == "trivial"]
+json.dump(c, open(sys.argv[2], "w"))' "$SAMPLE/invented-paginate/case.json" "$C13/invented-trivial/case.json"
+rm -f "$FAKE_DIR/answers/"*
+answer paginate "shop/paginate.py" "$PAGINATE_GOOD"
+out="$(score run --all --save-baseline --cases "$C13" --results-dir "$WORK/r13")"
+check "3705 a first run with nothing comparable is still saved when there is no baseline" "Saved as the baseline" "$out"
+out="$(score run --all --save-baseline --cases "$C13" --results-dir "$WORK/r13")"; rc=$?
+check "3705 a comparison with no defect and no item judged wrong is unmeasured" "UNMEASURED: these cases hold no real defect and no item judged wrong" "$out"
+check_rc "3705 and exits 2" 2 "$rc"
+check "3705 the refused save says nothing could be compared" "nothing could be compared, so it was not saved as the baseline" "$out"
+check_not "3705 and never that nothing was measured, since every review ran" "Nothing was measured" "$out"
+# Both texts wrap their lines, so they are read with every run of spaces and line breaks as one space.
+doc="$(python3 -I -B -c 'import ast, sys; print(" ".join(ast.get_docstring(ast.parse(open(sys.argv[1]).read())).split()))' "$TOOL" </dev/null)"
+check "3705 the tool's own exit text lists the third cause of exit 2" "or the cases compared hold no real defect and no item judged wrong" "$doc"
+readme="$(python3 -I -B -c 'import sys; print(" ".join(open(sys.argv[1]).read().split()))' "$DIR/../README.md" </dev/null)"
+check "3705 the README's exit text lists it too" "or the cases compared hold no real defect and no item judged wrong" "$readme"
 
 echo
 echo "passed: $pass, failed: $fail"
