@@ -169,9 +169,11 @@ case "$*" in
     au="$(rd author)"; asked=false
     [ -n "$au" ] || au='{"id":"U_kgDOinvented","is_bot":false,"login":"active","name":""}'
     case "$*" in *"--json "*author*) asked=true ;; esac
+    # body holds the pull request's description, empty when unset: an announcement's post is read
+    # from it by the changelog record gate (claude-config#3742).
     jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" --argjson l "${lb:-[]}" --argjson x "${cx:-false}" --arg fo "${fo:-acme}" --arg br "${br:-main}" --arg rv "$(rd review-decision)" \
-      --argjson au "$au" --argjson asked "$asked" \
-      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:$br,isCrossRepository:$x,headRepositoryOwner:{login:$fo},headRepository:{name:"widget"},statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",reviewDecision:$rv,url:"https://github.com/acme/widget/pull/7",labels:$l,body:""}
+      --argjson au "$au" --argjson asked "$asked" --arg body "$(rd body)" \
+      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:$br,isCrossRepository:$x,headRepositoryOwner:{login:$fo},headRepository:{name:"widget"},statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",reviewDecision:$rv,url:"https://github.com/acme/widget/pull/7",labels:$l,body:$body}
        + (if $asked then {author:$au} else {} end)'
     ;;
   # A fork's branch, read from the fork (claude-config#1458): fork-tip, or the head when unset.

@@ -23,10 +23,12 @@ backslash newline out before it reads words, so `echo a\\` then `#b; echo RAN` i
 that starts a line was a comment, the line was dropped, and a quote or a heredoc opened after the #
 was never followed. A backslash joins only where it is live: one that ends a comment, or a
 heredoc's closing line, joins nothing (#3481). An unquoted heredoc's body is joined the same way
-before a line is compared with the marker (#3492); _closes and _read say what is done where a
-marker joined to the line before leaves the heredoc open in every shell. Where the reader cannot
-tell code from text it reads code: a scan that looks at a line no shell runs costs a second look,
-and one that skips a line a shell runs has missed what it was written to find.
+before a line is compared with the marker (#3492). Where a heredoc ends is not read here: it is
+asked of heredoc_close in lib/shell-words.py, the one Python reading of it, which the command
+reader asks too (#3592); _read says what is done where a marker joined to the line before leaves
+the heredoc open in every shell. Where the reader cannot tell code from text it reads code: a scan
+that looks at a line no shell runs costs a second look, and one that skips a line a shell runs has
+missed what it was written to find.
 
 unsure_heredocs(text) names each heredoc whose reading the reader cannot vouch for, by the line it
 opens on (#3592): an opener joined to the next line before the end of its marker, a heredoc the
@@ -49,6 +51,7 @@ never ends a function (#2063, #2068). It reads the assignments in a body through
 instead, which reads the body whole (#2076), so the text of each line that is this shell's own,
 which #2068 added for it, has no reader and is gone (L613).
 """
+import bisect
 import importlib.util
 import os
 import re
@@ -56,7 +59,8 @@ import sys
 
 # The end marker of a heredoc is read by lib/shell-words.py (heredoc_opener), the one reading of it,
 # which takes the whole word with its quotes removed as bash does: <<'E'OF and <<E"OF" end at EOF,
-# <<END-OF at END-OF (claude-config#2080). Loaded by its path beside this file, with no bytecode left
+# <<END-OF at END-OF (claude-config#2080). Where the heredoc ends is read there too (heredoc_close,
+# claude-config#3592). Loaded by its path beside this file, with no bytecode left
 # in lib/ (#2076). READER_ERROR is None once it loads; otherwise scan() refuses, naming it, since
 # this keeps no reading of its own to fall back on and one that misread a marker would read every
 # line after a heredoc as its body. Importing still works, so a scan can say which reader is missing.
@@ -93,6 +97,9 @@ OPENER_JOINED = ("its opener is joined to the next line by a backslash before th
                  "marker is not the word on that line; no heredoc is read there and the lines after are read as code")
 SHELLS_DIFFER = ("the shells do not end it at the same line: a backslash ends the line before its closing line, "
                  "and bash and zsh join the two where dash or ksh do not, or the reverse")
+MARKER_BREAK = ("the shells do not end it at the same line: its marker holds a line break, so no line is the marker. "
+                "bash and zsh read the rest of the file as its body, where ksh ends it at the lines that spell "
+                "the marker")
 NEVER_ENDS = ("its marker is joined by a backslash to the line before and no line after is the marker, so no shell "
               "ends it; the reader ends it there and reads the rest as code")
 
@@ -217,60 +224,33 @@ def scan(line, frames, keep=None, parens=None, before="", told=None, after=None)
     return ops
 
 
-def _closes(joined, line, strip, word, quoted):
-    """One line of a heredoc's body, read as bash and zsh read it: (whether it closes the heredoc,
-    the text it carries on to the next line, whether it is joined to the next line). `joined` is
-    what the lines before carried on.
-
-    An unquoted heredoc's body line that ends in an odd count of backslashes is joined to the next
-    BEFORE anything is compared with the marker (claude-config#3492; bash 3.2, zsh, sh and dash,
-    measured 2026-11-23 with texts that only echo and cat). So `a\\` then the marker is the one
-    line aMARKER and closes nothing, a line that is only a backslash then the marker closes, and so
-    does a marker split over two joined lines. A quoted marker's body is text as written and joins
-    nothing. With <<- the tabs come off the front of the joined line: bash closes at a tab and a
-    backslash followed by a tab and the marker where zsh does not, and this reads it as bash does,
-    since the lines after are then read as code."""
-    whole = joined + line
-    if (whole.lstrip('\t') if strip else whole) == word:
-        return True, "", False
-    if not quoted and (len(line) - len(line.rstrip('\\'))) % 2:
-        return False, whole[:-1], True
-    return False, "", False
-
-
-def _ends_later(lines, start, strip, word):
-    """Whether an unquoted heredoc still open at lines[start] is closed by any line from there on."""
-    joined = ""
-    for k in range(start, len(lines)):
-        closes, joined, _ = _closes(joined, lines[k], strip, word, False)
-        if closes:
-            return True
-    return False
-
-
 def _read(text, marks=None):
     """read_lines, with two more items a line: whether a # that starts it is text, joined onto a
     word by the line before, and whether it stands after a heredoc the reader is not sure of.
 
-    Given a list as `marks`, appends (line number, why) for each such heredoc, by the line it opens
-    on (claude-config#3592). Three kinds, each a row of lib/heredoc-closes.json, measured
-    2026-11-25 in bash 3.2, bash --posix, sh, dash, zsh, zsh emulating sh and ksh:
+    Where a heredoc ends is asked of heredoc_close in lib/shell-words.py, the one reading of it
+    (claude-config#3592), once for each heredoc, as its body starts. This reader ends it where bash
+    and zsh do (that function's `bash`), since the lines after are then read as code, and keeps no
+    close rule of its own.
+
+    Given a list as `marks`, appends (line number, why) for each heredoc the reader is not sure
+    of, by the line it opens on (claude-config#3592). Three kinds, each a row of
+    lib/heredoc-closes.json, measured 2026-11-25 in bash 3.2, bash --posix, sh, dash, zsh, zsh
+    emulating sh and ksh:
       * an opener joined to the next line before the end of its marker (OPENER_JOINED);
-      * a heredoc the shells do not end alike (SHELLS_DIFFER): it closes at a line a backslash
-        joined to the line before, which bash and zsh compare whole where dash or ksh do not (a
-        line that is only a backslash and then the marker, a marker split over two lines, a marker
-        and a backslash before an empty line), or its marker stands right after a line that starts
-        as the marker does and ends in backslashes, where ksh keeps the first of those backslashes
-        as text and so joins where the others do not and the reverse. It is read as bash reads it;
-      * a marker joined to the line before with no marker after it (NEVER_ENDS, #3492).
+      * a heredoc the shells do not end alike (SHELLS_DIFFER), named at the first closing line
+        heredoc_close gives as its `doubt`. It is read as bash reads it, so one whose marker
+        holds a line break (a dollar quote with a line break in it) is read on past the lines
+        that spell it, where ksh ends it (measured 2026-11-26, the same seven shells), and is
+        named in words of its own (MARKER_BREAK);
+      * a marker joined to the line before with no marker after it (NEVER_ENDS, #3492): no shell
+        closes it and heredoc_close's plain reading does.
     A heredoc the reader ends where every shell does is not named, however many of its lines a
     backslash joins. After a named one `rest` is true and code_lines leaves out nothing."""
     frames = [None]
     parens = [0]
     pending = []  # heredocs opened and not yet read: (strip_tabs, word, quoted, the line it opens on)
-    joined = ""   # what a heredoc's body lines have carried on to this one
-    carrying = False  # whether the body line before this one is joined to it
-    last = ""     # the body line before this one, of the same heredoc
+    ending = None  # how the heredoc being read ends: see ends
     before = ""   # the text a live backslash joined this line of code onto
     rest = False
     named = set()
@@ -281,18 +261,37 @@ def _read(text, marks=None):
         named.add(opened)
 
     lines = text.split('\n')
+    starts, offset = [], 0  # where each line starts in text
+    for line in lines:
+        starts.append(offset)
+        offset += len(line) + 1
+
+    def at(offset):
+        """The index of the line that holds, or ends at, that place in text."""
+        return bisect.bisect_right(starts, offset) - 1
+
+    def ends(i):
+        """How the first heredoc not yet read ends, its body starting at lines[i]: (the index of
+        the line that closes it or None, the index of the line it is first in doubt at or None,
+        whether no shell closes it where the reader does)."""
+        strip, word, quoted, _ = pending[0]
+        plain, _, _, bash, doubt, stray = _sw.heredoc_close(text, starts[i] - 1, word, strip, quoted)
+        close = bash or (plain if stray else None)
+        return at(close.end()) if close else None, None if doubt is None else at(doubt), stray
+
     for i, line in enumerate(lines):
         if pending:
-            strip, word, quoted, opened = pending[0]
-            alone = (line.lstrip('\t') if strip else line) == word
-            closes, carried, carries = _closes(joined, line, strip, word, quoted)
-            if not quoted:
-                core = (last.lstrip('\t') if strip else last).rstrip('\\')
-                if (closes and carrying) or (alone and last.endswith('\\') and core and word.startswith(core)):
-                    name(opened, SHELLS_DIFFER)
-                    rest = True
-            if (not closes and carrying and alone
-                    and not _ends_later(lines, i + 1, strip, word)):
+            if ending is None:
+                ending = ends(i)
+            close, doubt, never = ending
+            opened = pending[0][3]
+            if doubt == i:
+                # Two causes, each with its own words (L11): a closing line a backslash joined, and
+                # a marker no line can be.
+                name(opened, MARKER_BREAK if "\n" in pending[0][1] else SHELLS_DIFFER)
+                rest = True
+            closes = close == i
+            if closes and never:
                 # The marker, joined to the body line before it, and no line after that closes the
                 # heredoc. Every shell reads the rest of the file as its body, where a substitution
                 # runs wherever it stands, in a comment or a quoted string too. But whoever wrote
@@ -303,13 +302,12 @@ def _read(text, marks=None):
                 # code_lines drops none of the rest, since any of it may hold a substitution that
                 # runs. Read as body instead, the rest would stop being code for every scan that
                 # asks for code, on the strength of one stray backslash.
-                closes, carried, carries, rest = True, "", False, True
+                rest = True
                 name(opened, NEVER_ENDS)
-            joined, carrying, last = carried, carries, line
             before = ""
             if closes:
                 pending.pop(0)
-                joined, carrying, last = "", False, ""
+                ending = None
             yield (i + 1, line, "end" if closes else "heredoc", "", [], False, rest)
             continue
         starts_quoted = frames[-1] is not None

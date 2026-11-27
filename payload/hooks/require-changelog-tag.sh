@@ -59,10 +59,13 @@
 # all (gh gives no answer, the registry cannot say whether the repository is gated, a tool is
 # missing) the override still lets the merge through, since it is the remedy this gate names for
 # exactly that, and the allow says in one sentence that an announcement could not be ruled out.
-# The two exits that come before the command can even be parsed keep the override as it was.
+# The exits that come before the command can even be read (the library that reads it is missing,
+# neither jq nor python3 is installed, the payload is not a call any reader takes) let it through
+# the same way, saying the same of a command that could not be read at all (claude-config#3742).
 # A command merging more than one pull request is not such a case and is refused with the override
 # typed too (Dan, 2026-11-25, claude-config#3666): its remedy, one pull request per command, is
-# always open.
+# always open. Nor is a command written so that the pull request it merges cannot be told (Dan,
+# 2026-11-26, claude-config#3742): its remedy, naming the pull request plainly, is always open too.
 #
 # An announce pull request also merges only on wording Dan approved (claude-config#3666): the
 # Announcement block as GitHub holds it at the merge must hash to an approval lib/announce-approval.py
@@ -87,11 +90,40 @@ payload=$(cat)
 # words every merge route names (mt__might_merge in lib/merge-target.sh).
 case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
 
+# How this gate says something beside a call it lets through (lib/hook-notice.sh). Loaded here, ahead
+# of every exit the override can take, so each one can say its sentence (claude-config#3742, low 10):
+# it used to be loaded after the three that come before the command is read, which therefore let the
+# command through with nothing said.
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
+# LET THROUGH, SAID OUT LOUD (Dan, 2026-11-25). With the override typed and the labels unread, the
+# merge goes ahead, as the override always meant. But an unread pull request may be an announcement,
+# and an allow that says nothing would read as "it was not one" (L98). So the person is shown one
+# sentence and the session is handed the same one. `unread` is what is standing between the gate and
+# the labels at each step below, in words for the notice. Given `command`, it is said of a command
+# of which not even "does it merge a pull request" could be read, since a sentence may claim only
+# what was measured (L11): the three exits ahead of the command's reading.
+unread="this Mac's dev update registry could not be read"
+override_allows() {  # $1 = `command` where the command itself could not be read
+  local what="this merge" whether="whether it carries changelog/announce"
+  if [ "${1:-}" = command ]; then
+    what="this command"; whether="whether it merges a pull request carrying changelog/announce"
+  fi
+  hook_allow_notice "ALLOW_UNTAGGED_MERGE=1 let $what through, but $unread, so $whether was never read and an announcement, which the override does not cover, could not be ruled out." PreToolUse
+}
+
 # shellcheck source=lib/merge-target.sh
 { . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null && declare -F mt_runs_merge >/dev/null; } || {
   # A library this gate cannot load is not a merge with nothing to check (claude-config#1900,
-  # L10). Past the words above this may be a merge, so it is refused, naming the file.
-  case "$payload" in *ALLOW_UNTAGGED_MERGE=1*) exit 0 ;; esac
+  # L10). Past the words above this may be a merge, so it is refused, naming the file. The override,
+  # read off the payload's text, still lets it through, and says so.
+  case "$payload" in
+    *ALLOW_UNTAGGED_MERGE=1*)
+      unread="require-changelog-tag.sh could not load lib/merge-target.sh, which reads whether a command merges a pull request and which one"
+      override_allows command ;;
+  esac
   echo "Cannot tell whether this repo needs a changelog record: require-changelog-tag.sh could not load $HOOK_DIR/lib/merge-target.sh, or lib/push-scope.sh beneath it, which reads whether this command merges a pull request and which one, so whether the change carries a changelog record could not be checked. A library this gate cannot load is not a merge with nothing to check. Reinstall the hooks with claude-sync pull. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>." >&2
   exit 2
 }
@@ -127,7 +159,10 @@ refuse_no_reader() {  # $1 = the absence clause, $2 = what it costs, $3 = what t
 # missing one is refused in its own words once the command can be read.
 if ps_reader_missing jq python3; then
   case "$payload" in
-    *ALLOW_UNTAGGED_MERGE=1*) exit 0 ;;
+    *ALLOW_UNTAGGED_MERGE=1*)
+      # The override still clears it, and says so (claude-config#3742, low 10), written by bash alone.
+      unread="neither jq nor python3 is installed, so this command could not be read out of the hook payload"
+      override_allows command ;;
     *)
       refuse_no_reader "neither jq nor python3 is on PATH" \
         "require-changelog-tag.sh reads this command out of the hook payload, which is JSON, with one of them, so with neither installed it cannot tell whether this command merges a pull request at all, let alone which one." \
@@ -140,8 +175,21 @@ fi
 # anything parses it: a lone surrogate escape made jq read nothing, and this gate let the merge
 # through (claude-config#1944). A payload still unreadable is judged by its words (#1922).
 payload="$(ps_clean_payload "$payload")"
-parsed=$(ps_parse_payload "$payload" raw) \
-  || ps_unparsed_refuse "$payload" require-changelog-tag.sh ALLOW_UNTAGGED_MERGE "a merge of a pull request" '*merge*' '*Merge*' '*enqueuePullRequest*'
+parsed=$(ps_parse_payload "$payload" raw) || {
+  # The shared refusal leaves with nothing said when the payload's words hold the override. So where
+  # they do, and they name a merge, the sentence is said here first (claude-config#3742, low 10).
+  # Asked of the same text the shared refusal reads, so the two agree on what the payload holds.
+  unparsed_text="$(ps_payload_text "$payload")"
+  case "$unparsed_text" in
+    *ALLOW_UNTAGGED_MERGE=1*)
+      case "$unparsed_text" in
+        *merge*|*Merge*|*enqueuePullRequest*)
+          unread="this hook's payload could not be read as a call"
+          override_allows command ;;
+      esac ;;
+  esac
+  ps_unparsed_refuse "$payload" require-changelog-tag.sh ALLOW_UNTAGGED_MERGE "a merge of a pull request" '*merge*' '*Merge*' '*enqueuePullRequest*'
+}
 command="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 
@@ -159,29 +207,15 @@ cwd="${parsed#*$'\x1f'}"
 # is taken, so it asks about the merge itself.
 mt_runs_merge "$command" || exit 0
 
-# How this gate says something beside a merge it lets through (lib/hook-notice.sh).
-. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
-  printf '%s\n' "$1" >&2
-  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
-
 # THE OVERRIDE, read once (claude-config#3665; the head of this file). It used to leave here, before
 # anything was read. `overridden` stays true until the pull request has been read and found to carry
 # the announce label, which the override does not cover: from then on this merge is judged as if the
-# override had not been typed. `unread` is what is standing between the gate and the labels at each
-# step below, in words for the notice.
+# override had not been typed. What it says when it lets a merge through unread is override_allows,
+# near the top of this file, with `unread` set at each step below.
 overridden=false
 case "$command" in
   *ALLOW_UNTAGGED_MERGE=1*) overridden=true ;;
 esac
-unread="this Mac's dev update registry could not be read"
-
-# Let through, said out loud (Dan, 2026-11-25). With the override typed and the labels unread, the
-# merge goes ahead, as the override always meant. But an unread pull request may be an announcement,
-# and an allow that says nothing would read as "it was not one" (L98). So the person is shown one
-# sentence and the session is handed the same one.
-override_allows() {
-  hook_allow_notice "ALLOW_UNTAGGED_MERGE=1 let this merge through, but $unread, so whether it carries changelog/announce was never read and an announcement, which the override does not cover, could not be ruled out." PreToolUse
-}
 
 # Every refusal below goes through here. While the override stands, a refusal is not given: each one
 # ahead of the label reading is a way the labels could not be read, so it becomes the allow above.
@@ -197,10 +231,22 @@ deny() {
   exit 0
 }
 
-# node reads the changelog entry itself, so with it absent there is no rule this machine can
-# apply at all, and nothing a person here could do about it (L324). It also reads the registry, so
-# it is asked first.
-command -v node >/dev/null 2>&1 || exit 0
+# node reads the registry and the changelog entry itself, labels included, so it is asked first.
+# With it absent this gate used to leave here in silence, as a machine with no rule it could apply
+# (L324). But this is known to be a merge, the pull request may be an announcement, and the same
+# state with jq missing is refused, while announce-label-ask.sh refuses with no node too: so every
+# merge went through unjudged on a launch whose PATH lost node, with nothing said (claude-config#3742,
+# item 5; L98). It is refused by name, as jq's absence is below, and with the override typed the
+# merge goes through with the sentence about an announcement. Both write without jq and without node.
+if ps_reader_missing node; then
+  if [ "$overridden" = true ]; then
+    unread="node is not installed, so neither this Mac's dev update registry nor the pull request's labels could be read"
+    override_allows
+  fi
+  refuse_no_reader "node is not on PATH" \
+    "require-changelog-tag.sh reads this Mac's dev update registry and the pull request's changelog record with it, labels included, so with node absent nothing here can tell whether this repository is gated, a tagged pull request from an untagged one, or an announcement from any other change." \
+    "node"
+fi
 
 # Where this Mac's registry is, from its one reader. A reader that answers nothing cannot say where
 # to look, and cannot tell is never "not gated" (L490).
@@ -302,8 +348,23 @@ fi
 # here can then say which repository it is in either, so whether the registry gates it cannot be
 # told, and cannot tell is never "not gated" (L490). Asked in this shell, so a GraphQL merge's node is
 # resolved once and the repository and number read below take that answer.
+#
+# TWO KINDS, and the override clears only one (claude-config#3742, item 6). A pull request GitHub
+# gave no answer about (the node of a GraphQL merge that no logged-in account can resolve) is one
+# nothing here can read however the command is written, so the override is the only way on and the
+# merge goes through with the sentence (Dan, 2026-11-25: "Let it through, said out loud"). A command
+# WRITTEN so its pull request cannot be told (one mutation merging several, a document kept in a
+# file, an id passed nowhere, an endpoint or a repository flag naming no repository) is refused with
+# or without the override (Dan, 2026-11-26, by picker: "Refuse them too"): like several merges in one
+# command above, its remedy is always open, which is to name the pull request plainly. It was let
+# through with the sentence, so an announcement merged unjudged behind an unusual spelling. The
+# refusal does not offer an override that no longer clears it (L111).
 if mt_api_merge_untold "$command"; then
-  unread="which pull request this command merges could not be told"
+  if [ "$MT_API_ROUTE" != graphql ]; then
+    overridden=false
+    deny "Cannot judge this merge's changelog record: $MT_API_WHY ALLOW_UNTAGGED_MERGE=1 does not clear this: the override does not cover a pull request carrying changelog/announce, and a command written so that its pull request cannot be told may be merging one. Name the pull request plainly, one per command: gh pr merge <number> --repo <owner>/<name>."
+  fi
+  unread="GitHub gave no answer about which pull request this command merges"
   deny "Cannot judge this merge's changelog record: $MT_API_WHY Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
@@ -374,6 +435,15 @@ if [ "$bad_announce" = "true" ] && [ "$overridden" != true ]; then
   deny "Cannot tell whether this repo takes the changelog/announce label: $bad_announce_why. Fix announceChannel in its entry in $REGISTRY, or remove the key if the repo does not announce. Deliberate override, for a pull request that does not carry changelog/announce: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
+# Does this repository announce to agents at all? Only where its entry names a channel is a pull
+# request asked whether it finishes a feature Dan said yes to announcing (claude-config#3669, below).
+# A channel that is not a channel id is not a yes: without the override it was refused just above,
+# and with it the merge of a pull request that is no announcement goes through as it always did.
+announces=false
+if [ "$bad_announce" != "true" ] && [ -n "$(printf '%s' "$scope" | jq -r '.announceChannel // ""')" ]; then
+  announces=true
+fi
+
 pr=$(mt_pr_number "$command")
 
 # The repository is passed to gh the same way the merge names it, so the question is about the
@@ -406,15 +476,6 @@ fi
 view=$(printf '%s' "$envelope" | jq -c '.view')
 number=$(printf '%s' "$view" | jq -r '.number // "?"')
 author=$(printf '%s' "$view" | jq -r '.author.login // ""')
-
-# Dependabot writes no body block and merges itself through the auto-merge
-# workflow, so gating it would stall that workflow permanently on every bump.
-# Its changes are also not a per-change record in the update: they collapse into
-# one standing roll-up line about dependency updates, which is how the June to
-# August post already treated them.
-case "$author" in
-  dependabot|dependabot\[bot\]|app/dependabot) exit 0 ;;
-esac
 
 # The record is read by parseEntry, which reads it the same on every Mac, and then judged by
 # gateRefusal, which is this gate's alone and is handed what the registry said about THIS repository
@@ -449,14 +510,195 @@ verdict=$(printf '%s' "$view" | HOOK_DIR="$HOOK_DIR" SCOPE="$scope" node -e '
 # Does it carry the announce label? "yes", "no", or nothing when not even that could be told.
 carries=$(printf '%s' "$verdict" | jq -r 'if .announce == true then "yes" elif .announce == false then "no" else "" end' 2>/dev/null)
 
-# THE OVERRIDE'S ONE EXCEPTION (the head of this file). The labels have been read, so the override is
-# settled here and nowhere later: a pull request that is not an announcement takes it, exactly as it
-# always did, whatever is wrong with its record. One that is an announcement does not, and from this
-# line on it is judged as if the override had not been typed. Where the label could not be told the
-# merge goes through and that is said.
+# THE ISSUES THE PULL REQUEST CLOSES, read once (claude-config#3666, #3669). Each comes with its
+# milestone's number, title, description and open issues. One read serves both readers below: the
+# `used` line an announcement's merge leaves, and the question of whether a pull request under
+# another label finishes a feature Dan said yes to announcing. It sets closing_file to GitHub's
+# answer, or closing_unread to why there is none. Called in this shell, never a subshell, so both
+# reach the caller, who removes the file.
+closing_file=""; closing_unread=""
+read_closing() {
+  local account
+  account=$(printf '%s' "$envelope" | jq -r '.account // ""' 2>/dev/null)
+  closing_unread=""
+  closing_file=$(mktemp "${TMPDIR:-/tmp}/announce-closes.XXXXXX" 2>/dev/null) || closing_file=""
+  if [ -n "$closing_file" ] \
+    && mt_api_read "$closing_file" "$account" graphql \
+         -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { closingIssuesReferences(first: 50) { totalCount nodes { number repository { nameWithOwner } milestone { number title description issues(states: OPEN, first: 100) { totalCount nodes { number } } } } } } } }' \
+         -f owner="${slug%%/*}" -f name="${slug#*/}" -F number="$number" \
+    && [ "$MT_READ_STATE" = ok ]; then
+    return 0
+  fi
+  closing_unread="the issues this pull request closes could not be read from GitHub (${MT_READ_ERR:-no answer})"
+  [ -n "$closing_file" ] && rm -f "$closing_file"
+  closing_file=""
+  return 1
+}
+
+# A FEATURE DAN SAID YES TO ANNOUNCING DOES NOT FINISH UNDER ANOTHER LABEL (claude-config#3669, R9).
+#
+# Feature discovery asks Dan whether a feature is announced to agents when it ships, and the
+# milestone's description carries his answer as one line (skills/milestone/create-milestone.sh).
+# A pull request that does NOT carry changelog/announce, in a repository that announces, is asked
+# here whether it closes the last open issue of a milestone whose line says yes. When it does, and
+# this Mac's record holds neither an announcement merged for that milestone nor his decline, it is
+# DENIED: label it changelog/announce with wording he approved, or ask him with a picker whether it
+# is still being announced. His `Not announcing` is read into the record by the same path as an
+# approval (lib/announce-approval.py says how), and only that clears it.
+#
+# The judge is lib/announce-approval.py's `finishes`, handed GitHub's own answer: which milestone
+# says yes, which is finished, and what the record holds are all its to say, so this file reads
+# none of it a second way. It gives back `announced`, the pull requests the record holds as let
+# through with an announcement for the milestone. That line says this gate let one through, never
+# that GitHub merged it, so GitHub is asked about each, and only one that merged and still carries
+# changelog/announce covers the milestone: one that has not merged, or that merged with the label
+# taken off, announced nothing. The library is then asked a second time naming those, and a pull
+# request that first comes up in that second answer is asked of GitHub the same way: no answer
+# about it, or an answer that it did not merge as an announcement, is unread, since the library is
+# asked twice for one merge and never a third time.
+#
+# A deny, never `ask`, like every refusal about an announcement: only his picker clears it. So the
+# override does not clear it either. What GitHub or the record does not answer is refused in its
+# own words, never read as "not the last" (L98), and there the override is the only way on, as it
+# is for a pull request whose labels could not be read: the merge goes through and the allow says
+# what was not read. Every other pull request leaves here with nothing said: one that closes no
+# issue, one that leaves the milestone open, one whose milestone says no or that nobody was asked
+# about, and any pull request in a repository that does not announce, which is not read at all.
+finishes_announced_feature() {
+  [ "$announces" = true ] || return 0
+  local was_overridden="$overridden" verdict9="" state9="" n other other_state unmerged="" spent9="" asked9=""
+  r9_unread() {  # $1 = what could not be read
+    [ -n "$closing_file" ] && rm -f "$closing_file"
+    if [ "$was_overridden" = true ]; then
+      hook_allow_notice "ALLOW_UNTAGGED_MERGE=1 let this merge through, but $1, so whether PR #$number finishes a feature Dan said yes to announcing to agents was never read, and one that does, which the override does not cover, could not be ruled out." PreToolUse
+    fi
+    overridden=false
+    deny "Cannot tell whether PR #$number finishes a feature Dan said yes to announcing to agents: $1. Where a repository announces, the pull request that finishes such a feature merges under changelog/announce unless he declined in a picker, and what could not be read is never taken as a pull request that finishes none. Try the merge again. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+  }
+  # $1 = the pull requests GitHub says did not merge as an announcement, comma separated, or nothing.
+  # $2 = for the second question, what the first one spent of the time one call has for reading
+  # noted sessions back. The two share that time, so asking twice reads back no longer than asking
+  # once, and the library reads what is no count of seconds as no time left.
+  r9_ask() {
+    verdict9=$(printf '%s' "$payload" | python3 -B "$HOOK_DIR/lib/announce-approval.py" finishes --repo "$slug" --pr "$number" --answer-file "$closing_file" ${1:+--unmerged "$1"} ${2:+--spent "$2"} --hook 2>/dev/null)
+    state9=$(printf '%s' "$verdict9" | jq -r '.state // ""' 2>/dev/null)
+  }
+  read_closing || r9_unread "$closing_unread"
+  # A pull request that closes no issue finishes no milestone, and GitHub's answer alone says so:
+  # a count of none beside an empty list, and nothing short of both. It leaves here before python3
+  # or the library is needed, so a library that cannot answer refuses only the pull requests whose
+  # verdict is the library's to give (any that closes an issue), never every merge in a repository
+  # that announces. Any other answer, one that cannot be read included, goes on to the library.
+  if jq -e '.data.repository.pullRequest.closingIssuesReferences | (.totalCount == 0) and ((.nodes | type) == "array") and ((.nodes | length) == 0)' "$closing_file" >/dev/null 2>&1; then
+    rm -f "$closing_file"; closing_file=""
+    return 0
+  fi
+  command -v python3 >/dev/null 2>&1 \
+    || r9_unread "python3 is not installed, and lib/announce-approval.py, which reads the milestone's line and Dan's answers, runs under it"
+  # r9_merged <pull request>: asks GitHub about one the record holds as let through with an
+  # announcement, its state and its labels in one read, and sets other_state. The record's line is
+  # written before the merge runs, so the pull request may have merged later with the announce
+  # label taken off: merged, and nothing announced. It covers the milestone only when it merged AND
+  # still carries the label, which lib/changelog-entry.js reads here as it does for the pull
+  # request being merged. other_state is "<state> yes|no", or nothing when either was not in
+  # GitHub's answer. asked9 keeps every pull request asked about, each between two spaces.
+  r9_merged() {
+    asked9="$asked9 $1 "
+    other=$(mt_pr_view "$1" "number,url,state,labels" "$slug" "$repo_flag")
+    other_state=$(printf '%s' "$other" | HOOK_DIR="$HOOK_DIR" OTHER_PR="$1" node -e '
+      const entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
+      let raw = "";
+      process.stdin.on("data", function (d) { raw += d; });
+      process.stdin.on("end", function () {
+        try {
+          const got = JSON.parse(raw), view = got.view;
+          if (got.found !== true || view.number !== Number(process.env.OTHER_PR)) return;
+          if (typeof view.state !== "string" || !/^[A-Z]+$/.test(view.state) || !Array.isArray(view.labels)) return;
+          process.stdout.write(view.state + " " + (entry.carriesAnnounce(view.labels) === true ? "yes" : "no"));
+        } catch (e) { /* nothing printed: not read */ }
+      });
+    ' 2>/dev/null)
+  }
+  r9_no_answer() {  # $1 = the pull request GitHub gave no answer about
+    r9_unread "GitHub gave no answer that holds both the state and the labels of pull request $1, which this Mac's record holds as let through with an announcement for a milestone this pull request finishes, so whether that announcement merged, and merged under changelog/announce, could not be told"
+  }
+  r9_ask ""
+  if [ "$state9" = clear ]; then
+    for n in $(printf '%s' "$verdict9" | jq -r '.announced[]?' 2>/dev/null); do
+      r9_merged "$n"
+      case "$other_state" in
+        "MERGED yes") ;;
+        '') r9_no_answer "$n" ;;
+        *) unmerged="${unmerged:+$unmerged,}$n" ;;
+      esac
+    done
+    if [ -n "$unmerged" ]; then
+      spent9=$(printf '%s' "$verdict9" | jq -r 'if (.spent | type) == "number" then .spent else "unknown" end' 2>/dev/null)
+      r9_ask "$unmerged" "${spent9:-unknown}"
+      # The second answer can name a pull request the first did not: with a session left unread by
+      # then, a milestone the first answer cleared by his decline is sent on to its own line let
+      # through. Each such pull request is asked of GitHub the same way, and one GitHub gives no
+      # answer about is unread. One that did not merge as an announcement changes the list again,
+      # and the record is asked twice, never a third time: that is unread too, never clear (L98).
+      if [ "$state9" = clear ]; then
+        for n in $(printf '%s' "$verdict9" | jq -r '.announced[]?' 2>/dev/null); do
+          case "$asked9" in *" $n "*) continue ;; esac
+          r9_merged "$n"
+          case "$other_state" in
+            "MERGED yes") ;;
+            '') r9_no_answer "$n" ;;
+            *) r9_unread "pull request $n, which this Mac's record holds as let through with an announcement for a milestone this pull request finishes, first came up when the record was asked a second time, and GitHub says it did not merge as an announcement (it has not merged, or it merged without the changelog/announce label). That changes what the record was asked about again, and it is asked twice for one merge, never a third time, so whether anything else covers that milestone could not be told" ;;
+          esac
+        done
+      fi
+    fi
+  fi
+  rm -f "$closing_file"; closing_file=""
+  case "$state9" in
+    clear) return 0 ;;
+    owed)
+      overridden=false
+      deny "PR #$number cannot merge as it stands: it does not carry changelog/announce, and $(printf '%s' "$verdict9" | jq -r '.why // ""') $(printf '%s' "$verdict9" | jq -r '.how // ""')
+
+This is checked at merge time because the pull request that closes a milestone's last open issue is the last one that can carry its announcement: after it, nothing asks again. ALLOW_UNTAGGED_MERGE=1 does not clear this: only Dan's answer in a picker does." ;;
+    unread) r9_unread "$(printf '%s' "$verdict9" | jq -r '.why // ""')" ;;
+    *) r9_unread "lib/announce-approval.py gave no verdict that could be read about the milestone it closes issues of" ;;
+  esac
+}
+
+# Dependabot writes no body block and merges itself through the auto-merge
+# workflow, so gating it would stall that workflow permanently on every bump.
+# Its changes are also not a per-change record in the update: they collapse into
+# one standing roll-up line about dependency updates, which is how the June to
+# August post already treated them.
+#
+# It leaves here only once the label has been read and is not the announce label
+# (claude-config#3703). This exit used to stand above that question, so a pull request the bot
+# opened, relabelled changelog/announce and given an Announcement block, merged on wording nobody
+# approved and left no line on the record. One that carries the label is judged like any other from
+# here on, and so is one whose labels could not be read, since that is not known to be free of it.
+#
+# It does not leave past the question of whether it finishes a feature Dan said yes to announcing
+# (claude-config#3669, just above): that rule has no exception for who opened the pull request.
+if [ "$carries" = no ]; then
+  case "$author" in
+    dependabot|dependabot\[bot\]|app/dependabot) finishes_announced_feature; exit 0 ;;
+  esac
+fi
+
+# THE OVERRIDE'S TWO EXCEPTIONS (the head of this file). The labels have been read, so the override
+# is settled here and nowhere later. It does not cover two things:
+#   1. a pull request that is an announcement. From this line on it is judged as if the override had
+#      not been typed.
+#   2. a pull request that is no announcement and finishes a feature Dan said yes to announcing
+#      (claude-config#3669). So that is asked first, and it is refused with or without the override.
+#      Only where whether it finishes one could not be read does the override let it through, and
+#      that is said (finishes_announced_feature).
+# Any other pull request that is no announcement takes the override, whatever is wrong with its
+# record. Where the label could not be told the merge goes through and that is said.
 if [ "$overridden" = true ]; then
   case "$carries" in
-    no) exit 0 ;;
+    no) finishes_announced_feature; exit 0 ;;
     yes) overridden=false ;;
     *) unread="lib/changelog-entry.js failed while reading the pull request's labels"
        override_allows ;;
@@ -507,8 +749,42 @@ This is checked at merge time because a post written under an Announcement headi
 This is checked at merge time because judging it later means re-reading every merged title, which is what assembling the June to August update actually cost. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
-# Every other pull request is done here: its record passed.
-[ "$carries" = yes ] || exit 0
+# Every other pull request is done here, its record passed, once it has been asked whether it
+# finishes a feature Dan said yes to announcing (claude-config#3669, R9).
+if [ "$carries" != yes ]; then
+  finishes_announced_feature
+  exit 0
+fi
+
+# THE MERGE IS THE CALL'S ONE GITHUB WRITE (claude-config#3742, item 4).
+#
+# Everything below judges the Announcement block as GitHub holds it NOW, which is before this call
+# runs. A call that edits the description and then merges (`gh pr edit 7 --body-file new.md && gh pr
+# merge 7`) was judged on the wording as it stood: approved wording was found and claimed, then the
+# command replaced the block and merged wording Dan never saw. So for an announcement a call holding
+# any other GitHub write beside the one merge is refused and told to run them apart, which is always
+# open. It is asked here, before the approval is claimed, so a call refused for it claims nothing.
+#
+# The count is gh_issue_scan.py's gh_writes, the one the label hook asks (announce_label_gate.py),
+# never a second reading of the call kept here. A merge through the GitHub API is itself one of the
+# writes it counts, so that route is allowed one (MT_API_ROUTE, set where the merge was told above).
+# The merge helper's own call is gh, its merge arguments and the commit it pins: no other write.
+# A count that could not be made is refused in its own words, never read as none (L98).
+merge_writes=0
+case "${MT_API_ROUTE:-}" in rest|graphql) merge_writes=1 ;; esac
+call_writes=""
+if command -v python3 >/dev/null 2>&1; then
+  call_writes=$(printf '%s' "$command" | python3 -B "$HOOK_DIR/gh_issue_scan.py" writes "$cwd" 2>/dev/null)
+fi
+writes=$(printf '%s' "$call_writes" | jq -r 'if (.writes | type) == "number" then .writes else "" end' 2>/dev/null)
+case "$writes" in
+  ''|*[!0-9]*)
+    writes_why=$(printf '%s' "$call_writes" | jq -r '.unread // ""' 2>/dev/null)
+    deny "PR #$number cannot merge in this call: it carries changelog/announce, and whether the call holds another GitHub write beside the merge could not be read (${writes_why:-gh_issue_scan.py, which python3 runs beside this hook, gave no count}). Its announcement is judged as the description holds it before the call runs, so a write ahead of the merge could change the wording after it was judged. Run the merge as a call of its own: gh pr merge $number --repo $slug. If it is refused again, reinstall the hooks with claude-sync pull. $not_covered" ;;
+esac
+if [ "$writes" -gt "$merge_writes" ]; then
+  deny "PR #$number cannot merge in this call: it carries changelog/announce, and the call holds $((writes - merge_writes)) other GitHub write$([ $((writes - merge_writes)) -eq 1 ] || printf 's') beside the merge (gh pr create, gh pr edit, gh issue edit or a gh api call that writes). Its announcement is judged as the description holds it before the call runs, so a write ahead of the merge could change the wording after Dan approved it and after it was judged. Run them apart: the other write in a call of its own, then the merge alone. $not_covered"
+fi
 
 # THE WORDING DAN APPROVED (claude-config#3666; Dan: "it should ask me before applying the label").
 #
@@ -574,25 +850,25 @@ esac
 # that cannot be read are recorded as unread with why, and a line that cannot be written is said
 # beside the merge.
 said=$(printf '%s' "$approval" | jq -r '(.notes // []) | join(" ")' 2>/dev/null)
-account=$(printf '%s' "$envelope" | jq -r '.account // ""' 2>/dev/null)
 closes=""; closes_unread=""
-closes_file=$(mktemp "${TMPDIR:-/tmp}/announce-closes.XXXXXX" 2>/dev/null) || closes_file=""
-if [ -n "$closes_file" ] \
-  && mt_api_read "$closes_file" "$account" graphql \
-       -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { closingIssuesReferences(first: 50) { nodes { number repository { nameWithOwner } milestone { title } } } } } }' \
-       -f owner="${slug%%/*}" -f name="${slug#*/}" -F number="$number" \
-  && [ "$MT_READ_STATE" = ok ]; then
-  closes=$(jq -c '[.data.repository.pullRequest.closingIssuesReferences.nodes[] | {issue: .number, repo: .repository.nameWithOwner, milestone: (.milestone.title // null)}]' "$closes_file" 2>/dev/null)
+# The one read of the issues it closes (read_closing, above). Each is recorded with its milestone's
+# title and number: the number is what `finishes` finds an announced milestone by (claude-config#3669).
+if read_closing; then
+  closes=$(jq -c '[.data.repository.pullRequest.closingIssuesReferences.nodes[] | {issue: .number, repo: .repository.nameWithOwner, milestone: (.milestone.title // null), milestone_number: (.milestone.number // null)}]' "$closing_file" 2>/dev/null)
   [ -n "$closes" ] || closes_unread="GitHub's answer about the issues this pull request closes could not be read"
+  rm -f "$closing_file"
 else
-  closes_unread="the issues this pull request closes could not be read from GitHub (${MT_READ_ERR:-no answer})"
+  closes_unread="$closing_unread"
 fi
-[ -n "$closes_file" ] && rm -f "$closes_file"
 used=$(python3 -B "$HOOK_DIR/lib/announce-approval.py" used --repo "$slug" --hash "$block_hash" --pr "$number" \
   ${closes:+--closes "$closes"} ${closes_unread:+--unread "$closes_unread"} 2>/dev/null)
 if [ "$(printf '%s' "$used" | jq -r '.written // false' 2>/dev/null)" != "true" ]; then
   said="${said:+$said }PR #$number is recorded as the one using Dan's approval, but the issues it closes could not be added to this Mac's record of approved announcements ($(printf '%s' "$used" | jq -r '.why // ""' 2>/dev/null)), so the check that a feature Dan said yes to announcing does not finish under another label will not find them there."
 fi
-[ -n "$said" ] && hook_allow_notice "$said" PreToolUse
+# THIS MERGE OWES A DRAFT (claude-config#3667). Only an announcement the gate lets through reaches
+# here, so its allow always says one line, to Dan and to the session, after anything said above:
+# what the is it live card asks for once the change is live, and that a card silent about it is an
+# old copy of the mod. Nothing the gate decides depends on it.
+hook_allow_notice "${said:+$said }PR #$number owes agents its announcement: once its change is live, the is it live card for it tells the session to save the approved wording as a Slack draft for Dan to send. A session whose card for it says nothing about an announcement is running an old copy of the is it live mod: run /reload-plugins, then make the card again." PreToolUse
 
 exit 0

@@ -1214,6 +1214,50 @@ printf '%s' '[{"name":"changelog/technical"}]' > "$ST/labels"
 out="$(CHANGELOG_REGISTRY="$REG" MWR_CHANGELOG_GATE="$DIR/require-changelog-tag.sh" run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1178 control: the real gate lets a labelled pull request through the helper" "0" "$rc"
 
+# An announcement merges through the helper on an approval that was only ever in the session
+# (claude-config#3742 item 1). The helper hands every gate a payload naming no transcript and a
+# session id that is no session's, so the real gate can find his approval only on the record. His
+# answer gets there when he gives it: announce-answer-note.sh, the real hook, runs once the picker is
+# answered and notes it, and the gate's question reads it back from the session's own transcript.
+# No label command and no typed merge ran in between, which is what used to write an approval.
+REG_ANN="$WORKDIR/repos-announce.json"
+printf '%s\n' '{"repos":[{"name":"Widget","repo":"acme/widget","changelogFrom":"2026-01-01","announceChannel":"C0000TEST02"}]}' > "$REG_ANN"
+ANN_WORDING=$'@here\n**Handing a call back**\n\nYou can now hand a call back to the queue.'
+ANN_BODY=$'prose\n\n## Changelog\nAgents can now hand a call back to the queue.\n\n## Announcement\n'"$ANN_WORDING"$'\n\n## Testing\nran it'
+ANN_RECORD="$WORKDIR/announce-record"
+ann_fresh() { fresh "$OLD" 0 "$GREEN"; printf '%s' '[{"name":"changelog/announce"}]' > "$ST/labels"; printf '%s' "$ANN_BODY" > "$ST/body"; }
+ann_run() { CHANGELOG_REGISTRY="$REG_ANN" ANNOUNCE_APPROVALS_DIR="$ANN_RECORD" MWR_CHANGELOG_GATE="$DIR/require-changelog-tag.sh" run 7 --repo acme/widget --squash; }
+if . "$DIR/lib/announce-approval-fixture.sh" 2>/dev/null && declare -F aaf_shown >/dev/null; then ok
+else bad "#3742 lib/announce-approval-fixture.sh is missing beside this suite, so no session could be built"; aaf_shown() { :; }; aaf_talk() { :; }; fi
+ann_fresh
+out="$(ann_run)"; rc=$?
+check_eq "#3742 control: an announcement nobody asked Dan about is refused through the helper" "1" "$rc"
+check "#3742 in the gate's words" "its announcement is not wording Dan approved" "$out"
+check_eq "#3742 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+# The session asks him: the file opened in front of him, the picker put, the hook on his answer, and
+# then his answer in the transcript, which Claude Code writes after the hook has run.
+ann_file="$(aaf_shown "$WORKDIR/announce-wording" "$WORKDIR/announce-talk.jsonl" "$ANN_WORDING")"
+ann_picker="$(aaf_talk "$WORKDIR/announce-talk.jsonl" put acme/widget "$ann_file")"
+noted="$(aaf_talk "$WORKDIR/announce-talk.jsonl" payload "$ann_picker" acme/widget "$ann_file" | ANNOUNCE_APPROVALS_DIR="$ANN_RECORD" bash "$DIR/announce-answer-note.sh" 2>&1)"; rc=$?
+check_eq "#3742 the hook that notes his answer runs clean and says nothing" "0|" "$rc|$noted"
+aaf_talk "$WORKDIR/announce-talk.jsonl" answer "$ann_picker" acme/widget "$ann_file"
+ann_fresh
+out="$(ann_run)"; rc=$?
+check_eq "#3742 R2 still possible: an announcement he approved in the session merges through the helper, which names no session ($(printf '%s' "$out" | tr '\n' ' ' | cut -c1-900))" "0" "$rc"
+check_eq "#3742 and it is merged" "1" "$(count gh-calls 'pr merge')"
+check "#3742 his approval is on the record, with pull request 7 as the one that used it" '"kind": "used"' "$(grep '"pr": 7' "$ANN_RECORD/record.jsonl" 2>/dev/null)"
+check "#3742 as an approval of his, read back from the transcript" "\"picker\": \"$ann_picker\"" "$(grep '"kind": "approved"' "$ANN_RECORD/record.jsonl" 2>/dev/null)"
+# The same route with his Not yet: the note is taken and approves nothing.
+ANN_RECORD="$WORKDIR/announce-record-notyet"
+ann_file="$(aaf_shown "$WORKDIR/announce-wording-notyet" "$WORKDIR/announce-talk-notyet.jsonl" "$ANN_WORDING")"
+ann_picker="$(aaf_talk "$WORKDIR/announce-talk-notyet.jsonl" put acme/widget "$ann_file")"
+aaf_talk "$WORKDIR/announce-talk-notyet.jsonl" payload "$ann_picker" acme/widget "$ann_file" | ANNOUNCE_APPROVALS_DIR="$ANN_RECORD" bash "$DIR/announce-answer-note.sh" >/dev/null 2>&1
+aaf_talk "$WORKDIR/announce-talk-notyet.jsonl" answer "$ann_picker" acme/widget "$ann_file" "Not yet"
+ann_fresh
+out="$(ann_run)"; rc=$?
+check_eq "#3742 R2: his Not yet, noted by the same hook, merges nothing through the helper" "1" "$rc"
+check_eq "#3742 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+
 # The design score gate (#1364) is asked at the merge as well: a pull request whose closing keywords
 # name a Match the settled design issue below 100% is not merged through the helper any more than
 # when typed.

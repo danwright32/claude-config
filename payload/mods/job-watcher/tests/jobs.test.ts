@@ -1,6 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { assess, harnessFinished, holdRefusal, holdsOutputBack, inFlight, listedStatuses, isErrorLine, isPollLoop, leftoverLine, logClause, notifiedTasks, parseVerdict, runFor, shortCommand, shortLine, startedJob, startedTask } from '../hooks/jobs.ts'
+import { FINISHED_TASK_STATUSES, tasksIn } from '../hooks/mod-kit/inflight.ts'
 
 const MIN = 60_000
 
@@ -375,6 +376,23 @@ describe('the background work sent with a stop', () => {
   test('a task Claude Code has finished is one it lists as ended or no longer lists; any other status is not (#1517)', () => {
     for (const s of ['completed', 'failed', 'killed', 'stopped', 'unlisted']) expect(harnessFinished(s)).toBe(true)
     for (const s of ['running', 'pending', '', 'paused']) expect(harnessFinished(s)).toBe(false)
+  })
+  // #3770: the watcher reads the list and its ended statuses through mod-kit's one list, which the
+  // close this session card reads too, so the two can never disagree about what is still in flight.
+  test("the list and its ended statuses are read through mod-kit's one list, as the close card reads them (#3770)", () => {
+    const lists: unknown[] = [
+      undefined,
+      { b1: 'running' },
+      [],
+      [null, 'b1', { type: 'shell' }, { id: '' }, { id: 'b2' }],
+      [{ id: 'b5', type: 'shell', status: 'running', command: 'sleep 200' }, { id: 'a4', type: 'subagent', status: 'completed', description: 'probe2' }],
+      // A command longer than the watcher shows, cut the same way on both readings.
+      [{ id: 'b6', type: 'shell', status: 'running', command: 'gh run watch 19876543210 --repo danwright32/claude-config --exit-status' }],
+    ]
+    expect(inFlight(lists[5])?.[0]?.what.length).toBeLessThanOrEqual(41)
+    for (const raw of lists) expect({ raw, read: inFlight(raw) }).toEqual({ raw, read: tasksIn(raw, shortCommand)?.map(({ id, what }) => ({ id, what })) })
+    for (const s of [...FINISHED_TASK_STATUSES, 'running', 'pending', 'waiting', '', 'paused', 'cancelled']) expect({ s, ended: harnessFinished(s) }).toEqual({ s, ended: FINISHED_TASK_STATUSES.has(s) })
+    expect(harnessFinished('unlisted')).toBe(true)
   })
   test('the refusal names each piece of work and the ways out', () => {
     const said = holdRefusal([{ id: 'b1', what: 'gh pr checks 9 --watch' }, { id: 'mon1', what: 'gh run watch 99' }])
