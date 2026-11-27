@@ -3619,6 +3619,13 @@ test('#3416: handedToUnknown gives each file a script text hands a program the r
     { word: 'x $(a | b) y', unexpanded: true },
     { word: '/s/app/page.tsx', unexpanded: false },
   ])
+  // #3620: only the reader's own `true` is the mark. Anything else in its place (a reading from
+  // another version of the reader, a value cut short) is no mark, so the word is judged as one the
+  // shell may fill in, and held where that reading holds it.
+  for (const mark of ['yes', 'true', 1, {}, null, false, undefined]) {
+    const run = { script: 'mystery', what: 'a program the mods do not know', unknown: true as const, args: [{ word: 'x $(a | b) y', path: '/s/x $(a | b) y', unexpanded: mark as never }] }
+    expect({ mark, kept: handedToUnknown([run]).map(h => 'unexpanded' in h) }).toEqual({ mark, kept: [false] })
+  }
   expect(handedToUnknown(undefined)).toEqual([])
 })
 
