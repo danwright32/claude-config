@@ -19,6 +19,14 @@ is written. Every fixture of those is still invented text in that layout.
 message, or put an unmeasured label line under it, and "unknown" has no heading at all. They are
 here so the suite can show the reader fails aloud, or sets a pair aside, instead of counting edits
 nobody made.
+
+NOT seen either, and here for the same reason (the second review of pull request 3848):
+"first_label" and "some_first_label" (a label line right under the Message TS line), "above" (one
+above it, with the text in place), "most_wordless", "unlisted" (labels in no fixed list),
+"pagination" (text in the result's other fields: the field was measured, whether it ever holds
+text was not), "no_messages_field", "odd_id", "other_mentions" (a channel, a group and a here
+mention with a name added) and "own_drafted" and "own_added" (his own lines shaped like a label).
+"bands" is ten pairs whose likeness is known by construction, for the count by likeness.
 """
 import datetime
 import json
@@ -78,10 +86,13 @@ class Records:
         else:
             self.result(at + 1, call, "Error: the draft could not be saved", error=True, as_list=False)
 
-    def thread(self, at, channel, parent, posts, layout="thread"):
-        """posts: (seconds, who, text). The first is the thread's parent message."""
+    def thread(self, at, channel, parent, posts, layout="thread", fields=None):
+        """posts: (seconds, who, text). The first is the thread's parent message. fields are further
+        fields of the result's JSON object, written after "messages"."""
         call = self.use(at, "slack_read_thread", {"channel_id": channel, "message_ts": ts(parent)})
-        self.result(at + 1, call, json.dumps({"messages": thread_text(posts, layout)}))
+        answer = {"messages": thread_text(posts, layout)}
+        answer.update(fields or {})
+        self.result(at + 1, call, json.dumps(answer))
 
     def channel(self, at, channel, posts):
         call = self.use(at, "slack_read_channel", {"channel_id": channel})
@@ -110,8 +121,15 @@ def thread_text(posts, layout):
             out.append("--- Reply %d of %d ---" % (i, len(posts) - 1))
         head = "From: %s (%s)\nTime: 2026-11-02 10:00:00 EST\n" % (who[0], who[1])
         marked = layout == "labelled" or (layout == "some_labelled" and i % 5 == 2)
+        first = layout == "first_label" or (layout == "some_first_label" and i % 5 == 2)
         if text == "":                       # a post that holds a file and no words
             out.append(head + "Message TS: %s\n" % ts(seconds))
+        elif first:                          # a label line nobody measured, right under the Message TS line
+            out.append(head + "Message TS: %s\nThread TS: %s\n%s\n" % (ts(seconds), ts(posts[0][0]), text))
+        elif layout == "above":              # the text in place, and a line nobody measured above the Message TS line
+            out.append(head + "Thread TS: %s\nMessage TS: %s\n%s\n" % (ts(posts[0][0]), ts(seconds), text))
+        elif layout == "unlisted":           # a label that is in no fixed list, under the text and above the line
+            out.append(head + "Quay marker: 2\nMessage TS: %s\n%s\nHarbour note: 1\n" % (ts(seconds), text))
         elif layout == "body_first":         # the text sits above the Message TS line
             out.append(head + "%s\nMessage TS: %s\n" % (text, ts(seconds)))
         elif layout == "split":              # the text above it, and a label line nobody measured under it
@@ -223,9 +241,19 @@ def many(folder, per_thread, strays=(), nearly=None, stray_after=100):
 WORD_FOR_WORD = "Gauge %d read 41 at dawn, 57 at noon and 63 at dusk. Can you confirm the dusk reading?"
 
 
-def word_for_word(folder, layout, wordless=0):
+OWN_FIRST = "Update: gauge %d read 41 at dawn and 57 at noon."
+OWN_LAST = "\nNext step: check the dusk reading on gauge %d."
+
+
+def word_for_word(folder, layout, wordless=0, fields=None, own=""):
     """Twelve drafts in three threads, each posted WORD FOR WORD as drafted: the truth is twelve sent
-    as drafted, whatever the layout. wordless adds that many posts with no words to each thread."""
+    as drafted, whatever the layout. wordless adds that many posts with no words to each thread.
+    fields are further fields of each read result, beside "messages".
+
+    own puts lines of HIS that are shaped like a label into two posts of each thread: one post that
+    is a single "Update: ..." line, and one that ends in a "Next step: ..." line. With own "drafted"
+    the draft holds those lines too, so the truth is still twelve sent as drafted. With own "added"
+    the draft is without them: he put them in by hand, and nothing can tell them from the connector's."""
     r = Records()
     at = 10000
     for t in range(3):
@@ -233,17 +261,100 @@ def word_for_word(folder, layout, wordless=0):
         channel = "C0FIXTURE%02d" % (40 + t)
         posts = [(parent, OTHER, "Thread %d about the tide gauge." % t)]
         for k in range(4):
+            draft = sent = WORD_FOR_WORD % k
+            if own and k == 1:
+                sent = OWN_FIRST % k
+                draft = sent if own == "drafted" else sent[len("Update: "):]
+            elif own and k == 2:
+                sent = draft + OWN_LAST % k
+                draft = sent if own == "drafted" else draft
             at += 100
-            r.draft(at, channel, parent, WORD_FOR_WORD % k)
+            r.draft(at, channel, parent, draft)
             at += 100
-            posts.append((at, ME, WORD_FOR_WORD % k))
+            posts.append((at, ME, sent))
         for _ in range(wordless):
             at += 100
             posts.append((at, ME, ""))
         at += 100
-        r.thread(at, channel, parent, posts, layout)
+        r.thread(at, channel, parent, posts, layout, fields)
         at += 1000
     r.write(folder, "session-%s.jsonl" % layout)
+
+
+def no_messages_field(folder):
+    """A read result whose JSON object has no "messages" string: the layout of its text is right, and
+    it sits under a key nobody measured. One draft, posted word for word."""
+    r = Records()
+    r.draft(100, "C0FIXTURE31", 0, "The lock gates close at nine.")
+    call = r.use(900, "slack_read_thread", {"channel_id": "C0FIXTURE31", "message_ts": ts(0)})
+    r.result(901, call, json.dumps({"result": thread_text([
+        (0, OTHER, "When do the lock gates close?"), (200, ME, "The lock gates close at nine.")], "thread")}))
+    r.write(folder, "session-no-messages-field.jsonl")
+
+
+def odd_id(folder):
+    """A tool_result whose tool_use_id is a list, which no real record was seen to hold, beside one
+    draft posted word for word. The reader has to pass it over and still read the rest."""
+    r = Records()
+    r.draft(100, "C0FIXTURE32", 0, "The lock gates close at nine.")
+    r.lines.append({"type": "user", "timestamp": iso(500), "sessionId": "fixture", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": ["toolu_fixture_odd"], "content": "The slipway reopens on Friday."}]}})
+    r.thread(900, "C0FIXTURE32", 0, [(0, OTHER, "When do the lock gates close?"), (200, ME, "The lock gates close at nine.")])
+    r.write(folder, "session-odd-id.jsonl")
+
+
+def other_mentions(folder):
+    """A channel, a group and a "here" mention, each written bare in the draft and with a name added
+    in the read, as a mention of a person was MEASURED to be. These three were not measured: they are
+    the same mechanism. Three drafts in three threads, each posted word for word."""
+    r = Records()
+    cases = (
+        ("<#C0FIXTURE99> has the winter mooring list for the harbour office to read.",
+         "<#C0FIXTURE99|harbour-office> has the winter mooring list for the harbour office to read."),
+        ("<!subteam^S0FIXTURE1> please read the winter mooring list before the tide turns.",
+         "<!subteam^S0FIXTURE1|@harbour-crew> please read the winter mooring list before the tide turns."),
+        ("<!here> the slipway reopens on Friday at nine.",
+         "<!here|here> the slipway reopens on Friday at nine."),
+    )
+    for n, (draft, sent) in enumerate(cases):
+        start = 1000 * n
+        channel = "C0FIXTURE%02d" % (33 + n)
+        r.draft(start + 100, channel, start, draft)
+        r.thread(start + 900, channel, start, [(start, OTHER, "Any news from the harbour?"), (start + 200, ME, sent)])
+    r.write(folder, "session-other-mentions.jsonl")
+
+
+def tide_words(count, changed):
+    """count invented words in a row, the first `changed` of them swapped for other invented words.
+    Every word is different, so the likeness of two such rows of fifty is (50 - changed) / 50."""
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    return " ".join(("ebb" if i < changed else "tide") + letters[i // 26] + letters[i % 26] for i in range(count))
+
+
+# How many of a draft's fifty words each post swaps, and so its likeness: 0 is the same (1.00), then
+# 0.98, 0.96, 0.94, 0.90, 0.88, 0.80, 0.78, 0.70 and 0.68. Four of them sit exactly on a band's edge.
+BAND_SWAPS = (0, 1, 2, 3, 5, 6, 10, 11, 15, 16)
+# The posts that are NOT the last message of the read they are in: somebody answers after them.
+BAND_ANSWERED = (1, 2)
+
+
+def bands(folder):
+    """Ten drafts of fifty invented words in ten threads, each posted with a known number of words
+    swapped, so the count of pairs in each band of likeness has a known answer. The first is posted
+    with bold added and nothing else changed."""
+    r = Records()
+    for n, swapped in enumerate(BAND_SWAPS):
+        start = 1000 * n
+        channel = "C0FIXTURE%02d" % (60 + n)
+        sent = tide_words(50, swapped)
+        if swapped == 0:
+            sent = "*" + sent + "*"
+        posts = [(start, OTHER, "Any news from the tide gauge?"), (start + 200, ME, sent)]
+        if swapped in BAND_ANSWERED:
+            posts.append((start + 300, OTHER, "Thank you."))
+        r.draft(start + 100, channel, start, tide_words(50, 0))
+        r.thread(start + 900, channel, start, posts)
+    r.write(folder, "session-bands.jsonl")
 
 
 def unknown(folder):
@@ -321,17 +432,15 @@ def second_post(folder, second_after=120):
 
 
 def differences(folder):
-    """Eight drafts in eight threads. Seven were posted word for word, and what was read back differs
-    in ONE thing a read result might add or write another way; the eighth was really edited. NONE of
-    the seven differences was measured: they are guesses at why so few real pairs read as sent as
+    """Seven drafts in seven threads. Six were posted word for word, and what was read back differs
+    in ONE thing a read result might add or write another way; the seventh was really edited. NONE of
+    the six differences was measured: they are guesses at why so few real pairs read as sent as
     drafted, and they are here so the reader's --differences count can be seen to tell them apart."""
     r = Records()
     party = chr(0x1F389)  # an emoji as a character, written by its number so this file holds none
     cases = (
-        ("<#C0FIXTURE99> has the winter mooring list for the harbour office to read.",
-         "<#C0FIXTURE99|harbour-office> has the winter mooring list for the harbour office to read."),
-        ("<!subteam^S0FIXTURE1> please read the winter mooring list before the tide turns.",
-         "<!subteam^S0FIXTURE1|@harbour-crew> please read the winter mooring list before the tide turns."),
+        ("The winter mooring list is in <https://example.invalid/moorings|the mooring list> for the harbour office to read.",
+         "The winter mooring list is in <https://example.invalid/moorings|Winter moorings, harbour office> for the harbour office to read."),
         ("The tide table for the week is at https://example.invalid/tides and is ready.",
          "The tide table for the week is at <https://example.invalid/tides|example.invalid/tides> and is ready."),
         ("The slipway reopened this morning and the pilot boat is back :tada:",
@@ -418,8 +527,28 @@ def main():
         differences(folder)
     elif which == "unknown":
         unknown(folder)
-    elif which in ("wordforword", "body_first", "trailing", "labelled", "split", "some_labelled"):
+    elif which in ("wordforword", "body_first", "trailing", "labelled", "split", "some_labelled",
+                   "first_label", "some_first_label", "above", "unlisted"):
         word_for_word(folder, "thread" if which == "wordforword" else which)
+    elif which == "most_wordless":   # six posts with no words beside five with them, in each thread
+        word_for_word(folder, "thread", wordless=6)
+    elif which == "pagination":      # the result's other fields hold text, one of them under a key in no list
+        word_for_word(folder, "thread", fields={
+            "pagination_info": "There are 4 more replies in the lighthouse thread. Pass the cursor to read them.",
+            "next_cursor": "bGlnaHRob3VzZQ", "has_more": True, "pagination": "",
+            "A keeper wrote this whole key": "The lighthouse keeper has the cursor."})
+    elif which == "own_drafted":     # label shaped lines of his own, which the draft holds too
+        word_for_word(folder, "thread", own="drafted")
+    elif which == "own_added":       # the same lines, put in by hand after the draft was saved
+        word_for_word(folder, "thread", own="added")
+    elif which == "no_messages_field":
+        no_messages_field(folder)
+    elif which == "odd_id":
+        odd_id(folder)
+    elif which == "other_mentions":
+        other_mentions(folder)
+    elif which == "bands":
+        bands(folder)
     elif which == "concise":
         concise(folder, detailed_too=False)
     elif which == "concise_beside_detailed":

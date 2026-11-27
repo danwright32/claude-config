@@ -181,15 +181,116 @@ check "labelled: said as nothing measured" "Nothing was measured" "$out"
 check "labelled: with how many messages end that way" "last line shaped like a label: 15" "$out"
 check_not "labelled: and no pair is counted" "pairs:" "$out"
 out="$(run labelled --shapes)"
-check "shapes: a label from the fixed list is named, with its count" "label lines under a Message TS line, Attachments: 15" "$out"
+check "shapes: a label from the fixed list is named, with where it sits and its count" "label lines last under a Message TS line, Attachments: 15" "$out"
 check_not "shapes: and nothing of the message under it is printed" "Gauge" "$out"
 out="$(run split)"; rc=$?
 check_eq "split: text above the line and a label under it is a failure" "4" "$rc"
 check "split: said as nothing measured" "Nothing was measured" "$out"
+SET_ASIDE_FOR_LABEL="pairs whose post begins or ends in a line shaped like a label that its draft does not hold there"
 out="$(run some_labelled)"; rc=$?
 check_eq "some labelled: a label under a few messages is measured" "0" "$rc"
-check "some labelled: those pairs are set aside and counted" "pairs whose post ends in a line shaped like a label: 3" "$out"
+check "some labelled: those pairs are set aside and counted" "$SET_ASIDE_FOR_LABEL: 3" "$out"
 check "some labelled: and the rest are read as they were sent" "sent as drafted: 9 of 9 pairs" "$out"
+
+# --- a line of the connector's own RIGHT UNDER the Message TS line (second review, M2) ---------------------
+# The same twelve word for word posts, each with a label line between its Message TS line and its text.
+# Read as his words, that line made every opening look changed, and a rule was offered from it.
+for f in first_label some_first_label above most_wordless unlisted own_drafted own_added; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
+out="$(run first_label)"; rc=$?
+check_eq "first label: a label line right under every Message TS line is a failure, never twelve changed openings" "4" "$rc"
+check "first label: said as nothing measured, with the reason" "Nothing was measured: most of the messages found begin with a line shaped like a label" "$out"
+check "first label: with how many messages begin that way" "first line shaped like a label: 15" "$out"
+check_not "first label: no kind is called recurring" "recurring" "$out"
+check_not "first label: and no pair is counted" "pairs:" "$out"
+check_not "first label: no example is shown either" "Example for" "$(run first_label --examples)"
+out="$(run first_label --shapes)"
+check "shapes: a label line is said to be first under its Message TS line" "label lines first under a Message TS line, Thread TS: 15" "$out"
+check "shapes: the messages that begin with one are counted" "messages whose first line is shaped like a label: 15" "$out"
+check "shapes: apart from the messages that end in one" "messages whose last line is shaped like a label: 0" "$out"
+out="$(run labelled --shapes)"
+check "shapes: and the other way about when the label is under the text" "messages whose first line is shaped like a label: 0" "$out"
+out="$(run some_first_label)"; rc=$?
+check_eq "some first label: a label over the text of a few messages is measured" "0" "$rc"
+check "some first label: those pairs are set aside and counted" "$SET_ASIDE_FOR_LABEL: 3" "$out"
+check "some first label: and the rest are read as they were sent" "sent as drafted: 9 of 9 pairs" "$out"
+check "some first label: so no opening is counted as changed" "the opening changed: 0 of 9 pairs" "$out"
+# His own line shaped like a label (second review, S3). A line the draft holds at the same end is his.
+out="$(run own_drafted)"; rc=$?
+check_eq "own lines the draft holds: measured" "0" "$rc"
+check "own lines the draft holds: no pair is set aside for them" "$SET_ASIDE_FOR_LABEL: 0" "$out"
+check "own lines the draft holds: all twelve are read as sent" "sent as drafted: 12 of 12 pairs" "$out"
+out="$(run own_added)"
+check "own lines he added by hand: set aside, since nothing can tell them from the connector's" "$SET_ASIDE_FOR_LABEL: 6" "$out"
+check "own lines he added by hand: the other six are read as sent" "sent as drafted: 6 of 6 pairs" "$out"
+# The two exits for text that is somewhere else, each reached with text in SOME messages (second review, S1).
+out="$(run most_wordless)"; rc=$?
+check_eq "most wordless: most messages with no text is a failure, though some have it" "4" "$rc"
+check "most wordless: said with its own reason" "Nothing was measured: most of the messages found have no text under their Message TS line" "$out"
+check "most wordless: with the count" "messages found in them: 33 (no text under the Message TS line: 18;" "$out"
+check_not "most wordless: and no pair is counted" "pairs:" "$out"
+out="$(run above)"; rc=$?
+check_eq "above: a line nobody measured above most Message TS lines is a failure, though the text is in place" "4" "$rc"
+check "above: said with its own reason" "Nothing was measured: most of the messages found hold a line above their Message TS line" "$out"
+check "above: with the count" "a line above it that is neither From nor Time: 15" "$out"
+check_not "above: and no pair is counted" "pairs:" "$out"
+# A label that is in no fixed list is counted by its length and never printed (second review, S2).
+out="$(run unlisted --shapes)"
+check "unlisted: a label in no list is counted by its length, under the text" "label lines last under a Message TS line, not a known name, of 12 characters: 15" "$out"
+check "unlisted: and above the Message TS line" "label lines above a Message TS line, not a known name, of 11 characters: 15" "$out"
+check_not "unlisted: its name is never printed" "Harbour" "$out"
+check_not "unlisted: nor the one above" "Quay" "$out"
+check_not "unlisted: nor in the default run" "Harbour" "$(run unlisted)"
+
+# --- only the field that holds messages is read (second review, M3) ---------------------------------------
+# The same twelve word for word posts. The result's other fields hold text, which was joined onto the
+# last message of each read and counted as his words.
+for f in pagination no_messages_field odd_id other_mentions bands; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
+out="$(run pagination)"; rc=$?
+check_eq "pagination: text in the result's other fields is measured" "0" "$rc"
+check "pagination: and is no part of any message, so all twelve are read as sent" "sent as drafted: 12 of 12 pairs" "$out"
+out="$(run pagination --shapes)"
+check "shapes: one line of text under each Message TS line, and none from another field" "lines of text under a Message TS line: 15" "$out"
+check "shapes: a listed field that holds text is counted" "result field pagination_info, holding text: 3" "$out"
+check "shapes: and another" "result field next_cursor, holding text: 3" "$out"
+check "shapes: a field in no list that holds text is counted by its length" "result fields not in the fixed list, holding text, of 29 characters: 3" "$out"
+check_not "shapes: a field that is empty is not counted as holding text" "result field pagination, holding text" "$out"
+check_not "shapes: none of the pagination text is printed" "lighthouse" "$out"
+check_not "shapes: nor the cursor" "bGlnaHRob3VzZQ" "$out"
+check_not "shapes: nor the key in no list" "keeper" "$out"
+out="$(run no_messages_field)"; rc=$?
+check_eq "no messages field: a result with its text under another key is a failure, never read by guess" "4" "$rc"
+check "no messages field: counted as a layout this cannot read" "read results in a layout this cannot read: 1" "$out"
+check "shapes: and counted under its own name" "read results whose JSON object has no messages string: 1" "$(run no_messages_field --shapes)"
+# A tool_result whose tool_use_id is no string is passed over, never a crash (second review, S8).
+out="$(run odd_id)"; rc=$?
+check_eq "odd id: a result whose call id is a list does not stop the run" "0" "$rc"
+check_not "odd id: with no traceback" "Traceback" "$out"
+check "odd id: and the pair beside it is read" "sent as drafted: 1 of 1 pair" "$out"
+# A channel, a group and a here mention with a name added are the same mention (second review, S5).
+out="$(run other_mentions)"
+check "other mentions: each draft posted word for word is sent as drafted" "sent as drafted: 3 of 3 pairs" "$out"
+check "other mentions: and no opening is counted as changed" "the opening changed: 0 of 3 pairs" "$out"
+
+# --- pairs by how like their draft they are (second review, the unexplained gap) --------------------------
+# Ten drafts of fifty words, each posted with a known number of words swapped: 0, 1, 2, 3, 5, 6, 10, 11,
+# 15 and 16, so the likeness is 1, 0.98, 0.96, 0.94, 0.90, 0.88, 0.80, 0.78, 0.70 and 0.68.
+out="$(run bands --likeness)"; rc=$?
+check_eq "likeness: the run succeeds" "0" "$rc"
+check "likeness: the pairs it is counted over" "pairs by how like their draft they are: 10" "$out"
+check "likeness: the same once formatting is set aside" "  the same once formatting is set aside: 1" "$out"
+check "likeness: 0.98 itself is in the top band" "  not the same, 0.98 and over: 1" "$out"
+check "likeness: 0.96" "  0.95 to under 0.98: 1" "$out"
+check "likeness: 0.94, and 0.90 itself" "  0.90 to under 0.95: 2" "$out"
+check "likeness: 0.88, and 0.80 itself" "  0.80 to under 0.90: 2" "$out"
+check "likeness: 0.78, and 0.70 itself, which is not heavily rewritten" "  0.70 to under 0.80: 2" "$out"
+check "likeness: 0.68 is heavily rewritten" "  under 0.70, heavily rewritten: 1" "$out"
+check "likeness: the bottom band is the count the default run calls heavily rewritten" "heavily rewritten: 1 of 10 pairs" "$out"
+check "likeness: and the top line is the count it calls sent as drafted" "sent as drafted: 1 of 10 pairs" "$out"
+check "likeness: posts that were the last message of their read are counted, with how many of them were sent as drafted" "posts that were the last message of the read their text was taken from: 8 of 10 pairs (sent as drafted: 1 of those 8, and 0 of the other 2)" "$out"
+check_not "likeness: counts only, no message text" "tide" "$out"
+check_not "likeness: nor a swapped word" "ebb" "$out"
+check_not "likeness: nothing of it without the flag" "pairs by how like their draft" "$(run bands)"
+check "the default run says how many pairs changed in none of the four kinds, at zero too" "changed, in none of the four kinds: 0 of 12 pairs" "$(run recurring)"
 
 # --- the layout as it was measured on the work MacBook on 2026-11-27 (pull request 3848) ----------------
 # Counts, field names and the punctuation of headings were measured there. Every word below is invented.
@@ -198,7 +299,7 @@ for f in concise concise_beside_detailed headings mentions second_post second_po
 out="$(run trailing)"; rc=$?
 check_eq "trailing: a Reactions line under every text is measured" "0" "$rc"
 check "trailing: and the twelve are read as they were sent" "sent as drafted: 12 of 12 pairs" "$out"
-check "trailing: no pair is set aside for it" "pairs whose post ends in a line shaped like a label: 0" "$out"
+check "trailing: no pair is set aside for it" "$SET_ASIDE_FOR_LABEL: 0" "$out"
 out="$(run trailing --shapes)"
 check "shapes: the Reactions lines set aside are counted" "Reactions lines under a message, set aside: 15" "$out"
 check_not "shapes: and what follows the label is not printed" "thumbsup" "$out"
@@ -244,14 +345,19 @@ check "no such post in the basics" "of those, more like that draft than the post
 out="$(run second_post_late)"
 check "late second post: the draft is still paired with the first post after it" "heavily rewritten: 1 of 1 pair" "$out"
 check "late second post: one two hours after the draft is not counted as more like it" "of those, more like that draft than the post it was paired with: 0" "$out"
-# --differences: what one more thing set aside would make a changed pair the same. Seven guesses at
+# --differences: what one more thing set aside would make a changed pair the same. Six guesses at
 # what a read result adds or writes another way, none of them measured, and one real edit.
 fixture differences || { echo "FAIL: fixture differences could not be built"; fail=$((fail + 1)); }
 out="$(run differences --differences)"; rc=$?
 check_eq "differences: the run succeeds" "0" "$rc"
-check "differences: the pairs it is counted over" "pairs changed but not heavily rewritten: 8" "$out"
-check "differences: a name added inside angle brackets (a channel, a group)" "the same once what is inside angle brackets is set aside (a mention, a group or a link with a name added): 2" "$out"
-check "differences: a link written two ways" "the same once how a link is written is set aside: 1" "$out"
+check "differences: the pairs it is counted over" "pairs changed but not heavily rewritten: 7" "$out"
+check "differences: other words inside a link's angle brackets" "the same once what is inside angle brackets is set aside (a mention, a group or a link with a name added): 1" "$out"
+check "differences: a link written two ways, and that link with other words" "the same once how a link is written is set aside: 2" "$out"
+# For each kind, how many of its pairs one of those things could explain: what the skill tells Dan
+# beside a proposed rule, so a count that may be no edit of his is never put to him bare (M4).
+check "differences: of the pairs under a kind, how many one of those things could explain" "  the opening changed: 1 of 2 pairs" "$out"
+check "differences: a kind with no pair says so" "  figures cut: 0 of 0 pairs" "$out"
+check "the default run says how many pairs changed in none of the four kinds" "changed, in none of the four kinds: 4 of 7 pairs" "$out"
 check "differences: punctuation alone" "the same once punctuation, symbols and spacing are set aside: 1" "$out"
 check "differences: an emoji as a name against a character" "the same once emoji are set aside (a :name: or a character): 1" "$out"
 check "differences: a trailing edited mark" "the same once a trailing (edited) is set aside: 1" "$out"
@@ -323,9 +429,29 @@ if [ "$(id -u)" != 0 ]; then
 fi
 check_eq "decided: --shapes does not need the decisions, so it still prints" "0" "$(as torn recurring --shapes >/dev/null 2>&1; echo $?)"
 
+# --- no run without --examples prints a word of a message, a name, an id or a field's text ---------------
+# Every fixture built above, in each way of running that shows no example, searched for the words the
+# fixtures are written in. One line of output with any of them is a failure of the whole point.
+WORDS='harbour|Harbour|Gauge|gauge|tide|ebb|ferry|slipway|lighthouse|keeper|berth|mooring|lock gates|pilot boat|buoy|Quay|timetable|thumbsup|Ada|Ben Sample|U0FIXTURE|C0FIXTURE|S0FIXTURE|T0FIXTURE|example\.invalid|bGlnaHRob3VzZQ|toolu_fixture'
+leaks=0; runs=0
+for f in "$WORK"/*/project; do
+  which="$(basename "$(dirname "$f")")"
+  for mode in "" "--shapes" "--differences --likeness"; do
+    # shellcheck disable=SC2086
+    out="$(run "$which" $mode)"
+    runs=$((runs + 1))
+    if printf '%s\n' "$out" | grep -qE "$WORDS"; then
+      leaks=$((leaks + 1)); echo "  a word of a fixture was printed by: $which $mode"
+    fi
+  done
+done
+check_eq "no run without --examples prints a word of any fixture" "0" "$leaks"
+check_eq "and that was looked for over every fixture in three ways of running (a count that cannot quietly shrink)" "1" "$([ "$runs" -ge 120 ] && echo 1 || echo 0)"
+check_eq "the search does see a fixture's words when they are printed" "1" "$(run recurring --examples | grep -cE "$WORDS" | sed 's/^[1-9][0-9]*$/1/')"
+
 # --- it writes nothing, and holds no way to -----------------------------------------------------------
 before="$(cd "$WORK" && find . -type f -exec cksum {} + | sort)"
-run basics --examples >/dev/null; run recurring --examples >/dev/null
+run basics --examples >/dev/null; run recurring --examples >/dev/null; run bands --likeness --differences >/dev/null
 check_eq "a run leaves every file as it was and makes none" "$before" "$(cd "$WORK" && find . -type f -exec cksum {} + | sort)"
 static="$(python3 -B - "$TOOL" <<'PY'
 import ast, sys

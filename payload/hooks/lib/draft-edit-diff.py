@@ -7,7 +7,7 @@ records, pairs each saved draft with the post that followed it, and prints how o
 edit was made, with the number of pairs each count rests on.
 
     python3 draft-edit-diff.py --author <Slack member id or display name> [--records <folder>]
-                               [--examples] [--skip "<kind>"]... [--shapes] [--differences]
+                               [--examples] [--skip "<kind>"]... [--shapes] [--differences] [--likeness]
 
 IT ONLY PRINTS. It opens files to read and has no call that writes, moves or removes one, starts no
 program and sends no request; it imports nothing that could. That is a rule and not a habit: the
@@ -24,9 +24,19 @@ label not in them is counted by its length and never printed, since it could be 
 
 --differences adds, for the pairs that are changed but not heavily rewritten, how many would be the
 same with one more thing set aside (what is inside angle brackets, how a link is written,
-punctuation, emoji, a trailing "(edited)", the last or the first line read back). Counts only. It is
-there because the first real run read far fewer pairs as sent as drafted than the issue's
-measurement did, and counts alone could not say why.
+punctuation, emoji, a trailing "(edited)", the last or the first line read back), and the same count
+for each kind a rule can be offered for. Counts only. It is there because the first real run read
+far fewer pairs as sent as drafted than the issue's measurement did, and counts alone could not say
+why. Each count is an UPPER BOUND on what a difference in how a read is written could explain, and
+no more: he also changes punctuation and adds and cuts lines, and a heavily rewritten pair is not
+looked at.
+
+--likeness adds how many pairs sit in each band of likeness (the same; 0.98 and over; 0.95; 0.90;
+0.80; 0.70; under 0.70, which is heavily rewritten), and how many posts were the last message of
+the read their text was taken from. Counts only. It is the one count that can be set beside the
+issue's four bands of 2026-11-24 (22 sent as drafted, 25 lightly edited, 30 edited and 29 heavily
+rewritten, of 106): this reader calls a pair sent as drafted only when the two are the SAME once
+formatting is set aside, and where the issue drew its lines is not on record.
 
 WHAT DAN DECIDED BEFORE. A kind he accepted or said never to offer again is not offered: this reads
 ~/.claude/state/draft-edit-review/decisions.json itself, the file the skill's decisions.py writes,
@@ -49,8 +59,8 @@ HOW A PAIR IS MADE.
   * A post more than PAIR_WITHIN_MINUTES minutes after that draft is not paired with it. Both are left
     out and counted.
   * Both are compared after Slack's formatting is set aside (links, bold, italics, bullets, quote
-    markers at the start of a line, the name a read adds inside a mention, spacing and case), by
-    words, with difflib.
+    markers at the start of a line, the name a read adds inside a mention of a person, a channel or
+    a group, spacing and case), by words, with difflib.
   * The FIRST post after a draft takes it. A later post that is more like that draft is left out
     and counted, so the count says how often that rule may have made the wrong pair.
 
@@ -67,10 +77,21 @@ WHAT IT CANNOT SEE, so nobody reads more into a count than it measured.
   * An edit he made after sending. The text compared is the one in whichever record was read last.
   * A read result that was cut short: a long thread, a channel read's limit, or an answer too large
     for the session, which Claude Code keeps as a preview. How a record holds one was not measured.
-  * How the connector shows an emoji, a quotation mark, or a channel or group mention against how
-    the draft wrote it. Only links, bold, italics, bullets, quote markers at the start of a line,
-    the name a read adds inside a mention of a person, spacing and case are set aside, so a draft
-    that opens with a channel or a group can read as the opening changed.
+  * How the connector shows an emoji, a quotation mark, an apostrophe, a dash, a phone number or a
+    link against how the draft wrote it. Only links in the three forms named above, bold, italics,
+    bullets, quote markers at the start of a line, the name a read adds inside a mention, spacing
+    and case are set aside, so any of those can read as an edit, and as the opening changed when it
+    sits in the first OPENING_WORDS words.
+  * "@Name" typed in a draft and turned into a real mention by hand before sending. That is an edit
+    he makes, and it reads as the opening changed when the name opens the message.
+  * His own line shaped like a label ("Update: ...", "Next step: ...") when it is the first or the
+    last line of what he sent and the draft did not hold it there. The pair is set aside with the
+    lines that may be the connector's, since nothing can tell the two apart.
+  * A line of the connector's own, under or over the text, that is NOT shaped like a label and is
+    not the Reactions line. It is read as his words. --differences counts how many pairs a first or
+    a last line could explain.
+  * Why a share is what it is. The first real run read 6 of 184 pairs as sent as drafted, against
+    22 of 106 in the issue's count three days before. That is not explained (see --likeness).
   * A thread read that was handed a reply's own time, not its parent's: that reply is placed at the
     top of the channel unless another read shows it inside its thread.
 
@@ -111,18 +132,24 @@ of (L98, L177). What was NOT measured: any other line the connector writes under
 concise read looks like inside, and a read result too large for the session.
 
 WHERE THE TEXT SITS is part of that layout, and matching headings say nothing about it. The text of
-a message is read as the lines under its Message TS line, less any Reactions line. The connector's
-own account of a read says its default answer "includes reactions + thread info", and no line for
-thread info was measured. So:
+a message is read from the "messages" field of the result alone, as the lines under its Message TS
+line, less any Reactions line. The connector's own account of a read says its default answer
+"includes reactions + thread info", and no line for thread info was measured. So:
+  * no other field of the result is read for a message: what "pagination_info" holds is no part of
+    the last message of a read. A result whose JSON object has no "messages" string is counted as
+    one this cannot read, and --shapes counts the other fields that hold text;
   * a message with no text under its Message TS line is counted, and is no post: never a pair;
-  * a pair whose post ends in a line shaped like a label (a word or three and a colon, as From and
-    Time are written) is set aside and counted, since that line may be the connector's and not his;
+  * a pair whose post BEGINS or ENDS in a line shaped like a label (a word or three and a colon, as
+    From and Time are written) that its draft does not hold at that end is set aside and counted,
+    since that line may be the connector's and not his;
   * the run exits 4 and says nothing was measured when most messages have no text there, or hold a
-    line above the Message TS line that is neither From nor Time, or end in such a label line;
+    line above the Message TS line that is neither From nor Time, or begin or end in such a label
+    line;
   * --shapes counts the lines of text under and above the Message TS lines, and names a label line
     only when its name is in KNOWN_LABELS, a fixed list. Any other is counted by its length alone.
-These four guards have not met a real read yet: the run that measured the layout was made before
-they were written. They make a layout that differs fail aloud.
+    It says where each label line sits: alone, first, last or inside the text.
+These guards have not met a real read yet: the run that measured the layout was made before they
+were written. They make a layout that differs fail aloud.
 
 Exit codes: 0 measured; 2 a wrong argument; 3 the records folder or the decisions file could not be
 read; 4 read results were there and none could be read, or the text of most messages is not where
@@ -185,9 +212,12 @@ OTHER_HEAD = re.compile(r"^(?:=== .* ===|--- .* ---)\s*$")
 # messages. It is no part of what was sent, so it is set aside wherever it sits in the body. A line
 # of his own that begins with this word would go with it.
 REACTIONS_LINE = re.compile(r"^Reactions:")
-# A mention is <@id> in a draft call and <@id|name> in a read result (measured there: 39 of 144
-# pairs counted as the opening changed differed in nothing else).
-MENTION = re.compile(r"<@([A-Za-z0-9]+)\|[^>]*>")
+# A mention of a person is <@id> in a draft call and <@id|name> in a read result (measured there: in
+# 39 of the 144 pairs counted as the opening changed, the openings differed only at the mention; with
+# the name set aside, sent as drafted went from 2 pairs to 6). A channel (<#id|name>), a group
+# (<!subteam^id|@name>) and a mention like <!here|here> are the same mechanism and are set aside the
+# same way. Those three were NOT measured: no real read was seen to hold one.
+MENTION = re.compile(r"<([@#!][^|<>\s]*)\|[^<>]*>")
 CONCISE = "concise reads, which carry no time and cannot be paired"
 FROM_LINE = re.compile(r"^From: (.+?)(?: \(([A-Z0-9]+)\))?\s*$")
 TS_LINE = re.compile(r"^Message TS: (\d+\.\d+)\s*$")
@@ -212,7 +242,16 @@ NO_TEXT = "messages with no text under the Message TS line"
 ABOVE = "messages with a line above the Message TS line that is neither From nor Time"
 ABOVE_LINES = "lines above a Message TS line that are neither From nor Time"
 LABELLED = "messages whose last line is shaped like a label"
-ASK = re.compile(r"\?$|\b(?:can you|could you|would you|will you|do you|are you able|please|let me know|any chance)\b")
+LABELLED_FIRST = "messages whose first line is shaped like a label"
+# The one field of a read result's JSON object that holds messages (measured: "messages" and
+# "pagination_info" were the two fields of 1,731 results). No other field is read for a message.
+MESSAGES_FIELD = "messages"
+NO_MESSAGES_FIELD = "read results whose JSON object has no messages string"
+# --likeness: the lower edge of each band of likeness between "the same" and heavily rewritten (HEAVY).
+# Settings, not measurements: the issue's count of 2026-11-24 reported four bands and kept no record
+# of where it drew them, so these are drawn finely enough to set beside any of the usual lines.
+LIKENESS_BANDS = (0.98, 0.95, 0.90, 0.80)
+ASK =re.compile(r"\?$|\b(?:can you|could you|would you|will you|do you|are you able|please|let me know|any chance)\b")
 FIGURE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
@@ -241,41 +280,64 @@ def result_text(item):
 
 
 def unwrap(text):
-    """The connector answers with a JSON object whose strings hold the messages. Returns the text to
-    read for messages and the object's field names; text that is no JSON object is read as it is."""
+    """The connector answers with a JSON object whose "messages" string holds the messages. Returns
+    the text to read for messages (None when the object has no such string), the object's field
+    names, and the names of its OTHER fields that hold text. Text that is no JSON object is read as
+    it is.
+
+    Only that one field is read. Every string of the object used to be joined, so whatever
+    "pagination_info" or any other field held became the last lines of the last message of the read,
+    and was compared, and could be shown, as his words (the second review of pull request 3848, M3)."""
     try:
         parsed = json.loads(text)
     except ValueError:
-        return text, []
+        return text, [], []
     if not isinstance(parsed, dict):
-        return text, []
-    strings = [v for v in parsed.values() if isinstance(v, str)]
-    return "\n".join(strings), sorted(str(k) for k in parsed)
+        return text, [], []
+    inner = parsed.get(MESSAGES_FIELD)
+    other = sorted(str(k) for k, v in parsed.items() if k != MESSAGES_FIELD and isinstance(v, str) and v.strip())
+    return (inner if isinstance(inner, str) else None), sorted(str(k) for k in parsed), other
+
+
+def label_of(line):
+    """The name of the label a line is shaped like, or "" when it is not shaped like one."""
+    m = LABEL_LINE.match(line)
+    return m.group(1) if m else ""
 
 
 def label_seen(line, where, shape):
     """Counts a line shaped like a label for --shapes: by name when the name is one of KNOWN_LABELS,
     and by its length alone when it is not, since it can then be the start of somebody's message."""
-    m = LABEL_LINE.match(line)
-    if not m:
+    name = label_of(line)
+    if not name:
         return
-    name = m.group(1)
     if name in KNOWN_LABELS:
         shape["label lines %s a Message TS line, %s" % (where, name)] += 1
     else:
         shape["label lines %s a Message TS line, not a known name, of %d characters" % (where, len(name))] += 1
 
 
+def end_labels(text):
+    """The label names of the first and of the last line of a text that holds words: ("", "") for
+    a text whose ends are not shaped like a label."""
+    lines = [x for x in text.split("\n") if x.strip()]
+    return (label_of(lines[0]), label_of(lines[-1])) if lines else ("", "")
+
+
 def posts_in(text, shape):
-    """Each message WITH TEXT in a read result as (ts, name, member id, body, labelled), where
-    labelled says its last line is shaped like a label. shape counts what was seen, including the
-    messages found with no text under their Message TS line, which are no post here: unread."""
+    """Each message WITH TEXT in a read result as (ts, name, member id, body, final), where final
+    says it is the last message of this read. shape counts what was seen, including the messages
+    found with no text under their Message TS line, which are no post here: unread."""
     posts = []
     cur = None
 
     def close():
         if cur is None:
             return
+        # Whatever is under the last heading of a read is the end of the field, where anything the
+        # connector writes after the messages would land. Only a post made from it is the final one.
+        if posts:
+            posts[-1][4] = False
         if not (cur["ts"] and (cur["name"] or cur["uid"])):
             shape["headings with no author or no Message TS under them"] += 1
             return
@@ -290,12 +352,23 @@ def posts_in(text, shape):
         if not lines:
             shape[NO_TEXT] += 1
             return
-        for x in lines:
-            label_seen(x, "under", shape)
-        labelled = bool(LABEL_LINE.match(lines[-1]))
-        if labelled:
+        # Where a label shaped line sits is said, since a line of the connector's own would sit at one
+        # end of the text: right under the Message TS line, or under the last line of the message.
+        for i, x in enumerate(lines):
+            if len(lines) == 1:
+                where = "alone under"
+            elif i == 0:
+                where = "first under"
+            elif i == len(lines) - 1:
+                where = "last under"
+            else:
+                where = "inside the text under"
+            label_seen(x, where, shape)
+        if label_of(lines[0]):
+            shape[LABELLED_FIRST] += 1
+        if label_of(lines[-1]):
             shape[LABELLED] += 1
-        posts.append((cur["ts"], cur["name"], cur["uid"], "\n".join(cur["body"]).strip(), labelled))
+        posts.append([cur["ts"], cur["name"], cur["uid"], "\n".join(cur["body"]).strip(), True])
 
     for line in text.split("\n"):
         m = CHANNEL_HEAD.match(line)
@@ -346,7 +419,7 @@ def read_records(root, shape):
     saved = {}    # call id -> whether Slack saved it
     reads = {}    # call id -> (tool, channel, parent ts, whether it asked for the concise layout, its time)
     concise = {}  # place -> the latest time a concise read read it back (None: a time this could not read)
-    posts = {}    # (channel, ts) -> (place, name, member id, body, whether its last line is label shaped)
+    posts = {}    # (channel, ts) -> (place, name, member id, body, whether it was the last message of its read)
     done = set()  # read call ids whose result was taken
     files = 0
 
@@ -425,6 +498,8 @@ def take_call(item, rec, drafts, reads):
 
 def take_result(item, drafts, saved, reads, posts, done, shape, concise):
     call = item.get("tool_use_id")
+    if not isinstance(call, str):
+        return  # no call has such an id (take_call keeps strings only), and a list here stopped the run
     if call in drafts:
         text, error = result_text(item)
         saved[call] = saved.get(call, False) or (not error and not DRAFT_ERROR.search(text))
@@ -446,7 +521,7 @@ def take_result(item, drafts, saved, reads, posts, done, shape, concise):
         if place not in concise or read_at is None or (concise[place] is not None and read_at > concise[place]):
             concise[place] = read_at
         return
-    inner, fields = unwrap(text)
+    inner, fields, holding = unwrap(text)
     for field in fields:
         # A key is printed only when it is one of KNOWN_FIELDS. Any other could be anything, a
         # sentence of somebody's included, so only its length is counted (the review, S1).
@@ -454,26 +529,38 @@ def take_result(item, drafts, saved, reads, posts, done, shape, concise):
             shape["result field " + field] += 1
         else:
             shape["result fields not in the fixed list, of %d characters" % len(field)] += 1
+    for field in holding:
+        # The other fields that hold text, which is read for no message. Counted, never printed.
+        if field in KNOWN_FIELDS:
+            shape["result field %s, holding text" % field] += 1
+        else:
+            shape["result fields not in the fixed list, holding text, of %d characters" % len(field)] += 1
+    if inner is None:
+        # A JSON object with no "messages" string. Its text is not looked for under another key:
+        # that would be a guess at a layout nobody measured.
+        shape[NO_MESSAGES_FIELD] += 1
+        shape["in a layout this cannot read"] += 1
+        return
     found = posts_in(inner, shape)
     if not found:
         # No message with text: no heading this knows, or every message's text is somewhere else.
         shape["in a layout this cannot read"] += 1
         return
     shape["read results with messages"] += 1
-    for ts, name, uid, body, labelled in found:
+    for ts, name, uid, body, final in found:
         place = (channel, "") if tool == CHANNEL_TOOL or ts == parent else (channel, parent)
         known = posts.get((channel, ts))
         if known is not None and known[0][1] and not place[1]:
             # Already read inside its thread. A reply Slack also shows in the channel is ONE post, in
             # its thread, whichever read came first: it is never a second post at the top (S6).
             place = known[0]
-        posts[(channel, ts)] = (place, name, uid, body, labelled)
+        posts[(channel, ts)] = (place, name, uid, body, final)
 
 
 def sentences(text):
     """The text with Slack's formatting set aside, as a list of sentences in lower case."""
     t = html.unescape(text)
-    t = MENTION.sub(r"<@\1>", t)
+    t = MENTION.sub(r"<\1>", t)
     t = re.sub(r"<(?:https?|mailto):[^|>\s]+\|([^>]*)>", r"\1", t)
     t = re.sub(r"<((?:https?|mailto):[^>\s]+)>", r"\1", t)
     t = re.sub(r"\[([^\]]+)\]\((?:https?|mailto):[^)\s]+\)", r"\1", t)
@@ -517,24 +604,42 @@ def kinds_of(draft, sent):
     return kinds, likeness
 
 
+def may_be_connectors(draft, sent):
+    """Whether the first or the last line of what was read back is shaped like a label that the draft
+    does not hold at that same end. Such a line may be the connector's and not his: the connector's
+    own account of a read says it "includes reactions + thread info", and where a thread info line
+    sits was never measured, right under the Message TS line or under the text.
+
+    A label line the DRAFT holds at the same end, by the same name, is his: "Update: ..." as the
+    first line of both is no line of the connector's. What this still gets wrong, on the harmless
+    side (L648): a line like that which he ADDED by hand is set aside with the connector's, so that
+    pair is in no count; and a connector line whose label happens to be the one his draft begins or
+    ends with is compared as his words."""
+    d_first, d_last = end_labels(draft)
+    s_first, s_last = end_labels(sent)
+    return bool((s_first and s_first != d_first) or (s_last and s_last != d_last))
+
+
 def pair_up(drafts, saved, posts, author, concise):
-    """Pairs as (place, post time, draft text, sent text), and what was left out."""
+    """Pairs as (place, post time, draft text, sent text, whether the post was the last message of
+    the read its text was taken from), and what was left out."""
     want = author.strip().lower()
     by_place = collections.defaultdict(list)
     for call, d in drafts.items():
         if saved.get(call) and d["at"] is not None:
             by_place[d["place"]].append((d["at"], call, d["text"]))
     mine = collections.defaultdict(list)
-    for (_channel, ts), (place, name, uid, body, labelled) in posts.items():
+    for (_channel, ts), (place, name, uid, body, final) in posts.items():
         if uid.lower() == want or name.strip().lower() == want:
-            mine[place].append((float(ts), body, labelled))
+            mine[place].append((float(ts), body, final))
     pairs, used, no_draft, doubtful = [], set(), 0, 0
     late, late_posts = set(), 0
     paired_at, closer = {}, 0  # draft call -> the likeness of the pair it made
     for place, sent in mine.items():
         ds = sorted(by_place.get(place, []))
-        for at, body, labelled in sorted(sent):
+        for at, body, final in sorted(sent):
             before = [d for d in ds if d[0] < at]
+            labelled = bool(before) and may_be_connectors(before[-1][2], body)
             if not before or before[-1][1] in used:
                 no_draft += 1
                 # The first post after a draft takes it. When this later one is MORE like that draft,
@@ -553,12 +658,12 @@ def pair_up(drafts, saved, posts, author, concise):
                 continue
             used.add(before[-1][1])
             if labelled:
-                # Its last line may be the connector's and not his, so the pair is set aside and counted:
-                # compared, a post sent word for word would read as edited (L648).
+                # Its first or last line may be the connector's and not his, so the pair is set aside
+                # and counted: compared, a post sent word for word would read as edited (L648).
                 doubtful += 1
                 continue
             paired_at[before[-1][1]] = kinds_of(before[-1][2], body)[1]
-            pairs.append((place, at, before[-1][2], body))
+            pairs.append((place, at, before[-1][2], body, final))
     replaced = unread = unread_concise = 0
     for place, ds in by_place.items():
         ds.sort()
@@ -693,6 +798,7 @@ def main():
     parser.add_argument("--skip", action="append", default=[])
     parser.add_argument("--shapes", action="store_true")
     parser.add_argument("--differences", action="store_true")
+    parser.add_argument("--likeness", action="store_true")
     args = parser.parse_args()
     for kind in args.skip:
         if kind not in OFFERED:
@@ -715,7 +821,7 @@ def main():
             return 3
     skipped = decided | set(args.skip)
     shape = collections.Counter()
-    for key in (FOUND, TEXT_LINES, NO_TEXT, ABOVE, ABOVE_LINES, LABELLED, CONCISE):
+    for key in (FOUND, TEXT_LINES, NO_TEXT, ABOVE, ABOVE_LINES, LABELLED, LABELLED_FIRST, CONCISE, NO_MESSAGES_FIELD):
         shape[key] = 0  # printed by --shapes at zero too: where the text sits is what a first run checks
     files, drafts, saved, posts, concise = read_records(args.records, shape)
     n_saved = sum(1 for call in drafts if saved.get(call))
@@ -746,7 +852,8 @@ def main():
               "run this with --shapes to see what they are made of." % unreadable)
     found, wordless = shape[FOUND], shape[NO_TEXT]
     print("messages found in them: %d (no text under the Message TS line: %d; a line above it that is neither "
-          "From nor Time: %d; last line shaped like a label: %d)" % (found, wordless, shape[ABOVE], shape[LABELLED]))
+          "From nor Time: %d; last line shaped like a label: %d; first line shaped like a label: %d)" % (
+              found, wordless, shape[ABOVE], shape[LABELLED], shape[LABELLED_FIRST]))
     if shape["read results"] and not shape["read results with messages"] and (unreadable or shape[CONCISE]):
         if not unreadable:
             print("Nothing was measured: every thread or channel read in the records is a concise read, which "
@@ -756,8 +863,10 @@ def main():
                   "a count of pairs here would be a count of this program's blind spot.")
         return 4
     # The headings can all match while the TEXT sits where this does not look (review M1). Each of the
-    # three is a failure when it is true of most messages, never a count: a post read with no text, or
-    # with a line of the connector's own in it, is compared as an edit Dan never made.
+    # four is a failure when it is true of most messages, never a count: a post read with no text, or
+    # with a line of the connector's own in it, is compared as an edit Dan never made. The label line
+    # is looked for at BOTH ends of the text: right under the Message TS line it made every opening
+    # read as changed, and a rule was offered from twelve posts sent word for word (second review, M2).
     misplaced = ""
     if 2 * wordless > found:
         misplaced = "most of the messages found have no text under their Message TS line"
@@ -766,6 +875,9 @@ def main():
     elif 2 * shape[LABELLED] > found - wordless:
         misplaced = ("most of the messages found end in a line shaped like a label (a word or three and a colon), "
                      "which is how the connector writes its own lines")
+    elif 2 * shape[LABELLED_FIRST] > found - wordless:
+        misplaced = ("most of the messages found begin with a line shaped like a label (a word or three and a "
+                     "colon), which is how the connector writes its own lines")
     if misplaced:
         print("Nothing was measured: %s, so the text of a message is not where this looks for it. Run this with "
               "--shapes to see how the lines are laid out." % misplaced)
@@ -781,20 +893,25 @@ def main():
           "may be there, and a concise read shows no time to pair it by)" % left["unread_concise"])
     print("posts whose draft was already paired: of those, more like that draft than the post it was paired "
           "with: %d (the first post after a draft takes it)" % left["closer"])
-    print("also left out: pairs whose post ends in a line shaped like a label: %d (that line may be the "
-          "connector's and not his)" % left["doubtful"])
+    print("also left out: pairs whose post begins or ends in a line shaped like a label that its draft does not "
+          "hold there: %d (that line may be the connector's and not his; one he added by hand is left out with "
+          "it)" % left["doubtful"])
     print("also left out: posts more than %d minutes after the draft before them: %d (drafts: %d). The %d "
           "minutes is a setting, chosen on 2026-11-27 from one Mac's pairs that day." % (
               PAIR_WITHIN_MINUTES, left["late_posts"], left["late_drafts"], PAIR_WITHIN_MINUTES))
     print("also left out: saved drafts with no time on their record: %d (nothing can be said to come after "
           "one)" % left["untimed"])
     tally = collections.defaultdict(list)
-    for place, at, draft, sent in pairs:
+    banded = []  # (likeness, whether sent as drafted, whether the post was the last message of its read)
+    for place, at, draft, sent, final in pairs:
         kinds, likeness = kinds_of(draft, sent)
+        banded.append((likeness, kinds == ["sent as drafted"], final))
         for kind in kinds or ["changed, in no kind"]:
             tally[kind].append((place, at, draft, sent, likeness))
     for kind in REPORTED:
         print("%s: %d of %s" % (kind, len(tally[kind]), plural(len(pairs), "pair")))
+    # A pair that differs, is not heavily rewritten and is in none of the four kinds was in no line.
+    print("changed, in none of the four kinds: %d of %s" % (len(tally["changed, in no kind"]), plural(len(pairs), "pair")))
     print("kept out of the four kinds below and of the floor, as heavily rewritten: %d (a post that far from "
           "the draft before it may not be an edit of it)" % len(tally["heavily rewritten"]))
     examples = []
@@ -826,8 +943,11 @@ def main():
             for place, at, draft, sent, _likeness in tally[kind]:
                 changed[(place, at)] = (draft, sent)
         counts = collections.Counter()
-        for draft, sent in changed.values():
+        explained = set()  # the pairs that one of those things alone would make the same
+        for key, (draft, sent) in changed.items():
             found = differences(draft, sent)
+            if found:
+                explained.add(key)
             for name in found or ["none of these"]:
                 counts[name] += 1
         print("")
@@ -837,6 +957,43 @@ def main():
         for name, _test in SET_ASIDE:
             print("  the same once %s: %d" % (name, counts[name]))
         print("  none of these: %d" % counts["none of these"])
+        # The same count for each kind a rule can be offered for, so the number a rule rests on is never
+        # put to Dan without how much of it a difference in how a read is written could account for. It is
+        # an upper bound and no more: punctuation, an emoji and a first or last line are also edits he makes.
+        print("Of the pairs under each kind, how many one of the things above would make the same (an upper bound "
+              "on how many may be no edit of his: he also changes punctuation, and adds and cuts lines)")
+        for kind in OFFERED:
+            under = {(place, at) for place, at, _draft, _sent, _likeness in tally[kind]}
+            print("  %s: %d of %s" % (kind, len(under & explained), plural(len(under), "pair")))
+    if args.likeness:
+        # --likeness: how many pairs sit in each band of likeness. Counts only. It is here because the
+        # issue's count of 2026-11-24 read 22 of 106 pairs as sent as drafted and the first run of this
+        # reader read 6 of 184, and the likeliest cause is that the two meant different things by it:
+        # this wants the two texts the same once formatting is set aside, and the issue reported four
+        # bands of likeness. If that is the cause, about a fifth of the pairs sit in the top lines here.
+        same = sum(1 for _likeness, as_drafted, _final in banded if as_drafted)
+        rest = sorted(likeness for likeness, as_drafted, _final in banded if not as_drafted)
+        print("")
+        print("How like its draft each post is (counts only; likeness is the share of the words the two have in "
+              "common, after formatting is set aside)")
+        print("pairs by how like their draft they are: %d" % len(banded))
+        print("  the same once formatting is set aside: %d" % same)
+        upper = None
+        for edge in LIKENESS_BANDS + (HEAVY,):
+            n = sum(1 for likeness in rest if likeness >= edge and (upper is None or likeness < upper))
+            if upper is None:
+                print("  not the same, %.2f and over: %d" % (edge, n))
+            else:
+                print("  %.2f to under %.2f: %d" % (edge, upper, n))
+            upper = edge
+        print("  under %.2f, heavily rewritten: %d" % (HEAVY, sum(1 for likeness in rest if likeness < HEAVY)))
+        # Whatever the connector writes after the messages of a read lands under the last one, so a
+        # share sent as drafted that is lower among those posts than among the others points there.
+        last = [as_drafted for _likeness, as_drafted, final in banded if final]
+        other = [as_drafted for _likeness, as_drafted, final in banded if not final]
+        print("posts that were the last message of the read their text was taken from: %d of %s (sent as drafted: "
+              "%d of those %d, and %d of the other %d)" % (len(last), plural(len(banded), "pair"), sum(last),
+                                                           len(last), sum(other), len(other)))
     return 0
 
 
