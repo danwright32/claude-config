@@ -2599,7 +2599,9 @@ last command of a pipeline runs in the session's shell in zsh and in a shell of 
 neither can be read from the command, so both are followed, up to 16 ways. Third, a command the
 reader cannot vouch for (a quote left open, a line it is not sure the shell runs) is judged in
 every folder any `cd` in it names, the session's first, with no `cd` followed: the reading that
-sees more writes. The added reading cuts where the shell cuts, which the loop's own cut never did
+sees more writes. So is a command that reads well and hands a shell a string the reader cannot
+vouch for (`bash -c`, `eval`): the first build caught that failure and read on, so the string was
+judged by nothing new, and the lessons review of the change found it. The added reading cuts where the shell cuts, which the loop's own cut never did
 at a single `&`, so `true & rm payload/x` is now refused too.
 
 The other three shapes the review named were each handed to the gate first. `xargs rm` fed a
