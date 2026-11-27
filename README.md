@@ -3455,9 +3455,11 @@ What it does not cover:
 - A process that left its shell's group (`setsid`, a job control shell) is not tied. The time
   limit runner (`hooks/lib/run-with-limit.sh`, the next section) puts what it starts in a group of
   its own and records that group the same way: an empty file named for the group's id in the folder
-  `python3 hooks/lib/agent-leftovers.py dir "$CLAUDE_CODE_SESSION_ID"` prints. A group is listed
-  only once its leader has gone, so a command that runs on after its runner was killed outright is
-  not listed until it ends and leaves something behind.
+  `python3 hooks/lib/agent-leftovers.py dir "$CLAUDE_CODE_SESSION_ID"` prints. The runner takes
+  that file away again once the group holds nothing, so the file stays only for a group the runner
+  could not end or did not live to end. A group is listed only once its leader has gone, so a
+  command that runs on after its runner was killed outright is not listed until it ends and leaves
+  something behind.
 - A group whose oldest process started after the agent's command ended (each generation started
   the next and ended) is said as one that could not be told, never as the agent's.
 - The hand back is where an agent can still act, so an agent that ends by plain text is not asked
@@ -3479,20 +3481,29 @@ went unrun where it most needed a limit (four sightings on claude-config#3578).
 
     bash ~/.claude/hooks/lib/run-with-limit.sh <seconds> <command> [its words]
 
-The command runs as the leader of a process group of its own, with the caller's input and output
-as they are. The limit is a whole number of seconds from 1 to 86400.
+The command runs as the leader of a process group of its own, on the caller's own input and output
+(nothing is captured). The limit is a whole number of seconds from 1 to 86400.
+
+**It is for commands that do not read a terminal.** An agent and a gate have none. Typed at a
+prompt, the command is in a background group of the terminal, and a command that reads or sets
+the terminal there (`git commit` opening an editor, `sudo`, `ssh`, anything that asks) is
+suspended by the system until the limit ends it. The runner hands the terminal to nobody; the
+usage says so, and the 124 line says when the command was suspended and not running at its limit.
 
 | Comes back as | What happened |
 | --- | --- |
 | the command's own code | It ended in time and left nothing running. Nothing is said. |
-| 124 | It reached the limit. The whole group was sent TERM, then KILL 2 seconds later (a setting, not measured). |
+| 124 | It reached the limit. The whole group was sent TERM, then KILL 2 seconds later (a setting, not measured) if anything was still there. |
 | 123 | It ended in time and left a process running in its group, which was stopped the same way. |
-| 125 | Nothing was run: a bad limit, no command, python3 missing, or a system it cannot work on. Also a fault inside the runner after the command started, when the group is sent KILL. |
-| 128 plus the signal | The runner was sent TERM, INT or HUP, and ended the group before it went. |
+| 125 | Nothing was run: a bad limit, no command, no usable python3, or a system it cannot keep its rule on. Also a fault inside the runner once the command's process exists: its group is sent KILL. |
+| ended by the signal | The runner was sent a signal it can catch, and ended the group before it went. A shell reports that as 128 plus the signal's number. |
 
 A command a signal ended comes back as 128 plus that signal's number, and one that could not be
-started as 127 or 126, as a shell reports them. When something was stopped the runner says so in
-one line on standard error, naming the group's id, whether TERM or KILL ended it, and the command.
+started as 127 or 126, as a shell reports them. An executable file with no interpreter line is
+handed to `sh`, as a shell hands it. When something was stopped the runner says so in one line on
+standard error, naming the group's id, whether TERM or KILL ended it, and the command. A command
+can itself exit with 123, 124 or 125 (another runner inside this one does), and only that line
+tells the runner's code from the command's.
 
 - **A process left running fails the run.** A suite that passes and leaves a process behind is
   what cost 40 GB on 2026-11-24, so the run comes back as 123 whatever the command's own code
@@ -3500,20 +3511,38 @@ one line on standard error, naming the group's id, whether TERM or KILL ended it
   itself: a shell does not wait for a process substitution, so `exec > >(tee log)` ends with
   `tee` a moment behind it, and ending `tee` at once would cut the log short and fail a passing
   run by a race. The 123 is Dan's to reverse (stop the process and keep the command's code).
-- **The command is never run with no limit.** With python3 missing, the program behind the
-  launcher missing, or a system where the runner cannot see a process group, nothing runs and 125
-  comes back. A fault inside the runner after the command has started sends the group KILL. The
-  command starts only once the runner is watching it: a runner that dies first leaves a child
-  that ends without becoming the command.
+- **The command is never run with no limit, and a run with nothing run is never a pass.** With
+  python3 missing, the program behind the launcher missing, or a system where the runner cannot
+  see a process group or keep its own children, nothing runs and 125 comes back. The launcher
+  asks the program one question before it hands a command over and goes on only at the program's
+  own answer, so a `python3` that starts and is not Python (a version manager's shim with no
+  python chosen) is 125 too, where its exit code 0 used to read as a pass. A fault inside the
+  runner once the command's process exists sends the group KILL, and a fault before that is 125
+  in words. The command starts only once the runner is watching it: a runner that dies first, or
+  is told to stop first, leaves a child that ends without becoming the command.
 - **It signals a number only while its own child pins it.** A child that has not been collected
   keeps its process id, running or ended, and the group it leads has that number. So the runner
   learns that the command ended without collecting it (a kqueue process event on macOS, `waitid`
   with `WNOWAIT` on Linux), ends whatever the group still holds, and collects the command last.
   After the collect it signals nothing: the number can by then belong to any new process. One
-  class in `lib/run-with-limit.py` holds both calls and refuses a signal after the collect.
+  class in `lib/run-with-limit.py` holds the calls that signal the command or its group and the
+  call that collects it, and refuses a signal after the collect.
+- **It keeps its own children whatever its caller set.** A caller that ignores SIGCHLD hands
+  that down, and on Linux a process with it has its children collected by the system the moment
+  they end, which would leave the number pinned by nothing (found by review, claude-config#3833).
+  The runner puts SIGCHLD back to its default before it starts anything, proves with a child of
+  its own that an ended child stays until the runner collects it, and runs nothing (125) where
+  that fails. The command still starts with SIGCHLD as its caller had it. Before the KILL it
+  sends on a fault, the runner asks the system whether the command is still its own child.
+- **A signal that would end the runner ends the command's group first.** TERM, INT, HUP, QUIT,
+  USR1, USR2, ALRM, VTALRM, PROF and XCPU are carried over (on Linux also IO, PWR, STKFLT and
+  the real time signals), unless the caller had the signal ignored. The runner then ends by that
+  signal itself, so a shell loop around it stops at Ctrl C. A stop that arrives before the
+  command was let go starts nothing. TSTP (Ctrl Z) is caught and not acted on, since a stopped
+  runner keeps no limit.
 - **It reads no `ps`,** which cannot start under `hooks/no-network-run.sh` (macOS refuses a
   setuid program in a sandbox). On macOS it asks with signal 0: measured on 2026-11-27 on the
-  personal MacBook (macOS 26.6.2) with the runner's own children, a group holding only its ended,
+  personal MacBook (macOS 26.6.2) with a probe's own children, a group holding only its ended,
   uncollected leader answers EPERM, a group with one more member answers success, and 15 ms after
   that member ended it answers EPERM again. On Linux signal 0 succeeds for a group holding only
   its ended leader, so the members are read from `/proc`. Either way the runner first asks about
@@ -3522,14 +3551,34 @@ one line on standard error, naming the group's id, whether TERM or KILL ended it
 - **Its group is recorded for the leftover process check** above, before the command starts, when
   the run is inside a session whose shells are recorded. A session with no marker folder is left
   alone, since the folder's being there is what tells the reader the shells are recorded. A record
-  that should have been made and could not be is said in one line, and the limit is kept.
+  that should have been made and could not be is said in one line, and the limit is kept. The
+  runner takes its own file away once the group holds nothing, just before it collects the
+  command, while the command still pins the number the file is named for. Process ids came round
+  again within minutes on this Mac (2026-11-27, one sample), and a file left for every run would
+  tie each number to the session for as long as the folder lives. The file stays when the runner
+  could not end the group, after a fault, and when the runner did not live to take it away;
+  nothing else removes it, and macOS empties the folder of what nobody has touched for about
+  three and a half days (`bash-shell-mark.sh`). While a file is there, the check's count of
+  "other commands of this session" in the same span is one too high for it.
+- **A command that left its own group is ended by its own process id,** which it keeps for as
+  long as the runner has not collected it. What it started outside the group is not reached.
 
 What it does not cover:
 
-- A process that leaves the group (`setsid`, a job control shell) is not stopped and not seen.
-- A process this user may not signal (a setuid program) reads as nothing left.
-- A runner ended by KILL stops nothing. The command runs on with no limit, and the leftover
-  process check lists its group only once its leader has gone.
+- A process the command starts outside the group (`setsid`, a job control shell) is not stopped
+  and not seen.
+- A process this user may not signal (a setuid program) reads as nothing left, and when the
+  runner has taken its record away the leftover process check no longer ties it either.
+- A runner ended by KILL stops nothing. Neither does one ended by a signal a fault raises (ABRT,
+  BUS, FPE, ILL, SEGV, SYS, TRAP), which are left at their default. A runner stopped by STOP
+  keeps no limit while it is stopped, and applies it late when it goes on. In each case the
+  command runs on with no limit, and the leftover process check lists its group only once its
+  leader has gone.
+- A command that reads the terminal, as said above. With a python3 that has no `os.waitid` (the
+  developer tools' 3.9.6, read on 2026-11-27) the 124 line cannot say the command was suspended.
+- A `python3` that never answers the launcher's question holds the launcher for as long, with
+  nothing run. A `python3` built to answer the question and then do something else is not
+  caught: this is a time limit and no security boundary.
 - The gates do not read through it yet. The Slack drafts gate, the payload write gate and the
   area check judge a command behind it as they judge any program they do not know. Reading through
   lets commands run that are refused today, so it waits for Dan's sign off (claude-config#3578).
@@ -3541,7 +3590,10 @@ What it does not cover:
 
 Tests: `hooks/test-run-with-limit.sh`. The fixtures are real processes, and every case ends by
 checking none is left. The rule about signals is held by running the program with stand ins for
-the calls that signal and collect: a signal asked for after the collect is recorded and never sent.
+the calls that start, signal and collect. A stand in sends a signal only to a child it saw the
+program start and has not seen collected; any other signal asked for is recorded and never sent.
+No changed copy of the runner is ever run: a case stands in for what is around the program (the
+system's answers, the clock, the record step) and never takes a protection out of it.
 
 ### An agent getting past the checks, and a report that says it did not
 
