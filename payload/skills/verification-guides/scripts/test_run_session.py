@@ -7,7 +7,16 @@ a run is the supervisor's own lock, and VERIFICATION_TIME_SCALE=0 (the poll dela
 VERIFICATION_DEADLINE_SCALE=0 (the run deadline) make those immediate where a test needs them.
 
 Serve must stop on every path, so every way a run can end is driven here: a normal stop, a ready
-command that never succeeds, serve dying by itself, the deadline, and the supervisor killed outright.
+command that never succeeds, serve dying by itself, the deadline, the supervisor killed outright, the
+caller going away while the run is starting or once it is up, and a stop that hangs.
+
+No test may leave a process behind (the #3807 review). Every run a test starts is tied to the test
+process by a lifeline, every stand in that holds a supervisor waits on a lock the test process
+alone holds, and the stand ins for serve and the suite the last class starts read a pipe only the
+test writes, so each ends when the test process does, however that went. The one exception is on
+purpose: the run the last class starts with NO lifeline can be tied to nothing, and its bound is a
+shortened deadline. Where a fault cannot be had without a race, a stand in blocks the thing waited
+on; no test sleeps to give a fault time to happen.
 """
 
 import contextlib
@@ -16,11 +25,13 @@ import fcntl
 import io
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -134,6 +145,62 @@ def wait_not_running(program, limit_s=20):
         time.sleep(0.05)
 
 
+def stop_limit(rdir):
+    """How long the product itself allows the stop of the run in `rdir`, which is what a test waits
+    for one: a shorter guess reads a correct stop on a loaded Mac as a hung one (the #3807 review)."""
+    with open(os.path.join(rdir, "areas.json")) as f:
+        return run_session.stop_wait_s(json.load(f)["timeouts"])
+
+
+def wait_for_file(path, limit_s):
+    """Wait on the condition, the file being there, and return what it holds, or None at the limit."""
+    deadline = time.monotonic() + limit_s
+    while True:
+        try:
+            with open(path) as f:
+                return f.read()
+        except FileNotFoundError:
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.05)
+
+
+def wait_group_empty(pgid, limit_s=30):
+    """Wait on the condition, no live member in the process group, and return those left at the limit."""
+    deadline = time.monotonic() + limit_s
+    while True:
+        left = live_members(pgid)
+        if not left or time.monotonic() >= deadline:
+            return left
+        time.sleep(0.05)
+
+
+# A stand in for a program the supervisor runs, written into a folder put first on its PATH. The
+# first call of it is HELD: it says which process it is, then waits for a lock the test holds, and
+# only then does the real program's work. The lock is released when the test lets go of it and also
+# when the test process is gone, however it went, so a held stand in can never outlive its test.
+HELD_FIRST = r'''#!%(python)s
+import fcntl, os, sys
+fake = os.environ["FAKE_DIR"]
+try:
+    os.mkdir(os.path.join(fake, "%(name)s-held"))
+except FileExistsError:
+    pass  # only the first call is held
+else:
+    said = os.path.join(fake, "%(name)s-held", "pid")
+    with open(said + ".tmp", "w") as f:
+        f.write(str(os.getpid()))
+    os.rename(said + ".tmp", said)
+    %(before)s
+    with open(os.path.join(fake, "hold.lock")) as lock:
+        fcntl.flock(lock, fcntl.LOCK_SH)
+%(then)s
+'''
+# The sandbox the monitor would run its canaries and serve under, standing in where a test must not
+# depend on what this Mac's real one reports: it drops `-f <profile>` and runs the command as it is.
+FAKE_SANDBOX = '#!/bin/sh\nshift 2\nexec "$@"\n'
+
+
 class RunFixture(unittest.TestCase):
     """The throwaway repository and the helpers both test classes use; it holds no tests."""
 
@@ -148,6 +215,7 @@ class RunFixture(unittest.TestCase):
         os.mkfifo(os.path.join(self.fake, "ready.fifo"))
         git(self.repo, "init", "-q")
         self.started = []
+        self.held = None
         # Every run a test starts is tied to this process (claude-config#3682): it holds the write
         # end, and when it dies, killed with its whole suite included, each run's supervisor sees the
         # pipe end and stops its run. tearDown's stop never runs in a suite killed outright.
@@ -155,7 +223,32 @@ class RunFixture(unittest.TestCase):
 
     lifeline = True
 
+    def hold(self):
+        """Take the lock every held stand in waits for. It is this process's alone, so it is let go
+        by let_go(), by tearDown, and by the system when this process is gone."""
+        self.held = os.open(os.path.join(self.fake, "hold.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(self.held, fcntl.LOCK_EX)
+
+    def let_go(self):
+        if self.held is not None:
+            os.close(self.held)
+            self.held = None
+
+    def stand_in(self, name, text):
+        """Write an executable stand in named `name` into the folder path_first() puts on the PATH."""
+        folder = os.path.join(self.fake, "bin")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, name)
+        with open(path, "w") as f:
+            f.write(text)
+        os.chmod(path, 0o755)
+        return path
+
+    def path_first(self):
+        return os.path.join(self.fake, "bin") + os.pathsep + os.environ.get("PATH", "")
+
     def tearDown(self):
+        self.let_go()  # before the stops below: a supervisor a stand in holds cannot finish one
         for rid in self.started:
             subprocess.run(self.cli("stop", rid), capture_output=True, text=True, env=self.env())
         if self.tie:
@@ -286,6 +379,9 @@ class RunSessionTests(RunFixture):
         s = self.run_cli("stop", rid)
         self.assertEqual(s.returncode, 0, s.stderr)
         self.assert_fully_stopped(self.receipt(rid), "stop")
+        # Serve left by itself on the SIGTERM the stop sent it. A supervisor that started serve with
+        # the stop signals blocked hands serve that block, and then has to kill it (the #3807 review).
+        self.assertEqual(self.receipt(rid)["serve_exit"], 0, "serve did not end on the SIGTERM it was sent")
 
         again = self.run_cli("drive", rid, "--area", "invoices", "--", "open", "/")
         self.assertNotEqual(again.returncode, 0)
@@ -323,7 +419,8 @@ class RunSessionTests(RunFixture):
         rid = json.loads(r.stdout)["receipt_id"]
         with open(os.path.join(self.fake, "serve.pid")) as f:
             os.kill(int(f.read()), signal.SIGKILL)
-        run_session.wait_for_supervisor(os.path.join(self.home, "receipts", rid), timeout_s=30)
+        rdir = os.path.join(self.home, "receipts", rid)
+        run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
         rec = self.receipt(rid)
         self.assert_fully_stopped(rec, "serve_exited")
         self.assertEqual(rec["serve_exit"], -signal.SIGKILL)
@@ -331,7 +428,8 @@ class RunSessionTests(RunFixture):
     def test_the_deadline_stops_serve(self):
         r = self.start(self.commit(ready="true"), scale="0", deadline="0")
         rid = self.only_receipt_id()
-        run_session.wait_for_supervisor(os.path.join(self.home, "receipts", rid), timeout_s=30)
+        rdir = os.path.join(self.home, "receipts", rid)
+        run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
         self.assert_fully_stopped(self.receipt(rid), "deadline")
         if r.returncode != 0:
             self.assertIn("serve-stopped", r.stderr)
@@ -367,6 +465,141 @@ class RunSessionTests(RunFixture):
         s = self.run_cli("stop", rid)
         self.assertEqual(s.returncode, 0, s.stderr)
         self.assert_fully_stopped(self.receipt(rid), "stop")
+
+    @unittest.skipIf(sys.platform != "darwin", "UNMEASURED, not passed: the monitor whose start holds the"
+                     " supervisor here only starts on macOS")
+    def test_a_caller_that_goes_while_the_run_is_starting_is_acted_on_once_serve_is_recorded(self):
+        # The supervisor is held inside the egress monitor's start, before serve exists, by a report
+        # stream that says nothing until the test lets it go. A stop acted on there would interrupt
+        # the start of a child, which leaves that child running with nothing recorded to stop it by
+        # (the #3807 review). So the stop must wait until serve's pid and group are in the receipt.
+        self.stand_in("log", HELD_FIRST % {
+            "python": sys.executable, "name": "log", "then": "",
+            "before": 'print("Filtering the log data using the fake predicate", flush=True)'})
+        self.hold()
+        self.extra_env = {"VERIFICATION_EGRESS_LOG": os.path.join(self.fake, "bin", "log"),
+                          "VERIFICATION_EGRESS_SANDBOX": self.stand_in("sandbox-exec", FAKE_SANDBOX)}
+        # egress_s is how long the monitor waits on that stream by itself: long, so only the test ends the hold.
+        self.doc_over = {"timeouts": {"ready_s": 20, "ready_interval_s": 1, "max_run_s": 3600, "stop_s": 10,
+                                      "egress_s": 120}}
+        sha = self.commit()
+        starting = subprocess.Popen(self.cli("start", "--repo", self.repo, "--sha", sha, "--areas", "invoices"),
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env(),
+                                    pass_fds=self.tie[:1])
+        self.addCleanup(starting.communicate)
+        self.assertTrue(wait_for_file(os.path.join(self.fake, "log-held", "pid"), 120),
+                        "the supervisor never started its report stream")
+        rid = self.only_receipt_id()
+        self.started.append(rid)
+        rdir = os.path.join(self.home, "receipts", rid)
+        self.assertIsNone(self.receipt(rid)["serve_pid"], "serve was started before the monitor was")
+        self.cut_lifeline()
+        self.assertEqual(wait_for_file(os.path.join(rdir, "stop-reason"), 120), "caller_gone",
+                         "the supervisor never saw its caller go")
+        self.let_go()  # the stream ends, the monitor gives up, and the supervisor goes on to start serve
+        try:
+            run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
+        except v.VerificationError as e:
+            self.fail("a stop asked for during the start was never acted on: %s" % e)
+        rec = self.receipt(rid)
+        self.assertIsNotNone(rec["serve_pid"], "the stop was acted on before serve's pid and group were"
+                             " recorded, so it interrupted the supervisor while it was starting: %s" % rec)
+        self.assertEqual(rec["serve_pgid"], rec["serve_pid"])
+        self.assertEqual(rec["stopped_by"], "caller_gone", rec)
+        self.assertEqual(wait_group_empty(rec["serve_pgid"]), [], "serve outlived the stop")
+        self.assertTrue(rec["worktree_removed"], rec)
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+
+    def test_a_second_stop_signal_does_not_interrupt_the_stop_already_under_way(self):
+        # The supervisor is held at the first thing a stop signal makes it do, reading why it was
+        # asked to stop: the reason file is a FIFO here, so that read waits for this test to write
+        # it. A second signal landing there used to end the read with the reason never taken, and
+        # the run was recorded as a supervisor error (the #3807 review).
+        r = self.start(self.commit())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["receipt_id"]
+        rdir = os.path.join(self.home, "receipts", rid)
+        rec = self.receipt(rid)
+        fifo = os.path.join(rdir, "stop-reason")
+        os.mkfifo(fifo)
+        try:
+            run_session.request_stop(rdir, "stop")
+            # Wait on the condition, the supervisor having the reason open to read: only then can
+            # this end be opened without blocking (ENXIO until a reader is there).
+            deadline, w = time.monotonic() + stop_limit(rdir), None
+            while w is None and time.monotonic() < deadline:
+                try:
+                    w = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError as e:
+                    if e.errno != errno.ENXIO:
+                        raise
+                    time.sleep(0.05)
+            self.assertIsNotNone(w, "the supervisor never came to read why it was asked to stop")
+            try:
+                self.assertTrue(run_session.supervisor_alive(rdir))
+                # The second stop signal, to the pid the supervisor's held lock vouches for. It is
+                # sent BEFORE the reason is written, so it reaches a supervisor still in that read.
+                os.kill(rec["supervisor_pid"], signal.SIGTERM)
+                os.write(w, b"stop")
+            finally:
+                os.close(w)
+        finally:
+            # Whatever went wrong above, no supervisor is left waiting for a reason nobody will
+            # write: this opens the FIFO as a writer whether or not a reader is there yet.
+            rw = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+            os.write(rw, b"stop")
+            os.close(rw)
+        try:
+            run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
+        except v.VerificationError as e:
+            self.fail("the supervisor did not finish its stop: %s" % e)
+        self.assert_fully_stopped(self.receipt(rid), "stop")
+        with open(os.path.join(rdir, "supervisor.log")) as f:
+            self.assertNotIn("Traceback", f.read(), "the second signal broke out of the stop")
+
+    def test_a_stop_that_hung_is_cut_off_once_the_caller_is_gone(self):
+        # The state process 77733 was left in on 2026-11-26 (claude-config#3820): a stop was asked
+        # for, the supervisor began it and never finished. Here the stop hangs because the first ps
+        # the supervisor runs, to see whether serve's group is empty, is held by this test.
+        self.stand_in("ps", HELD_FIRST % {"python": sys.executable, "name": "ps", "before": "pass",
+                                          "then": 'os.execv("/bin/ps", ["ps"] + sys.argv[1:])'})
+        self.hold()
+        # The scale makes a supervisor whose caller is gone give the stop no time at all before it
+        # cuts the run off: this stop can never finish, so nothing is lost by not waiting for it.
+        self.extra_env = {"PATH": self.path_first(), "VERIFICATION_STOP_LIMIT_SCALE": "0"}
+        r = self.start(self.commit())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["receipt_id"]
+        rdir = os.path.join(self.home, "receipts", rid)
+        rec = self.receipt(rid)
+        run_session.request_stop(rdir, "stop")
+        held = wait_for_file(os.path.join(self.fake, "ps-held", "pid"), stop_limit(rdir))
+        self.assertTrue(held, "the supervisor's stop never reached the ps this test holds")
+        self.assertTrue(run_session.supervisor_alive(rdir))
+        self.assertIsNone(self.receipt(rid)["stopped_at"])
+        self.cut_lifeline()
+        try:
+            run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
+        except v.VerificationError as e:
+            self.fail("a stop that hung was not ended once the caller of its run was gone: %s" % e)
+        done = self.receipt(rid)
+        self.assertEqual(done["stopped_by"], "caller_gone", done)
+        self.assertIn("cut off", done["stop_detail"])
+        self.assertIn("a stop asked for earlier (stop)", done["stop_detail"])
+        # A run that was cut off is never given a measured verdict, clean least of all.
+        self.assertEqual(done["egress"]["verdict"], "unmeasured", done["egress"])
+        self.assertIn("cut off", done["egress"]["why"])
+        self.assertIsNone(done["egress"].get("measured_to"))
+        self.assertEqual(done["stop_command_exit"], 0, "the project's stop command, which the hung stop had run")
+        self.assertTrue(done["worktree_removed"], done)
+        self.assertFalse(os.path.exists(rec["worktree"]), "worktree left behind")
+        self.assertEqual(wait_group_empty(rec["serve_pgid"]), [], "serve's group outlived the cut off")
+        if rec.get("egress_monitor_pgid"):
+            self.assertEqual(wait_group_empty(rec["egress_monitor_pgid"]), [], "the report stream outlived the cut off")
+        # The supervisor is gone, and so is the ps it was waiting on, which was in no recorded group
+        # but in the supervisor's own.
+        self.assertEqual(wait_gone([rec["supervisor_pid"], int(held)]), [], "left behind by the cut off")
+        self.assertFalse(os.path.exists(os.path.join(rdir, "egress-beat")), "the beat program's copy was left")
 
     def test_stop_recovers_when_the_supervisor_was_killed_outright(self):
         r = self.start(self.commit())
@@ -800,7 +1033,8 @@ class NativeRunTests(RunFixture):
     def test_the_deadline_still_ends_a_native_run(self):
         self.start(self.commit(**self.native), deadline="0")
         rid = self.only_receipt_id()
-        run_session.wait_for_supervisor(os.path.join(self.home, "receipts", rid), timeout_s=30)
+        rdir = os.path.join(self.home, "receipts", rid)
+        run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
         rec = self.receipt(rid)
         self.assertEqual(rec["stopped_by"], "deadline", rec)
         self.assertTrue(rec["worktree_removed"])
@@ -812,7 +1046,8 @@ class NativeRunTests(RunFixture):
         self.assertEqual(r.returncode, 0, r.stderr)
         rid = json.loads(r.stdout)["receipt_id"]
         self.cut_lifeline()
-        run_session.wait_for_supervisor(os.path.join(self.home, "receipts", rid), timeout_s=60)
+        rdir = os.path.join(self.home, "receipts", rid)
+        run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
         rec = self.receipt(rid)
         self.assertEqual(rec["stopped_by"], "caller_gone", rec)
         self.assertTrue(rec["worktree_removed"])
@@ -980,24 +1215,271 @@ class StartSetupFailureTests(RunFixture):
         self.assert_abandoned("start_error", "No space left on device")
 
 
+TIED_CHILD = ("import signal, sys\n"
+              "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+              "print('up', flush=True)\n"
+              "sys.stdin.read()\n")
+IN_PROCESS_LIMIT_S = 120  # how long a stop or a cut off run inside this process is waited for: a limit, never a wait
+
+
+class Uncollectable:
+    """Stands in for serve's Popen where serve cannot be collected, the state the stop of process
+    77733 was left in (claude-config#3820). A wait with a limit runs out at once, without sleeping;
+    a wait with none blocks until the test lets it go, as that stop blocked for good."""
+
+    def __init__(self, real):
+        self.pid = real.pid
+        self.returncode = None
+        self.let_go = threading.Event()
+        self.waits = []
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        if timeout is None:
+            self.let_go.wait()
+            return self.returncode
+        raise subprocess.TimeoutExpired("serve", timeout)
+
+
+class MonitorThatSaysClean:
+    """Stands in for the egress monitor: asked for its verdict, it would call the run clean."""
+
+    proc = None
+
+    def __init__(self):
+        self.asked = 0
+
+    def finish(self):
+        self.asked += 1
+        return {"verdict": "clean", "why": "nothing outside the allowed hosts was reached", "monitor": "a stand in"}
+
+
+class CutOffTests(RunFixture):
+    """A stop that cannot finish is cut off, and the receipt says so (the #3807 review).
+
+    These call the stop inside this process, on a receipt folder written here, so that the thing a
+    stop waits on can be a stand in that never comes. The processes standing in for serve and the
+    report stream each read a pipe only this process writes, so they end when it does; each is in a
+    session of its own, as the real ones are, and ignores SIGTERM. Nothing waits a fixed time.
+    """
+
+    lifeline = False
+
+    def setUp(self):
+        super().setUp()
+        quiet = contextlib.redirect_stderr(io.StringIO())  # a cut off says so on stderr, the supervisor's log
+        self.said = quiet.__enter__()
+        self.addCleanup(quiet.__exit__, None, None, None)
+
+    def child(self):
+        p = subprocess.Popen([sys.executable, "-c", TIED_CHILD], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             start_new_session=True)
+        self.addCleanup(self.end_child, p)
+        self.assertEqual(p.stdout.readline(), b"up\n", "the stand in process did not start")
+        return p
+
+    def end_child(self, p):
+        if p.poll() is None:  # still this process's own child, so the pid is its and nobody else's
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+        p.stdin.close()
+        p.stdout.close()
+
+    def a_run_on_disk(self, **over):
+        """A receipt folder as a supervisor leaves it in the middle of a run. Returns its path."""
+        rdir = os.path.join(self.home, "receipts", "20260101T000000Z-0000000-abcdef")
+        wt = os.path.join(rdir, "worktree")
+        os.makedirs(wt)
+        with open(os.path.join(rdir, "areas.json"), "w") as f:
+            json.dump({"commands": {"stop": 'echo ran >> "%s"' % os.path.join(self.fake, "stop-ran")},
+                       "timeouts": {"stop_s": 1, "egress_s": 1}}, f)
+        rec = dict(receipt_id=os.path.basename(rdir), repo=self.repo, worktree=wt, stopped_at=None,
+                   stopped_by=None, stop_detail=None, serve_pid=None, serve_pgid=None, egress_monitor_pgid=None,
+                   egress={"verdict": "unmeasured", "why": run_session.EGRESS_WHY})
+        rec.update(over)
+        run_session.update_receipt(rdir, **rec)
+        return rdir
+
+    def on_disk(self, rdir):
+        with open(os.path.join(rdir, "receipt.json")) as f:
+            return json.load(f)
+
+    def stops_ran(self):
+        try:
+            with open(os.path.join(self.fake, "stop-ran")) as f:
+                return len(f.readlines())
+        except FileNotFoundError:
+            return 0
+
+    def test_a_killed_serve_that_cannot_be_collected_ends_the_stop_as_cut_off(self):
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid, egress_monitor_pgid=stream.pid)
+        stuck = Uncollectable(serve)
+        self.addCleanup(stuck.let_go.set)
+        monitor = MonitorThatSaysClean()
+        returned = []
+        # KILLED_WAIT_S is how long a killed serve is waited for. The stand in's wait runs out at
+        # once whatever the limit, so the value only has to be one the stop passes on.
+        with mock.patch.object(run_session, "KILLED_WAIT_S", 7, create=True):
+            stop = threading.Thread(target=lambda: returned.append(
+                run_session.do_stop(rdir, "stop", proc=stuck, monitor=monitor)), daemon=True)
+            stop.start()
+            stop.join(IN_PROCESS_LIMIT_S)
+            self.assertFalse(stop.is_alive(), "the stop was still waiting, with no limit, for a killed serve it"
+                             " could not collect (it waited with limits %s)" % stuck.waits)
+        self.assertEqual(stuck.waits, [1, 7], "serve gets stop_s to end, then KILLED_WAIT_S once it is killed")
+        self.assertEqual(len(returned), 1, "the stop raised instead of ending the run")
+        rec = returned[0]
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertTrue(rec["stopped_at"])
+        self.assertEqual(rec["stopped_by"], "stop", rec)
+        self.assertIn("cut off", rec["stop_detail"])
+        self.assertIn("could not be collected", rec["stop_detail"])
+        # Never a measured verdict for a run that was cut off: the monitor is not even asked.
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+        self.assertIn("cut off", rec["egress"]["why"])
+        self.assertEqual(monitor.asked, 0, "the monitor was asked for a verdict on a run that was cut off")
+        # Serve and the report stream are ended by the groups the receipt recorded, and serve is
+        # collected without its Popen, so the receipt says truthfully how it ended.
+        self.assertEqual(rec["serve_exit"], -signal.SIGKILL, rec)
+        self.assertEqual(wait_group_empty(serve.pid), [], "serve's group outlived the cut off")
+        self.assertEqual(wait_group_empty(stream.pid), [], "the report stream's group outlived the cut off")
+        self.assertEqual(rec["serve_survivors"], [])
+        self.assertEqual((rec["stop_command_exit"], self.stops_ran()), (0, 1), "the project's stop command runs once")
+        self.assertTrue(rec["worktree_removed"], rec)
+        self.assertFalse(os.path.exists(rec["worktree"]))
+
+    def test_a_cut_off_runs_the_projects_stop_command_when_the_stop_never_got_to_it(self):
+        serve = self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid)
+        rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished", proc=serve)
+        self.assertEqual((rec["stop_command_exit"], self.stops_ran()), (0, 1))
+        self.assertEqual(rec["stopped_by"], "caller_gone", rec)
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+        self.assertEqual(rec["serve_exit"], -signal.SIGKILL, rec)
+        self.assertEqual(wait_group_empty(serve.pid), [])
+        self.assertTrue(rec["worktree_removed"], rec)
+
+    def test_a_stop_that_finishes_after_the_run_was_cut_off_does_not_rewrite_the_receipt(self):
+        cut = {"verdict": "unmeasured", "why": "the run was cut off"}
+        rdir = self.a_run_on_disk(stopped_at="2026-01-01T00:00:00Z", stopped_by="caller_gone",
+                                  stop_detail="the stop did not finish and the run was cut off", egress=cut)
+        rec = run_session.do_stop(rdir, "stop", monitor=MonitorThatSaysClean())
+        for got in (rec, self.on_disk(rdir)):
+            self.assertEqual(got["egress"], cut, "a run that was cut off was given a verdict afterwards")
+            self.assertEqual((got["stopped_by"], got["stopped_at"]), ("caller_gone", "2026-01-01T00:00:00Z"))
+
+    def test_a_cut_off_after_the_run_ended_changes_nothing_and_signals_nothing(self):
+        serve = self.child()
+        clean = {"verdict": "clean", "why": "nothing outside the allowed hosts was reached"}
+        rdir = self.a_run_on_disk(stopped_at="2026-01-01T00:00:00Z", stopped_by="stop", egress=clean,
+                                  serve_pid=serve.pid, serve_pgid=serve.pid)
+        before = self.on_disk(rdir)
+        rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone", proc=serve)
+        self.assertEqual(rec, before)
+        self.assertEqual(self.on_disk(rdir), before)
+        self.assertIsNone(serve.poll(), "a run that had already ended was signalled again")
+        self.assertEqual(self.stops_ran(), 0)
+
+    def test_cutting_off_leaves_within_its_limit_even_when_the_receipt_cannot_be_written(self):
+        rdir = self.a_run_on_disk()
+        lock = open(os.path.join(rdir, "receipt.lock"), "a")
+        self.addCleanup(lock.close)
+        fcntl.flock(lock, fcntl.LOCK_EX)  # the receipt's own lock, held: the cut off cannot write its ending
+        left = threading.Event()
+        cut = threading.Thread(target=run_session.cut_off_and_leave, daemon=True,
+                               args=(rdir, "caller_gone", "its caller was gone"),
+                               kwargs={"limit_s": 0.05, "leave": left.set})
+        cut.start()
+        self.assertTrue(left.wait(IN_PROCESS_LIMIT_S), "the cut off never left though its limit had passed")
+        self.assertIsNone(self.on_disk(rdir)["stopped_at"])
+        lock.close()
+        cut.join(IN_PROCESS_LIMIT_S)
+        self.assertFalse(cut.is_alive())
+
+    def test_a_stop_reason_that_cannot_be_written_still_stops_the_run(self):
+        # A full disk when the lifeline ends: the watcher used to die there, and the run lived on to
+        # its deadline (the #3807 review). The stop must still be asked for, and still read as
+        # caller_gone though no reason file says so.
+        rdir = self.a_run_on_disk()
+        r, w = os.pipe()
+        os.close(w)
+        self.addCleanup(os.close, r)
+        gone, finished, woken = threading.Event(), threading.Event(), []
+        finished.set()  # the stop that follows finishes at once: this test is about the asking
+        with mock.patch.object(run_session, "record_stop_reason", side_effect=DISK_FULL):
+            run_session.watch_lifeline(rdir, r, gone, finished, 60, lambda: (None, None),
+                                       wake=lambda: woken.append(True))
+        self.assertEqual(woken, [True], "the supervisor was never told to stop")
+        self.assertTrue(gone.is_set())
+        self.assertIn("No space left on device", self.said.getvalue())
+        self.assertEqual(run_session.requested_reason(rdir, "caller_gone" if gone.is_set() else "stop"), "caller_gone")
+
+    def test_a_supervisor_whose_stop_finishes_in_time_is_not_cut_off(self):
+        rdir = self.a_run_on_disk()
+        r, w = os.pipe()
+        os.close(w)
+        self.addCleanup(os.close, r)
+        gone, finished, woken, left = threading.Event(), threading.Event(), [], []
+        finished.set()
+        run_session.watch_lifeline(rdir, r, gone, finished, 0, lambda: (None, None),
+                                   wake=lambda: woken.append(True), leave=lambda: left.append(True))
+        self.assertEqual((woken, left), ([True], []))
+        self.assertIsNone(self.on_disk(rdir)["stopped_at"], "a run whose stop had finished was cut off")
+        with open(os.path.join(rdir, "stop-reason")) as f:
+            self.assertEqual(f.read(), "caller_gone")
+
+
 # A test suite, as payload/hooks/test-skill-python-tests.sh runs one: this process builds the
-# fixture the tests above use, starts a run through it exactly as they do, says what it started, and
-# then waits to be killed. argv: the scripts folder, then "tied" (the fixture's lifeline in place, as
-# every test above has it) or "untied" (no lifeline, as every real run Dan's sessions start has it).
+# fixture the tests above use, starts runs through it exactly as they do, says what it started, and
+# then waits to be killed. argv: the scripts folder, then one word for each run it is to hold, "tied"
+# (the fixture's lifeline in place, as every test above has it) or "untied" (no lifeline, as every
+# real run Dan's sessions start has it).
+#
+# It is itself tied to the test that started it (the #3807 review): it waits by reading its input,
+# a pipe only that test writes, so when that test is gone, however it went, the read ends and this
+# suite stops what it started and leaves. Killed, as the tests below kill it, it does none of that.
+# An untied run can be tied to nothing, which is what it is: its one bound is a shortened deadline.
+UNTIED_DEADLINE_SCALE = "0.25"  # of the fixture's 3600 seconds: 15 minutes, many times a slow test
 SUITE = r'''
-import json, os, signal, sys
+import json, os, subprocess, sys
 sys.dont_write_bytecode = True
 sys.path.insert(0, sys.argv[1])
 import test_run_session as t
-f = t.RunFixture()
-f.lifeline = sys.argv[2] == "tied"
-f.setUp()
-r = f.start(f.commit())
-print(json.dumps({"base": os.path.dirname(f.repo), "home": f.home, "code": r.returncode,
-                  "out": r.stdout, "err": r.stderr}), flush=True)
-while True:
-    signal.pause()
+held, said = [], []
+for word in sys.argv[2:]:
+    f = t.RunFixture()
+    f.lifeline = word == "tied"
+    f.setUp()
+    held.append(f)
+    r = f.start(f.commit(), deadline="1" if f.lifeline else t.UNTIED_DEADLINE_SCALE)
+    said.append({"base": os.path.dirname(f.repo), "home": f.home, "code": r.returncode,
+                 "out": r.stdout, "err": r.stderr})
+print(json.dumps(said), flush=True)
+sys.stdin.read()
+ended = []
+for f in held:
+    for rid in f.started:
+        subprocess.run(f.cli("stop", rid), capture_output=True, text=True, env=f.env())
+        ended.append(f.receipt(rid))
+print(json.dumps(ended), flush=True)  # its folders go when it leaves, so it says how each run ended
 '''
+SUITE_START_LIMIT_S = 600  # how long a suite may take to bring its runs up: a limit, never a wait
+
+
+def read_line(pipe, limit_s):
+    """One line from a pipe, waited for no longer than limit_s. Returns the line and None, or what
+    there was of one and why there is no more: the writer ended, or the limit passed."""
+    got, deadline = b"", time.monotonic() + limit_s
+    while not got.endswith(b"\n"):
+        left = deadline - time.monotonic()
+        if left <= 0 or not select.select([pipe], [], [], left)[0]:
+            return got, "it said nothing more within %ss" % limit_s
+        chunk = os.read(pipe.fileno(), 65536)
+        if not chunk:
+            return got, "it ended"
+        got += chunk
+    return got, None
 
 
 def alive(pid):
@@ -1032,31 +1514,45 @@ class SuiteStoppedAsAGroupTests(unittest.TestCase):
     command line (L1011), and nothing waits a fixed time (L290).
     """
 
-    def run_suite(self, tie):
-        suite = subprocess.Popen([sys.executable, "-B", "-c", SUITE, HERE, tie], stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE, start_new_session=True, text=True)
+    def start_suite(self, *ties):
+        """Start a suite that holds one run for each word in `ties`. Returns the suite and, for each
+        run in that order, its receipt folder and its receipt as it stood once the run was up."""
+        suite = subprocess.Popen([sys.executable, "-B", "-c", SUITE, HERE] + list(ties), stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         self.addCleanup(self.end_suite, suite)
-        line = suite.stdout.readline()  # the suite prints once its run is up, or dies saying why
-        self.assertTrue(line, "the suite printed nothing: %s" % suite.stderr.read() if suite.poll() is not None else "")
-        said = json.loads(line)
-        self.addCleanup(shutil.rmtree, said["base"], True)
-        self.assertEqual(said["code"], 0, said["err"])
-        rid = json.loads(said["out"])["receipt_id"]
-        rdir = os.path.join(said["home"], "receipts", rid)
-        with open(os.path.join(rdir, "receipt.json")) as f:
-            rec = json.load(f)
-        self.addCleanup(self.stop_run, said["home"], rid, rec)
-        self.assertTrue(run_session.supervisor_alive(rdir), "the run was not up when the suite said it was")
-        os.killpg(suite.pid, signal.SIGKILL)  # stopped as a group, the way a cut short push gate does
-        suite.wait()
-        return rdir, rec
+        # The suite prints once its runs are up, or dies saying why. The wait for that has a limit,
+        # so a start that hangs fails this test and can never hang it (the #3807 review).
+        line, why = read_line(suite.stdout, SUITE_START_LIMIT_S)
+        if why:
+            self.kill_suite(suite)
+            self.fail("the suite did not say what it started (%s); it said: %r %s"
+                      % (why, line, suite.stderr.read().decode(errors="replace")[-2000:]))
+        runs = []
+        for said in json.loads(line):
+            self.addCleanup(shutil.rmtree, said["base"], True)
+            self.assertEqual(said["code"], 0, said["err"])
+            rid = json.loads(said["out"])["receipt_id"]
+            rdir = os.path.join(said["home"], "receipts", rid)
+            with open(os.path.join(rdir, "receipt.json")) as f:
+                rec = json.load(f)
+            self.addCleanup(self.stop_run, said["home"], rid, rec)
+            self.assertTrue(run_session.supervisor_alive(rdir), "the run was not up when the suite said it was")
+            runs.append((rdir, rec))
+        return suite, runs
 
-    def end_suite(self, suite):
+    def kill_suite(self, suite):
+        """Stop the suite as a group, the way a cut short push gate does."""
         if suite.poll() is None:
             os.killpg(suite.pid, signal.SIGKILL)
         suite.wait()
-        suite.stdout.close()
-        suite.stderr.close()
+
+    def end_suite(self, suite):
+        self.kill_suite(suite)
+        for pipe in (suite.stdin, suite.stdout, suite.stderr):
+            try:
+                pipe.close()
+            except OSError:
+                pass  # its reader is gone: there is nothing left to flush to
 
     def stop_run(self, home, rid, rec):
         """Stop the run by its receipt (which signals only the supervisor whose lock is held), then
@@ -1070,28 +1566,69 @@ class SuiteStoppedAsAGroupTests(unittest.TestCase):
             if pgid:
                 self.assertEqual(live_members(pgid), [], "process group %s outlived the stop" % pgid)
 
-    def test_a_run_ends_when_the_suite_that_started_it_is_stopped_as_a_group(self):
-        rdir, rec = self.run_suite("tied")
+    def on_disk(self, rdir):
+        with open(os.path.join(rdir, "receipt.json")) as f:
+            return json.load(f)
+
+    def assert_ended_by_its_lifeline(self, rdir, rec):
         try:
-            run_session.wait_for_supervisor(rdir, timeout_s=60)
+            run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
         except v.VerificationError as e:
             self.fail("the supervisor outlived the suite that started it: %s" % e)
-        with open(os.path.join(rdir, "receipt.json")) as f:
-            done = json.load(f)
+        done = self.on_disk(rdir)
         self.assertEqual(done["stopped_by"], "caller_gone", done)
         self.assertEqual(wait_gone([rec["serve_pid"]]), [], "serve outlived the supervisor that stopped it")
         self.assertEqual(live_members(rec["serve_pgid"]), [], "serve's group outlived the stop")
         self.assertTrue(done["worktree_removed"], done)
 
+    def test_a_run_ends_when_the_suite_that_started_it_is_stopped_as_a_group(self):
+        suite, (run,) = self.start_suite("tied")
+        self.kill_suite(suite)
+        self.assert_ended_by_its_lifeline(*run)
+
     def test_a_run_with_no_lifeline_outlives_the_suite_that_started_it(self):
         # Every real run: start returns, and the run must keep serving for the drive and stop calls
         # that come in later processes, until stop, serve exiting or its deadline.
-        rdir, rec = self.run_suite("untied")
+        #
+        # Looking the moment the suite is dead proves nothing: a run wrongly tied to its caller would
+        # still be in the middle of stopping, with every sign of life (the #3807 review). So the suite
+        # holds a second run that IS tied, and this waits on the condition that one has ended by its
+        # lifeline, receipt written. Both runs lost the suite in the same instant, and by the time
+        # the tied one has finished a whole stop, an untied one that was going to react has: the
+        # first thing a lifeline that ends does is record why.
+        suite, (untied, tied) = self.start_suite("untied", "tied")
+        self.kill_suite(suite)
+        self.assert_ended_by_its_lifeline(*tied)
+        rdir, rec = untied
+        self.assertFalse(os.path.exists(os.path.join(rdir, "stop-reason")),
+                         "a run with no lifeline was asked to stop when its caller went")
         self.assertTrue(run_session.supervisor_alive(rdir), "a run with no lifeline ended with its caller")
         self.assertTrue(alive(rec["supervisor_pid"]))
         self.assertTrue(live_members(rec["serve_pgid"]), "serve ended with the caller of a run that has no lifeline")
-        with open(os.path.join(rdir, "receipt.json")) as f:
-            self.assertIsNone(json.load(f)["stopped_at"])
+        self.assertIsNone(self.on_disk(rdir)["stopped_at"])
+        # And it is still a run in every way: a later process stops it, and the receipt says `stop` did.
+        self.stop_run(os.path.dirname(os.path.dirname(rdir)), os.path.basename(rdir), rec)
+        self.assertEqual(self.on_disk(rdir)["stopped_by"], "stop")
+
+    def test_a_suite_whose_starter_is_gone_stops_the_run_it_held_and_leaves(self):
+        # The suite is not killed here. Its starter going away, which is all the death of this test
+        # would do to it, is its input ending: the untied run it holds would otherwise be left with
+        # nothing but its deadline (the #3807 review).
+        suite, ((rdir, rec),) = self.start_suite("untied")
+        limit = stop_limit(rdir) + 60  # read now: the suite's folders go with it
+        suite.stdin.close()
+        line, why = read_line(suite.stdout, limit)
+        self.assertIsNone(why, "the suite did not stop its run once the test that started it let go of it"
+                          " (%s); it said: %r" % (why, line))
+        (done,) = json.loads(line)
+        self.assertEqual((done["receipt_id"], done["stopped_by"]), (rec["receipt_id"], "stop"), done)
+        self.assertTrue(done["worktree_removed"], done)
+        try:
+            suite.wait(timeout=limit)
+        except subprocess.TimeoutExpired:
+            self.fail("the suite was still running after the test that started it let go of it")
+        self.assertEqual(wait_gone([rec["supervisor_pid"], rec["serve_pid"]]), [], "left behind by the suite")
+        self.assertEqual(live_members(rec["serve_pgid"]), [], "serve's group outlived the suite's stop")
 
 
 if __name__ == "__main__":

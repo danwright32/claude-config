@@ -119,7 +119,10 @@ started, became ready and stopped and why (`stop`, `ready_failed`, `serve_exited
 stamp, and `egress` (below). The three `start_` reasons mean setup failed before serve started, and
 `worktree_removed` says whether the worktree went: `start_failed` a named refusal, `start_error` any other error (a full disk, a
 failed copy), `start_interrupted` an interrupt. `stop_detail` carries the error itself and any
-cleanup step that also failed, which `start` reports too, as `start-cleanup-failed`.
+cleanup step that also failed, which `start` reports too, as `start-cleanup-failed`. A stop that
+could not finish is cut off (a killed serve that could not be collected, or a run whose caller was
+gone and whose stop was still going `stop`'s own wait later): `stop_detail` then says the run was
+cut off and why, and `egress` reads `unmeasured`, never a verdict.
 
 The receipt's `egress` is the verdict of the egress monitor, [scripts/egress.py](scripts/egress.py),
 which the run's supervisor starts before serve and settles after serve's whole process group is

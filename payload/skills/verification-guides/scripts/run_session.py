@@ -33,9 +33,26 @@ the supervisor's parent is always gone and a signal to the caller's process grou
 it. A caller that wants the run to end with it instead, a test suite above all (claude-config#3682),
 passes a LIFELINE: the read end of a pipe whose write end only it holds, named by
 VERIFICATION_LIFELINE_FD. The supervisor reads it, and when every holder of the write end is gone,
-killed outright or as a group included, the kernel ends the pipe and the supervisor stops the run as
-`stop` would, recorded as `caller_gone`. No pid is watched, so none can be recycled (L1011, L409).
-A run started without one, every run a session starts by the skill, is unchanged.
+killed outright or as a group included, the kernel ends the pipe and the supervisor stops the run,
+recorded as `caller_gone`. No pid is watched, so none can be recycled (L1011, L409). A run started
+without one, every run a session starts by the skill, has no lifeline and outlives its caller.
+
+A stop is never acted on while the supervisor is still starting its children. A stop signal that
+arrives before serve's pid and group and the report stream's group are in the receipt is held and
+acted on once they are, because a stop that interrupted the start of a child would leave that child
+running in a session of its own with nothing recorded to stop it by. The signals are held by the
+handler and never by blocking them: a blocked signal is inherited by every child started meanwhile,
+and serve would then never see the SIGTERM that stops it (measured, claude-config#3807).
+
+A stop that cannot finish is CUT OFF, in two places. Serve that is killed and still cannot be
+collected within KILLED_WAIT_S ends the stop there. And a supervisor whose caller is gone gives the
+stop stop_wait_s to finish, counted from when the lifeline ended and whether or not an earlier
+`stop` already stands, then ends the run itself from the lifeline's thread. Cutting off kills serve's
+group and the report stream's group by the ids the supervisor recorded, collects serve, runs the
+project's stop command if the stop had not, removes the worktree, and writes the receipt with the
+reason, a `stop_detail` saying the stop did not finish, and egress `unmeasured`: the monitor is never
+asked for a verdict on a run that was cut off. A run with no lifeline whose stop hangs anywhere else
+is still not ended by anything; `stop` reports it as supervisor-hung.
 
 One run per project at a time: the supervisor also holds a lock keyed by the checkout's path, so a
 second `start` is refused with the live run's receipt id rather than fighting it for the port.
@@ -52,11 +69,14 @@ its test connections, #3576) and nothing outside the allowed hosts was reached; 
 names what was; `unmeasured` says why the monitor could not see, a Mac that did not report every
 connection it was asked to among the reasons, and never passes for clean.
 
-Env: VERIFICATION_HOME (see verification.py). Two injectable clocks (L524), each a number of at
+Env: VERIFICATION_HOME (see verification.py). Three injectable clocks (L524), each a number of at
 least 0 that multiplies seconds, default 1: VERIFICATION_TIME_SCALE scales every poll delay (the
 ready interval, the wait for a stopped process group to empty), VERIFICATION_DEADLINE_SCALE scales
-the run's deadline. They are separate so a test can make the ready polls immediate without also
-firing the deadline.
+the run's deadline, and VERIFICATION_STOP_LIMIT_SCALE scales how long a supervisor whose caller is
+gone gives the stop before it cuts the run off. They are separate so a test can make the ready
+polls immediate without also firing the deadline, or cut off a stop it has hung without cutting
+off every other. The last cannot make a receipt read better: it only cuts a run off sooner, and a
+run that is cut off reads unmeasured.
 
 Exit codes are verification.py's: 0 ok, 2 usage, 3 not found, 4 refused, 5 busy, 8 the run failed.
 """
@@ -87,9 +107,19 @@ import verification as v  # noqa: E402
 EGRESS_WHY = "the run has not stopped yet, and its egress verdict is written when it does"
 EGRESS_RECOVERED = ("the supervisor was gone without stopping serve, and the egress monitor it ran went with"
                     " it, so this run's connections were not all seen")
+EGRESS_CUT_OFF = ("the run was cut off before its stop had finished (%s), and the egress monitor is never asked"
+                  " for a verdict on a run that was cut off, so this run's connections were not all seen")
 STOP_REASONS = ("stop", "ready_failed", "caller_gone")
 READY_ATTEMPT_MAX_S = 30
 GONE_POLL_S = 0.05
+KILLED_WAIT_S = 30  # how long serve is waited for once it has been killed, before the stop is cut off
+CUT_OFF_ROOM_S = 60  # how long cutting a run off may take, besides the project's stop command
+# One thread at a time decides how a run ended, and the first ending recorded is the one kept: a stop
+# that finishes after its run was cut off must not rewrite the receipt with a verdict.
+ENDING = threading.Lock()
+# What the project's stop command exited with, by receipt folder, once a stop in this process has
+# run it ("running" while it is), so that cutting the run off neither runs it twice nor skips it.
+STOP_COMMAND = {}
 
 
 class StopRequested(BaseException):
@@ -228,12 +258,13 @@ def request_stop(rdir, reason):
             return  # it exited between the lock check and the signal; the wait that follows sees it
 
 
-def requested_reason(rdir):
+def requested_reason(rdir, unrecorded="stop"):
+    """Why the stop was asked for, as recorded; `unrecorded` when no reason could be recorded."""
     try:
         with open(os.path.join(rdir, "stop-reason"), errors="replace") as f:
             reason = f.read().strip()
     except FileNotFoundError:
-        return "stop"
+        return unrecorded
     return reason if reason in STOP_REASONS else "stop"
 
 
@@ -321,9 +352,10 @@ def finish_egress(rdir, rec, monitor, egress_why):
     return {"verdict": "unmeasured", "why": egress_why, "monitor": egress.MONITOR}
 
 
-def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None):
-    """Stop serve, run the project's stop command, settle egress, remove the worktree, record it all."""
-    rec = read_receipt(rdir)
+def project_stop(rdir, rec, detail):
+    """Run the project's stop command in the run's worktree, unless a stop in this process already
+    has. Returns what it exited with (None when it was not run), the detail with anything that went
+    wrong added, and the project's stop_s."""
     doc = None
     try:
         with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
@@ -331,12 +363,41 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None)
     except (OSError, ValueError) as e:
         detail = (detail + "; " if detail else "") + "areas.json copy unreadable, project stop not run: %s" % e
     stop_s = (doc or {}).get("timeouts", {}).get("stop_s", v.TIMEOUT_DEFAULTS["stop_s"])
+    if rdir in STOP_COMMAND:
+        if STOP_COMMAND[rdir] == "running":
+            return None, (detail + "; " if detail else "") + "the project's stop command had not finished", stop_s
+        return STOP_COMMAND[rdir], detail, stop_s
     wt = rec.get("worktree") or os.path.join(rdir, "worktree")
     stop_exit = None
     if doc and os.path.isdir(wt):
+        STOP_COMMAND[rdir] = "running"
         stop_exit, out = run_project_command(doc["commands"]["stop"], wt, stop_s)
+        STOP_COMMAND[rdir] = stop_exit
         if stop_exit != 0:
             detail = (detail + "; " if detail else "") + "project stop exited %s: %s" % (stop_exit, out[-200:])
+    return stop_exit, detail, stop_s
+
+
+def record_ending(rdir, **fields):
+    """Write how a run ended, once. The first ending recorded is the one kept: a stop that finishes
+    after its run was cut off changes nothing, and gets the receipt as it stands."""
+    with ENDING:
+        rec = read_receipt(rdir)
+        if rec.get("stopped_at"):
+            return rec
+        return update_receipt(rdir, stopped_at=v.utc_now(), **fields)
+
+
+def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None, killed_wait_s=None):
+    """Stop serve, run the project's stop command, settle egress, remove the worktree, record it all.
+
+    Serve gets stop_s to end once it is asked to, and killed_wait_s (KILLED_WAIT_S when not given)
+    to be collected once it is killed. A serve that still cannot be collected ends the stop there
+    and the run is cut off (see cut_off): a wait with no limit at that point is a stop that never
+    returns, which is the state a supervisor was found in on 2026-11-26 (claude-config#3820)."""
+    rec = read_receipt(rdir)
+    stop_exit, detail, stop_s = project_stop(rdir, rec, detail)
+    wt = rec.get("worktree") or os.path.join(rdir, "worktree")
     pgid = rec.get("serve_pgid")
     serve_exit = None
     if proc is not None:
@@ -345,7 +406,12 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None)
             proc.wait(timeout=stop_s)
         except subprocess.TimeoutExpired:
             signal_group(proc.pid, signal.SIGKILL)
-            proc.wait()
+            limit = KILLED_WAIT_S if killed_wait_s is None else killed_wait_s
+            try:
+                proc.wait(timeout=limit)
+            except subprocess.TimeoutExpired:
+                return cut_off(rdir, reason, "serve (process %s) was killed and still could not be collected"
+                               " %ss later" % (proc.pid, limit), detail=detail, proc=proc, monitor=monitor)
         serve_exit = proc.returncode
     if pgid:
         signal_group(pgid, signal.SIGTERM)
@@ -355,9 +421,116 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None)
     survivors = live_members(pgid)
     egress_field = finish_egress(rdir, rec, monitor, egress_why or EGRESS_RECOVERED)
     removed = remove_worktree(rec["repo"], wt)
-    return update_receipt(rdir, stopped_at=v.utc_now(), stopped_by=reason, stop_detail=detail,
-                          serve_exit=serve_exit, stop_command_exit=stop_exit, worktree_removed=removed,
-                          serve_survivors=survivors, egress=egress_field)
+    return record_ending(rdir, stopped_by=reason, stop_detail=detail,
+                         serve_exit=serve_exit, stop_command_exit=stop_exit, worktree_removed=removed,
+                         serve_survivors=survivors, egress=egress_field)
+
+
+def collect(pid, limit_s):
+    """Collect a killed child of this process straight from the system, without its Popen. Returns
+    its exit as a Popen gives one (minus the signal that ended it), or None when it had been
+    collected already or was still not gone at the limit. A poll on the condition, with a limit."""
+    deadline = time.monotonic() + limit_s
+    while True:
+        try:
+            got, status = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            return None
+        if got == pid:
+            return os.waitstatus_to_exitcode(status)
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(GONE_POLL_S)
+
+
+def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None, collect_s=None):
+    """End a run whose stop cannot finish, and record that it was cut off (claude-config#3682, #3807).
+
+    Only a supervisor calls this: from the stop itself when a killed serve cannot be collected, or
+    from the lifeline's thread when its caller is gone and the stop has not finished. It ends
+    serve's group and the report stream's group by the ids the supervisor recorded, in the receipt
+    or in the Popen it still holds, and never by matching a command (L1011). It collects serve
+    straight from the system, since the lock inside serve's Popen may be the very thing the stop is
+    stuck on. It runs the project's stop command if the stop had not, and removes the worktree.
+
+    The receipt then says the run was cut off and why, and its egress is unmeasured. The monitor is
+    never asked for a verdict here: a run that was cut off was not watched to its end, so no reading
+    of it may pass for a measurement. A run whose ending is already recorded is left exactly as it
+    is, and nothing is signalled."""
+    with ENDING:
+        rec = read_receipt(rdir)
+        if rec.get("stopped_at"):
+            return rec
+        print("verification: cutting the run off: %s" % why, file=sys.stderr, flush=True)
+        stream = getattr(monitor, "proc", None)
+        serve_pgid = rec.get("serve_pgid") or (proc.pid if proc is not None else None)
+        for pgid in dict.fromkeys((serve_pgid, rec.get("egress_monitor_pgid"),
+                                   stream.pid if stream is not None else None)):
+            if pgid:
+                signal_group(pgid, signal.SIGKILL)
+        serve_exit = None
+        if proc is not None:
+            serve_exit = proc.returncode
+            if serve_exit is None:
+                serve_exit = collect(proc.pid, KILLED_WAIT_S if collect_s is None else collect_s)
+        detail = (detail + "; " if detail else "") + "the stop did not finish and the run was cut off: %s" % why
+        stop_exit, detail, _ = project_stop(rdir, rec, detail)
+        try:
+            survivors = live_members(serve_pgid)
+        except v.VerificationError as e:  # ps failed: said, and the ending still recorded
+            survivors, detail = None, detail + "; whether serve's group is empty could not be read: %s" % e
+        egress_why = EGRESS_CUT_OFF % why
+        left = egress.remove_beat_program(rdir)
+        if left:
+            egress_why += "; " + left
+        removed = remove_worktree(rec["repo"], rec.get("worktree") or os.path.join(rdir, "worktree"))
+        return update_receipt(rdir, stopped_at=v.utc_now(), stopped_by=reason, stop_detail=detail,
+                              serve_exit=serve_exit, stop_command_exit=stop_exit, worktree_removed=removed,
+                              serve_survivors=survivors,
+                              egress={"verdict": "unmeasured", "why": egress_why, "monitor": egress.MONITOR})
+
+
+def leave_now():
+    """End this supervisor at once, and with it whatever it was itself still waiting on (a ps, a git,
+    the project's stop command): those run in the supervisor's own process group, which it leads."""
+    try:
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
+    if os.getpgrp() == os.getpid():
+        os.killpg(os.getpid(), signal.SIGKILL)
+    os._exit(1)
+
+
+def cut_off_and_leave(rdir, reason, why, proc=None, monitor=None, limit_s=None, leave=leave_now):
+    """cut_off from a thread other than the supervisor's main one, and then the end of the process:
+    the main thread is stuck in the stop, so nothing else would ever end it.
+
+    The cut off has a limit of its own, limit_s (the project's stop_s and CUT_OFF_ROOM_S when not
+    given), because it writes the receipt and runs ps and git, any of which can block. At the limit
+    the process leaves anyway with no ending recorded, and a later `stop` finds the supervisor gone
+    and records the run as recovered, which is unmeasured too."""
+    if limit_s is None:
+        limit_s = run_timeouts(rdir)["stop_s"] + CUT_OFF_ROOM_S
+    timer = threading.Timer(limit_s, leave)
+    timer.daemon = True
+    timer.start()
+    try:
+        cut_off(rdir, reason, why, proc=proc, monitor=monitor)
+    except Exception:
+        traceback.print_exc()
+    finally:
+        timer.cancel()
+        leave()
+
+
+def run_timeouts(rdir):
+    """The run's timeouts from its copy of areas.json, or the defaults where that cannot be read."""
+    try:
+        with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
+            return dict(v.TIMEOUT_DEFAULTS, **json.load(f)["timeouts"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return dict(v.TIMEOUT_DEFAULTS)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -367,24 +540,49 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None)
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 
 
-def watch_lifeline(rdir, fd):
-    """Stop this supervisor once every holder of its caller's lifeline is gone (claude-config#3682).
+def wake_main():
+    signal.pthread_kill(threading.main_thread().ident, signal.SIGTERM)
+
+
+def watch_lifeline(rdir, fd, gone, finished, limit_s, held, wake=wake_main, leave=leave_now):
+    """End this supervisor's run once every holder of its caller's lifeline is gone (claude-config#3682).
 
     The read ends only when the kernel ends the pipe, which it does when the last holder of the
     write end dies, however it died. Anything written down the pipe is not a goodbye and is read
-    past. The stop goes the way `stop`'s does, a recorded reason and then a signal, so the run ends
-    by the one path every stop takes; the signal is aimed at the main thread, where the wait it
-    must interrupt is, and is not sent when an earlier stop request already stands. The thread is
-    born with the stop signals blocked, so one sent from outside always lands on the main thread."""
+    past. Then `gone` is set and the stop is asked for as `stop` asks: a recorded reason and then a
+    signal, aimed at the main thread, where the wait it must interrupt is. The signal is not sent
+    when an earlier stop request already stands. A reason that cannot be written (a full disk) does
+    not save the run: the signal is sent all the same, and `gone` is what says why. The thread is
+    born with the stop signals blocked, so one sent from outside always lands on the main thread.
+
+    Asking is not the end of it. The main thread sets `finished` when its stop is done, and this
+    waits limit_s for that, whoever asked for the stop and whenever. A stop still not finished then
+    is one that hung, as one asked for at 8:13 PM ET on 2026-11-26 did for good (claude-config#3820),
+    and the run is cut off from here (see cut_off) with whatever `held` says the supervisor holds,
+    its serve and its monitor, and this process ends."""
     try:
         while os.read(fd, 4096):
             pass
         why = "every holder of the lifeline it was started with is gone"
     except OSError as e:
         why = "its lifeline could not be read (%s: %s)" % (type(e).__name__, e)
+    gone.set()
     print("verification: supervisor stopping the run: %s" % why, file=sys.stderr, flush=True)
-    if record_stop_reason(rdir, "caller_gone"):
-        signal.pthread_kill(threading.main_thread().ident, signal.SIGTERM)
+    try:
+        first = record_stop_reason(rdir, "caller_gone")
+    except OSError as e:
+        first = True
+        print("verification: the reason for the stop could not be recorded (%s: %s); stopping all the same"
+              % (type(e).__name__, e), file=sys.stderr, flush=True)
+    if first:
+        wake()
+    if finished.wait(limit_s):
+        return
+    asked = requested_reason(rdir, "caller_gone")
+    what = "the stop that followed" if asked == "caller_gone" else "a stop asked for earlier (%s)" % asked
+    proc, monitor = held()
+    cut_off_and_leave(rdir, "caller_gone", "its caller was gone and %s had not finished %ss later"
+                      % (what, round(limit_s, 1)), proc=proc, monitor=monitor, leave=leave)
 
 
 def supervise(rdir, repo_lock_fd, pipe_w, lifeline_fd=None):
@@ -392,64 +590,94 @@ def supervise(rdir, repo_lock_fd, pipe_w, lifeline_fd=None):
     sup = open(os.path.join(rdir, "supervisor.lock"), "a", errors="replace")
     fcntl.flock(sup, fcntl.LOCK_EX)
 
+    # A stop signal is acted on once, and never while children are being started (the #3807 review).
+    # Until every child's pid and group is in the receipt it is only noted, and acted on when they
+    # are: a stop that broke into the start of a child would leave that child running in a session
+    # of its own with nothing recorded to stop it by. It is held HERE, in the handler, and not by
+    # blocking the signals, because a blocked signal is inherited by every child started meanwhile
+    # and serve would then never see the SIGTERM that stops it. And the first stop to be acted on
+    # has every later one ignored before it raises, so none can break into the stop under way.
+    gate = {"recorded": False, "asked": False}
+
     def on_signal(signum, frame):
+        if not gate["recorded"]:
+            gate["asked"] = True
+            return
+        for s in STOP_SIGNALS:
+            signal.signal(s, signal.SIG_IGN)
         raise StopRequested()
 
     for s in STOP_SIGNALS:
         signal.signal(s, on_signal)
-    proc, reason, detail, monitor = None, "supervisor_error", None, None
+    proc, monitor = None, None
+    outcome = None  # (why the run ended, the detail), bound once and whole so a signal cannot split it
+    gone, finished = threading.Event(), threading.Event()
     try:
-        if lifeline_fd is not None:
-            signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)  # inherited by the thread made next
-            try:
-                threading.Thread(target=watch_lifeline, args=(rdir, lifeline_fd), daemon=True).start()
-            finally:
-                signal.pthread_sigmask(signal.SIG_UNBLOCK, STOP_SIGNALS)
-        with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
-            doc = json.load(f)
-        rec = read_receipt(rdir)
-        # The egress monitor starts BEFORE serve, so it covers serve's whole life, and is proved live
-        # by its canary first. One that cannot start leaves serve running unwrapped and the verdict
-        # unmeasured with its reason: a run is never refused for it, and never called clean.
-        monitor = egress.Monitor(rdir, rec["receipt_id"], doc["egress"]["allow"], doc["timeouts"]["egress_s"])
-        unavailable = monitor.start()
-        wrap = None if unavailable else [monitor.sandbox, "-f", monitor.profile]
-        update_receipt(rdir, egress_sandbox=wrap,
-                       egress_monitor_pgid=None if unavailable else monitor.proc.pid)
-        if v.serves(doc):
-            log = open(os.path.join(rdir, "serve.log"), "ab")
-            proc = subprocess.Popen((wrap or []) + ["/bin/sh", "-c", doc["commands"]["serve"]], cwd=rec["worktree"],
-                                    start_new_session=True, stdin=subprocess.DEVNULL, stdout=log,
-                                    stderr=subprocess.STDOUT)
-            update_receipt(rdir, supervisor_pid=os.getpid(), serve_pid=proc.pid, serve_pgid=proc.pid)
-        else:
-            # Every area is native and nothing is served (claude-config#2951): the supervisor still
-            # holds the run, its lock and its egress monitor, until a stop or the deadline.
-            update_receipt(rdir, supervisor_pid=os.getpid())
-        os.write(pipe_w, b"ok\n")
-        os.close(pipe_w)
-        pipe_w = None
-        if proc is None:
-            time.sleep(deadline_s(doc))  # a stop signal raises StopRequested out of the sleep
-            reason = "deadline"
-        else:
-            try:
-                exited = proc.wait(timeout=deadline_s(doc))
-                reason, detail = "serve_exited", "serve exited by itself with %s" % exited
-            except subprocess.TimeoutExpired:
-                reason = "deadline"
+        try:
+            with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
+                doc = json.load(f)
+            rec = read_receipt(rdir)
+            if lifeline_fd is not None:
+                # A caller that is gone gets the patience a caller that is there has: `stop` itself
+                # waits stop_wait_s for a supervisor before it calls it hung.
+                limit = stop_wait_s(doc["timeouts"]) * time_scale("VERIFICATION_STOP_LIMIT_SCALE")
+                signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)  # inherited by the thread made next
+                try:
+                    threading.Thread(target=watch_lifeline, daemon=True,
+                                     args=(rdir, lifeline_fd, gone, finished, limit, lambda: (proc, monitor))).start()
+                finally:
+                    signal.pthread_sigmask(signal.SIG_UNBLOCK, STOP_SIGNALS)  # before any child is started
+            # The egress monitor starts BEFORE serve, so it covers serve's whole life, and is proved live
+            # by its canary first. One that cannot start leaves serve running unwrapped and the verdict
+            # unmeasured with its reason: a run is never refused for it, and never called clean.
+            monitor = egress.Monitor(rdir, rec["receipt_id"], doc["egress"]["allow"], doc["timeouts"]["egress_s"])
+            unavailable = monitor.start()
+            wrap = None if unavailable else [monitor.sandbox, "-f", monitor.profile]
+            update_receipt(rdir, egress_sandbox=wrap,
+                           egress_monitor_pgid=None if unavailable else monitor.proc.pid)
+            if v.serves(doc):
+                log = open(os.path.join(rdir, "serve.log"), "ab")
+                proc = subprocess.Popen((wrap or []) + ["/bin/sh", "-c", doc["commands"]["serve"]],
+                                        cwd=rec["worktree"], start_new_session=True, stdin=subprocess.DEVNULL,
+                                        stdout=log, stderr=subprocess.STDOUT)
+                update_receipt(rdir, supervisor_pid=os.getpid(), serve_pid=proc.pid, serve_pgid=proc.pid)
+            else:
+                # Every area is native and nothing is served (claude-config#2951): the supervisor still
+                # holds the run, its lock and its egress monitor, until a stop or the deadline.
+                update_receipt(rdir, supervisor_pid=os.getpid())
+            gate["recorded"] = True  # every child is recorded: a stop may be acted on from here
+            if gate["asked"]:
+                on_signal(None, None)
+            os.write(pipe_w, b"ok\n")
+            os.close(pipe_w)
+            pipe_w = None
+            if proc is None:
+                time.sleep(deadline_s(doc))  # a stop signal raises StopRequested out of the sleep
+                outcome = ("deadline", None)
+            else:
+                try:
+                    exited = proc.wait(timeout=deadline_s(doc))
+                    outcome = ("serve_exited", "serve exited by itself with %s" % exited)
+                except subprocess.TimeoutExpired:
+                    outcome = ("deadline", None)
+        except StopRequested:
+            if outcome is None:  # else the run had already ended another way, and that stands
+                outcome = (requested_reason(rdir, "caller_gone" if gone.is_set() else "stop"), None)
+        except Exception as e:
+            outcome = ("supervisor_error", "%s: %s" % (type(e).__name__, e))
+            traceback.print_exc()
+        finally:
+            for s in STOP_SIGNALS:
+                signal.signal(s, signal.SIG_IGN)
     except StopRequested:
-        reason = requested_reason(rdir)
-    except Exception as e:
-        reason, detail = "supervisor_error", "%s: %s" % (type(e).__name__, e)
-        traceback.print_exc()
+        pass  # the one stop that is ever acted on, landing after the wait was over: `outcome` stands
     finally:
-        for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-            signal.signal(s, signal.SIG_IGN)
         if pipe_w is not None:
             os.close(pipe_w)  # start reads end of file with no "ok": the supervisor failed
+        reason, detail = outcome or ("supervisor_error", None)
         do_stop(rdir, reason, proc=proc, detail=detail, monitor=monitor,
                 egress_why="the supervisor stopped (%s) before the egress monitor existed" % reason)
+        finished.set()
     return 0
 
 
