@@ -81,8 +81,11 @@ run's numbers:
 - How many pairs read as sent as drafted, and how many sit at 0.98 and over in the count by
   likeness.
 - Of the pairs changed but not heavily rewritten, how many one difference in how a read writes a
-  message would make the same, and how many are none of these. Say that this is a ceiling: he also
-  changes punctuation and adds and cuts lines, so some of those are his edits.
+  message would make the same, and how many are none of these. Say what that number is and is not.
+  It counts the pairs that one of seven known differences would explain. It is not a limit in either
+  direction: some of those pairs are still his edits, since he also changes punctuation and adds and
+  cuts lines, and a pair in none of these can still be no edit of his, when a read writes a message
+  another way that nobody has listed.
 - That the first count, on the issue on 2026-11-24, read about one draft in five as sent as
   drafted, that the first run of this reader read 6 of 184, and that nobody yet knows why. The
   likeliest reason is that the two counts meant different things by it. Until that is settled, a
@@ -133,7 +136,10 @@ question holds, in this order:
    written.
 2. What it rests on: "N of M pairs, in T threads", and how many of those N pairs one difference in
    how a read is written would make the same, from the reader's line for that kind under "Of the
-   pairs under each kind": "up to K of those N may be no edit of yours".
+   pairs under each kind", in these words, with the numbers put in: "K of those N would be the same
+   with one of seven known differences in how Slack reads a message back set aside. The other N
+   minus K differ some other way: an edit of yours, or a read difference nobody has listed." Never
+   call K a limit on how many may be no edit of his: with K at 0, all N can still be no edit of his.
 3. The example pair, the draft and then what he sent, each as the script printed it.
 
 The options, in this order:

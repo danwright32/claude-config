@@ -27,9 +27,13 @@ same with one more thing set aside (what is inside angle brackets, how a link is
 punctuation, emoji, a trailing "(edited)", the last or the first line read back), and the same count
 for each kind a rule can be offered for. Counts only. It is there because the first real run read
 far fewer pairs as sent as drafted than the issue's measurement did, and counts alone could not say
-why. Each count is an UPPER BOUND on what a difference in how a read is written could explain, and
-no more: he also changes punctuation and adds and cuts lines, and a heavily rewritten pair is not
-looked at.
+why. Each count says how many pairs ONE of those listed differences would explain, and it is a
+limit in neither direction. A pair it explains can still be his edit: he also changes punctuation
+and adds and cuts lines. A pair it does not explain can still be no edit of his: a read can write
+a message another way that is not listed here (a phone number read back as a link, a link read
+back as its words and its address, two lines of the connector's over the text), and twelve drafts
+posted word for word then read as twelve changed openings with 0 of 12 explained (the third review
+of pull request 3848, M1). A heavily rewritten pair is not looked at.
 
 --likeness adds how many pairs sit in each band of likeness (the same; 0.98 and over; 0.95; 0.90;
 0.80; 0.70; under 0.70, which is heavily rewritten), and how many posts were the last message of
@@ -971,10 +975,13 @@ def main():
             print("  the same once %s: %d" % (name, counts[name]))
         print("  none of these: %d" % counts["none of these"])
         # The same count for each kind a rule can be offered for, so the number a rule rests on is never
-        # put to Dan without how much of it a difference in how a read is written could account for. It is
-        # an upper bound and no more: punctuation, an emoji and a first or last line are also edits he makes.
-        print("Of the pairs under each kind, how many one of the things above would make the same (an upper bound "
-              "on how many may be no edit of his: he also changes punctuation, and adds and cuts lines)")
+        # put to Dan without how much of it one of the LISTED differences would account for. It is a limit
+        # in neither direction: punctuation, an emoji and a first or last line are also edits he makes, and
+        # a difference that is not listed leaves a pair in "none of these" that is no edit of his.
+        print("Of the pairs under each kind, how many one of the things above would make the same. The rest of a "
+              "kind's pairs differ in some other way: an edit of his, or a difference in how a read is written "
+              "that is not listed above (a phone number read back as a link is one). Neither number is a limit on "
+              "how many are his edits: he also changes punctuation, and adds and cuts lines.")
         for kind in OFFERED:
             under = {(place, at) for place, at, _draft, _sent, _likeness in tally[kind]}
             print("  %s: %d of %s" % (kind, len(under & explained), plural(len(under), "pair")))

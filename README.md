@@ -6503,15 +6503,19 @@ pieces turn the edits he keeps making into written rules, each one his to accept
   counts, for the pairs changed but not heavily, how many would be the same with one more thing
   set aside (a name inside angle brackets, how a link is written, punctuation, emoji, a trailing
   edited mark, a last or first line), and the same for each kind a rule can be offered for. Each
-  is a ceiling on what a difference in how a read is written could explain, since he also changes
-  punctuation and adds and cuts lines. `--likeness` counts the pairs in each band of likeness (the
+  counts the pairs one of those seven listed differences would explain, and is a limit in neither
+  direction: a pair it explains can still be his edit, since he also changes punctuation and adds
+  and cuts lines, and a pair it does not explain can still be no edit of his, when a read writes a
+  message another way that is not listed (twelve drafts posted word for word, with a phone number
+  read back as a link, read as twelve changed openings with 0 of 12 explained). `--likeness` counts the pairs in each band of likeness (the
   same, 0.98 and over, 0.95, 0.90, 0.80, 0.70, under 0.70) and how many posts were the last
   message of the read their text came from.
 - **The offer**, the `draft-edit-review` skill. It runs the reader with `--differences` and
   `--likeness`, tells Dan the counts and, before any rule, the doubt set out in the last paragraph
   of this section, and asks one question for each recurring kind: the proposed rule in one
-  sentence, the pairs it rests on and how many of them a difference in how a read is written could
-  explain, one example pair, and Accept, Not now or Never offer this again. The sentence is run
+  sentence, the pairs it rests on, how many of them one of the listed read differences would
+  explain and that the rest are his edit or a read difference nobody has listed, one example pair,
+  and Accept, Not now or Never offer this again. The sentence is run
   through `/no-ai-tells` before that question, so the sentence he accepts is the sentence written,
   word for word. On Accept a second question asks where the rule goes (the no-ai-tells skill, the Slack
   section of the global `CLAUDE.md`, or the project's own file), and the session makes that edit

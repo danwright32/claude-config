@@ -28,6 +28,12 @@ text was not), "no_messages_field", "odd_id", "other_mentions" (a channel, a gro
 mention with a name added), "own_drafted", "own_added" and "own_every" (his own lines shaped like
 a label) and "alerts" (most messages, by somebody else, beginning and ending in such a line).
 "bands" is ten pairs whose likeness is known by construction, for the count by likeness.
+
+NOT seen either (the third review of pull request 3848): "phone" and "link_as_words" (a phone number
+read back as a link, and a link read back as its words and its address) and "two_lines" (two lines
+of the connector's over the text, the first not shaped like a label). Each is twelve drafts posted
+word for word that the reader still reads as twelve changed openings, with none of them under any
+of the differences it lists. They hold the wording of that count to what it measures.
 """
 import datetime
 import json
@@ -127,6 +133,8 @@ def thread_text(posts, layout):
             out.append(head + "Message TS: %s\n" % ts(seconds))
         elif first:                          # a label line nobody measured, right under the Message TS line
             out.append(head + "Message TS: %s\nThread TS: %s\n%s\n" % (ts(seconds), ts(posts[0][0]), text))
+        elif layout == "two_lines":          # TWO lines nobody measured over the text, the first not shaped like a label
+            out.append(head + "Message TS: %s\n(in thread)\nThread TS: %s\n%s\n" % (ts(seconds), ts(posts[0][0]), text))
         elif layout == "above":              # the text in place, and a line nobody measured above the Message TS line
             out.append(head + "Thread TS: %s\nMessage TS: %s\n%s\n" % (ts(posts[0][0]), ts(seconds), text))
         elif layout == "unlisted":           # a label that is in no fixed list, under the text and above the line
@@ -292,6 +300,42 @@ def word_for_word(folder, layout, wordless=0, fields=None, own="", alerts=0):
         r.thread(at, channel, parent, posts, layout, fields)
         at += 1000
     r.write(folder, "session-%s.jsonl" % layout)
+
+
+# A draft, and how a read might write the same message back, in a way that is NONE of the things
+# --differences sets aside. Neither was measured: the third review of pull request 3848 built both
+# to show that a pair --differences cannot explain can still be no edit of his.
+UNLISTED = {
+    # a phone number read back as a link to ring it
+    "phone": ("Ring 01632 960123 for the harbour office about gauge %d before the tide turns on Friday and the slipway shuts.",
+              "Ring <tel:01632960123|01632 960123> for the harbour office about gauge %d before the tide turns on Friday and the slipway shuts."),
+    # a link with words of its own read back as those words and then the address
+    "link_as_words": ("See <https://example.invalid/tides|the tide table> for gauge %d before the ferry leaves on Friday and the slipway shuts.",
+                      "See the tide table (https://example.invalid/tides) for gauge %d before the ferry leaves on Friday and the slipway shuts."),
+}
+
+
+def unlisted_difference(folder, which):
+    """Twelve drafts in three threads, each posted WORD FOR WORD, and each read back with one
+    difference in its first six words that --differences does not list. The truth is twelve sent as
+    drafted and no rule. The reader cannot see that: it reads twelve changed openings, and
+    --differences puts all twelve under "none of these"."""
+    r = Records()
+    draft, sent = UNLISTED[which]
+    at = 10000
+    for t in range(3):
+        parent = at
+        channel = "C0FIXTURE%02d" % (44 + t)
+        posts = [(parent, OTHER, "Thread %d about the tide gauge." % t)]
+        for k in range(4):
+            at += 100
+            r.draft(at, channel, parent, draft % k)
+            at += 100
+            posts.append((at, ME, sent % k))
+        at += 100
+        r.thread(at, channel, parent, posts)
+        at += 1000
+    r.write(folder, "session-%s.jsonl" % which)
 
 
 def no_messages_field(folder):
@@ -541,8 +585,10 @@ def main():
     elif which == "unknown":
         unknown(folder)
     elif which in ("wordforword", "body_first", "trailing", "labelled", "split", "some_labelled",
-                   "first_label", "some_first_label", "above", "unlisted"):
+                   "first_label", "some_first_label", "above", "unlisted", "two_lines"):
         word_for_word(folder, "thread" if which == "wordforword" else which)
+    elif which in UNLISTED:          # word for word, read back with a difference --differences does not list
+        unlisted_difference(folder, which)
     elif which == "most_wordless":   # six posts with no words beside five with them, in each thread
         word_for_word(folder, "thread", wordless=6)
     elif which == "pagination":      # the result's other fields hold text, one of them under a key in no list

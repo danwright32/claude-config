@@ -380,6 +380,23 @@ check "differences: no line over the text here" "the same once the first line of
 check "differences: and the one real edit is none of these" "none of these: 1" "$out"
 check_not "differences: counts only, no message text" "harbour" "$out"
 check_not "differences: nothing of it without the flag" "How the pairs changed" "$(run differences)"
+# What that count is NOT (third review, M1). Twelve drafts posted word for word, read back with a
+# difference the reader does not list: a phone number as a link, a link as its words and its address,
+# two lines of the connector's over the text. The reader cannot see that these are no edit of his. It
+# reads twelve changed openings and puts none of them under a listed difference, so "0 of 12" beside
+# that kind is no limit on how many are no edit of his: here all twelve are. The words say so.
+for f in phone link_as_words two_lines; do
+  fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }
+  out="$(run "$f" --differences)"
+  check "$f: twelve word for word posts still read as a recurring kind, which the reader cannot see" "the opening changed: 12 of 12 pairs, in 3 threads: recurring" "$out"
+  check "$f: none of the twelve is under a difference the reader lists" "  none of these: 12" "$out"
+  check "$f: so the count beside the kind is 0 of 12, though all twelve are no edit of his" "  the opening changed: 0 of 12 pairs" "$out"
+  check "$f: and the words over that count say the rest can be a read difference too" "The rest of a kind's pairs differ in some other way: an edit of his, or a difference in how a read is written that is not listed above" "$out"
+  check "$f: and that neither number is a limit" "Neither number is a limit on how many are his edits" "$out"
+  check_not "$f: the count is never called an upper bound" "upper bound" "$out"
+  check_not "$f: counts only, no message text" "slipway" "$out"
+done
+check_eq "the reader's own account no longer calls that count an upper bound or a ceiling" "0" "$(grep -c -i -e 'upper bound' -e 'ceiling' "$TOOL")"
 out="$(run some_wordless)"; rc=$?
 check_eq "some wordless: a few posts with no words are measured" "0" "$rc"
 check "some wordless: they are counted" "no text under the Message TS line: 3" "$out"

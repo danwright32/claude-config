@@ -241,7 +241,27 @@ check "in so many words: nobody yet knows why so few read as sent as drafted" "n
 check "with how many changed pairs a difference in how a read is written could explain" "how many one difference in how a read writes a message would make the same" "$body"
 check "and how many pairs sit in the top band of likeness" "how many sit at 0.98 and over in the count by likeness" "$body"
 check_eq "he is told before the first question" "1" "$(follows 'Before any rule is put to him, tell Dan the doubt over these counts' 'Ask one AskUserQuestion for each recurring kind')"
-check "each question says how many of its kind's pairs may be no edit of his" "how many of those N pairs one difference in how a read is written would make the same" "$body"
+check "each question says how many of its kind's pairs a listed read difference would explain" "how many of those N pairs one difference in how a read is written would make the same" "$body"
+# The third review's M1. That number was put to Dan as "up to K of those N may be no edit of yours",
+# and it is no such limit. Twelve drafts posted word for word, read back with a phone number written
+# as a link: the reader reads a recurring kind and prints 0 of 12 beside it, so the old sentence told
+# him none of the twelve was in doubt when all twelve were no edit of his. The sentence put to him
+# has to hold on exactly that output.
+mkdir -p "$WORK/m1/records/project"
+python3 -B "$HOOKS/draft-edit-fixtures/build.py" "$WORK/m1/records/project" phone
+out="$(env -u CLAUDE_HOME -u DRAFT_EDIT_REVIEW_STATE_DIR HOME="$WORK/m1" python3 -B "$DIFF" --records "$WORK/m1/records" --author U0FIXTUREA --differences --likeness 2>&1)"
+check "twelve word for word posts, a phone number read back as a link: the reader offers a kind" "the opening changed: 12 of 12 pairs, in 3 threads: recurring" "$out"
+check "and prints 0 of 12 beside it, so no sentence may read that number as a limit" "  the opening changed: 0 of 12 pairs" "$out"
+check_eq "the differences the reader lists are the seven the skill names" "7" "$(printf '%s\n' "$out" | grep '^  the same once ' | grep -c -v 'once formatting is set aside')"
+check "the question's sentence says what K counts" '"K of those N would be the same with one of seven known differences in how Slack reads a message back set aside.' "$body"
+check "and that the rest can be a read difference nobody has listed" 'The other N minus K differ some other way: an edit of yours, or a read difference nobody has listed."' "$body"
+check "and the skill says K is no limit, with the case that shows it" "Never call K a limit on how many may be no edit of his: with K at 0, all N can still be no edit of his." "$body"
+check "the doubt told before any rule says the same of the whole count" "It is not a limit in either direction" "$body"
+check "with both halves: a pair it explains can be his edit" "some of those pairs are still his edits, since he also changes punctuation and adds and cuts lines" "$body"
+check "and a pair it does not explain can be no edit of his" "a pair in none of these can still be no edit of his" "$body"
+check_not "the number is no longer put to him as up to K" "up to K of those N" "$body"
+check_not "nor called a ceiling" "ceiling" "$body"
+check_not "nor an upper bound" "upper bound" "$body"
 # The reader's own account and the skill say it together: when the share is explained, both change.
 check_eq "the reader's account still calls that share not explained, which is why the skill says so" "1" "$(grep -c 'That is not explained (see --likeness)' "$DIFF")"
 # Three sentences the feature rests on that no case held (second review, S6).
