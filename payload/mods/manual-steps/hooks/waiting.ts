@@ -98,35 +98,23 @@ const YOUR_STEP = /\byour (?:manual )?step\b/gi
 const notQuoted = (plain: string, at: number): boolean => !quotedOnLine(plain.slice(0, at))
 
 // #3842: on 2026-11-27 the permission check refused a call and the session handed Dan the step in
-// five wordings no phrase read. Each is named, so tools/steps-phrase-count.ts counts it by itself
-// over the session records with this file's own matcher, and each stays only while the turns it
-// catches hold steps for Dan (the counts: docs/mods-design.md "Manual steps").
-// "One step left for you.", "The one step left for you": a step counted or singled out. Counted
-// on 2026-11-27, the bare words "step left for you" were also said of none ("no manual step left
-// for you") and of an issue's title ("a step left for you after a refusal"), so neither is it.
+// five wordings no phrase read. A phrase stays only while the turns it catches hold steps for Dan,
+// so each was counted by itself with this file's own matcher (tools/steps-phrase-count.ts) over the
+// personal MacBook's 10,501 turns of 30 days, on 2026-11-27, and the two that caught steps are read
+// (the counts: docs/mods-design.md "Manual steps"). Not read, having been said in no turn there:
+// "Still yours:" (as first written it was said once, of two open questions), "needs you to set"
+// and a thing left "because my update was refused by the permission check". The turn a call is
+// refused in is held for the refusal itself, whatever its words (hooks/turn.ts).
+// "One step left for you.", "The one step left for you": a step counted or singled out. The bare
+// words "step left for you" were also said of none ("no manual step left for you") and of an
+// issue's title ("a step left for you after a refusal"), so neither is it.
 const STEP_LEFT_FOR_YOU = /\b(?:one|two|three|four|five|\d+|the (?:one|last|only)) (?:(?:more|manual|small|last) )?steps? left for you\b/gi
-// "Still yours: the row is on Waiting, and Status needs setting to Done", leading its sentence and
-// closed by its colon, so "the decision is still yours" is not it. Counted on 2026-11-27 it was
-// said once, of two open questions, so it counts only where what follows names a step, as
-// "waiting on you" must (#1613), or says that a thing needs setting, doing or the like.
-const STILL_YOURS = new RegExp(`${LEAD}still yours:`, 'gim')
-const NEEDS_DOING = /^[^.!?\n]{0,200}\bneeds? (?:setting|doing|running|applying|pasting|clicking|approving|entering|typing|signing)\b/i
-const stillYoursIsAStep = (plain: string, at: number, end: number): boolean =>
-  handsOverAStep(plain, at, end) || (notQuoted(plain, at) && NEEDS_DOING.test(plain.slice(end)))
 // "the one only you can do", naming one thing; never "something only you can do", said of a rule.
 const ONLY_YOU_CAN_DO = /\b(?:the|that|this|one) (?:(?:one|last|only|remaining) )?(?:one|step|thing|part) only you can do\b/gi
-// "The row still needs you to set Status to Done". Its own phrase beside NEEDS_YOU_TO, so it is
-// counted by itself; "Set" is still no word that begins a numbered step (Dan, 2026-11-27).
-const NEEDS_YOU_TO_SET = /\bneeds? you to set\b/gi
-// A thing left undone "because my update was refused by the permission check".
-const REFUSED_SO_LEFT = /\bbecause my [\w-]+(?: [\w-]+)? (?:was|were|got) (?:refused|denied|blocked) by (?:the |auto mode's )?(?:permission|safety) check\b/gi
-/** #3842's five, each by the name the count prints for it. */
+/** #3842's wordings the check reads, each by the name the count prints for it. */
 export const AFTER_REFUSAL: ReadonlyMap<string, RegExp> = new Map([
   ['step left for you', STEP_LEFT_FOR_YOU],
-  ['Still yours:', STILL_YOURS],
   ['the one only you can do', ONLY_YOU_CAN_DO],
-  ['needs you to set', NEEDS_YOU_TO_SET],
-  ['because my (call) was refused by the permission check', REFUSED_SO_LEFT],
 ])
 
 // #1811: numbered steps handed to Dan, a numbered line that begins with something a person does at a
@@ -179,7 +167,7 @@ const ALSO: ReadonlyMap<RegExp, (plain: string, at: number, end: number) => bool
   [NUMBERED, numberedTwice],
   [THEN_TELL_ME, dansNow],
   [CMD_S, dansNow],
-  ...[...AFTER_REFUSAL.values()].map(rx => [rx, rx === STILL_YOURS ? stillYoursIsAStep : notQuoted] as const),
+  ...[...AFTER_REFUSAL.values()].map(rx => [rx, notQuoted] as const),
 ])
 
 // Each says a step is Dan's to do. "waiting on you" never matches "waiting on your", and a step is
@@ -218,7 +206,7 @@ export const PHRASES: readonly RegExp[] = [
   THEN_TELL_ME,
   SAVE_FILE,
   CMD_S,
-  // #3842: the five wordings that handed Dan a step after a refused call.
+  // #3842: the wordings that handed Dan a step after a refused call and caught steps when counted.
   ...AFTER_REFUSAL.values(),
 ]
 

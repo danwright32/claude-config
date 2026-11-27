@@ -42,7 +42,7 @@ refused(){ printf '{"parentUuid":"u","isSidechain":%s,"promptId":"%s","type":"us
 STEPS=mcp__manual-steps__steps
 {
   # 1: a new phrase alone, nothing pinned: newly read, and the most it would newly hold.
-  prompt p1; said p1 'The row still needs you to set Status to Done: (link)'
+  prompt p1; said p1 'That closes every point except the one only you can do: set Status to Done at (link).'
   # 2: a call the permission check refused, and a reply that names no phrase: held for the refusal.
   prompt p2; called p2 Bash; refused p2 automode-blocked; said p2 'I checked the deploy and it is live.'
   # 3: refused, then the step pinned: answered.
@@ -52,16 +52,18 @@ STEPS=mcp__manual-steps__steps
   # 5: refused, and the one line: not held.
   prompt p5; refused p5 automode-blocked; said p5 'Nothing from the refusal is yours to do.'
   # 6: a new phrase beside one the check already read: said, not newly read.
-  prompt p6; said p6 'The deploy is waiting on you: run the migration command. The row also needs you to set Status to Done.'
+  prompt p6; said p6 'The deploy is waiting on you: run the migration command. It is the one only you can do.'
   # 7: a new phrase in a turn that pinned a step: newly read, held by nothing new.
   prompt p7; called p7 "$STEPS"; result p7 Pinned; said p7 'One step left for you, and it is on the card.'
   # 8: the kind only quoted inside a tool result, where a record holds it escaped: not a refusal.
   prompt p8; result p8 '{\"toolDenialKind\":\"automode-blocked\"}'; said p8 'I read the record.'
   # 9: a refused call and a new phrase in one turn: each counted, and counted as both.
-  # The issue's whole sentence: "Still yours:" counts only where a step follows it.
-  prompt p9; refused p9 automode-blocked; said p9 'Still yours: the to do list row is on Waiting, and Status needs setting to Done.'
+  prompt p9; refused p9 automode-blocked; said p9 'One step left for you. The to do list row is still on Waiting.'
   # 10: a subagent refused inside the main record: not this conversation's.
   prompt p10; refused p10 automode-blocked true; said p10 'The agent stopped.'
+  # 11: the three wordings of the issue the check does not read (said in no turn of the personal
+  # MacBook's 30 days, 2026-11-27): no phrase, so the turn is counted and nothing in it is.
+  prompt p11; said p11 'Still yours: Status needs setting to Done. The row still needs you to set it, because my update was refused by the permission check.'
 } > "$W/projects/one/s1.jsonl"
 # A subagent's own record, in its folder: never read.
 { prompt q1; refused q1 automode-blocked; said q1 'The row still needs you to set Status to Done.'; } > "$W/projects/one/s1/subagents/a.jsonl"
@@ -77,11 +79,13 @@ before="$(find "$W" -type f | sort | xargs cksum)"
 out="$(node "$TOOL" --projects "$W/projects" --where 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "the count runs, exit 0" ok || check "the count runs, exit 0" "exit=$code: $out"
 has "two records read, the old one and the subagent's passed over" "$out" "2 session records last written in 30 days read"
-has "ten turns, the one kept in both records counted once" "$out" "; 10 turns of the main conversation, 1 more kept in a second record and counted once."
-has "needs you to set: said in 2, newly read in 1, would newly hold 1" "$out" 'phrase "needs you to set": said in 2; newly read in 1; would newly hold at most 1.'
-has "step left for you: said in a turn that pinned a step, so it holds nothing new" "$out" 'phrase "step left for you": said in 1; newly read in 1; would newly hold at most 0.'
-has "Still yours: said in 1 and would hold 1" "$out" 'phrase "Still yours:": said in 1; newly read in 1; would newly hold at most 1.'
-has "a phrase said nowhere counts zero" "$out" 'phrase "the one only you can do": said in 0; newly read in 0; would newly hold at most 0.'
+has "eleven turns, the one kept in both records counted once" "$out" "; 11 turns of the main conversation, 1 more kept in a second record and counted once."
+has "the one only you can do: said in 2, newly read in 1, would newly hold 1" "$out" 'phrase "the one only you can do": said in 2; newly read in 1; would newly hold at most 1.'
+has "step left for you: said in 2, one of them in a turn that pinned a step, so it would newly hold 1" "$out" 'phrase "step left for you": said in 2; newly read in 2; would newly hold at most 1.'
+has "--where names the turn a phrase alone would hold" "$out" "  s1.jsonl turn 1"
+lacks "a wording the check does not read is not counted: Still yours" "$out" "Still yours"
+lacks "nor needs you to set" "$out" "needs you to set"
+lacks "nor because my update was refused" "$out" "because my"
 has "the refused call: 4 turns, 1 answered by a pin, 1 by the line, 2 held, 1 of them with a new phrase too" "$out" "a call the permission check refused: in 4 turns; answered by a steps tool call after it in 1; answered in words in 1; would be held once each: 2, of which 0 the check had already held for another reason and 1 a new phrase would hold too."
 has "--where names the record and the turn" "$out" "  s1.jsonl turn 2"
 has "--where names the turn held for both" "$out" "  s1.jsonl turn 9"
@@ -98,6 +102,7 @@ has "and its refused call" "$out" "a call the permission check refused: in 5 tur
 out="$(node "$TOOL" --projects "$W/empty" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "a folder holding no session record is counted as none, exit 0" ok || check "a folder holding no session record is counted as none, exit 0" "exit=$code"
 has "and says it read none" "$out" "0 session records last written in 30 days read"
+has "a phrase said nowhere counts zero" "$out" 'phrase "the one only you can do": said in 0; newly read in 0; would newly hold at most 0.'
 out="$(node "$TOOL" --projects "$W/missing" 2>&1)"; code=$?
 [ "$code" -eq 3 ] && check "a folder that cannot be read exits 3" ok || check "a folder that cannot be read exits 3" "exit=$code"
 has "and says nothing was counted" "$out" "so nothing was counted"

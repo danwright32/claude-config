@@ -2485,7 +2485,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   The session rightly did not send it again, then told him in eight replies that the row was his
   to set, and pinned nothing: none of its five wordings was a phrase the check read, and nothing
   tied a refused call to the card. Dan's answer that day was "Both". So the turn's end now judges
-  the refused call itself, whatever the reply says, and the five wordings are phrases as well.
+  the refused call itself, whatever the reply says, and the two of the five wordings that caught
+  steps when counted are phrases as well.
   The refusal is read from Claude Code's own session record, which the check already reads for the
   turn (`hooks/turn.ts`): the record of a refused call carries `toolDenialKind`, and only
   `automode-blocked`, the permission check's verdict, counts. `automode-unavailable` is the check
@@ -2512,17 +2513,23 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   records of 30 days, 10,491 turns: 19 turns held a call the permission check refused, 3 were
   answered by a call of the `steps` tool after it, and 16 would be held, once each, about one every
   two days. Read one by one, 3 of the 16 left Dan a step no card held (2 said so in prose), 9 left
-  him nothing and would be answered by the one line, and 4 could not be told from the turn. The
-  five wordings, as first written and then as kept (counts are turns; "newly held" is the most it
-  could be, since the card as it stood is not in the record):
+  him nothing and would be answered by the one line, and 4 could not be told from the turn. A
+  phrase stays only if what it catches are steps for Dan, so the five wordings were counted twice
+  that day: as first written, and again (7,603 records, 10,501 turns) after two were narrowed to
+  leave out what they had wrongly caught. Counts are turns, and "newly held" is the most it could
+  be, since the card as it stood is not in the record:
 
-  | Wording | Said in | Newly held | Read | Kept |
+  | Wording | First: said in, newly held | What those turns were | Then: said in, newly held | Read by the check |
   |---|---|---|---|---|
-  | "step left for you" | 3 | 1 | 1 said no step was left, 1 was an issue's title, 1 a real step already on the card | narrowed to a step counted or singled out ("One step left for you", "The one step left for you") |
-  | "Still yours:" | 1 | 1 | two open questions, no step | only where a step follows, as "waiting on you" must (#1613), or a thing "needs setting" or the like |
-  | "the one only you can do" | 2 | 2 | both steps for Dan | yes |
-  | "needs you to set" | 0 | 0 | never said | yes, on the wording of 2026-11-27 alone |
-  | "because my (call) was refused by the permission check" | 0 | 0 | never said; its turn holds a refused call anyway | yes, until the work MacBook is counted |
+  | "step left for you" | 3, 1 | 1 said no step was left, 1 was an issue's title, 1 a step for Dan already on the card | 1, 0 (narrowed to a step counted or singled out) | yes, as "One step left for you", "The one step left for you" |
+  | "the one only you can do" | 2, 2 | both steps for Dan (an app only he can quit and reopen, a command only he can type) | 2, 2 | yes |
+  | "Still yours:" | 1, 1 | two open questions, no step | 0, 0 (narrowed to where a step follows it) | no: it caught no step |
+  | "needs you to set" | 0, 0 | never said | 0, 0 | no: never said |
+  | "because my (call) was refused by the permission check" | 0, 0 | never said | 0, 0 | no: never said |
+
+  The three not read were all said on the work MacBook in the replies of 2026-11-27, which this
+  count cannot see. The turn a call is refused in is held for the refusal whatever its words, and
+  those replies also said "One step left for you", which is read.
 
   "Set" did not join the words that begin a numbered step (Dan, 2026-11-27): it also leads
   Claude's own plans, and the same list decides what a page of steps is.
