@@ -244,6 +244,27 @@ run_bash "python3 <<E${NL}x = 1 + $BS${NL}    2${NL}import poster${NL}E" "$FED"
 refused "and the same joined body importing a module that posts is refused"
 says "as the post it is" "$POSTS"
 
+# A dollar sign or a backquote in the end marker. Inside single quotes every shell takes the marker
+# as it is written (bash 3.2.57, sh and zsh 5.9 each ended `cat <<'E$'`, and the same with a
+# backquote, at that line: measured 2026-11-26 with a touch after each), and the gate reads it, so
+# the body is the program's. Main read neither: python3 fed an import of a module that posts that
+# way passed (measured the same day at f0c2aba6fd). Outside single quotes the gate does not read
+# the marker, and the refusal says so. It named any dollar sign or backquote as a cause, which one
+# in single quotes never is.
+for mark in 'E$' 'E`'; do
+  run_bash "python3 <<'$mark'${NL}import poster${NL}$mark" "$FED"
+  refused "python3 fed a module that posts by a heredoc whose single quoted marker is $mark is refused"
+  says "as the post it is: $mark" "$POSTS"
+  run_bash "python3 <<'$mark'${NL}import quiet${NL}$mark${NL}echo done" "$FED"
+  allowed "the same heredoc feeding a quiet module passes: $mark"
+done
+for open in 'E$' "E$BS\$"; do
+  run_bash "python3 <<$open${NL}import quiet${NL}E\$" "$FED"
+  refused "a program fed by a heredoc whose marker holds a dollar sign outside single quotes is refused: $open"
+  says "as a check it could not make: $open" "$COULD_NOT"
+  says "saying where a dollar sign is not read: $open" "the end marker holds a dollar sign or a backquote outside single quotes"
+done
+
 echo "slack drafts only: fed() ends a heredoc where the shells of this machine end it (claude-config#3497)"
 
 # fed() against the shells themselves (L58): each text is run in every shell found here, with cat

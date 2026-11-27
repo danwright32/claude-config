@@ -5463,7 +5463,8 @@ than one `<<` in the command, a marker whose first letters it reads and whose re
 opener line that ends in a backslash, a heredoc opened earlier on that line that cannot be read or
 never ends, and an unquoted body that no line ends and that holds a dollar sign or a backquote,
 which the shells expand. It reads a plain word, bare or in quotes (`word()` in that file is the
-whole rule); among those it does not read are a marker that holds a dollar sign or a backquote, one
+whole rule); among those it does not read are a marker that holds a dollar sign or a backquote
+outside single quotes (inside them every shell takes the marker as written, and so does it), one
 with a character outside quotes that is not a letter, a digit or one of `_ . , : / @ % + = ^ -`,
 and one whose quote never closes. The refusal says how to write the marker so that it is read.
 
@@ -5477,7 +5478,8 @@ on saying it is no body. An interpreter's imports and a send route's name are re
 a pipe from such a heredoc carries stays not worked out and refused, as before. Not read: the
 lines of a shell fed that way as commands (`bash <<\EOF` whose body runs a script that posts),
 what code fed to python3 that way runs beyond its imports, and a body whose marker holds a dollar
-sign or a backquote.
+sign or a backquote outside single quotes (`python3 <<"E$"` importing a module that posts passes,
+as it does on main).
 
 Since claude-config#2844 it also reads what a runner or a compiler runs without the command naming
 it as a script (`payload/hooks/lib/program-runs.py`): the script or module `python3 -m` runpy, pdb,

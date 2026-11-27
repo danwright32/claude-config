@@ -35,8 +35,8 @@ command's own line for it and no body, so `python3 <<\\E` importing a module tha
 now gives that line and then the body, where word() reads the marker and the end is certain, and
 goes on saying it is no body: an interpreter's imports and a send route's name are read there,
 what a pipe from such a heredoc carries stays not worked out, and a shell fed that way still has
-its lines read by nobody as commands. Where the marker is not read (a $ or a backquote in it)
-nothing is added.
+its lines read by nobody as commands. Where the marker is not read (a $ or a backquote in it
+outside single quotes, as in <<"E$") nothing is added.
 """
 import bisect
 import re
@@ -59,8 +59,9 @@ def word(s, i):
     """The heredoc opened at s[i] ("<<"), as (marker, strip_tabs, quoted): the word after it with
     its quotes taken off, whether a - follows the <<, and whether any part of the word is quoted,
     when the shells read the body as written. "" where no word follows, and None where the word
-    is one bash 3.2 and zsh are not known here to read alike: one holding a $, a backquote or a
-    line break, a character outside PLAIN that no quote holds, a quote that never closes, or no
+    is one bash 3.2 and zsh are not known here to read alike: one holding a $ or a backquote
+    outside single quotes (inside them both take the marker as written, and it is read), a line
+    break, a character outside PLAIN that no quote holds, a quote that never closes, or no
     character at all."""
     j, n = i + 2, len(s)
     strip = s.startswith("-", j)

@@ -12,7 +12,8 @@
 # so the walk does not vouch for the directory inside one, and a value that is a relative path was
 # then left as the word the script wrote, which names no file, so nothing was read. The same path
 # written out in the same function was read all along, against the directory the reader follows.
-# A value worked out is now read there too, in a second reading that can only refuse more.
+# A value worked out is now read there too, in a third reading, made after the two before it found
+# nothing, that can only refuse more.
 #
 # Kept apart from test-slack-drafts-only-gate-scripts.sh, which covers a script that posts, so that
 # suite does not grow (the precedent is test-slack-drafts-comment-start.sh); the helpers below are

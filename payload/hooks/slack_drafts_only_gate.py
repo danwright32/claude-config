@@ -1936,8 +1936,9 @@ def heredoc_why(line, one_line=False, opener=""):
     if opener == "marker":
         # Named by Judge.fed, the gate's own reading of what a heredoc feeds a program (#3497).
         return ("it feeds a program by a heredoc whose end the gate does not read, in the line `%s`: more "
-                "than one << stands in the command, or the end marker holds a dollar sign, a backquote, a "
-                "quote that never closes or another character the gate does not read in one, or the line "
+                "than one << stands in the command, or the end marker holds a dollar sign or a backquote "
+                "outside single quotes, a quote that never closes or another character the gate does not "
+                "read in one, or the line "
                 "ends in a backslash, or a heredoc opened earlier on the line cannot be read to its end, so "
                 "the gate cannot tell which lines the shell feeds the program. Write one << on the "
                 "command's last line, with the end marker as one plain word, in single quotes where "
