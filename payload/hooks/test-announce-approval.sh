@@ -921,6 +921,18 @@ r="$(helper_asks acme/widget "$(hash_file "$F")" 73)"
 check "R2 #3789 it approves nothing, and is settled as one whose transcript is gone" "$([[ "$r" == "no|unapproved|"* ]] && settled_as toolu_absent3 'transcript is gone' && echo ok || echo "$r $(cat "$STORE_USED/record.jsonl")")"
 r="$(helper_asks acme/widget "$(hash_file "$F")" 73)"
 check "#3789 and is not looked for again" "$([[ "$r" == "no|unapproved|"* && "$r" != *"could not be read back"* ]] && [ "$(kinds settled)" = 1 ] && echo ok || echo "$r")"
+# The same for a note that names its repository and file, taken while the transcript was there: once
+# the transcript is gone the picker can never be read, so it is settled and said once (review of
+# #3669, low 6). It was read back, and said as "could not be read back", on every call for ever.
+STORE_USED="$WORK/store-noted-gone-named"
+F="$(shown gone-named)"; T="$WORK/gone-named.jsonl"
+P="$(talk "$T" put acme/widget "$F")"
+r="$(note "$T" payload "$P" acme/widget "$F")"
+rm -f "$T"
+r2="$(helper_asks acme/widget "$(hash_file "$F")" 74)"
+check "R2 #3669 E a note naming its repository whose transcript is gone approves nothing, is said once and settled" "$([[ "$r" == "yes|" && "$r2" == "no|unapproved|"*"gone-named.jsonl, can never be read"* && "$r2" != *"could not be read back"* ]] && settled_as "$P" 'transcript is gone' && echo ok || echo "$r / $r2 $(cat "$STORE_USED/record.jsonl")")"
+r2="$(helper_asks acme/widget "$(hash_file "$F")" 74)"
+check "#3669 E and is neither read nor said again" "$([[ "$r2" == "no|unapproved|"* && "$r2" != *"can never be read"* && "$r2" != *"could not be read back"* ]] && [ "$(kinds settled)" = 1 ] && echo ok || echo "$r2")"
 STORE_USED="$WORK/store-noted-absent"
 F="$(shown absent-noted-2)"; T="$WORK/absent-noted-2.jsonl"
 r="$(AAF_PAYLOAD_FORM=nometadata note "$T" payload toolu_absent4 acme/widget "$F" "" "" "" a9bba4c0ffee)"
@@ -1828,6 +1840,7 @@ for n in 1 2; do
   PX="$(talk "$WORK/f-behind-other-$n.jsonl" put acme/widget "$F" "" "behind$n")"
   note "$WORK/f-behind-other-$n.jsonl" payload "$PX" acme/widget "$F" "" "" "behind$n" >/dev/null
 done
+BEHIND2="$PX"
 YES12="$(closing "$SAYS_YES" "12" "12")"
 r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
 check "still possible: his Not announcing clears it when the call read every noted session" "$([[ "$r" == "clear||"* ]] && [ "$(kinds decided)" = 1 ] && echo ok || echo "$r")"
@@ -1906,12 +1919,18 @@ r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
 talk "$T" decide acme/widget "Hand over" "Announce it"
 r="$(NO_NODE=1 finishes_short "$STORE_USED" "$YES12" "$T")"
 check "still possible #3669 D: an answer about another feature that could not be checked leaves his decline about this one standing" "$([[ "$r" == "clear||"* ]] && echo ok || echo "$r")"
-# A noted session whose transcript is gone, its note naming a repository, is tried on every call and
-# can never be read. It is no session the call left unread, so it does not stand in his decline's way.
+# A noted session whose transcript is gone, its note naming a repository, can never be read. It was
+# tried on every call for ever, and said each time as "could not be read back" (review of #3669, low
+# 6). It is settled by the call that finds it gone, as a note by its ids alone already was, and said
+# once: on that call his decline does not clear, because what he answered there is not known, and
+# on every later call it does.
 STORE_USED="$WORK/store-f-behind"; T="$WORK/f-behind.jsonl"
 rm -f "$WORK/f-behind-other-2.jsonl"
+settled_before="$(kinds settled)"
 r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T")"
-check "still possible #3669: a noted session whose transcript is gone is no session left unread, and his decline still clears it" "$([[ "$r" == "clear||"* ]] && echo ok || echo "$r")"
+check "R9 #3669 E the call that finds a repository's noted session gone settles its note and says so, and his decline does not clear on that call" "$([[ "$r" == "unread||"*'`Not announcing`'*"f-behind-other-2.jsonl, can never be read"* && "$r" != *"could not be read back"* ]] && settled_as "$BEHIND2" 'transcript is gone' && [ "$(kinds settled)" = "$((settled_before + 1))" ] && echo ok || echo "$r")"
+r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T")"
+check "still possible #3669 E: it is said once and read no more, and his decline clears the next call" "$([[ "$r" == "clear||"* ]] && [ "$(kinds settled)" = "$((settled_before + 1))" ] && echo ok || echo "$r")"
 # What GitHub does not answer is never read as "not the last".
 for bad in '' '{}' '{"data":{"repository":{"pullRequest":null}}}' \
   '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":60,"nodes":[]}}}}}' \

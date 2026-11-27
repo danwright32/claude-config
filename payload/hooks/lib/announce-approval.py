@@ -150,8 +150,11 @@ outcome for, and judges each from what the transcript holds:
     and, for an Approve, said. With no note such a picker is passed over; a note left with no
     outcome would have its session read back on every later call.
   - a picker the transcript does not hold yet: left as it is, and looked for again.
-  - a picker noted by its ids alone whose session's transcript is gone: settled the same way,
-    since what it asked can never be read.
+  - a noted picker whose session's transcript is gone, noted by its ids alone or naming a
+    repository: settled the same way, since what it asked can never be read. One that named a
+    repository was an announcement's picker, so the call that settles it says once that an
+    answer of his there is lost (_gone_said); left unsettled, its session was read back and
+    said on every call for ever.
 THE WORDING HE ANSWERED ABOUT is taken from the note only when the note holds a hash, for the same
 repository and file as the transcript's picker: then the hash and the file's change time noted,
 which must be before his answer, are the ones judged, so a write to the file afterwards neither
@@ -1121,9 +1124,24 @@ def _ordinary(session_id, other):
 
 
 def _gone_why(transcript_path):
-    """Why a picker noted by its ids alone is settled once its session's transcript is gone."""
+    """Why a noted picker is settled once its session's transcript is gone."""
     return ("its session's transcript is gone (" + transcript_path + "), so what it asked can never be read: it "
             "approves nothing and is not read again")
+
+
+def _gone_said(transcript_path, left):
+    """What a call says, once, of a noted session whose transcript is gone, or None when every one
+    of its unjudged notes (left) is by its ids alone, which may be a picker about anything and is
+    settled with nothing said. A note naming a repository was of an announcement's picker there,
+    so that an answer of his is lost is said by the call that settles it."""
+    count = sum(1 for n in left.values() if n.get("repo") is not None)
+    if not count:
+        return None
+    return ("an answer of his the record notes, in the session whose transcript was " + transcript_path
+            + ", can never be read: that transcript is gone, and with it what he answered in "
+            + (str(count) + " pickers" if count != 1 else "1 picker") + " the record notes for this repository. "
+            "This is said once: a call that can write the record settles them as deciding nothing, and they are "
+            "not read again")
 
 
 def _gone(transcript_path):
@@ -1442,19 +1460,16 @@ def _harvest(payload, notes, key):
     unlooked = [unlooked] if unlooked else []
     read = []
     for session, transcript, pickers, left in _read_back(entries, noted, looked, unjudged, deadline, unlooked):
-        gone = []
         if _gone(transcript):
-            # Its transcript is gone, so what a picker noted by its ids alone asked can never be
-            # read: settled, so it is not looked for on every later call. A note that names this
-            # repository is left to the reading below, which says the transcript could not be read.
-            bare = sorted(p for p, n in left.items() if n.get("repo") is None)
-            gone = [_settled_other(session, p, _gone_why(transcript)) for p in bare]
-            if len(bare) == len(left):
-                read.append(([], [], gone, None))
-                continue
+            # Its transcript is gone, so what its noted pickers asked can never be read: each is
+            # settled, so it is not looked for on every later call, and one that named this
+            # repository is said, once (_gone_said).
+            gone = [_settled_other(session, p, _gone_why(transcript)) for p in sorted(left)]
+            read.append(([], [], gone, _gone_said(transcript, left)))
+            continue
         more, less, over, why = approvals(session, transcript, deadline, pickers, {p for s, p in ended if s == session},
                                           set(left))
-        read.append((more, less, gone + over, why and (
+        read.append((more, less, over, why and (
             "an answer of his the record notes, in the session whose transcript is " + transcript
             + ", could not be read back: " + why)))
     # Read newest first, and kept in the order the sessions' notes were taken.
@@ -1859,8 +1874,9 @@ def _harvest_decisions(payload, notes, key=None, short=None):
     or out of time) or were tried and could not be read (a transcript that is there and unreadable
     or misplaced, this session's own included when the record notes a picker of it nothing has
     judged), for a caller that must not lean on his last answer then (finishes). A call that names
-    no transcript of its own tried none, and a transcript that is gone is not one that can be
-    read later."""
+    no transcript of its own tried none. A noted session whose transcript is gone can never be
+    read: its notes are settled here, and where one named a repository the call that settles it
+    says so once and counts it among these, so no later call does."""
     deadline = time.monotonic() + CHECK_SECONDS
     entries, unreadable = read_record()
     noted = _noted(entries)
@@ -1885,21 +1901,22 @@ def _harvest_decisions(payload, notes, key=None, short=None):
     read, seen = [], {f["picker"] for f in found}
     before = len(unlooked)
     for session, transcript, _, left in _read_back(entries, noted, looked, unjudged, deadline, unlooked):
-        gone = []
         if _gone(transcript):
-            # As in _harvest: what a picker noted by its ids alone asked can never be read.
-            bare = sorted(p for p, n in left.items() if n.get("repo") is None)
-            gone = [_settled_other(session, p, _gone_why(transcript)) for p in bare]
-            if len(bare) == len(left):
-                read.append((gone, [], None))
-                continue
+            # As in _harvest: what its noted pickers asked can never be read, so each is settled
+            # here and read no more. One that named a repository is said, once, and on the call
+            # that says it the answer there is as unknown as in a session tried and not read.
+            said = _gone_said(transcript, left)
+            read.append(([_settled_other(session, p, _gone_why(transcript)) for p in sorted(left)], [], said))
+            if said:
+                tried.append(said)
+            continue
         # A picker a forked session carries under two session ids is judged once in one call.
         more, less, why = decisions(session, transcript, deadline, done | seen, set(left))
         seen |= {f["picker"] for f in more}
         why = why and ("an answer of his the record notes, in the session whose transcript is " + transcript
                        + ", could not be read back: " + why)
-        read.append((gone + more, less, why))
-        if why and not _gone(transcript):
+        read.append((more, less, why))
+        if why:
             # Tried and not read: its transcript is there and could not be read, or is not where
             # Claude Code keeps one. An answer of his may be in it, as in a session left unread.
             tried.append(why)
