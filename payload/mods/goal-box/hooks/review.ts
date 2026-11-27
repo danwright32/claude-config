@@ -17,15 +17,27 @@ import { TOOL } from './box.ts'
 // The record cannot say a review is still to COME, and at a call made before the turn's end it has
 // not been handed over yet. So a turn that has changed something, by the review hooks' own test
 // (hooks/turn-worked.py, asked as request.ts asks it), is one whose review is to come, and its box
-// waits too. The hooks do not always hand a review over at such a turn's end (their kill switch, a
-// stop that follows another Stop hook's block, a helper that failed), so a box refused this way and
-// never shown is asked for once more when the turn has ended: that message is Dan's choice as well
-// (the issue's comment of 2026-11-27, 1:11 PM ET), once per request, and a turn it starts has changed
-// nothing, so the call it asks for is not held.
+// waits too. The hooks do not always hand a review over at such a turn's end (a stop that follows
+// another Stop hook's block, a helper that failed), so a box refused this way and never shown is
+// asked for once more when the turn has ended: that message is Dan's choice as well (the issue's
+// comment of 2026-11-27, 1:11 PM ET), once per request, and a turn it starts has changed nothing, so
+// the call it asks for is not held.
+//
+// Two cases are known before the turn ends to bring no review, and hold nothing: Dan asleep (the
+// hooks stand down, and the mod asks scope modes' one sleep predicate), and the hooks' own switch
+// for one conversation, a file beside its transcript (REVIEWS_OFF_SUFFIX below).
 //
 // A record that cannot be read never holds the box and is never read as answered in silence: the box
 // shows, and the mod says so where Dan and a later session can see it. A box that never shows is the
 // worse fault of the two.
+
+/**
+ * The review hooks' switch for one conversation: with a file of this name beside the transcript
+ * (`touch <transcript>.skip-stop-hooks`) both stay silent for it, so no review is handed over and
+ * the box waits for none. The name is the hooks' own (session-reflection.sh,
+ * feature-issue-review.sh); tests/test-goal-box-review-record.sh fails when they stop reading it.
+ */
+export const REVIEWS_OFF_SUFFIX = '.skip-stop-hooks'
 
 /** How long the read of the record may take: one file read backwards to its last prompt, two small files. */
 export const REVIEW_STATE_MS = 10_000

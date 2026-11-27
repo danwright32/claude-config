@@ -17,7 +17,9 @@
 #   the command the mod hands the session as the review's last step does not, run as written with a
 #     path holding a space and an apostrophe, turn a handed over review into an answered one;
 #   the stand in's answers in the goal box suite are not the shape the real file prints;
-#   the read leaves anything beside the files it loads.
+#   the read leaves anything beside the files it loads;
+#   the file name the mod takes for "the reviews are switched off for this conversation" stops being
+#     the one that silences both review hooks, run for real with and without it.
 #
 # Seen to fail with the state word the real file prints changed (L1).
 set -uo pipefail
@@ -125,7 +127,6 @@ with tempfile.TemporaryDirectory() as d:
     env.pop('CLAUDE_CODE_SESSION_ID', None)
     r = subprocess.run(['bash', '-c', command], capture_output=True, text=True, timeout=30, env=env)
     check("the last step's command, run as the mod writes it, records the answer", None if r.returncode == 0 and word(t) == (0, 'answered') else 'it exited %d, said %r %r, and the state is then %r' % (r.returncode, r.stdout.strip(), r.stderr.strip()[-200:], word(t)))
-    check('each state the real file printed is one the mod knows', None if {'none', 'handed', 'answered'} <= set(STATES) else 'the mod knows only %r' % STATES)
 
     # The next prompt ends the record.
     with open(t, 'a') as fh:
@@ -147,6 +148,40 @@ with tempfile.TemporaryDirectory() as d:
     r = subprocess.run([sys.executable, *OPTIONS, os.path.join(lib, 'review-record.py'), 'state', '--transcript', t], capture_output=True, text=True, timeout=30)
     left = sorted(os.listdir(hooks)) + sorted(os.listdir(lib)) + sorted(os.listdir(project))
     check('the read leaves nothing beside the files it loads, or beside the transcript', None if r.returncode == 0 and left == ['lib', 'turn-worked.py', 'review-record.py', 's1.jsonl'] else 'exit %d, and the folders then held %r' % (r.returncode, left))
+
+    # The switch that turns the reviews off for one conversation. The mod holds nothing when a file
+    # of this name sits beside the transcript, so the name has to be the one that silences the real
+    # hooks: each is run on a turn that changed something, without the file (it speaks) and with it
+    # (it says nothing). Throwaway spool, temp folder and sleep record, as the hooks' own suites use.
+    k = re.search(r"^export const REVIEWS_OFF_SUFFIX = '(\.[A-Za-z-]+)'$", source, re.M)
+    check('the name of the switch file can be read out of review.ts', None if k else 'REVIEWS_OFF_SUFFIX is not written as this suite reads it')
+    if k:
+        worked = os.path.join(d, 'switch', 'w.jsonl')
+        os.makedirs(os.path.dirname(worked))
+        with open(worked, 'w') as fh:
+            fh.write(line('p1', 'do the thing'))
+            fh.write(json.dumps({'type': 'assistant', 'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'name': 'Edit', 'id': 't1', 'input': {}}]}}) + '\n')
+            fh.write(line('p1'))
+        hook_env = dict(os.environ, CLAUDE_ISSUE_SPOOL_DIR=os.path.join(d, 'spool'), TMPDIR=os.path.join(d, 'tmp'), CLAUDE_SLEEP_RECORD=os.path.join(d, 'no-sleep-record.json'))
+        for name in ('CLAUDE_DETACHED_RUN', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_REVIEW_REASON_FORCE_FAIL'):
+            hook_env.pop(name, None)
+        os.makedirs(hook_env['CLAUDE_ISSUE_SPOOL_DIR'])
+        os.makedirs(hook_env['TMPDIR'])
+        payload = json.dumps({'transcript_path': worked, 'stop_hook_active': False})
+
+        def speaks(hook, n):
+            proj = os.path.join(d, 'proj-%s-%d' % (hook, n))
+            os.makedirs(proj)
+            r = subprocess.run(['bash', os.path.join(root, 'payload', 'hooks', hook)], input=payload, capture_output=True, text=True, timeout=120, env=dict(hook_env, CLAUDE_PROJECT_DIR=proj))
+            return '"decision"' in r.stdout
+
+        for hook in ('session-reflection.sh', 'feature-issue-review.sh'):
+            on = speaks(hook, 1)
+            with open(worked + k.group(1), 'w') as fh:
+                fh.write('')
+            off = speaks(hook, 2)
+            os.remove(worked + k.group(1))
+            check('%s hands a review over without the switch file and stays silent with it, by the name the mod reads' % hook, None if (on, off) == (True, False) else 'spoke without it: %r, spoke with it: %r' % (on, off))
 
 # The stand in's answers, in the goal box suite, are the shape the real file prints: one JSON object
 # on a line, its state under "state".

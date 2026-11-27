@@ -12038,8 +12038,11 @@ not shown by the turn's end is asked for once more, once per request, by a messa
 in place of the turn end's other question, because the hooks do not hand a review over at every
 such turn's end. A record that cannot be read never holds the box: the box shows, with a line in
 the log and a note in the close card's reasons file. While Dan is asleep the reviews stand down
-and nothing is held. `payload/hooks/test-review-record.sh` holds the record and its writers, and
-`tests/test-goal-box-review-record.sh` holds the mod's two commands to the real file. Where the
+and nothing is held, and nothing is held in a conversation the reviews are switched off for (the
+Stop hooks' own `<transcript>.skip-stop-hooks` file), where the box shows as it did.
+`payload/hooks/test-review-record.sh` holds the record and its writers, and
+`tests/test-goal-box-review-record.sh` holds the mod's two commands, and that switch's name, to
+the real files. Where the
 card is not drawn, the result is the same box as text, shaped like SESSION REFLECTION. What holds the box is read through mod-kit's one
 list of what is in flight (`hooks/mod-kit/inflight.ts`, #3770), asked for the box's three kinds.
 The close this session card (#3770, Dan's answers of 2026-11-26): a manual steps card headed

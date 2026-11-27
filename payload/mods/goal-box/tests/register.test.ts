@@ -2285,6 +2285,27 @@ test('while Dan is asleep the reviews stand down, so the box does not wait for o
   expect(reviewAsks).toEqual([])
 })
 
+test("the reviews switched off for this conversation (the Stop hooks' own switch file beside its transcript): no review will run, so the box shows as it did and the record is not asked (#3843)", withKit, async ($, on) => {
+  const { w, cards, submitted, reviewAsks } = world(on, { disk: { [`${T}.skip-stop-hooks`]: true }, review: reviewSays('handed') })
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1'])
+  expect(reviewAsks).toEqual([])
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toEqual([])
+})
+
+test('whether the reviews are switched off cannot be checked: the box waits as if they were on, and the turn end message still covers it (#3843)', withKit, async ($, on) => {
+  const { w, logs } = world(on, { disk: { [`${T}.skip-stop-hooks`]: 'the folder could not be read' } })
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/its end of turn review is still to come/)
+  expect(logs.filter(l => /whether the end of turn reviews are switched off for this conversation could not be checked \(.*the folder could not be read.*\)/.test(l))).toHaveLength(1)
+})
+
 test('a review handed over and never answered does not hold his next request: the record ends with its turn (#3843)', withKit, async ($, on) => {
   const { w, submitted } = world(on)
   await start($)

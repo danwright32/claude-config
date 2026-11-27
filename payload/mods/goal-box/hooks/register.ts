@@ -4,7 +4,7 @@ import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
 import { WORK_TEST_MS, alreadyShownText, answered, workRead, workTestArgv, type WorkRead } from './request.ts'
-import { REVIEW_STATE_MS, answeredCommand, askAgainText, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, type ReviewRead, type ReviewWait } from './review.ts'
+import { REVIEWS_OFF_SUFFIX, REVIEW_STATE_MS, answeredCommand, askAgainText, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, type ReviewRead, type ReviewWait } from './review.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { askPr } from './mod-kit/prmerged.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
@@ -477,13 +477,21 @@ const asleepNow = async ($: EngineInterface): Promise<boolean> => {
 
 /**
  * Whether the end of turn review holds a box that would otherwise show (review.ts). While Dan is
- * asleep the review hooks stand down, so nothing is held and the record is not asked. The record is
- * read by its one owner, for the transcript this session's /goal was just read from.
+ * asleep the review hooks stand down, and with their switch file beside this conversation's
+ * transcript they are off for it, so in both nothing is held and the record is not asked. A switch
+ * that cannot be checked is taken as not set: the box then waits as usual, and the message at the
+ * turn's end covers a review that never comes. The record is read by its one owner, for the
+ * transcript this session's /goal was just read from.
  */
 const reviewNow = async ($: EngineInterface): Promise<ReviewWait> => {
   if (await asleepNow($)) return null
   const t = await transcriptNow($)
   if ('why' in t) return { unread: `the end of turn review's record could not be read (this session's transcript, which it is kept beside, was not found: ${t.why})` }
+  try {
+    if (await $.fs.exists(`${t.path}${REVIEWS_OFF_SUFFIX}`)) return null
+  } catch (err) {
+    debug($, `whether the end of turn reviews are switched off for this conversation could not be checked (${errorText(err, MOD)}), so the box waits for a review as if they were on`)
+  }
   let read: ReviewRead
   try {
     const home = await $.env.get('HOME')
