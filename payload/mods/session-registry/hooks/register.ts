@@ -422,7 +422,9 @@ export const register: Register = on => {
     // A check or a search that fails is no answer (#1636): under a load average past 100 one did,
     // and was read as no file, so /sleep told Dan a session with a /goal had none. Such a lookup
     // gives `unread`, naming each failure, and is never remembered as a miss, so the next read looks again.
-    const transcriptOf = async (h: string, r: SessionsRecord, now: number): Promise<{ path: string | null; unread?: string }> => {
+    // `early` holds the looks the list began before the records were read (#3673), by path: the
+    // first look at such a path takes that answer, asked in this same list, rather than ask again.
+    const transcriptOf = async (h: string, r: SessionsRecord, now: number, early?: Map<string, Promise<boolean>>): Promise<{ path: string | null; unread?: string }> => {
       if (!SESSION_ID.test(r.sessionId)) return { path: null }
       const failures: string[] = []
       // Where its folder's spelling puts it: named outright for an ordinary folder, and for one past
@@ -441,7 +443,9 @@ export const register: Register = on => {
           if (!q) continue
           let there = false
           try {
-            there = await built.fs.exists(q)
+            const begun = early?.get(q)
+            early?.delete(q)
+            there = await (begun ?? built.fs.exists(q))
           } catch (err) {
             failures.push(`whether ${q} is there could not be checked (${errText(err)})`)
           }
@@ -497,6 +501,22 @@ export const register: Register = on => {
         // and times gives no such answer, and every record is read, said once in the debug log (L289).
         const texts = new Map<string, string | undefined>()
         const toRead: string[] = []
+        // #3673: every question a list asks is put to Claude Code's main thread, which every agent of
+        // the session shares, and Claude Code ends the whole list at 10 seconds. Asked one after
+        // another, each waits its own turn there, and on a busy session that alone outran the 10
+        // seconds: 26 calls the collision guard refused on the personal MacBook, 2026-11-20 to
+        // 2026-11-27, while 59 of 82 quick calls around them took 5 seconds or more. So the looks for
+        // the open sessions' transcripts no longer wait for every record to be read. Begun here, by
+        // path, before the reads: for each record about to be read whose session an earlier list in
+        // this process found a transcript for, whether that file is still there. Only the look is
+        // early. Whether the session is open, and where else its transcript may be, are still judged
+        // from the record once it is read. A look nobody needs (the record turned out closed, say) is
+        // still asked; only its answer is ignored. So a remembered transcript's presence is judged as
+        // of the start of the list: one deleted while the records are read is handed on as there, where
+        // a look after the reads said none, and the next list says none. This saves a step only when
+        // every open session's transcript is remembered: one that is not, and the first list after a
+        // start, still look after the reads.
+        const early = new Map<string, Promise<boolean>>()
         let untimed = false
         for (const ent of files) {
           const isTimed = typeof ent.size === 'number' && typeof ent.mtimeMs === 'number' && ent.mtimeMs > 0
@@ -504,7 +524,17 @@ export const register: Register = on => {
           const was = seen.get(ent.name)
           const r = isTimed && was && was.size === ent.size && was.mtimeMs === ent.mtimeMs ? parse(was.text) : null
           if (r && !isOpenAt(r, now)) texts.set(ent.name, was?.text)
-          else toRead.push(ent.name)
+          else {
+            toRead.push(ent.name)
+            const last = was ? parse(was.text) : null
+            const at = last && SESSION_ID.test(last.sessionId) ? found.get(last.sessionId) : undefined
+            if (at !== undefined && !early.has(at)) {
+              const look = built.fs.exists(at)
+              // Its failure is said by the reader that takes it; one nobody takes is not an error.
+              look.catch(() => undefined)
+              early.set(at, look)
+            }
+          }
         }
         if (untimed && !toldUntimed) {
           toldUntimed = true
@@ -549,7 +579,7 @@ export const register: Register = on => {
           }
           await Promise.all(
             open.map(async r => {
-              const t = await transcriptOf(h, r, now)
+              const t = await transcriptOf(h, r, now, early)
               r.transcriptPath = t.path
               if (t.unread !== undefined) r.transcriptUnread = t.unread
               else delete r.transcriptUnread
