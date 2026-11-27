@@ -2551,7 +2551,11 @@ refused. That read now asks only what the segments of the command itself placed.
 path named besides a script that could not be read was looked for with every occurrence of every
 script path the command runs taken out as plain text, so a script named `a` hid `payload/`, and a
 script run by its payload path hid the same path given as a word to the unread script. Only the
-word where a script is run is taken out now, once for each time the command runs it. Over the 99
+word where a script is run is taken out now, once for each time the command runs it. The old
+search is still asked beside the new one, and a command either refuses is refused: taking every
+occurrence out could also make the word `payload/` appear where a script name sat against it
+inside a longer word (a script named `x` beside `xpayload/hooks`), and whether that accidental
+refusal goes is a choice left to Dan in the pull request. Over the 99
 made up commands of that review, none that main refuses is let through after the first fix (four
 before it); that is a measurement over those commands and no proof for every command.
 
