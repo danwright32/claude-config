@@ -890,9 +890,9 @@ odd_case "the hand substituted placeholder with such a byte right after it" 1 "$
 odd_case "a home path on the line after one holding such a byte" 2 "$H1" "$BADHOME/six" 'first \377 line\n%s/six\n' "$BADHOME"
 odd_case "a home path on the line before one holding such a byte" 1 "$H1" "$BADHOME/seven" '%s/seven\nlater \377 line\n' "$BADHOME"
 # The marker excuses its own line and no other, in a file holding such a byte too. The marked
-# line here is valid text on purpose: whether a marked line that itself holds such a byte is
-# excused depends on the locale and on where the byte sits (the check's note above its search
-# says how), and that is left as it was found, so no case here holds it either way.
+# line here is valid text on purpose: a marked line that itself holds such a byte is another
+# matter, which turned on the locale when these cases were written and has cases of its own
+# further down since claude-config#3586.
 odd_case "an unmarked line holding such a byte, below a marked line of valid text," 2 "$H1" "$BADHOME/eight" \
   'plain %s/excused claude-sync-allow-home-path \n\377 %s/eight\n' "$BADHOME" "$BADHOME"
 for loc in $ODD_LOCALES; do
@@ -978,6 +978,207 @@ for loc in $ODD_LOCALES; do
     && LC_ALL=C grep -a -q -E -- "hooks/head\.txt:1:.*$BADHOME/\.claude/x\.sh .* \[line cut: bytes 851 to 1148 of $cut_head_len shown\]$" "$COUT" \
     && check "#3538 and the note names the bytes really shown (locale $loc)" ok \
     || check "#3538 and the note names the bytes really shown (locale $loc)" "exit=$code_cutv: $(peek "$COUT" 900)"
+done
+
+# ---------------------------------------------------------------------------
+# Three things #3538 measured and left as they were found (claude-config#3586). Each case runs in
+# a UTF-8 locale this machine has and in C, like the cases above, because the check is run in both
+# and two of the three used to turn on which.
+#
+# Every home path, letter outside ASCII, odd byte and control character below is built by printf
+# when the suite runs, so this file holds none of them.
+# ---------------------------------------------------------------------------
+UROOT="/Users"
+HROOT="/home"
+H4="carry claude-sync-allow-home-path and are reported all the same"
+ALLOW_MARK="claude-sync-allow-home-path"
+
+# 1. An account name that starts with a letter outside ASCII. The pattern asked for an ASCII letter
+# or digit there, so that an elided example is not taken for a machine's path, and a home whose
+# name starts with an accented or a fullwidth letter passed in either locale.
+NAME_N=0
+name_case() { # name_case <what the name starts with> <printf format> [args]
+  local what="$1" fmt="$2"; shift 2
+  local root loc out code n
+  NAME_N=$((NAME_N + 1))
+  root="$(tree "name$NAME_N")"
+  # shellcheck disable=SC2059
+  printf "$fmt" "$@" > "$root/hooks/name.txt"
+  printf 'hooks/name.txt\0' > "$TMPROOT/name$NAME_N.files"
+  for loc in $ODD_LOCALES; do
+    out="$TMPROOT/name$NAME_N.$loc.out"
+    LC_ALL="$loc" bash "$CHECK" "$root" > "$out" 2>&1
+    code=$?
+    n="$(LC_ALL=C grep -a -c -F -- "hooks/name.txt:1:" "$out" || true)"
+    [ "$code" -eq 1 ] && [ "${n:-0}" -eq 1 ] && LC_ALL=C grep -a -q -F -- "$H1" "$out" \
+      && check "#3586 a home path whose name starts with $what is reported (locale $loc)" ok \
+      || check "#3586 a home path whose name starts with $what is reported (locale $loc)" "exit=$code, ${n:-0} reported line(s) name hooks/name.txt:1: $(peek "$out" 400)"
+    # The listed form is the search a send runs, and must not pass what the walk reports.
+    LC_ALL="$loc" bash "$CHECK" --files0-from "$TMPROOT/name$NAME_N.files" "$root" > "$out.listed" 2>&1
+    code=$?
+    n="$(LC_ALL=C grep -a -c -F -- "hooks/name.txt:1:" "$out.listed" || true)"
+    [ "$code" -eq 1 ] && [ "${n:-0}" -eq 1 ] \
+      && check "#3586 and by the listed form too: a name starting with $what (locale $loc)" ok \
+      || check "#3586 and by the listed form too: a name starting with $what (locale $loc)" "exit=$code, ${n:-0} reported line(s): $(peek "$out.listed" 400)"
+  done
+}
+name_case "an accented letter" 'bash %s/\303\251ric/.claude/x.sh\n' "$UROOT"
+name_case "a fullwidth letter" 'bash %s/\357\274\241lice/.claude/x.sh\n' "$UROOT"
+name_case "a letter of another script, under the other root," 'cd %s/\346\227\245\346\234\254/work\n' "$HROOT"
+name_case "an accented letter in a one byte encoding" 'bash %s/\351ric/.claude/x.sh\n' "$UROOT"
+
+# The other side, measured from what the repository holds (L48). On 2026-11-26, 91 lines of it
+# wrote a home root and then something that is not a name, 96 times in all, and what followed the
+# root's slash was always an ASCII mark: a dot 70 times, an opening angle bracket 19, a closing
+# round bracket 2, a single quote 2, and a bar, an opening square bracket and a double quote once
+# each. One fixture line per shape, the end of a line as well, with letters outside ASCII beside
+# them that start no name. None is reported.
+ELIDED="$(tree elided)"
+{
+  printf 'absolute: node "%s/.../hook.mjs"\n' "$UROOT"
+  printf 'a path like %s/<name>/.claude or %s/<user>\n' "$UROOT" "$HROOT"
+  printf 'anything under a home root (%s/) is one\n' "$UROOT"
+  printf "the roots '%s/' and \"%s/\" by default\n" "$UROOT" "$HROOT"
+  printf 'matched as %s/|%s/ and then %s/[a-z]\n' "$UROOT" "$HROOT" "$UROOT"
+  printf 'caf\303\251 at %s/.../x and \357\274\241 at %s/<name>/y, na\303\257ve\n' "$UROOT" "$HROOT"
+  printf 'and a line that ends at %s/\n' "$UROOT"
+} > "$ELIDED/hooks/doc.md"
+for loc in $ODD_LOCALES; do
+  LC_ALL="$loc" bash "$CHECK" "$ELIDED" > "$TMPROOT/elided.$loc.out" 2>&1
+  code_el=$?
+  [ "$code_el" -eq 0 ] \
+    && check "#3586 every shape of elided example the repository holds is still not a machine path (locale $loc)" ok \
+    || check "#3586 every shape of elided example the repository holds is still not a machine path (locale $loc)" "exit=$code_el out=$(peek "$TMPROOT/elided.$loc.out" 600)"
+done
+
+# 2. The marker on a line that also holds a byte that is not valid text. It used to turn on the
+# locale: measured on 2026-11-24, of five such lines the grep macOS ships saw the marker on one
+# under a UTF-8 locale and on all five under C (of the five home path lines below, on 2026-11-26,
+# on two and on all five), and a line it reported was followed by advice to add the marker it
+# already carried. Now such a line is reported in every locale, in a group of its own that says the marker
+# was seen and why it is not honoured, and a marked line of valid text is excused as it always was.
+reported_with() { # reported_with <report> <file:line:> <text>...  -> 0 when exactly one reported line names that place and holds every text
+  local f="$1" where="$2" l needle
+  shift 2
+  # Read whole into a variable, never through a reader that leaves early (claude-config#162).
+  l="$(LC_ALL=C grep -a -F -- "$where" "$f" || true)"
+  [ -n "$l" ] || return 1
+  case "$l" in *$'\n'*) return 1 ;; esac
+  for needle in "$@"; do
+    case "$l" in *"$needle"*) ;; *) return 1 ;; esac
+  done
+  return 0
+}
+MKB="$(tree markbad)"
+{
+  printf '\377 x %s/one %s\n' "$BADHOME" "$ALLOW_MARK"
+  printf 'x %s/two %s\377\n' "$BADHOME" "$ALLOW_MARK"
+  printf 'x %s/three \377%s\n' "$BADHOME" "$ALLOW_MARK"
+  printf '%s x %s/four \377\n' "$ALLOW_MARK" "$BADHOME"
+  printf 'x %s/five %s caf\303\n' "$BADHOME" "$ALLOW_MARK"
+  printf 'caf\303\251 %s/six \342\202\254%s\303\251\n' "$BADHOME" "$ALLOW_MARK"
+  printf '\377 the %s token and %s/x %s\n' "$LTOK" "$LANG_TOK" "$ALLOW_MARK"
+} > "$MKB/hooks/marked.txt"
+for loc in $ODD_LOCALES; do
+  MOUT="$TMPROOT/markbad.$loc.out"
+  LC_ALL="$loc" bash "$CHECK" "$MKB" > "$MOUT" 2>&1
+  code_mk=$?
+  mk_n="$(LC_ALL=C grep -a -c -E -- "hooks/marked\.txt:[123457]:" "$MOUT" || true)"
+  [ "$code_mk" -eq 1 ] && [ "${mk_n:-0}" -eq 6 ] \
+    && check "#3586 a marked line holding a byte that is not valid text is reported, wherever the byte sits (locale $loc)" ok \
+    || check "#3586 a marked line holding a byte that is not valid text is reported, wherever the byte sits (locale $loc)" "exit=$code_mk, ${mk_n:-0} of 6 such lines reported: $(peek "$MOUT" 900)"
+  # Said as what it is: the marker was seen, and the byte is why it does not count. Nothing in the
+  # report advises adding a marker, because every line reported here already carries one.
+  LC_ALL=C grep -a -q -F -- "$H4" "$MOUT" && ! LC_ALL=C grep -a -q -F -- "$H1" "$MOUT" \
+    && ! LC_ALL=C grep -a -q -F -- "or put $ALLOW_MARK on the line" "$MOUT" \
+    && reported_with "$MOUT" "hooks/marked.txt:1:" "the marker is on this line and does not count" "byte 1 of the line is not valid text" \
+    && reported_with "$MOUT" "hooks/marked.txt:5:" "the marker is on this line and does not count" "of the line is not valid text" \
+    && check "#3586 and the report says the marker was seen and why the line is reported anyway (locale $loc)" ok \
+    || check "#3586 and the report says the marker was seen and why the line is reported anyway (locale $loc)" "exit=$code_mk: $(peek "$MOUT" 900)"
+  reported_with "$MOUT" "hooks/marked.txt:7:" "found: the sync's placeholder" ", the hand substituted placeholder]" \
+    && check "#3586 such a line is reported once, naming everything found on it (locale $loc)" ok \
+    || check "#3586 such a line is reported once, naming everything found on it (locale $loc)" "$(peek "$MOUT" 900)"
+  ! LC_ALL=C grep -a -q -F -- "hooks/marked.txt:6:" "$MOUT" \
+    && check "#3586 a marked line of valid text, letters outside ASCII touching the marker, stays excused (locale $loc)" ok \
+    || check "#3586 a marked line of valid text, letters outside ASCII touching the marker, stays excused (locale $loc)" "$(peek "$MOUT" 900)"
+done
+# The same verdict and the same words in both locales, which is the point of the change.
+# shellcheck disable=SC2206
+odd_locs=($ODD_LOCALES)
+if [ "${#odd_locs[@]}" -eq 2 ]; then
+  cmp -s "$TMPROOT/markbad.${odd_locs[0]}.out" "$TMPROOT/markbad.${odd_locs[1]}.out" \
+    && check "#3586 the marker counts the same way under ${odd_locs[0]} and under ${odd_locs[1]}" ok \
+    || check "#3586 the marker counts the same way under ${odd_locs[0]} and under ${odd_locs[1]}" "${odd_locs[0]}: $(peek "$TMPROOT/markbad.${odd_locs[0]}.out" 500) AND ${odd_locs[1]}: $(peek "$TMPROOT/markbad.${odd_locs[1]}.out" 500)"
+else
+  printf 'SUITE-PART-UNMEASURED #3586 the marker counts the same way in two locales: this machine has no UTF-8 locale to compare C against\n'
+fi
+# A marked line beside an unmarked finding: each in its own group, and the advice to add a marker
+# is given for the unmarked one only.
+MKM="$(tree markmixed)"
+printf 'plain %s/unmarked\n\377 %s/marked %s\n' "$BADHOME" "$BADHOME" "$ALLOW_MARK" > "$MKM/hooks/mixed.txt"
+for loc in $ODD_LOCALES; do
+  MMOUT="$TMPROOT/markmixed.$loc.out"
+  LC_ALL="$loc" bash "$CHECK" "$MKM" > "$MMOUT" 2>&1
+  code_mm=$?
+  [ "$code_mm" -eq 1 ] \
+    && [ "$(LC_ALL=C grep -a -c -F -- "hooks/mixed.txt:1:" "$MMOUT" || true)" -eq 1 ] \
+    && [ "$(LC_ALL=C grep -a -c -F -- "hooks/mixed.txt:2:" "$MMOUT" || true)" -eq 1 ] \
+    && LC_ALL=C grep -a -q -F -- "$H1" "$MMOUT" && LC_ALL=C grep -a -q -F -- "$H4" "$MMOUT" \
+    && check "#3586 an unmarked finding and a marked one are each reported once, under their own headings (locale $loc)" ok \
+    || check "#3586 an unmarked finding and a marked one are each reported once, under their own headings (locale $loc)" "exit=$code_mm: $(peek "$MMOUT" 900)"
+done
+
+# The marker counts on the line that carries it, never in the NAME of the file the line is in. The
+# filter that used to drop marked lines read the search's whole output line, which starts with the
+# file's path, so a file whose name held the marker's text had every one of its lines excused.
+MKP="$(tree markpath)"
+printf 'plain %s/in-a-file-named-for-the-marker\n' "$BADHOME" > "$MKP/hooks/$ALLOW_MARK-notes.txt"
+for loc in $ODD_LOCALES; do
+  MPOUT="$TMPROOT/markpath.$loc.out"
+  LC_ALL="$loc" bash "$CHECK" "$MKP" > "$MPOUT" 2>&1
+  code_mp=$?
+  [ "$code_mp" -eq 1 ] && reported_with "$MPOUT" "hooks/$ALLOW_MARK-notes.txt:1:" "$BADHOME/in-a-file-named-for-the-marker" \
+    && LC_ALL=C grep -a -q -F -- "$H1" "$MPOUT" \
+    && check "#3586 the marker in a file's name excuses none of its lines (locale $loc)" ok \
+    || check "#3586 the marker in a file's name excuses none of its lines (locale $loc)" "exit=$code_mp: $(peek "$MPOUT" 600)"
+done
+
+# 3. A reported line's control characters. A carriage return or an escape sequence is valid text,
+# so it was printed as it is: on a terminal the first draws the rest of the line over the file name
+# and line number, and the second can clear them. A file with CRLF line ends did that on every
+# line reported from it. Each is now shown as a backslash and its octal value, and counted.
+no_raw_controls() { # no_raw_controls <file>  -> 0 when it holds no control character but tabs and line ends
+  [ "$(LC_ALL=C tr -d '\t\n' < "$1" | LC_ALL=C grep -a -c '[[:cntrl:]]' || true)" -eq 0 ]
+}
+CTL="$(tree controls)"
+printf 'bash %s/.claude/crlf.sh\r\nsecond line\r\n' "$BADHOME" > "$CTL/hooks/crlf.txt"
+printf 'x \033[2K\033[1G%s/esc tail\n' "$BADHOME" > "$CTL/hooks/esc.txt"
+printf 'a\001b\010c\013d\014e\177f %s/rest\n' "$BADHOME" > "$CTL/hooks/rest.txt"
+printf 'x\302\233 2K %s/c1\n' "$BADHOME" > "$CTL/hooks/c1.txt"
+printf '\tindented\t%s/tab caf\303\251\n' "$BADHOME" > "$CTL/hooks/tab.txt"
+for loc in $ODD_LOCALES; do
+  KOUT="$TMPROOT/controls.$loc.out"
+  LC_ALL="$loc" bash "$CHECK" "$CTL" > "$KOUT" 2>&1
+  code_ctl=$?
+  # The fixtures really hold them, or a report passing the same test would prove nothing.
+  ! no_raw_controls "$CTL/hooks/crlf.txt" && ! no_raw_controls "$CTL/hooks/esc.txt" && ! no_raw_controls "$CTL/hooks/rest.txt" \
+    && [ "$code_ctl" -eq 1 ] && no_raw_controls "$KOUT" && valid_text "$KOUT" \
+    && check "#3586 a report holds no control character a reported line carried (locale $loc)" ok \
+    || check "#3586 a report holds no control character a reported line carried (locale $loc)" "exit=$code_ctl: $(peek "$KOUT" 900)"
+  LC_ALL=C grep -a -q -F -- "hooks/crlf.txt:1:bash $BADHOME/.claude/crlf.sh\\015 [1 control character, " "$KOUT" \
+    && check "#3586 the carriage return of a CRLF file is shown as its octal value, and counted (locale $loc)" ok \
+    || check "#3586 the carriage return of a CRLF file is shown as its octal value, and counted (locale $loc)" "$(peek "$KOUT" 900)"
+  LC_ALL=C grep -a -q -F -- "hooks/esc.txt:1:x \\033[2K\\033[1G$BADHOME/esc tail [2 control characters, " "$KOUT" \
+    && check "#3586 an escape sequence is shown, not obeyed (locale $loc)" ok \
+    || check "#3586 an escape sequence is shown, not obeyed (locale $loc)" "$(peek "$KOUT" 900)"
+  LC_ALL=C grep -a -q -F -- "hooks/rest.txt:1:a\\001b\\010c\\013d\\014e\\177f $BADHOME/rest [5 control characters, " "$KOUT" \
+    && LC_ALL=C grep -a -q -F -- "hooks/c1.txt:1:x\\302\\233 2K $BADHOME/c1 [1 control character, " "$KOUT" \
+    && check "#3586 so are the other control characters, the delete character and the ones above ASCII (locale $loc)" ok \
+    || check "#3586 so are the other control characters, the delete character and the ones above ASCII (locale $loc)" "$(peek "$KOUT" 900)"
+  # A tab moves the cursor forward only and is in every indented file, so it is left as it is.
+  LC_ALL=C grep -a -q -F -x -- "  $CTL/hooks/tab.txt:1:$(cat "$CTL/hooks/tab.txt")" "$KOUT" \
+    && check "#3586 a line with tabs and no other control character is reported byte for byte (locale $loc)" ok \
+    || check "#3586 a line with tabs and no other control character is reported byte for byte (locale $loc)" "$(peek "$KOUT" 900)"
 done
 
 # ---------------------------------------------------------------------------

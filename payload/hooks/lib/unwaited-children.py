@@ -89,7 +89,12 @@ try:
         "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "shell-words.py"))
     _sw = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_sw)
-    heredoc_opener = _sw.heredoc_opener
+    # Read for a walk handed one line at a time: an opener whose line ends in a backslash before
+    # the end of its marker is joined to the next line by every shell, so the marker is not the
+    # word this line shows and no heredoc is read for it (line_opener, claude-config#3504). The
+    # lines after are then judged as code. Read as E and a backslash, which no line is, the marker
+    # never came and every site after it went unread.
+    heredoc_opener = _sw.line_opener
 except Exception as e:  # noqa: BLE001  missing, or failing to load: either way there is no reader
     sys.stderr.write("unwaited-children: cannot load lib/shell-words.py, which reads every heredoc "
                      "this scan judges, so it judges nothing (%s: %s)\n" % (type(e).__name__, e))

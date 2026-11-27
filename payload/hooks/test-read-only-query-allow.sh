@@ -302,7 +302,17 @@ facts = []
 got = calls.cli_read_approval(R + " -o json\\ # c; " + W + "\n", work, ro.judge, sw)
 facts.append(("a # the shell reads inside a word is said to be why", got == (False, getattr(calls, "UNREAD_LINE", None)), got))
 got = calls.cli_read_approval(R + " -o a(b)# c; " + W + "\n", work, ro.judge, sw)
-facts.append(("a # that cannot be told from a comment is said to be why", got == (False, getattr(calls, "UNSURE_LINE", None)), got))
+# Why says which mark the reader named, in a sentence true of that mark and of no other
+# (test-db-write-ask-unsure-line.sh holds a case for each heredoc the reader names).
+TOLD = "holds a # the shared reader cannot tell from a comment"
+READ_ON = "past which the shared reader could not read the text to its end"
+facts.append(("a # that cannot be told from a comment is said to be why",
+              got[0] is False and TOLD in got[1] and READ_ON not in got[1] and "a(b)# c" in got[1], got))
+# Every shell reads this # inside its word, so the reader reads on, and the quote that opens after
+# it never closes: the reader can tell this # from a comment, and says so.
+got = calls.cli_read_approval(R + " -o json\\ # it's a note\n", work, ro.judge, sw)
+facts.append(("a # the reader read on past and then could not read to the end is said to be why, as that",
+              got[0] is False and READ_ON in got[1] and TOLD not in got[1], got))
 facts.append(("the reader it was handed reads as it did afterwards", sw.commands is reads_as, sw.commands))
 older = types.SimpleNamespace(**{k: getattr(sw, k) for k in dir(sw) if not k.startswith("__")})
 older.commands = lambda s, cwd="", heredocs=None, parts=None, spans=None, comments=None: reads_as(
@@ -321,7 +331,7 @@ while IFS=$'\t' read -r verdict label; do
   [ -n "$label" ] && check "#3472 $label" "$verdict"
 done <<< "$unsure_rows"
 # A program that stopped early checks nothing and would read as a pass (L288).
-[ "$unsure_ran" = "40" ] && check "#3472 all 40 unsure line cases ran" ok || check "#3472 all 40 unsure line cases ran" "ran: ${unsure_ran:-none}; ${unsure_rows:0:300}"
+[ "$unsure_ran" = "41" ] && check "#3472 all 41 unsure line cases ran" ok || check "#3472 all 41 unsure line cases ran" "ran: ${unsure_ran:-none}; ${unsure_rows:0:300}"
 rm -rf "$UNSURE_WORK"
 
 echo "passed: $pass, failed: $fail"
