@@ -236,6 +236,10 @@ type World = {
   procs: Gh
   /** The look runs until its time limit passes on the engine's clock, then throws or exits killed. */
   procsTimeout?: 'throws' | 'exits'
+  /** Taking the process list itself fails: ps throws, or ends with exit code 1. */
+  psFails?: 'throws' | 'exits'
+  /** The process list comes back marked as cut short (isStdoutTruncated). */
+  psCut?: boolean
   /** What mod-kit's reader reads a command as, or why it throws. */
   reader: (command: string) => unknown[] | { fails: string }
   /** The cards pinned through manual steps' noun, and the titles withdrawn, in order. */
@@ -355,7 +359,12 @@ const world = (on: On, init: Partial<World> = {}) => {
     }
     if (e.argv[0] === '__sleep') return ok(JSON.stringify(w.asleep === true))
     if (e.argv[0] === '__jobs') return w.jobsFail ? ok('', 1, w.jobsFail) : ok(JSON.stringify(w.jobs))
-    if (e.argv[0] === 'ps') return ok('4321 1 node\n')
+    if (e.argv[0] === 'ps') {
+      if (w.psFails === 'throws') return Promise.reject(new Error('ps could not be started')) as never
+      if (w.psFails === 'exits') return ok('', 1, 'ps: the process list could not be read')
+      if (w.psCut) return { value: { exitCode: 0, stdout: '4321 1 node\n', stderr: '', isStdoutTruncated: true, isStderrTruncated: false } } as never
+      return ok('4321 1 node\n')
+    }
     if (e.argv[0] === 'python3') {
       // The look is handed the process list on its standard input and a time limit of its own.
       const init = (e as { init?: { stdin?: string; timeoutMs?: number } }).init
@@ -1075,8 +1084,10 @@ test("mod-kit unable to draw the card still shows the box as text, the goal firs
 // ---- The close this session card (#3770) ----
 // Dan, 2026-11-26: pinned only once the Goal accomplished box was shown for his latest request,
 // every reading is clean and the session has stayed quiet for QUIET_MS; down at any new turn; back
-// only after the next box. A reading that cannot be taken withholds it. The two readings of a
-// process a command left behind (3.76.1) can only withhold it.
+// only after the next box. A reading that cannot be taken withholds it, with two exceptions, both in
+// the check for a process left behind, both noted in the reasons file and neither a reason to pin:
+// a process whose own parents cannot be followed, and a check that could not be finished at all.
+// The two readings of a process a command left behind (3.76.1) can only withhold it.
 const REASONS = `${'/Users'}/dan/.claude/state/close-session/s1.json`
 type Engine$ = Parameters<Parameters<typeof test>[2]>[0]
 const stopped = ($: Engine$, more: Record<string, unknown> = {}) =>
@@ -1089,7 +1100,7 @@ const workedAndQuiet = async ($: Engine$, clock: { advance: (ms: number) => Prom
   await turnEnds($, { answer: o.answer ?? 'Merged and live.' })
   await clock.advance(QUIET_MS)
 }
-const reasonsOf = (w: World) => JSON.parse(w.written[REASONS] ?? 'null') as { pinned: boolean; reasons: string[] } | null
+const reasonsOf = (w: World) => JSON.parse(w.written[REASONS] ?? 'null') as { pinned: boolean; reasons: string[]; notes?: string[]; attached?: number | null } | null
 const bash = ($: Engine$, command: string, more: Record<string, unknown> = {}) => $.tool.call({ tool: 'Bash', tool_use_id: 'x1', command, ...more } as never)
 
 test('all clear: once the box is shown and the session stays quiet, exactly one card is pinned, for this session alone and with no Done (#3770)', withAll, async ($, on) => {
@@ -1434,24 +1445,37 @@ test('a process carrying this session\'s id withholds the card; a look that fail
 
 // #3770, reopened: six of the eleven reasons in Dan's test were the session's own connected servers,
 // which carry its id for as long as it is open. The look now follows each carrier's parents by pid
-// (tests/test-close-card-process-look.sh runs it on real processes) and answers three ways: `found`
-// for one left behind, `unread` for one whose parents could not be followed, and a count of those
-// still attached to the session, which withhold nothing.
-test("processes carrying this session's id that are still attached to it withhold nothing; one whose parents could not be followed withholds the card, saying so (#3770)", withAll, async ($, on) => {
+// (tests/test-close-card-process-look.sh runs it on real processes) and answers `found` for one left
+// behind, `unread` for one whose own parents could not be followed, and a count of those still
+// attached to the session, which withhold nothing (`unplaced` and `own`, for a look that could not
+// follow its own line, are further down). Dan, 2026-11-26, by picker: "2.1 Unreadable
+// counts as nothing". One whose parents could not be followed is no reason either way: it never
+// withholds the card and never pins it, and the reasons file keeps it as a note, seen and not counted.
+const UNREAD_NOTE = "process 777 (node) carries this session's id, and whether it is still attached to this session could not be read (process 700, a parent of it, is not in the process list), so it was seen and not counted"
+test("processes carrying this session's id that are still attached to it withhold nothing; nor does one whose parents could not be followed, which the reasons file notes as seen and not counted (#3770)", withAll, async ($, on) => {
   const { w, clock } = world(on, { procs: { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [], attached: 6 }) } })
   await start($)
   await says($, 'Add the goal box')
   await workedAndQuiet($, clock)
-  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [], notes: [] })
   expect(w.pinned).toHaveLength(1)
   w.procs = { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [{ pid: 777, name: 'node', why: 'process 700, a parent of it, is not in the process list' }], attached: 6 }) }
   await says($, 'And one more thing')
   await workedAndQuiet($, clock, { id: 'b2' })
-  expect(w.pinned).toHaveLength(1)
+  expect(w.pinned).toHaveLength(2)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [], notes: [UNREAD_NOTE] })
+})
+
+test("an unread process beside one left behind changes nothing: the one left behind still withholds the card, and the unread one is only a note (#3770)", withAll, async ($, on) => {
+  const procs = { found: [{ pid: 4321, name: 'node' }], unread: [{ pid: 777, name: 'node', why: 'process 700, a parent of it, is not in the process list' }], attached: 0 }
+  const { w, clock } = world(on, { procs: { exitCode: 0, stdout: JSON.stringify(procs) } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
   expect(reasonsOf(w)?.pinned).toBe(false)
-  expect(reasonsOf(w)?.reasons).toEqual([
-    "process 777 (node) carries this session's id, and whether it is still attached to this session could not be read (process 700, a parent of it, is not in the process list), so it counts as left running",
-  ])
+  expect(reasonsOf(w)?.reasons).toEqual(["process 4321 (node) carries this session's id and its parents no longer lead to this session, so something this session started was left running"])
+  expect(reasonsOf(w)?.notes).toEqual([UNREAD_NOTE])
 })
 
 test('a look that answers garbled output withholds nothing, so the other readings decide and the card is pinned (#3770)', withAll, async ($, on) => {
@@ -1461,6 +1485,156 @@ test('a look that answers garbled output withholds nothing, so the other reading
   await workedAndQuiet($, clock)
   expect(w.pinned).toHaveLength(1)
   expect(reasonsOf(w)?.reasons).toEqual([])
+})
+
+// An independent review of the change above (2026-11-27) found the look calling a process unread
+// for two different reasons, that process's parents could not be followed or the look's OWN could
+// not be, and both had become a note. Dan's choice covers the first only. When the look cannot find
+// its own place, a process whose parents were followed to the system's first process cannot be told
+// apart from one still attached, so the look hands those back apart (`unplaced`, with `own` saying
+// why its own line failed) and the card is withheld, as it was before that change.
+const OWN_CUT = 'process 110, a parent of it, is not in the process list'
+test("the check could not find its own place among the processes: a process whose own parents lead to the system's first process withholds the card, and the reason says why in plain words (#3770, the review's RED1)", withAll, async ($, on) => {
+  // What the look answers for the review's planted world T2: 400 has the system's first process for
+  // a parent, and one row of the look's own line above the session's process is missing.
+  const { w, clock } = world(on, { procs: { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [], unplaced: [{ pid: 400, name: 'node' }], own: OWN_CUT, attached: 1 }) } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.pinned).toBe(false)
+  expect(reasonsOf(w)?.reasons).toEqual([
+    "the check for a process left behind could not find its own place among the processes (process 110, a parent of it, is not in the process list), so it could not tell whether these are still attached to this session or were left running, and each carries this session's id: process 400 (node)",
+  ])
+  expect(reasonsOf(w)?.notes).toEqual([])
+})
+
+test("the check could not find its own place at all, so every process carrying this session's id, the connected servers included, cannot be told apart: the card is withheld and one reason names them all (#3770, the review's T3)", withAll, async ($, on) => {
+  const procs = { found: [], unread: [], unplaced: [{ pid: 300, name: 'node' }, { pid: 400, name: 'node' }], own: 'process 850, a parent of it, is not in the process list', attached: 0 }
+  const { w, clock } = world(on, { procs: { exitCode: 0, stdout: JSON.stringify(procs) } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons).toEqual([
+    "the check for a process left behind could not find its own place among the processes (process 850, a parent of it, is not in the process list), so it could not tell whether these are still attached to this session or were left running, and each carries this session's id: process 300 (node), process 400 (node)",
+  ])
+  // It is withheld again under the next request, for as long as the check cannot find its place.
+  // An answer naming such processes with no reason given (the check never prints that) withholds too.
+  w.procs = { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [], unplaced: [{ pid: 400, name: 'node' }], attached: 0 }) }
+  await says($, 'And one more thing')
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.pinned).toBe(false)
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/could not find its own place among the processes \(it gave no reason\).*: process 400 \(node\)$/)
+})
+
+test("the two reasons a process is not placed stay apart: one whose own parents could not be followed is a note and never a hold, even while the check's own place is unknown; one that only the check's own place could tell apart withholds (#3770)", withAll, async ($, on) => {
+  const unread = [{ pid: 777, name: 'node', why: 'process 700, a parent of it, is not in the process list' }]
+  const { w, clock } = world(on, { procs: { exitCode: 0, stdout: JSON.stringify({ found: [], unread, unplaced: [{ pid: 400, name: 'node' }], own: OWN_CUT, attached: 1 }) } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons).toHaveLength(1)
+  expect(reasonsOf(w)?.reasons[0]).toMatch(/could not find its own place among the processes .*: process 400 \(node\)$/)
+  expect(reasonsOf(w)?.reasons[0]).not.toMatch(/777/)
+  expect(reasonsOf(w)?.notes).toEqual([UNREAD_NOTE])
+  // With nothing that needed the check's own place, the same failing withholds nothing and is a note
+  // beside the unread process's own: the card is pinned.
+  w.procs = { exitCode: 0, stdout: JSON.stringify({ found: [], unread, unplaced: [], own: OWN_CUT, attached: 1 }) }
+  await says($, 'And one more thing')
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(w.pinned).toHaveLength(1)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
+  expect(reasonsOf(w)?.notes).toEqual([
+    "the check for a process left behind could not find its own place among the processes (process 110, a parent of it, is not in the process list); it saw no process carrying this session's id that needed that place to be told apart, so this withheld nothing",
+    UNREAD_NOTE,
+  ])
+})
+
+test('the pin does not come back shown while an unread process was seen: the reasons file written then keeps the note beside why the card is not up (#3770, the review\'s RV5)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { pinAnswer: 'not shown: carried steps held', procs: { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [{ pid: 777, name: 'node', why: 'process 700, a parent of it, is not in the process list' }], attached: 6 }) } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.pinned).toBe(false)
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/could not be shown/)
+  expect(reasonsOf(w)?.notes).toEqual([UNREAD_NOTE])
+  expect(reasonsOf(w)?.attached).toBe(6)
+})
+
+// A check that could not be finished still says nothing either way, so the other readings decide
+// (the rule is older than this change and is Dan's to change). What changed is that it leaves a
+// trace: a note in the reasons file and a line in the debug log, where before it left neither or one.
+const UNFINISHED: { name: string; init: Partial<World>; note: RegExp; lookRuns: boolean }[] = [
+  { name: 'the check ends with an exit code other than 0', init: { procs: { exitCode: 1, stdout: '', stderr: 'python3: not found' } }, note: /^the check for a process left behind ended with exit code 1, so it said nothing either way: the other readings decided, and a process left behind would not have been seen$/, lookRuns: true },
+  { name: 'the check runs past its time limit and the run throws', init: { procsTimeout: 'throws' }, note: /^the check for a process left behind could not run \(.+\), so it said nothing either way: the other readings decided, and a process left behind would not have been seen$/, lookRuns: true },
+  { name: 'the check runs past its time limit and is killed', init: { procsTimeout: 'exits' }, note: /^the check for a process left behind ended with exit code 143, so it said nothing either way: /, lookRuns: true },
+  { name: 'the check prints something that is not JSON', init: { procs: { exitCode: 0, stdout: 'garbled' } }, note: /^the check for a process left behind printed something that is not its answer, so it said nothing either way: /, lookRuns: true },
+  { name: 'ps ends with an exit code other than 0', init: { psFails: 'exits' }, note: /^the check for a process left behind was not run, because the list of this user's processes could not be taken \(ps ended with exit code 1\), so it said nothing either way: /, lookRuns: false },
+  { name: 'ps throws', init: { psFails: 'throws' }, note: /^the check for a process left behind could not run \(.+\), so it said nothing either way: /, lookRuns: false },
+]
+for (const c of UNFINISHED) {
+  test(`a check for a process left behind that could not be finished (${c.name}) decides nothing, as before, and now says so in the reasons file's notes and in the debug log (#3770)`, withAll, async ($, on) => {
+    const { w, clock, logs, runs } = world(on, c.init)
+    await start($)
+    await says($, 'Add the goal box')
+    await workedAndQuiet($, clock)
+    await clock.advance(PROCESS_TIMEOUT_MS)
+    // What the card decides is unchanged: the other readings are clean, so it is pinned.
+    expect(w.pinned).toHaveLength(1)
+    expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [], attached: null })
+    const notes = reasonsOf(w)?.notes ?? []
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toMatch(c.note)
+    expect(logs).toContain(`goal-box: ${notes[0]}`)
+    expect(runs().some(a => a[0] === 'python3')).toBe(c.lookRuns)
+  })
+}
+
+test('a process list that was cut short is a check that could not be finished: what it did see still decides, and a note and a debug line say a process past the cut was not looked at (#3770)', withAll, async ($, on) => {
+  const CUT = "the list of this user's processes was cut short before its end, so the check for a process left behind could not be finished: a process past the cut was not looked at"
+  const { w, clock, logs } = world(on, { psCut: true, procs: { exitCode: 0, stdout: JSON.stringify({ found: [{ pid: 4321, name: 'node' }], unread: [], unplaced: [], own: null, attached: 2 }) } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  // The one it found left behind withholds the card as ever.
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons).toEqual(["process 4321 (node) carries this session's id and its parents no longer lead to this session, so something this session started was left running"])
+  expect(reasonsOf(w)?.notes).toEqual([CUT])
+  expect(logs).toContain(`goal-box: ${CUT}`)
+  // With nothing found in the part it saw, the card is pinned, as before, and the note is kept.
+  w.procs = { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [], unplaced: [], own: null, attached: 2 }) }
+  await says($, 'And one more thing')
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(w.pinned).toHaveLength(1)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [], notes: [CUT], attached: 2 })
+})
+
+test("the reasons file records how many processes the check counted as still attached, so a check that saw none at all can be told from a clean one; nothing is decided from the count (#3770, the review's RV8)", withAll, async ($, on) => {
+  // Attached 0 with nothing found: in a session with connected servers this is a check that saw no
+  // environment at all. The card is pinned as before; the file now says 0.
+  const { w, clock } = world(on, { procs: { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [], unplaced: [], own: null, attached: 0 }) } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toHaveLength(1)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [], notes: [], attached: 0 })
+  // A count is written when the card is withheld too.
+  w.procs = { exitCode: 0, stdout: JSON.stringify({ found: [{ pid: 4321, name: 'node' }], unread: [], unplaced: [], own: null, attached: 6 }) }
+  await says($, 'And one more thing')
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(w.pinned).toHaveLength(1)
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, attached: 6 })
+  // An answer that gives no count, or one that is not a number, is written as null, never as 0.
+  for (const [i, attached] of [undefined, 'many', -1, 2.5].entries()) {
+    w.procs = { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [], attached }) }
+    await says($, `And another ${i}`)
+    await workedAndQuiet($, clock, { id: `c${i}` })
+    expect({ attached, written: reasonsOf(w)?.attached }).toEqual({ attached, written: null })
+  }
 })
 
 test('a command that put something in the background withholds the card for the rest of the session, across later requests and boxes (#3770)', withAll, async ($, on) => {
