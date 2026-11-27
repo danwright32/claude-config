@@ -56,8 +56,14 @@ unset CLAUDE_CODE_SESSION_ID
 export AGENT_LEFTOVERS_ROOT="$TMP/marks"
 mkdir -p "$TMP/marks"
 
-# A fixture's hold has a ceiling only a hang reaches, so a broken runner still lets the suite end.
-HANG_TICKS=$((HANG_S * 10))
+# A fixture's hold has a ceiling, so a process a broken runner left does end. It is three times the
+# hang ceiling the suite's own waits take: with the two equal, a fixture, which starts first, ended
+# by itself just before the wait for it gave up, and a process the runner had left read as gone
+# (seen on 2026-11-27 with the runner's KILL taken out: the check that nothing is left passed).
+HANG_TICKS=$((HANG_S * 30))
+# A fixture also lets go once this suite's own process has gone, so a suite that is killed before
+# its trap runs leaves nothing holding for the length of that ceiling.
+export RWL_SUITE_PID=$$
 
 # tree.sh <dir> <ticks> <plain|stubborn|passing> <hold|leave> [code]
 # Starts a child, waits until the child has written its process id, writes its own, and then
@@ -76,7 +82,7 @@ sh -c '
   [ "$3" = stubborn ] && trap "" TERM
   echo "$$" > "$1/child.tmp" && mv "$1/child.tmp" "$1/child.pid"
   n=0
-  while [ -e "$1/hold" ] && { [ "$3" != passing ] || [ ! -e "$1/leader-done" ]; } && [ "$n" -lt "$HANG_TICKS" ]; do
+  while [ -e "$1/hold" ] && kill -0 "$RWL_SUITE_PID" 2>/dev/null && { [ "$3" != passing ] || [ ! -e "$1/leader-done" ]; } && [ "$n" -lt "$HANG_TICKS" ]; do
     sleep 0.1; n=$((n + 1))
   done
 ' sh "$d" "$HANG_TICKS" "$kind" > /dev/null 2>&1 &
@@ -89,24 +95,27 @@ if [ "$then_what" = leave ]; then
   exit "$code"
 fi
 n=0
-while [ -e "$d/hold" ] && [ "$n" -lt "$HANG_TICKS" ]; do sleep 0.1; n=$((n + 1)); done
+while [ -e "$d/hold" ] && kill -0 "$RWL_SUITE_PID" 2>/dev/null && [ "$n" -lt "$HANG_TICKS" ]; do sleep 0.1; n=$((n + 1)); done
 echo "should never be printed"
 SH
 
 CASE=""
 new_case() { CASE="$TMP/$1"; mkdir -p "$CASE"; : > "$CASE/hold"; }
 # left_running <dir>: the process ids the case recorded that never went. Each is waited for, since
-# a killed process is a moment in going; one that the runner left holds until the hang ceiling.
+# a killed process is a moment in going; one that the runner left holds well past that wait.
 left_running() {
-  local f p left=""
+  local f p pids="" left=""
   for f in "$1"/*.pid; do
     [ -f "$f" ] || continue
     p="$(cat "$f" 2>/dev/null || true)"
     case "$p" in ''|*[!0-9]*) continue ;; esac
-    hang_wait '! kill -0 "$p" 2>/dev/null' 0.05 || left="$left $p"
+    pids="$pids $p"
   done
+  # One wait for all of a case's processes, so a case that left several costs one ceiling.
+  hang_wait 'none_alive $pids' 0.05 || for p in $pids; do kill -0 "$p" 2>/dev/null && left="$left $p"; done
   printf '%s' "$left"
 }
+none_alive() { local q; for q in "$@"; do kill -0 "$q" 2>/dev/null && return 1; done; return 0; }
 # end_case <what the case was>: fails when anything the case started is still running, and only
 # then lets go of the fixture, so a process the runner left cannot pass by ending late.
 end_case() {
@@ -156,7 +165,7 @@ new_case stubborn
 bash "$RUNNER" 2 sh "$FX" "$CASE" "$HANG_TICKS" stubborn hold > "$CASE/out" 2> "$CASE/err"; rc=$?
 check "a command past its limit whose child ignores TERM still comes back as 124" "$([ "$rc" -eq 124 ] && echo ok || echo "rc $rc, said: $(cat "$CASE/err")")"
 if started; then
-  check "and the runner says the group ended at KILL" "$(one_line "$CASE/err" && grep -q 'KILL' "$CASE/err" && echo ok || echo "said: $(cat "$CASE/err")")"
+  check "and the runner says the group ended at KILL" "$(one_line "$CASE/err" && grep -q 'ended at KILL' "$CASE/err" && echo ok || echo "said: $(cat "$CASE/err")")"
   end_case "past the limit, a child ignoring TERM"
 else
   rm -f "$CASE/hold"
@@ -183,7 +192,7 @@ bash "$RUNNER" 300 sh "$FX" "$CASE" "$HANG_TICKS" stubborn leave 7 > "$CASE/out"
 check "a command that fails with 7 and leaves a child that ignores TERM comes back as 123, never 7" \
   "$([ "$rc" -eq 123 ] && echo ok || echo "rc $rc, said: $(cat "$CASE/err")")"
 check "and the runner's line names the command's own code and that KILL ended the group" \
-  "$(one_line "$CASE/err" && grep -q 'exit code 7' "$CASE/err" && grep -q 'KILL' "$CASE/err" && echo ok || echo "said: $(cat "$CASE/err")")"
+  "$(one_line "$CASE/err" && grep -q 'exit code 7' "$CASE/err" && grep -q 'ended at KILL' "$CASE/err" && echo ok || echo "said: $(cat "$CASE/err")")"
 check "and that fixture did start its child" "$(started && echo ok || echo "no process id was written")"
 end_case "a child left running that ignores TERM"
 
@@ -303,7 +312,7 @@ spec.loader.exec_module(m)
 fx, work, ticks = sys.argv[2], sys.argv[3], sys.argv[4]
 
 def result(name, cond, detail=""):
-    print(("PASS\t" if cond else "FAIL\t") + name + ("" if cond else ": %s" % (detail,)))
+    print(("PASS\t" + name) if cond else "FAIL\t%s\t%s" % (name, " ".join(str(detail).split())))
     sys.stdout.flush()
 
 log, said = [], []
@@ -421,14 +430,15 @@ m.GRACE = grace
 result("stand in: a child left running that ignores TERM: 123", rc == 123, rc)
 result("stand in: a child left running that ignores TERM: TERM, then KILL, then the one collect, and no signal after it",
        sent(15) and sent(9) and not faults(log), (faults(log), log))
-result("stand in: a child left running that ignores TERM: the line says KILL", len(said) == 1 and "KILL" in said[0], said)
+result("stand in: a child left running that ignores TERM: the line says the group ended at KILL", len(said) == 1 and "ended at KILL" in said[0], said)
 
 # What a command leaves is given a moment to end by itself (a writer finishing what it was piped)
 # before it counts as left running. Here the moment is made as long as the hang ceiling, so the
 # case asserts the rule and not this machine's speed.
 d = case_dir("passing")
 settle = m.SETTLE
-m.SETTLE = float(ticks) / 10
+result("the moment a command's leftovers are given to end by themselves is at least a second as shipped", settle >= 1.0, settle)
+m.SETTLE = float(ticks) / 30
 rc = run(["300", "sh", fx, d, ticks, "passing", "leave", "4"])
 m.SETTLE = settle
 result("stand in: a child that ends by itself just after the command: the command's own code, 4", rc == 4, (rc, said))
@@ -484,10 +494,10 @@ result("a /proc that is not there is said as unreadable, never as an empty group
 print("DONE\tall")
 EOF
 drive_done=""
-while IFS=$'\t' read -r verdict name; do
+while IFS=$'\t' read -r verdict name detail; do
   case "$verdict" in
     PASS) check "$name" ok ;;
-    FAIL) check "${name%%: *}" "${name#*: }" ;;
+    FAIL) check "$name" "got: ${detail:-no detail}" ;;
     UNMEASURED) echo "SUITE-PART-UNMEASURED $name" ;;
     DONE) drive_done="$name" ;;
   esac
@@ -498,6 +508,36 @@ for CASE in "$TMP/drive"/*/; do
   [ -e "$CASE/hold" ] || continue
   end_case "the stand in run's ${CASE##*/}"
 done
+
+# A runner that goes before it has let its command go (ended outright between starting the child
+# and watching it) must not leave the command running with nobody to keep its limit: the child
+# reads the end of the pipe it waits on and ends without becoming the command. The stand in for
+# the record step writes the child's process id and ends the runner with no clean up of any kind.
+# The suite waits for that child to be gone before it looks, so a child that did become the
+# command has finished writing its file by then.
+new_case gone
+python3 - "$PY" "$CASE" > /dev/null 2> "$CASE/err" <<'EOF'
+import importlib.util, os, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("run_with_limit", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+d = sys.argv[2]
+
+def goes(folder, pgid):
+    with open(os.path.join(d, "child.tmp"), "w") as f:
+        f.write("%d\n" % pgid)
+    os.rename(os.path.join(d, "child.tmp"), os.path.join(d, "child.pid"))
+    os._exit(77)
+
+m.record = goes
+m.main(["300", "sh", "-c", ': > "$1"', "sh", os.path.join(d, "ran")])
+os._exit(78)
+EOF
+rc=$?
+check "the stand in runner went at the step it was told to" "$([ "$rc" -eq 77 ] && [ -s "$CASE/child.pid" ] && echo ok || echo "rc $rc, said: $(cat "$CASE/err")")"
+end_case "a runner that went before it let its command go"
+check "and the child it left never became the command" "$([ ! -e "$CASE/ran" ] && echo ok || echo "the command ran with no runner")"
 
 # One place in the program signals and one collects, so the rule has one home to be held in.
 code_lines() { grep -v '^[[:space:]]*#' "$PY" 2> /dev/null; }
