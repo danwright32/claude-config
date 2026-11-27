@@ -274,10 +274,11 @@ done
 # one. A hook hears a route's calls unless the two name one field with different values, so a hook on
 # session.append with no door is passed over on these doors and runs on the others (#3697). Read
 # from the builds installed on the personal MacBook on 2026-11-25, 2.1.330 to 2.1.332, each of which
-# routes every route below that has no build of its own; earlier builds were never read for the
+# routes every route below that has no build of its own, and 2.1.328, read from CI's output on
+# 2026-11-26 (pull request 3784), routes them too; builds before 2.1.328 were never read for the
 # routes #3697 added (the session.append doors, telemetry.log and session.identity), so they are held
 # from the list's earliest build, which reports more, never less. The documentation says
-# telemetry.log is passed over from 2.1.328; no build before 2.1.330 was read to confirm it.
+# telemetry.log is passed over from 2.1.328; no build before it was read.
 # session.identity's handler refuses a user tier caller and routes every other, so no call of it
 # reaches a user tier hook.
 BYPASSED_ROUTES_SINCE="attribution.text	0
@@ -299,9 +300,12 @@ telemetry.log{to=collector}	0"
 # The routes the security default sends past the user tier for SOME of their calls (#3697): its
 # handler routes on a condition (a call from the Skill tool, a caller in the prepend or append tier,
 # its own reads) and hands every other call to the tier beneath. A hook on one runs, but not for
-# those calls. Read from the same builds, 2.1.330 to 2.1.332, each routing all of them.
+# those calls. Read from the installed builds 2.1.330 to 2.1.332, each routing all of them, and for
+# 2.1.328 from CI's output on 2026-11-26 (pull request 3784), which routes every one but fs.list, so
+# fs.list is held from 2.1.330 (2.1.329 was never read). The routes in the list above were read
+# from the same sources, and 2.1.328 routes every one of them its build allows.
 BYPASSED_SOME_SINCE="env.get	0
-fs.list	0
+fs.list	2.1.330
 fs.stat{resolve=true}	0
 session.append{door=note}	0
 session.append{door=tool-message}	0

@@ -930,9 +930,12 @@ other_shapes(){
 # e("tool.describe",(n,o,t)=>N(o,t)),e("agent.offer",(n,o,t)=>N(o,t))
 EOF
 }
+# The same before 2.1.330, the first build read that routes fs.list (2.1.328, read from CI's output on
+# 2026-11-26, does not), so a stub for an older build leaves it out.
+other_shapes_before_330(){ other_shapes | grep -v '"fs.list"'; }
 SEVEN7B=(attribution.text 'classic.*' prompt.compose prompt.context prompt.section settings.read skill.prompt)
-{ cat "$FAKE"; routes_of "${SEVEN7B[@]}"; other_shapes; } > "$TMPROOT/claude-same"; chmod +x "$TMPROOT/claude-same"
-{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment; other_shapes; } > "$TMPROOT/claude-more"; chmod +x "$TMPROOT/claude-more"
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}"; other_shapes_before_330; } > "$TMPROOT/claude-same"; chmod +x "$TMPROOT/claude-same"
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment; other_shapes_before_330; } > "$TMPROOT/claude-more"; chmod +x "$TMPROOT/claude-more"
 runbp "$TMPROOT/claude-same" 2.1.296
 [ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' && check "a build routing the listed events passes" ok \
   || check "a build routing the listed events passes" "exit=$code out=$out"
@@ -946,7 +949,8 @@ printf '%s\n' "$out" | grep -q 'UNMEASURED: no security default route was found'
 # before it do not, so the routes a build is held to depend on the build: each Mac and CI runs its
 # own, and neither goes red for the other's. 2.1.296 is the last build measured without them.
 { cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact; other_shapes; } > "$TMPROOT/claude-nine"; chmod +x "$TMPROOT/claude-nine"
-runbp "$TMPROOT/claude-nine" 2.1.299
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact; other_shapes_before_330; } > "$TMPROOT/claude-nine-old"; chmod +x "$TMPROOT/claude-nine-old"
+runbp "$TMPROOT/claude-nine-old" 2.1.299
 [ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' && check "2.1.299 routing prompt.attachment and session.compact as well passes" ok \
   || check "2.1.299 routing prompt.attachment and session.compact as well passes" "exit=$code out=$out"
 runbp "$TMPROOT/claude-same" 2.1.299
@@ -1068,6 +1072,16 @@ run7e "$TMPROOT/claude-eleven" 2.1.332
 run7e "$TMPROOT/claude-nine" 2.1.330
 [ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' \
   && check "a 2.1.330 writing the nine and the other shapes passes" ok || check "a 2.1.330 writing the nine and the other shapes passes" "exit=$code out=$out"
+# 2.1.328, as CI's runner printed it on 2026-11-26 (pull request 3784): every route above but fs.list,
+# which the builds installed here route from 2.1.330. A build older than a route's first build is not
+# held to it, and one at or past that build is.
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact; other_shapes_before_330; } > "$TMPROOT/claude-328"; chmod +x "$TMPROOT/claude-328"
+run7e "$TMPROOT/claude-328" 2.1.328
+[ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' \
+  && check "2.1.328, which does not route fs.list, passes" ok || check "2.1.328, which does not route fs.list, passes" "exit=$code out=$out"
+run7e "$TMPROOT/claude-328" 2.1.330
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'for some of their calls' | grep -q 'listed, no longer routed: fs.list' \
+  && check "a 2.1.330 that does not route fs.list fails, naming it" ok || check "a 2.1.330 that does not route fs.list fails, naming it" "exit=$code out=$out"
 # A new route in the matcher shape, which the plain reading leaves out, is said as not listed.
 { cat "$TMPROOT/claude-eleven"; printf '# e("session.append",{door:"queue"},(n,o,t)=>t.to(o,"append"))\n'; } > "$TMPROOT/claude-queue"; chmod +x "$TMPROOT/claude-queue"
 run7e "$TMPROOT/claude-queue" 2.1.332
