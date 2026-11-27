@@ -84,8 +84,14 @@ print(n)
 PY
 )"
 # A rename that matched nothing would leave a reader that CAN be asked, and its cases would prove
-# nothing of one that cannot (L100).
-case "$renamed" in ''|0|*[!0-9]*) check "#3472 the stand in for a reader that cannot be asked was made" "the rename found ${renamed:-nothing} to change" ;; *) check "#3472 the stand in for a reader that cannot be asked was made" ok ;; esac
+# nothing of one that cannot (L100). The count is read by the one test of a number above zero
+# (lib/whole-number.sh), into a name of its own so that the failure can still quote what came back.
+. "$DIR/lib/whole-number.sh"
+if renamed_count="$(whole_above_zero "$renamed")" && [ -n "$renamed_count" ]; then
+  check "#3472 the stand in for a reader that cannot be asked was made" ok
+else
+  check "#3472 the stand in for a reader that cannot be asked was made" "the rename found ${renamed:-nothing} to change"
+fi
 
 cat > "$WORK/cases.py" <<'PY'
 import importlib.util, json, os, subprocess, sys, types
