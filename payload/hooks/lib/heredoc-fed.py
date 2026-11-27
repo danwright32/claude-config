@@ -29,8 +29,9 @@ it cannot tell where they end it, it raises what the caller hands it as `unsure`
 refuses as a check it could not make: a marker a backslash joins to the line before, a line that
 is the marker only once joined, a marker the loose reading took the first letters of and word()
 does not read, more than one << in the command, an opener line that ends in a backslash, an
-earlier heredoc on that line that cannot be read or never ends, or a body that never ends and
-holds a $ or a backquote, which the shells expand.
+earlier heredoc on that line that cannot be read or never ends, or a body whose marker is not
+quoted that never ends and holds a $ or a backquote, which the shells expand there (one whose
+marker is quoted is fed as written, and handed on).
 
 An opener the loose reading never took (<<\\E, <<'E\\', <<"E F", <<!, <<~E) is not refused. fed() gave the
 command's own line for it and no body, so `python3 <<\\E` importing a module that posts passed. It
@@ -251,8 +252,8 @@ class Reader:
         word() read as strict, opened by the command at offset at of the text, on lines[i]. Where
         that cannot be told, the kind of doubt fed() names instead: "marker" for an opener line
         that goes on over the next, or an earlier heredoc on it that cannot be read or never ends,
-        and "" for a body whose end cannot be found, or that never ends and holds a $ or a
-        backquote."""
+        and "" for a body whose end cannot be found, or whose marker is not quoted and that
+        never ends and holds a $ or a backquote."""
         lines = self.lines
         if odd(lines[i]):
             return "marker"  # the command goes on over the next line

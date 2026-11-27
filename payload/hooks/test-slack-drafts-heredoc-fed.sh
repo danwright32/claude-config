@@ -327,7 +327,8 @@ a13|python3 <<'E'F|E|EF
 PATHS
 
 # The second judgement runs on what is left of the first one's time, never on a time of its own:
-# two whole budgets would be 22 seconds, past the 15 the hook is given. Counted in the gate's
+# two whole budgets would be 22 seconds, past the 15 the hook is given (not measured: the gate
+# sets the one and the hook's settings the other). Counted in the gate's
 # steps, which no load can move (SLACK_GATE_TICK_BUDGET under a test run): the fewest steps a
 # quiet command whose body grew is allowed in must be more than the fewest for the same command
 # with a body that did not grow by at least half of it, and no more than twice that and a few.
@@ -357,7 +358,7 @@ echo "  steps: $once for a body that did not grow, $twice for one that did"
 # is counted, which no load can move (L290). 300 `python3 <<EOF`, each with its EOF indented so
 # that it ends nothing, are 300 bodies that all run to the end of the text: handed on whole they
 # were 135,000 lines for a text of 900, and a script main judged in 1.47 seconds ran out of the
-# gate's 11 at 5019457df1 (the review's probe d_hd_300).
+# gate's 11 at 5019457df1 (the review's probe d_hd_300, measured 2026-11-27).
 cat > "$T/readings.py" <<'PY'
 import bisect, collections, importlib.util, random, re, sys
 

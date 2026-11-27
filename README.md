@@ -5466,9 +5466,10 @@ lines are not always a stricter reading: a line added at the end can weaken how 
 the lines before it (a quote left open has a shell's body read by the crude cut, which follows no
 variable; a later `sys.path` line is applied to an import that ran before it). So where any body
 grew and nothing was found, the gate judges the call once more with every body as it was before
-(`loose()` in that file, `main()` in the gate), on what is left of the same 11 seconds, and
-refuses where either reading gives a reason. Reading a body further can then never allow a
-command the shorter reading refused. Where it cannot tell where they end the body, the call is refused as a
+(`loose()` in that file, `main()` in the gate), on what is left of the same 11 seconds (the
+gate's own budget, set and not measured), and refuses where either reading gives a reason.
+Reading a body further can then never allow a command the shorter reading refused (found by the
+review of that change on 2026-11-27, which built five commands main refused and it allowed). Where it cannot tell where they end the body, the call is refused as a
 check the gate could not make: a marker that a backslash joins to the line before (which the
 shared reader refuses too, but not in a text it gives up on before it reaches that heredoc), more
 than one `<<` in the command, a marker whose first letters it reads and whose rest it does not, an
