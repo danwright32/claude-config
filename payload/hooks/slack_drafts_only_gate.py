@@ -574,6 +574,20 @@ NPM_LIFECYCLE = {"test": "test", "t": "test", "tst": "test", "start": "start", "
 PKG_DIR_OPTS = {"--prefix", "-C", "--dir", "--cwd"}
 PKG_EXEC = {"exec", "x", "dlx"}
 MAX_DEPTH = 3
+# How deep a shell script file, a heredoc fed to a shell and text piped to one are read as commands
+# (claude-config#3837). Up to MAX_DEPTH every reading is as it was. Before that issue one standing
+# exactly MAX_DEPTH deep was judged only by whether its own text names a send call, so a script
+# that names none and runs a script that posts passed: `bash h0.sh`, with the post behind four other
+# scripts, was allowed on d45aa40ce3 (2026-11-27). Refusing every script that deep was tried first
+# and refused the run of every suite in this repository, each of which sources lib/suite-deadline.sh,
+# which sources lib/load-average.sh, which sources lib/whole-number.sh (17 of 18 everyday commands
+# tried, 2026-11-27). So these are read on down to this depth, and one standing this deep is refused
+# as a command the gate could not check (too_deep in lib/no-network-route.py). A file that is
+# already being read higher up the same chain (lib/suite-deadline.sh runs itself again) is not read
+# a further time past MAX_DEPTH, and is not refused: its commands are the ones being read. A string
+# a shell is handed (`bash -c`, eval) is not read deeper than MAX_DEPTH, and is refused there, as
+# before.
+FILE_DEPTH = 8
 # A JavaScript or TypeScript script's relative imports are followed (claude-config#2318): repo-digest's
 # `npm run digest` runs src/digest.ts, which names no endpoint and imports src/slack.ts, which does.
 JS_EXT = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
@@ -2415,6 +2429,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         label = name or "a command"
         if odd or name is None:
             out = None
+            if not odd and vals and vals[0] is None and not self.shell.get("on_disk"):
+                # A program whose word cannot be worked out (`"$TOOL" +x run.sh`) may write any file
+                # it names, as a program the gate does not know may: with nothing marked, the less
+                # the gate knew of the program the more it believed (claude-config#3837). Not in a
+                # script on disk, where nothing a program names is marked (note_program).
+                for a, v in zip(args[1:], vals[1:]):
+                    self.note_named(a, v, d, "a program whose name this gate cannot work out")
         elif name in COPIERS:
             if any(v is None for v in vals):
                 # Which word is the target, and what it is copied from, cannot be told: every word
@@ -2693,6 +2714,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if hit:
                 return f"{name} runs a script from its input that names {hit.group(0)}" if unread is None else \
                     f"{name} {text_how}, which names {hit.group(0)}"
+            if shell_hint:
+                # Past MAX_DEPTH, and naming no endpoint: read as commands down to FILE_DEPTH, and
+                # refused there as text the gate could not check, as a script file is (script_body,
+                # claude-config#3837). Where the reading finds nothing it goes on as it did before.
+                if depth >= FILE_DEPTH:
+                    return self.unfollow(self.too_deep(f"the text {name} reads its commands from", FILE_DEPTH))
+                try:
+                    inner = self.line(body, d, depth + 1, body)
+                except self.sw.Unreadable:
+                    inner = None
+                if inner:
+                    return f"{name} {text_how}, one of which posts: {inner}"
             here = os.path.abspath(d or os.getcwd())
             reason = self.imports(f"the script {name} reads from its input", None, here, body, lang) if lang else None
             if lang == "py" and not reason:
@@ -2820,7 +2853,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         a program code that may write files it names (by_code), every default place curl reads one
         from. Asked only after a command that wrote one of those, never of every command: a scan per
         command of a long script's whole text was the cost of the first version."""
-        places = set(self.curlrc_noted)
+        named_here = sorted(self.curlrc_noted)
+        places = set(named_here)
         self.curlrc_noted.clear()
         if by_code:
             places.update(p for p, _ in self.curl_defaults("", "", None) if p)
@@ -2832,6 +2866,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if named:
                 return (f"it writes {path}, a config file curl reads by default, naming {named}, so a later "
                         f"curl call that names no endpoint would post there")
+        # One written by name with something the gate could not read (a program it does not know, a
+        # download, a word it cannot work out) may name an endpoint all the same, and nothing above
+        # can find it: the search refuses only where it sees one (claude-config#3837). Only what was
+        # noted for the file itself counts, never a guess that some program may have written any file.
+        for path in named_here:
+            by = [label for kind, _, label in self.made.get(path) or () if kind in ("unknown", "maybe")]
+            if by:
+                who = next((label for label in by if label), "")
+                return self.unfollow(f"it writes {path}, a config file curl reads by default, and what is "
+                                     f"written there{' (by ' + who + ')' if who else ''} cannot be read before "
+                                     "it runs, so whether a later curl call that names no endpoint would "
+                                     "post cannot be checked")
         return None
 
     def note_output(self, raw, value, d, pieces, label, append=False, redirect=False):
@@ -2937,9 +2983,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         real = os.path.realpath(self.resolve(target, d))
         if self.shell.get("on_disk"):
             pieces = [(k, v, "") if k == "unknown" else (k, v, lb) for k, v, lb in pieces]
-        if append:
+        roughly = self.read_roughly()
+        if append or roughly:
             pieces = self.pieces_of(target, d) + pieces
-        self.made[real] = pieces
+        self.made[real] = pieces + roughly
         if os.path.basename(real) in CURLRC_NAMES:
             self.curlrc_noted.add(real)
 
@@ -3052,12 +3099,32 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         real = os.path.realpath(self.resolve(target, d))
         if src_real == real:
             return
+        roughly = self.read_roughly()
         if os.path.isdir(src_real) or src_real in self.made_dirs:
+            if roughly:
+                # Never in the place of a folder noted before: every file under it is unread.
+                self.made_unknown.append((glob.escape(real.rstrip("/")) + "/*", roughly[0][2]))
+                return
             self.made_dirs[real] = (src_real, src.rstrip("/") or src)
             return
         pieces = self.pieces_of(src, where)
         if pieces:
-            self.made[real] = pieces
+            self.made[real] = (self.pieces_of(target, d) if roughly else []) + pieces + roughly
+
+    def read_roughly(self):
+        """The piece every write gains where the text being read could only be read by the crude cut
+        (lib/shell-words.py crude_commands), else []. That cut lists whatever MAY be a command,
+        words inside quotes included, which a shell only prints. Noted as any other write, such a
+        pretend write replaced what the gate held for the file: `cp post.sh made.sh` and then
+        `echo 'a $(printf true > made.sh) b'`, in a script with a quote left open further down,
+        left made.sh read as `true`, and `bash made.sh` after it was allowed (claude-config#3837,
+        seen on d45aa40ce3, 2026-11-27). So in such a text a write only ever adds: what the file
+        held before is kept, and the file also holds something the gate could not read, which
+        refuses a later run of it as one that could not be checked."""
+        if not self.shell.get("crude"):
+            return []
+        return [("unknown", None, "" if self.shell.get("on_disk") else
+                 "a command in text this gate could not read as commands for certain")]
 
     def script(self, word, d, depth, shell_hint, lang=None, label=None, sourced=False, built=None, maybe=True):
         """The reason a script file posts, or None. lang ("js" or "py") is the language of the
@@ -3080,6 +3147,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         this."""
         label = label or f"the script {word}"
         path = self.resolve(word, d)
+        if sourced:
+            # What it defines stays defined for the commands after it: a function named for a program
+            # the gate reads by its name (lib/exact-output.py sourced_shadow, claude-config#3837).
+            self.note_sourced(path)
         # A file a compiler run earlier in this call builds is read as each source it is built from,
         # at the source's own place, so its imports resolve as the compiler's do (claude-config#2844),
         # and then as it is on disk, which the build replaces. built names the program the command ran
@@ -3156,13 +3227,24 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         is_shell = shell_hint or real.endswith(SHELL_EXT) or bool(SHELL_BANG.match(first))
         prog = self.reading_shell(shell_hint, sourced, first) if is_shell else None
         binary = self.content(real, part="binary") if is_shell and "\0" in body else b""
-        if is_shell and depth < MAX_DEPTH and binary:
+        if is_shell and depth >= MAX_DEPTH:
+            # Past MAX_DEPTH (FILE_DEPTH says why, claude-config#3837): first judged exactly as it
+            # was before that issue, by a name in its text and by what it imports, so nothing
+            # refused then passes now. One that passed is then read as commands like any other,
+            # unless it is already being read higher up this chain, or stands FILE_DEPTH deep,
+            # where it is refused as a script the gate could not check, not as one that posts.
+            found = self.script_named(label, real, d, body, first, lang, hit)
+            if found or self.being_read(real):
+                return found
+            if depth >= FILE_DEPTH:
+                return self.unfollow(self.too_deep(label, FILE_DEPTH))
+        if is_shell and binary:
             # Only bash and ksh refuse a file with a NUL in its first line; zsh and dash run it, and
             # bash runs a file it sources up to its first NUL (nul_reading, claude-config#2977).
             reason = self.nul_reading(word, real, d, depth, label, prog, sourced)
             if reason is not False:
                 return reason
-        if is_shell and depth < MAX_DEPTH and "\0" in body:
+        if is_shell and "\0" in body:
             # A binary file, or what code naming one wrote (/usr/bin/true in a python3 heredoc's
             # string, read as a file the code may copy in, #2772), is no text bash runs as
             # commands: bash refuses it, and its bytes read as commands put a NUL in a word, which
@@ -3179,7 +3261,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                                      "keeps inside a word, so the commands it runs cannot be worked out "
                                      "(claude-config#2892)")
             hit = MARKER.search(body)
-        if is_shell and depth < MAX_DEPTH:
+        if is_shell:
             # Read as commands even with no endpoint in it: it can run another script that posts.
             # Only a text the reader itself says it cannot read (its Unreadable) is judged by what
             # it names. Any other error is a fault in this gate's own walk, which has judged
@@ -3198,6 +3280,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             except self.sw.Unreadable:
                 inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
             return f"{label} runs a command that posts: {inner}" if inner else None
+        return self.script_named(label, real, d, body, first, lang, hit)
+
+    def script_named(self, label, real, d, body, first, lang, hit):
+        """script_body for a file that is not read as commands: the reason it posts by a name in its
+        text (hit, the first one found) or by what it imports, or None."""
         # A file php runs is PHP whatever it is called, and its includes are followed (#2978).
         kind = "php" if lang == "php" else self.language(real, first, lang)
         held = None
@@ -3212,6 +3299,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             root = os.path.abspath(d or os.getcwd()) if kind == "php" else os.path.dirname(real)
             return self.imports(label, real, root, body, kind, (label, held.group(0)) if held else None)
         return None
+
+    def being_read(self, real):
+        """Whether the file real is one whose commands are being read now, higher up the chain of
+        files that led here: each text a file gave carries the file (ran) and the text that ran it
+        (parent)."""
+        ctx = self.shell
+        while isinstance(ctx, dict):
+            ran = ctx.get("ran")
+            if ran and ran[0] == real:
+                return True
+            ctx = ctx.get("parent")
+        return False
 
     @staticmethod
     def language(path, first, lang):
@@ -5945,6 +6044,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 starts = [p["start"] for p in parts]
             except self.sw.Unreadable:
                 parts, starts = [], []  # read by the crude cut, so no command's place is known
+                self.shell["crude"] = True  # and a write it lists may be quoted words (read_roughly)
             # The command of a package script that the words after the script's name land in: the one
             # they are written inside, as the shell reads text added to the end of a line, which a
             # command inside a substitution earlier in it is not (script_handed, claude-config#3143).
@@ -5979,11 +6079,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # it (headed_filled in lib/sh-walk-shapes.py, claude-config#3252), while the reader's
             # commands for that string, which that reading stands in for, are passed over.
             headed = None
+            # The depth of a wrapper whose string the reader could not read for certain, while the
+            # commands listed from that string are being read: a write among them may be quoted
+            # words, as in a whole text read by the crude cut (read_roughly, claude-config#3837).
+            rough_text, rough_under = bool(self.shell.get("crude")), None
             for d, text, wrapper, why, wdepth in self.sw.every_command(s, cwd):
                 if headed is not None:
                     if wdepth > headed:
                         continue
                     headed = None
+                if rough_under is not None and wdepth <= rough_under:
+                    rough_under = None
+                self.shell["crude"] = rough_text or rough_under is not None
                 d = self.settled_dir(d)  # a cd built from $0 or BASH_SOURCE, worked out (#2913)
                 while wraps and wraps[-1][0] >= wdepth:
                     wraps.pop()
@@ -6054,6 +6161,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return reason
                 if wrapper:
                     wraps.append([wdepth, text, d, -1])
+                    if why and rough_under is None:
+                        rough_under = wdepth
                 if not wdepth:
                     self.shell["last_cmd"] = (at, text) if at is not None else None
                     if home is not None:
@@ -6395,6 +6504,19 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             hit = MARKER.search(fed)
             if hit:
                 return f"{name} reads commands from its input, which names {hit.group(0)}"
+            if is_body and depth >= MAX_DEPTH:
+                # Past MAX_DEPTH, and naming no endpoint: read as commands down to FILE_DEPTH, and
+                # refused there as text the gate could not check, as a script file is (script_body,
+                # claude-config#3837). Where the reading finds nothing it goes on as it did before.
+                if depth >= FILE_DEPTH:
+                    return self.unfollow(self.too_deep(f"the text {name} reads its commands from", FILE_DEPTH))
+                try:
+                    self.next_program = name
+                    inner = self.line(fed, d, depth + 1, fed)
+                    if inner:
+                        return f"{name} runs commands from its input, one of which posts: {inner}"
+                except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573)
+                    pass
             return self.input_code(name, d, text, whole, depth, True, None)
         if INTERPRETER.match(name):
             if hit:
@@ -8333,8 +8455,10 @@ def main():
             advice += judge.mod_tests_note(reason)  # claude plugin test, for bun test in a mod's folder (#3356)
         else:
             advice = draft_advice("with the same channel and thread")
-        if not unfollowed:
-            advice += judge.route_note(reason)  # the no network wrapper, for a file's imports (#3173)
+        if not unfollowed or judge.too_deep_in(reason):
+            # The no network wrapper, for a file's imports (#3173) and for a script too deep to read
+            # (#3837), which is the one thing the walk could not follow that the route is named for.
+            advice += judge.route_note(reason)
         print("refuse\n" + lead + reason + ". " + advice)
         if kept:
             _cache.trace("not stored: refused")

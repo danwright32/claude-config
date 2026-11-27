@@ -151,6 +151,13 @@ IMPORTS = ", which imports "
 #     whose own file name holds them, is matched (not held by the suite).
 SHELL_EXT = (".sh", ".bash", ".zsh", ".command")
 NAMED_UNREAD = re.compile(r"(?:" + "|".join(re.escape(e) for e in SHELL_EXT) + r") posts to Slack \(it names ")
+# What a refusal reads like when a shell script, or text a shell reads as its commands, stands as
+# deep as the gate reads one as commands and so was not read (too_deep, claude-config#3837). Before
+# that issue such a script was judged only by whether its own text names a send call, so one that
+# names none and runs a script that posts passed: `bash h0.sh` with the post behind four scripts was
+# allowed on d45aa40ce3 (2026-11-27). It is refused as a command the gate could not check, and the
+# refusal gains the route below, since a suite that reaches a helper that deep is the everyday case.
+DEEP_UNREAD = "which is as deep as this gate reads a script as commands"
 # What a later file is said to have been written by, where one may have been.
 UNDER = "the command run under the no network wrapper"
 
@@ -221,6 +228,20 @@ def make(here):
             self.made_unknown.append(("*", UNDER))
             return True
 
+        @staticmethod
+        def too_deep(what, limit):
+            """Why what, a shell script or text a shell reads as its commands, cannot be judged: it
+            stands limit steps deep in what the command runs (the gate's MAX_DEPTH), where the gate
+            reads nothing as commands, so a script it runs is never seen (DEEP_UNREAD). The words
+            are made here because route_note looks for them."""
+            return (f"{what} is {limit} steps deep in what this command runs, {DEEP_UNREAD}, so what it runs "
+                    "cannot be checked")
+
+        @staticmethod
+        def too_deep_in(reason):
+            """Whether reason is a refusal too_deep worded."""
+            return DEEP_UNREAD in reason
+
         def route_note(self, reason):
             """The sentence a refusal gains when what the gate found is not a command it read: a
             file's imports are what reach code that posts, or a shell script was judged by a name
@@ -229,7 +250,7 @@ def make(here):
             test or a check can still be run. "" for any other refusal, and where no wrapper is
             installed, since a route that is not there must not be named (L111). It is asked only
             once a call is refused and adds words to that refusal, so it moves no verdict."""
-            if not self.no_network or not (IMPORTS in reason or NAMED_UNREAD.search(reason)):
+            if not self.no_network or not (IMPORTS in reason or NAMED_UNREAD.search(reason) or DEEP_UNREAD in reason):
                 return ""
             return (" If the command is a test or a check that is meant to post nothing, run it again under the "
                     "no network wrapper, which this gate lets through because what runs under it has no network "

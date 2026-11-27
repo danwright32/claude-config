@@ -57,11 +57,21 @@ the program the shell would run is that one for certain:
     or relative entry is the folder the command runs in), and no text that runs the command, the
     line itself or a script around it, names PATH in any way, set or only read;
   * with no word in front that runs it for the shell (env, exec, command, sudo, nice, xargs:
-    lib/shell-words.py's runners), since one can change where the program is looked for.
+    lib/shell-words.py's runners), since one can change where the program is looked for;
+  * never where an earlier command of the same call wrote, or may have written, the file the
+    shell would run: the word's own path, or for a bare name a file of that name in any folder of
+    the session's PATH or of SYSTEM_BIN (written_program, claude-config#3837: `cp ./frob
+    /opt/homebrew/bin/cat; /opt/homebrew/bin/cat calm.sh > run.sh; bash run.sh` was read as
+    calm.sh and allowed on d45aa40ce3, 2026-11-27);
+  * never where a function or an alias of the name is defined: in a text that runs the command,
+    in a file such a text sources before it or one that file sources (sourced_shadow), or
+    anywhere in such a text as a name in front of empty brackets, quoted or not, which is how
+    `eval 'cat() { ... }'` and a definition after another command on its line are written
+    (named_anywhere). All three were allowed on d45aa40ce3 (claude-config#3837).
 
 Not looked at, and so still believed: a bare name the session's PATH resolves outside those
-folders, a file an earlier command wrote into a PATH folder, zsh's path array, the shell's hash
-table (hash -p), and a PATH or function set by a file the command sources.
+folders, zsh's path array, the shell's hash table (hash -p), PATH set by a file the command
+sources, and a function whose name eval or source is handed through a variable.
 
 That judgement is system_program, and it is the gate's one judgement of it (claude-config#3440).
 The gate's older readings took a program by the last part of its word in the same way: with a
@@ -110,6 +120,27 @@ PATH_NAMED = re.compile(r"(?<!\w)PATH(?!\w)")
 # The programs among those the gate reads by name that bash, zsh and dash each run as a builtin of
 # their own where the name is written bare, whatever PATH holds (system_program).
 BUILTINS = frozenset({"echo", "printf"})
+# Empty brackets, and the name a function would have that ends just before them (named_anywhere).
+EMPTY_BRACKETS = re.compile(r"\(\s*\)")
+NAME_BEFORE = re.compile(r"[A-Za-z_][\w:.-]*\Z")
+
+
+def named_anywhere(text):
+    """Every name text writes in front of empty brackets, wherever it stands: at the start of a
+    line or after another command, bare or inside quoted words. The gate's sh_funcs finds `name()`
+    only at the start of a line, so `true; cat() { ./frob; }` and `eval 'cat() { ./frob; }'` each
+    defined a function it did not see (claude-config#3837). Quoted words are counted on purpose:
+    whether a shell ever evaluates them is not something a reading of the text can say, and
+    counting one that is only printed can only make a program doubted, never believed.
+
+    One pass over the brackets, never one search for each name: this is asked of every text
+    system_program walks, and tests/test-claude-sync.sh is 1.8 MB."""
+    names = set()
+    for m in EMPTY_BRACKETS.finditer(text):
+        found = NAME_BEFORE.search(text[max(0, m.start() - 120):m.start()].rstrip(" \t"))
+        if found:
+            names.add(found.group(0))
+    return names
 
 
 class Outside(Exception):
@@ -573,6 +604,10 @@ def make(unknown_dir, system_bin):
                 return False
             if bare and not builtin and not self.exact_session_path():
                 return False
+            # A file this call wrote where the shell finds the program is not the system's (#3837).
+            # A builtin by its bare name is not looked for in any folder.
+            if not builtin and self.written_program(word, name, bare):
+                return False
             # A text that begins with the program's own word has no word in front of it, so the
             # shared reader is asked only of the others: asked of every cat and cp of a long
             # script, it took judging `bash tests/test-claude-sync.sh` past its cost limit
@@ -585,6 +620,8 @@ def make(unknown_dir, system_bin):
             while ctx is not None:
                 if self.exact_shadowed(ctx["text"], name):
                     return False  # a function or an alias of that name is not the program
+                if ctx.get("sourced") and self.sourced_shadow(ctx["sourced"], name):
+                    return False  # nor is one a file this text sourced defines (#3837)
                 if bare and not builtin and (scripts or not ctx.get("on_disk")) \
                         and self.exact_names_path(ctx["text"]):
                     return False
@@ -655,10 +692,71 @@ def make(unknown_dir, system_bin):
                 # text, not once for each name: since claude-config#3440 this is asked of echo,
                 # printf, cat, cp and the rest too, and tests/test-claude-sync.sh is 1.8 MB (its
                 # cost case read 62.1 and 63.5 units against 57.0 with the search made per name).
-                funcs = self.exact_once(("functions", text), lambda: self.sh_funcs(text))
+                # With every name in front of empty brackets, which sh_funcs sees only at the start
+                # of a line (named_anywhere, claude-config#3837).
+                funcs = self.exact_once(("functions", text), lambda: self.sh_funcs(text) | named_anywhere(text))
                 aliases = self.exact_once(("alias lines", text), lambda: "\n".join(ALIAS_LINE.findall(text)))
                 memo[key] = name in funcs or bool(aliases and re.search(ALIAS % re.escape(name), aliases))
             return memo[key]
+
+        def note_sourced(self, path):
+            """Called by the gate's script() for each file a source or . command reads: the text
+            being read gains the file, for sourced_shadow, since what a sourced file defines stays
+            defined for the commands after it. A file sourced by a sourced file is kept against
+            that file as well, so it is found again where the outer file's reading was kept from an
+            earlier read and its commands are not walked a second time (the gate's clean)."""
+            real = os.path.realpath(path)
+            if not isinstance(self.shell, dict):
+                return
+            self.shell.setdefault("sourced", []).append(real)
+            ran = self.shell.get("ran")
+            if ran and ran[1] is None:  # the text being read is itself a sourced file's
+                nested = self.__dict__.setdefault("_exact_nested", {})
+                nested.setdefault(os.path.realpath(ran[0]), []).append(real)
+
+        def sourced_shadow(self, paths, name):
+            """Whether one of the sourced files paths, or a file one of them sources, defines a
+            function or an alias called name (claude-config#3837). Each is read as the gate reads
+            any file, so one an earlier command of this call wrote is read as what was written."""
+            nested = self.__dict__.get("_exact_nested", {})
+            seen, todo = set(), list(paths)
+            while todo:
+                real = todo.pop()
+                if real in seen:
+                    continue
+                seen.add(real)
+                text = self.sourced_text(real)
+                if text and self.exact_shadowed(text, name):
+                    return True
+                todo.extend(nested.get(real, ()))
+            return False
+
+        def sourced_text(self, real):
+            """The text of a sourced file, read once unless this call wrote it."""
+            def work():
+                try:
+                    return self.content(real).decode("utf-8", "replace")
+                except (OSError, ValueError):
+                    return ""  # unreadable to us is unreadable to the shell that would source it
+            return work() if self.made_from(real) is not None else self.exact_once(("sourced text", real), work)
+
+        def written_program(self, word, name, bare):
+            """Whether an earlier command of this call wrote, or may have written, the file the
+            shell would run for word (claude-config#3837): the path itself, or for a bare name a
+            file called name in a folder of the session's PATH or of the gate's SYSTEM_BIN. Asked
+            of the gate's own record of what the call wrote (made_from), which is empty for most
+            calls and answers at once then. For a bare name the folders are searched once for each
+            name while that record holds the same number of entries."""
+            if not (self.made or self.made_dirs or self.made_unknown or self.made_maybe or self.made_code
+                    or self.made_git):
+                return False
+            if not bare:
+                return self.made_from(word) is not None
+            folders = set(system_bin) | {e for e in (os.environ.get("PATH") or "").split(os.pathsep) if os.path.isabs(e)}
+            key = ("written program", name, len(self.made), len(self.made_dirs), len(self.made_unknown),
+                   len(self.made_maybe), len(self.made_code), len(self.made_git))
+            return self.exact_once(key, lambda: any(self.made_from(os.path.join(folder, name)) is not None
+                                                   for folder in sorted(folders)))
 
         def exact_once(self, key, work):
             """work()'s answer for key, worked out once: each of the three askings below depends
