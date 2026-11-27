@@ -2502,13 +2502,18 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   interactive sessions of the 30 days before (3,015 turns, each counted once though a resumed
   session's file repeats them; 7,483 headless and SDK sessions passed over): 44 turns handed Dan
   a command and 37 would be held, 34 with no card shown and 3 beside a card of other unfinished
-  steps, which is the case of the issue. Read one by one, all 37 hand him a command only he can
-  type (27 `/reload-plugins`, 6 `/compact`, 2 `/goal`, 1 `/plan-lite`, 1 `/winddown`), and none
-  is a rule quoted, a route, a path, an example or the session's own plan. The prose check as it
-  stands holds 2 of the 37, so 35 are turns sent back that were not before, a little over one a
-  day. The recogniser as
-  first built holds the same 37 turns, so on this Mac the review's fixes move nothing: none of
-  its wordings, missed or wrongly held, was said in those 30 days. The 37 is higher than the 23
+  steps, which is the case of the issue (27 `/reload-plugins`, 6 `/compact`, 2 `/goal`, 1
+  `/plan-lite`, 1 `/winddown`). The 37 were read in a window around each command's first mention,
+  which need not be the words that held the turn, and judged by the builder: 30 hand Dan a command
+  only he can type now, and 7 are open to question (5 for the morning or for when he is back, 2
+  offered beside another way). The prose check as it stands holds 2 of the 37, so 35 are turns
+  sent back that were not before, a little over one a day. The recogniser as first built holds
+  the same 37 turns, so on this Mac the review's fixes moved no turn between held and not held; a
+  wording said in a turn held for another reason would not show. The count tool was then fixed to
+  read a record's text blocks joined, as the mod does, and to mark the words that held each turn,
+  and was run again the same day after the second review's fixes (3,025 turns in 128 interactive
+  sessions, counts only, no window kept): the same 37 held, the same names, none moved against the
+  recogniser as first built. The 37 is higher than the 23
   of the first count because that count took a command as on the card whenever the session's
   last steps call named it, finished or not; this one follows each card through its steps calls
   and verdicts and asks for an unfinished step. By the first count's rule the same 30 days give
