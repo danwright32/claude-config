@@ -1867,8 +1867,11 @@ const counter: { name: string; register: Register } = {
   },
 }
 const requests = async ($: Engine$) => Number(((await $.tool.call({ tool: 'ToolSearch', tool_use_id: 'count' } as never)) as Out).deny)
+// Where a case below asks whether work after an answer counted, it reads the count and shows no box
+// after the work, so it says the same thing whatever else may hold a box in a turn that did work.
+const withCount = { plugins: [kit, registry, counter] }
 
-test('two calls at once after one answer count his answer once: the count of his requests goes up by one (#3843)', { plugins: [kit, registry, counter] }, async ($, on) => {
+test('two calls at once after one answer count his answer once: the count of his requests goes up by one (#3843)', withCount, async ($, on) => {
   const { w } = world(on)
   await start($)
   await askedAndShown($, 'Run the monthly sync', 'b1')
@@ -1903,55 +1906,56 @@ test("the box's own tool is not work when it is shown either: a box shown while 
 // with nothing in it (Claude Code's typings of the tool's result: "Freeform text the user typed
 // instead of selecting a structured option"). Those are his own words, so it is an answer of his.
 const TYPED = { result: { questions: PICKER.questions, answers: {}, response: 'Fix the count, and the total too' }, text: '' }
-test('a reply Dan types into a picker instead of choosing is his answer: work after it earns the box (#3843)', withKit, async ($, on) => {
-  const { w, cards } = world(on)
+test('a reply Dan types into a picker instead of choosing is his answer: work after it counts as a request of his (#3843)', withCount, async ($, on) => {
+  const { w } = world(on)
   await start($)
   await askedAndShown($, 'Run the monthly sync', 'b1')
   await picks(w, $, 'q1', TYPED)
   expect((await box($, MORE, 'b2')).deny).toMatch(/Dan has answered a picker since, and nothing has been changed since his answer/)
+  expect(await requests($)).toBe(1)
   await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
-  expect((await box($, MORE, 'b3')).deny).toBeUndefined()
-  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1', 'b3'])
+  expect(await requests($)).toBe(2)
 })
 
 // Dan's rule holds to the turn he answered in. An answer nothing followed stops waiting when that
 // turn ends, so a turn he did not start (a prompt a mod sends, a wake up, a job's notice) cannot do
 // work that counts as picked by an answer he gave before it.
-test('an answer nothing followed stops waiting when its turn ends: work in a later turn Dan did not start opens no new box (#3843)', withKit, async ($, on) => {
+test('an answer nothing followed stops waiting when its turn ends: work in a later turn Dan did not start opens no new box (#3843)', withCount, async ($, on) => {
   const { w, cards } = world(on)
   await start($)
   await askedAndShown($, 'Run the monthly sync', 'b1')
   await picks(w, $, 'q1')
-  // While the turn runs the refusal says how long his answer waits.
-  expect((await box($, MORE, 'b2')).deny).toMatch(/his answer waits only until the turn it was given in ends/)
   await turnEnds($)
   await turnStarts($, 't2')
   await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
-  const later = await box($, MORE, 'b3')
+  const later = await box($, MORE, 'b2')
   expect(later.deny).toMatch(/already shown for this request; it shows again once Dan has asked for something new/)
   expect(later.deny).not.toMatch(/since his answer/)
-  // The control: an answer and the work after it in one turn still earn the box.
+  expect(await requests($)).toBe(1)
+  // The control: an answer and the work after it in one turn still count as a request of his. Until
+  // the work, the refusal says how long his answer waits.
   await picks(w, $, 'q2')
+  expect((await box($, MORE, 'b3')).deny).toMatch(/do it in this turn, then call this tool again: his answer waits only until the turn it was given in ends\.$/)
   await does(w, $, 'Edit', 'e2', { file_path: '/repo/a.ts' })
-  expect((await box($, MORE, 'b4')).deny).toBeUndefined()
-  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1', 'b4'])
+  expect(await requests($)).toBe(2)
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1'])
 })
 
-test("a turn Dan interrupted ends his waiting answer as well, and a subagent's turn end does not (#3843)", withKit, async ($, on) => {
-  const { w, cards } = world(on)
+test("a turn Dan interrupted ends his waiting answer as well, and a subagent's turn end does not (#3843)", withCount, async ($, on) => {
+  const { w } = world(on)
   await start($)
   await askedAndShown($, 'Run the monthly sync', 'b1')
   await picks(w, $, 'q1')
   // A subagent's turn ending is not the conversation's: his answer still waits, and work counts.
   await turnEnds($, { agentId: 'a1' })
   await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
-  expect((await box($, MORE, 'b2')).deny).toBeUndefined()
+  expect(await requests($)).toBe(2)
+  // A turn he interrupted is the conversation's: the answer he gave in it stops waiting.
   await picks(w, $, 'q2')
   await turnEnds($, { reason: 'aborted', isAborted: true })
   await turnStarts($, 't2')
   await does(w, $, 'Edit', 'e2', { file_path: '/repo/a.ts' })
-  expect((await box($, MORE, 'b3')).deny).toMatch(/already shown for this request; it shows again once Dan has asked for something new/)
-  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1', 'b2'])
+  expect(await requests($)).toBe(2)
 })
 
 test("an answer whose following work could not be read stops waiting when its turn ends too, and the debug log says so (#3843)", withKit, async ($, on) => {
