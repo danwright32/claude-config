@@ -13,8 +13,18 @@
 #   * a command the gate refuses passes when the call is that wrapper and the command and nothing
 #     else, with one `cd <folder> &&` in front at most, and its output, errors or input sent to a
 #     file written out, each form of that by name;
-#   * the refusal of a file whose imports reach code that posts names the route, and no other
-#     refusal does;
+#   * the refusal of a file whose imports reach code that posts names the route, and so does the
+#     refusal of a shell script the gate judged by a name in it and did not read as commands
+#     (claude-config#3476): one behind three other scripts, or one binary from its first line and
+#     run by bash, which is judged so alone or behind one script. A script that posts, reached too
+#     deep to be read, is judged by the name in it like any other, so its refusal names the route
+#     as well. The route reads the name the command wrote for the file, and the gate tests the
+#     file's real path, so a Python or JavaScript file run by a link whose name has a shell ending
+#     (python3 link.sh) gains the sentence too, though it is never read as commands. That is held
+#     here as it stands today, so a change to it is a decision someone sees. The refusals held to
+#     name no route: a script whose commands the gate read, a request, and a file that names the
+#     send call under a written name with no shell ending. Where no wrapper is installed none
+#     does;
 #   * every other call is judged as it was before the rule, which for each case here is a refusal:
 #     a copy elsewhere, a variable, a tilde, a program, an assignment, a redirection or a word of
 #     the shell's own in front of the wrapper, such as time or if, any command before it but the one
@@ -172,6 +182,166 @@ says_not "#3173 and a refusal that is not about an import names no route" "no ne
 run_here "$POST"
 read_refused "#3173 a request to the endpoint itself is refused"
 says_not "#3173 and that refusal names no route" "no network wrapper"
+
+echo "slack drafts only: a refusal of a shell script judged by a name in it, and not read, names the no network route (claude-config#3476)"
+
+# The gate reads the commands of three scripts in a chain, each run by the one before, and no deeper
+# (MAX_DEPTH). A shell script it reaches below that is not read as commands: it is
+# judged by whether it names a send call, and refused as posting where it does. That is what refused
+# a plain run of the gate's own priority suite, which starts itself again under taskpolicy and so
+# reaches the gate's script, which names the call it guards, three scripts down. Measured on
+# 2026-11-27 against main at 6c06cd9ff4: the same script reached two scripts down is read, and
+# passes. No command that posts was read, so the refusal names the route by which a test can still
+# be run. guard.sh stands in for the gate's script: it names the call in a pattern and sends nothing.
+printf '%s\n' 'case "$(cat)" in *chat.postMessage*) echo refused >&2; exit 2 ;; esac' > "$P/guard.sh"
+printf '%s\n' 'bash guard.sh' > "$P/deep3.sh"
+printf '%s\n' 'bash deep3.sh' > "$P/deep2.sh"
+printf '%s\n' 'bash deep2.sh' > "$P/deep1.sh"
+printf '%s\n' 'bash post.sh' > "$P/dpost3.sh"
+printf '%s\n' 'bash dpost3.sh' > "$P/dpost2.sh"
+printf '%s\n' 'bash dpost2.sh' > "$P/dpost1.sh"
+printf '%s\n' "fetch('https://slack.com/api/chat.postMessage', { method: 'POST' });" > "$P/post.js"
+NAMED="posts to Slack (it names chat.postMessage)"
+
+run_here "bash deep1.sh"
+read_refused "#3476 a script that names the send call, reached three scripts down, is refused, as it was"
+says "#3476 and it is refused for the name in it" "the script guard.sh $NAMED"
+says "#3476 and the refusal names the installed wrapper by its path" "$W"
+says "#3476 and says where the wrapper goes, in the gate's own words for it" "as the first word of the command"
+says "#3476 and says what the wrapper takes away" "no network access"
+run_here "bash deep2.sh"
+read_allowed "#3476 the same script reached two scripts down is read as commands, and passes"
+run_here "$W bash deep1.sh > out.txt 2>&1"
+read_allowed "#3476 the call that refusal describes, the wrapper first and the output sent to a file, passes"
+# The gate cannot tell that script from one that does post, which it judges the same way at that
+# depth, so that refusal names the route too. Under the wrapper the script has no network.
+run_here "bash dpost1.sh"
+read_refused "#3476 a script that posts, reached three scripts down, is refused"
+says "#3476 and it is judged by the name in it as well" "the script post.sh $NAMED"
+says "#3476 so its refusal names the wrapper too" "$W"
+# Where the gate did read a command that posts, or judged a file written by a name with no shell
+# ending, the refusal is as it was: no route.
+run_here "bash dpost2.sh"
+read_refused "#3476 the same script reached two scripts down is read, and refused"
+says "#3476 for the request it sends" "curl sends a request to chat.postMessage"
+says_not "#3476 and a refusal for a command the gate read names no route" "no network wrapper"
+run_here "node post.js"
+read_refused "#3476 a file that is not a shell script and names the send call is refused"
+says "#3476 for the name in it, as such a file always is" "the script post.js $NAMED"
+says_not "#3476 and that refusal names no route" "no network wrapper"
+
+# Held as it stands today, found by the review of 2026-11-27 and not chosen by anyone: the same kind
+# of file run by a link whose name has a shell ending. The gate decides what is a shell script from
+# the file's real path, so it judges the Python or JavaScript file by the name in it, at once, as it
+# always did. The refusal carries the name the command wrote, which is all the route reads, so the
+# sentence is added although the file is never read as commands. A change that takes the sentence
+# off these two, or off anything else here, fails a case and so is seen.
+printf '%s\n' 'import urllib.request' \
+  "urllib.request.urlopen('https://slack.com/api/chat.postMessage', data=b'text=hi')" > "$P/post.py"
+ln -s post.py "$P/link.sh"
+ln -s post.js "$P/linkjs.sh"
+run_here "python3 link.sh"
+read_refused "#3476 a python file run by a link whose name has a shell ending is refused, as it was"
+says "#3476 for the name in it, under the name the command wrote" "the script link.sh $NAMED"
+says "#3476 and today its refusal names the wrapper, though the file is never read as commands" "$W"
+run_here "python3 post.py"
+read_refused "#3476 the same python file run by its own name is refused"
+says "#3476 for the name in it" "the script post.py $NAMED"
+says_not "#3476 and that refusal names no route" "no network wrapper"
+run_here "node linkjs.sh"
+read_refused "#3476 a javascript file run by a link whose name has a shell ending is refused, as it was"
+says "#3476 for the name in it, under the name the command wrote" "the script linkjs.sh $NAMED"
+says "#3476 and today its refusal names the wrapper, though the file is never read as commands" "$W"
+
+# A shell script binary from its first line, run by bash: bash refuses such a file, so the gate does
+# not read it as commands and searches its binary part for a send call, at any depth. Refused for
+# the name there alone and behind one script, with no chain of three, and each refusal names the
+# route. The NUL bytes are written by printf from an escape, so this file holds none.
+printf '\000\000\000 https://slack.com/api/chat.postMessage\n\000\000\n' > "$P/binfirst.sh"
+printf '%s\n' 'bash binfirst.sh' > "$P/runbin.sh"
+run_here "bash binfirst.sh"
+read_refused "#3476 a shell script binary from its first line that names the send call is refused, as it was"
+says "#3476 for the name in its binary part, with no script in front of it" "the script binfirst.sh $NAMED"
+says "#3476 and its refusal names the wrapper" "$W"
+run_here "bash runbin.sh"
+read_refused "#3476 the same script behind one script is refused, as it was"
+says "#3476 for the name in its binary part, one script down" "the script runbin.sh runs a command that posts: the script binfirst.sh $NAMED"
+says "#3476 and its refusal names the wrapper" "$W"
+
+# The refusal the issue records, of the priority suite as it stands beside this one: only ever read
+# here, never run. A change that lets the plain run pass (the issue's other build, which waits for
+# Dan) turns the first three of these over, and says so by failing here.
+RUN_IN="$DIR"
+run_here "bash test-slack-drafts-gate-qos.sh > out.txt 2>&1"
+read_refused "#3476 a plain run of the gate's own priority suite is refused, as it was"
+says "#3476 for the name in the gate's own script, three scripts down" "slack-drafts-only-gate.sh $NAMED"
+says "#3476 and the refusal names the installed wrapper by its path" "$W"
+run_here "$W bash test-slack-drafts-gate-qos.sh > out.txt 2>&1"
+read_allowed "#3476 that suite under the installed wrapper, written as the refusal describes, passes"
+RUN_IN="$P"
+
+# The sentence itself, asked of the gate's own code (Judge.route_note) with a refusal's reason:
+# which reasons gain it, that none does where no wrapper is installed (a route that is not there
+# must not be named, L111), and that the endings the route takes for a shell script are the gate's
+# own list (SHELL_EXT), which the route's file keeps a copy of.
+cat > "$T/note.py" <<'PY'
+import importlib.util
+import os
+import sys
+
+sys.dont_write_bytecode = True  # the gate is loaded by its path: leave no cache beside it
+GATE = sys.argv[1]
+os.environ["GATE_DIR"] = os.path.dirname(GATE)
+spec = importlib.util.spec_from_file_location("drafts_gate", GATE)
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+route = [m for m in gate.LIBS if m.__name__ == "no_network_route"][0]
+judge = gate.Judge(gate.load_reader())
+installed = judge.no_network
+NAMES = "posts to Slack (it names chat.postMessage)"
+
+
+def ask(label, reason, wrapper=True):
+    judge.no_network = installed if wrapper else None
+    note = judge.route_note(reason)
+    print(label + "\t" + ("named" if note and str(installed) in note else "odd" if note else "none"))
+
+
+def deep(name):
+    return f"the script a.sh runs a command that posts: the script {name} {NAMES}"
+
+
+IMPORT = f"the script a.test.js, which imports ../lib/n.js (lib/n.js), which {NAMES}"
+ask("a file whose imports reach code that posts", IMPORT)
+for ending in gate.SHELL_EXT:
+    ask(f"a shell script ending {ending} judged by a name in it", deep("b" + ending))
+ask("a python file judged by a name in it", deep("b.py"))
+ask("a javascript file judged by a name in it", deep("b.js"))
+ask("a file with no ending to its name judged by a name in it", deep("b"))
+ask("a script whose command was read", "the script a.sh runs a command that posts: curl sends a request to chat.postMessage")
+ask("no wrapper installed and a file whose imports reach code that posts", IMPORT, False)
+ask("no wrapper installed and a shell script judged by a name in it", deep("b.sh"), False)
+print("the endings\t" + ("same" if getattr(route, "SHELL_EXT", None) == gate.SHELL_EXT else "differ"))
+PY
+python3 "$T/note.py" "$DIR/slack_drafts_only_gate.py" > "$T/note.out" 2>&1
+note_is() { # note_is <what was asked> <named|none|same>
+  local got
+  got="$(awk -F '\t' -v want="$1" '$1 == want { print $2; exit }' "$T/note.out")"
+  if [ "$got" = "$2" ]; then check "#3476 the route sentence, asked of the gate's own code: $1 ($2)" ok
+  else check "#3476 the route sentence, asked of the gate's own code: $1 ($2)" "got '${got:-no answer}'; the code said: $(head -c 600 "$T/note.out" | tr '\n\t' '| ')"; fi
+}
+note_is "a file whose imports reach code that posts" named
+note_is "a shell script ending .sh judged by a name in it" named
+note_is "a shell script ending .bash judged by a name in it" named
+note_is "a shell script ending .zsh judged by a name in it" named
+note_is "a shell script ending .command judged by a name in it" named
+note_is "a python file judged by a name in it" none
+note_is "a javascript file judged by a name in it" none
+note_is "a file with no ending to its name judged by a name in it" none
+note_is "a script whose command was read" none
+note_is "no wrapper installed and a file whose imports reach code that posts" none
+note_is "no wrapper installed and a shell script judged by a name in it" none
+note_is "the endings" same
 
 # A command holding a character this file must not hold. Each \uXXXX in the text handed over is that
 # one character by the time the gate reads the payload, so none is written here.

@@ -650,7 +650,7 @@ check_eq "#1676 which is not believed once its run has gone" "busy" "$( ( eval "
 # =================================================================================================
 export MWR_GATE_TIMEOUT_TRIES=3 MWR_GATE_TIMEOUT_RETRY_SECONDS=11
 asks(){ grep -c 'tool_input' "$ST/work-names-gate-payloads" 2>/dev/null || true; }
-for g in check-work-names-merge.sh check-closing-merge.sh require-verification-run.sh; do
+for g in check-work-names-merge.sh check-closing-merge.sh require-verification-run.sh lessons-merge-gate.sh; do
   spent="$(sed -n 's/^BUDGET_SPENT="\(.*\)"$/\1/p' "$DIR/$g")"; spent="${spent//\$READ_DEADLINE/15}"
   check "#2558 $g says in its source when its read budget was spent" "seconds was spent" "$spent"
   fresh "$OLD" 0 "$GREEN"

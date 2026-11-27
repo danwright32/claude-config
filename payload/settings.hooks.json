@@ -257,6 +257,13 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/lessons-merge-gate.sh",
+            "timeout": 45,
+            "onFailure": "block",
+            "statusMessage": "Checking Dan has answered for the lesson entries the PR changes"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-work-names-publish.sh",
             "timeout": 45,
             "onFailure": "block",
@@ -343,6 +350,17 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/builder-model-gate.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/server-skill-ask.sh",
             "timeout": 10,
             "onFailure": "block"
           }

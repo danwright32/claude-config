@@ -645,6 +645,18 @@ Rejected along the way:
   borrowing them gave one tree a different verdict hour to hour (#953). The gate type checks against
   one build's types pinned in `tools/typescript/claude-code-types` instead, beside
   `claude plugin validate`, which reads the module the way the engine will.
+- **One notification for every outcome of the check (until #3759).** A mod not listed, a mod refused
+  and a validation the bound stopped all set one flag, so on 2026-11-26 a validation that was merely
+  slow at a load average of about 60 was shown to Dan as "a mod is not loading on this Mac". A time out
+  measures `claude`, not the mod, so it is said as could not check and notifies after
+  `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` syncs in a row for the same mod (the number and its measurement
+  are in the table of limits), counted in `.mod-check-timeouts` once per sync, by a tag naming the
+  sync, since one send can check twice. One sync posts at most one notification about time outs,
+  naming every mod due (six timed out in one sync on 2026-11-26). The only other notifications are for
+  a record that cannot be read: once when a time out meets it, and once, not on every sync, while it
+  cannot be set aside. The other two outcomes still notify at once. Waiting
+  longer under load, or skipping the check, was left alone: the 30 second bound is a limit, and
+  changing it is Dan's decision.
 - **Treating an absent `payload/mods` as an empty one.** git cannot record an empty folder, so a
   Mac whose last mod was deleted publishes a `.gitkeep`; without it the other Mac found no tree,
   skipped it, and kept every mod.
@@ -946,6 +958,7 @@ that is added both fail until this table is updated.
 | 0.1 seconds | `SYNC_POLL_INTERVAL=0.1` | How finely claude-sync notices that the hook suite runner it started has ended, and that a held sync lock has been released | Beside a hook suite measured between 220 and 441 seconds, the difference between this and the two seconds it replaces is invisible, and the granularity was never load bearing. It is the whole cost in the test suite, where real pulls run against a stub runner that returns in milliseconds: measured 2026-08-30, a pull noticed such a runner 306ms after it finished against 4,203ms at a four second poll. No deadline moves with it, both being measured against the clock, which had to be made true of the lock's own ceiling in the same change because that one was counting turns of its loop, proved by #205 | 2026-08-30 |
 | 1 nested run | `SUITE_MAX_DEPTH=1` | The suite's own depth allowance | Every place the suite spawns itself is one level down and nothing in it legitimately needs a run nested two deep, proved by #34 | 2026-08-17 |
 | 20 minutes | `SUITE_WALL_DEFAULT=1200` in hooks/lib/suite-deadline.sh, the limit every suite arms with, overridden for one run by `SUITE_WALL_TIMEOUT` | Any suite, started directly or by the runner, is stopped as hung, and everything it started is killed | One number for all of them, derived from the slowest suite that takes it. Measured 2026-09-18 on this Mac: test-run-all-tests.sh, the slowest of those, took 89 seconds alone at load 6 and 70 to 76 seconds with three copies at once at load 25. Re-read 2026-09-19 from the runner's own timings store (~/.cache/claude-config/suite-timings), where the slowest suite armed with this default is test-run-all-tests.sh at 90 seconds and the next is test-subagent-issue-harvest.sh at 62, so every other suite has more headroom still. The worst slowdown on record is 5.6x, the sync suite's 348 seconds idle against 1943 at load 160 to 188 on 2026-08-22, which would put the slowest of these near 500 seconds, so the limit is 13x its idle time and 2.4x that worst case. Before this only one suite had a bound at all, and 152 copies of that one were found at zero CPU the day it was measured, the oldest seven hours old. tests/test-claude-sync.sh is the one suite that does NOT take this default: it legitimately runs for 1943 seconds under load, so it arms at its own `SUITE_TIMEOUT` plus 60 seconds, which is 30 of its watchdog's 2 second polls, so the watchdog that can name the section it stopped in is always the one that speaks at the ceiling, proved by #444 | 2026-09-19 |
+| 5 syncs | `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY=5` | A mod whose `claude plugin validate` was stopped at `SYNC_CLAUDE_CHECK_TIMEOUT` on this many syncs in a row notifies, once per run of them; fewer are said as could not check in the output and in status, and notify nobody | Read from this Mac's whole sync log on 2026-11-26 (2.7 MB, 2026-09-09 to 2026-11-26): 677 runs in which the mod check ran (an apply, or a logged time out), 41 of them with a time out, which formed 43 runs of time outs for one mod: 33 of one sync, 9 of two, and one of four (mod-kit, 6:40 PM to 8:14 PM ET on 2026-11-25, at a load average near 60). 5 is the smallest number none of them reached, so not one measured slow answer would have notified, while a check that never finishes is heard after five syncs that check: the run of four took an hour and a half on a busy evening, and the log averages about nine such syncs a day. The count only grows on syncs that check, so a quiet day stretches it, which is the price of not notifying on load, proved by #3759 | 2026-11-26 |
 | 30 seconds | `SYNC_CLAUDE_CHECK_TIMEOUT=30` | One `claude plugin list` or `claude plugin validate` asked about the mods is stopped, and the pull says the mods could not be checked | Measured 2026-10-03 on this Mac, three runs each: `plugin list --json` took 0.37 to 0.40 seconds and `plugin validate` 0.31 to 0.44, so this is about 70x the slowest. The check runs under the sync lock on the watcher's and the timer's path, so the cost of waiting too long is every sync behind a hung claude (a login prompt, a self update), while a slow first launch still fits inside it, proved by #606 | 2026-10-03 |
 | 30 seconds | `SYNC_SCRATCH_DU_TIMEOUT=30` | A `du` sizing abandoned scratch is stopped and the size is reported as not known | Measured 2026-09-18 on this Mac: one `du` over 792 flat scratch items holding 950 MB in 12,124 entries took 0.2 seconds, so this is 150x that, and the 1,139 items and 1.4 GB the pile left would be under a second at the same rate. A `du` still going at 30 seconds is reading a tree something is writing, and the four found that day had run 23 to 51 minutes, proved by #444 | 2026-09-18 |
 | 1 minute | `SYNC_WATCH_ASK_TIMEOUT=60` | The watcher's timer wake stops its one `git ls-remote` of the shared repo and records the repo as unreachable for that wake | A chosen number, not a measurement. One ask took 0.22 to 0.33 seconds over five samples on this Mac on 2026-11-22 at a load average of 7.5, so this is about 180x the slowest. The ask runs in the watcher's only loop, so the cost of waiting too long is every later send behind a stalled connection, while a stopped ask costs one wake, since the next wake asks again, proved by #3396 | 2026-11-22 |
@@ -1978,9 +1991,10 @@ that refuses more.
 
 ### Text posted while a repository was private (#3582)
 
-The publish gate's rule is that a private repository is passed without its lists being read. That
-leaves a hole in time, not in the rule: text posted while a repository is private is judged by
-nothing, and turning the repository public publishes it unjudged. On 2026-11-24 this repository
+The publish gate's rule was that a private repository is passed without its lists being read (it
+still is, unless the repository declares itself public, the last part below). That
+left a hole in time, not in the rule: text posted while a repository is private was judged by
+nothing, and turning the repository public published it unjudged. On 2026-11-24 this repository
 was private for some hours, 83 texts were posted, and a scan written by hand that night found 8
 lines in two issues naming a work organisation or repository. Three things were missing, and each
 is now a tested part.
@@ -2041,11 +2055,63 @@ what it refuses did not: `test-gh-write-aliases.sh` holds the seven forms' decis
   yet, is judged by origin's copy as last fetched, since a session started in a stale checkout
   is the one that most needs telling. Silence means checked and as expected, so every way of not knowing
   is said as not knowing (L98). One `gh repo view` per session start, bounded at 4 seconds inside
-  the hook's 10 second timeout, both settings, not measured.
+  the hook's 10 second timeout, both settings, not measured. Since the file is read through
+  `lib/expected-visibility.py`, its git reads share one bound of 3 seconds before that, also a
+  setting, and the suite holds the timeout above the two bounds and 3 seconds more, read from
+  where each is set, so a hook cut off mid wait cannot leave a session with no line at all.
 
-Still open, and Dan's to decide (#3582): whether the publish gate should judge text posted to this
-repository even while it is private, since it is meant to be public. The scan is the remedy after
-the fact; that rule would be the prevention.
+**A repository that declares itself public is judged while it is private.** Decided by Dan, by
+picker on 2026-11-25, as the comment of that date on #3582 records it: "Yes, check it anyway
+(Recommended)". The scan is the remedy after the fact; this rule is the prevention. Ruled out in
+that comment: leaving the gate as it was and relying on the notice and the scan, and judging
+posted text in every private repository, which would refuse work names in the work repositories'
+own pull requests and issues, where they belong. How it is built, and what was weighed:
+
+- **The gate's one decision point, `published()`, gained one question.** For a repository GitHub
+  says is not public it asks `declared()` what the repository says it is meant to be; `public`
+  goes on to exactly the judging a public repository gets, the work owner exception included, and
+  anything else returns as before. Nothing a public repository meets changed, and no path now
+  passes that refused before, so the rule can only judge and refuse more.
+- **One reader, `lib/expected-visibility.py`, for the gate and the notice.** The notice held the
+  reading in its own shell lines. Two readings of one file drift (L370), and they already had: read
+  by those lines, an empty copy on origin's default branch was taken as no file while an empty
+  file in the working tree was said as one that could not be understood, and a folder at the path
+  was taken as no file. The reader says both as a declaration that is there and cannot be read,
+  and the notice now says it could not tell for each. The reading itself is unchanged: the first
+  word of the first line that is not a comment, in any letter case, split on spaces and tabs as
+  before, so a word ending in a carriage return is still none of the three.
+- **The declaration belongs to the repository the text goes to, never to the folder.** The gate
+  already asks GitHub which repository a command posts to. A checkout is read on disk only when
+  its `origin` names that same repository, letter case aside, from the checkout's root, so a
+  folder inside it and a worktree read their own copy. For any other target the folder's file is
+  another repository's declaration, so GitHub is asked for the target's own.
+- **GitHub is asked in one GraphQL read that names the repository back**, through each signed in
+  account in turn. A REST read of the file answers 404 both for no such file and for a private
+  repository the account cannot see, and reading the second as the first would pass a declared
+  repository unjudged. Measured on 2026-11-26, one read each: the answer is a `Blob` with its
+  `text`, a `Tree` for a folder at that path, `null` for no such path, and a `null` repository with
+  an error for one that cannot be resolved. A `Blob` cut short or binary, a `Tree` and an answer
+  naming another repository are each refused.
+- **Cannot tell is refused, whatever the text** (L98, L345): that comment's own words are that the
+  gate "must say it could not tell, and refuse, when it cannot read the declaration of a repository
+  it is about to post to". An empty file and a file of comments alone are refused too: a file that
+  is there has been written to say something. So is git not answering which checkout the command
+  runs in, or what its origin is: read as no checkout, that sent the question to GitHub in the
+  place of a checkout whose own file can say public where GitHub's copy does not, and the text
+  passed (found by the lessons review of the first commit, reproduced with a stand in git that
+  sleeps past the reader's bound, then fixed).
+- **Asked of GitHub only when the checkout cannot answer** (weighed, not built: asking GitHub
+  every time). GitHub's copy on the default branch cannot be changed by a branch's working tree
+  and is never stale, but asking it for every post to a private repository adds a call, 0.39 to
+  0.50 seconds over five runs on 2026-11-26, to every `gh` write in every private repository on
+  both Macs, almost all of which declare nothing, and a new way for each of them to be refused
+  when that call fails. Reading the checkout costs 0.020 to 0.023 seconds and no call. What that
+  leaves open is said in the README: a checkout holding no file that has not fetched since its
+  origin gained one, and a branch whose working tree changes the file, are each read as that
+  checkout has them.
+- **Not closed by this**: text that reaches GitHub without a `gh` command a session runs. The
+  notice's wording changed to say so, since "the publish gate does not judge text posted to it"
+  stopped being true.
 
 ## One watcher, and a leftover loop stops itself (#604)
 
@@ -2227,6 +2293,39 @@ is said once, logged and notified, and recorded in `.hooks-refused`. The send re
 takes the line out of the base, so the payload's copy reads as not yet seen here and is kept: a
 refusal on one Mac must never travel as a deletion that unregisters the gate on the Mac whose script
 is fine. The first pull that finds the script registers it and clears the record.
+
+### A key beside the hooks block is named, kept, and never applied (#3741)
+
+The file is the hooks block's home and nothing else's, but nothing stopped somebody putting another
+top level key in it. Measured on 2026-11-26 with a `permissions` block in a throwaway folder: the
+pull read `.hooks` alone and said nothing, so the key reached neither Mac, and the next send rewrote
+the file as `{hooks: ...}`, deleting the key from the repository with no word either.
+
+So the pull names every such key, in its output and the sync log on each pull and in a notification
+once per set of keys (`.hooks-file-keys-told`), and the send writes its merged block into the object
+it read, so every other key stays in the file. It is not byte for byte the same: the send reads the
+whole file with this Mac's home path put back, then writes it afresh through jq and puts the
+placeholder back, so in any key a value holding this Mac's literal home path becomes
+`__CLAUDE_HOME__`, as in the hooks block, and the spacing is jq's. A commit holding only that
+rewrite can be dropped as already published, since to this Mac it is the same content (seen in
+`tests/test-sync-hooks-file-other-keys.sh`), so it reaches the repository with a send that carries a
+change of its own. What a pull writes to a Mac's
+`settings.json` does not change: it still reads only `.hooks`. A file holding JSON `null` holds no
+key and no hooks, and both of the send's readings take it as empty, so the send writes its block over
+it, as it did before #3741.
+
+Rejected along the way:
+
+- **Refusing the whole file on the pull, as `settings.shared.json` refuses a key off its list.** That
+  file holds nothing but optional settings, so refusing it whole costs a setting or two. This one
+  holds every gate, and since #1899 a removed or renamed gate has to be taken out of `settings.json`
+  for the Mac to keep working, so holding the block back over a key the sync does not read would stall
+  every hook change on both Macs for as long as the key stood.
+- **Refusing the send while the key is there.** The send rewrites the file on every run, so it would
+  have held this Mac's hook changes back on every edit until somebody removed the key, while the key
+  itself does no harm sitting in the repository. Keeping it costs nothing and loses nothing.
+- **Applying the key.** That is carrying a setting between Macs, which is what `settings.shared.json`
+  and its list exist to decide, one setting at a time with Dan's sign off.
 
 ## A conflict in a file this tool GENERATES is not a conflict
 
@@ -2738,6 +2837,151 @@ approved would have held 72 seats rather than 20: at least 52 lessons that were 
 disputed in September are agreed diff now. That is why the seats became a tracked file (the seats
 paragraphs above): the 72 are the candidates the 20 seats were seeded from, and the other 52 are
 protected.
+
+## One time limit runner, and the one moment it may signal (#3578)
+
+`hooks/lib/run-with-limit.sh <seconds> <command>` is a program an agent or a script runs. It starts
+the command as the leader of a process group of its own and ends the whole group at the limit. This
+records why it is built the way it is; README "A time limit that ends the whole process group" says
+what it does.
+
+**It signals a number only while its own child pins that number.** The diagnosis on the issue
+(2026-11-27) names the hazard, by reading the code and with nothing reproduced: a supervisor that
+signals a group number after it has collected the group's leader. Once a process is collected its
+id is free, and the kernel can hand the id to any new process, so that signal can land on a
+stranger. `bounded_run` has that shape (an alarm that arrives between its `waitpid` and its
+`alarm 0` signals `-$pid`), as do two of its three private copies and two of the skill scripts that
+stop a group. What pins a number is a child that has not been collected: it keeps its process id, running
+or ended, and the group it leads has that id. So the order is fixed. Learn that the command ended
+without collecting it, end what its group still holds, collect it last, signal nothing after. One
+class holds the call that signals and the call that collects, and refuses the first after the
+second, and after either of its own looks at the command was told the command is no longer the
+runner's child (the look before a fault's KILL, and the look for a suspended command, which until
+the second review of claude-config#3833 threw that answer away). The suite runs the program with
+those calls replaced by recorders and fails on a signal asked for after the collect, which the
+recorder never sends.
+
+**The pin is only real if the runner keeps its own ended children, so it makes sure first.** An
+independent review of the pull request (claude-config#3833, 2026-11-27) found, by reading, that a
+caller which ignores SIGCHLD hands the setting down, and that on Linux a process with it has its
+children collected by the system the moment they end: the number would then be pinned by nothing,
+and the fault handler would send KILL to it. So the runner sets SIGCHLD to its default before it
+starts anything and then proves the result: it starts a child that ends at once and collects it,
+and where the system says there is no such child the run is refused with 125 before the command.
+The command is started with SIGCHLD as its caller had it. The fault handler asks the system
+whether the command is still the runner's child (`waitid` with `WNOWAIT`, where python has it)
+before any KILL. Considered: refusing whenever SIGCHLD is ignored (rejected: every command under
+such a caller would then fail for a setting the runner can put right for itself). A command that
+moved itself to another group is ended by its own process id, which the same pin covers.
+
+**A command that left its group is sent TERM by its id only after the watch, and the watch is not
+cut short.** At the limit such a command's group reads empty at once, and the runner watches for
+the command's end for up to ten seconds (a setting, not a measurement) before it signals the
+command's own id. The second review (2026-11-27) asked for that signal as soon as the group reads
+empty and the watch has not seen the end. That reading cannot tell a command that left its group
+from an ordinary one that is ending. In Apple's published kernel source (xnu, read on 2026-11-27,
+not measured on this Mac) a process is marked dead at the start of its exit, from which point a
+walk of its group no longer counts it and the group reads empty, while the process event the
+runner's watch waits for is posted near the end of the exit, after its files are closed. All
+through that span a signal to its process id answers success. A TERM by id sent then goes to the
+runner's own uncollected child, so it breaks no rule, and it would make the runner say the
+command had left a group it never left. Considered: sending on that reading anyway (rejected: an
+untrue sentence about an ordinary run, at a rate set by how slow an exit is under load). What
+would tell the two apart is a look at the command's own group id, which names another group only
+for a command that is alive and has moved. That look is a design step the review did not spell
+out, so it is put to Dan on the pull request (claude-config#3833), and README says the ten
+seconds.
+
+**Python, because the rule cannot be held in perl or bash.** Bash collects a child by itself the
+moment it ends, whether or not the script calls `wait`, so a script never holds the pin. Perl's core
+has no call that reports a child's end without collecting it. Python has one on each system: a
+kqueue process event on macOS and `waitid` with `WNOWAIT` on Linux (the python3 of Apple's developer
+tools, 3.9.6, has no `os.waitid`, read on 2026-11-27, which is why the two systems differ). A bash
+launcher stands in front so that a missing python3 is said in words and comes back as 125 with
+nothing run. Considered: one python file with a shebang (rejected: with python3 missing, `env`
+answers 127, which reads as the command's own code). The launcher also asks the program one
+question before it hands a command over, and goes on only at the program's own answer: a
+`python3` that starts and is not Python (a version manager's shim) would otherwise hand back its
+own exit code, and its 0 would read as a pass with nothing run. The answer comes with the code
+125, so the question typed as the words of a run is no pass either. Considered: the launcher
+staying as the parent and checking a proof afterwards (rejected: bash would then stand between
+the caller's signal and the runner, and bash cannot hold the pin to pass a signal on). The
+question costs one more start of python3 in every run.
+
+**What is left in the group is read with no `ps`.** `ps` is setuid, and macOS refuses to start a
+setuid program in a sandbox, so a runner reading it could not run under the no network wrapper,
+where a suite that names a Slack endpoint has to run. On macOS signal 0 to the group answers it.
+Measured on 2026-11-27 on the personal MacBook (macOS 26.6.2, python 3.14.4), each with the probe's
+own children, one run: a group holding only its ended, uncollected leader answered EPERM, the same
+group with one more member answered success, and 15 ms after that member ended it answered EPERM. On
+Linux signal 0 succeeds for a group whose only member is its ended leader (read from the kernel's
+documented behaviour, not measured here), so there the members come from `/proc`. Both readers are
+asked about the runner's own group before anything starts, where the answer is known, and a system
+where that fails runs nothing: a reader that cannot see would report every leftover as none (L1).
+
+**A command that leaves a process running fails, with 123.** The diagnosis on the issue asked
+whether to fail the run or to stop the process and keep the command's code, and recommended failing:
+a suite that passes and leaves a process behind is the fault of 2026-11-24. It is Dan's to reverse.
+What is left gets one second to end by itself first. Without that, `exec > >(tee log)` would fail
+by a race, since a shell does not wait for a process substitution, and `tee` would be ended before
+it had written what it was piped. The one second, the two from TERM to KILL and the ten the group is
+watched after KILL are settings, not measurements.
+
+**The command starts only once the runner is ready, and a fault inside the runner ends the group.**
+The child waits on a pipe before it becomes the command, and is let go after the runner is watching
+it and has recorded its group. A runner that dies first closes the pipe and the child ends. A fault
+after that sends the group KILL while the child still pins it. Every signal that would end the
+runner and that it carries is carried over to the group first (TERM, INT, HUP, QUIT, USR1, USR2,
+ALRM, VTALRM, PROF, XCPU, and on Linux IO, PWR, STKFLT and the real time signals python can set,
+from its SIGRTMIN up, which is 34 with glibc), and the runner then ends by that signal, so a shell
+loop around it stops at Ctrl C once the handlers are in (README names the spans before that, and
+the launcher's). TSTP is caught and not acted on, and TTIN and TTOU are ignored while a command
+runs, because a stopped runner keeps no limit. Ignored and not caught: a write that raised a caught
+TTOU fails and is tried again for ever. They are set after the command's process exists, so the
+command starts with both as its caller had them. So the paths that run the command with nobody
+keeping its limit are these. Nothing in the same process can answer the first three: the runner
+ended by KILL; the runner stopped by STOP, for as long as it is stopped; and a real fault in the
+runner's own process, since a python handler cannot return from one, which is why the signals a
+fault raises (ABRT, BUS, FPE, ILL, SEGV, SYS, TRAP, and EMT on macOS) stay at their default. The
+fourth is left by choice: the same signals sent from outside, of which ABRT, TRAP, SYS and EMT
+could be carried over and are not. On Linux signals 32 and 33 belong to the C library, and python
+cannot set them. Considered: a watchdog inside the group that signals its own
+group with `kill 0`, as `tools/load-window.sh` does, which would outlive the runner (rejected: it
+is a second process in every run, and it cannot tell a command that ended from one that was
+stopped). Considered for TSTP: stopping the group and then the runner, and letting both go on
+together (rejected: it makes the runner a job control shell, and it leaves open whether time spent
+stopped counts toward the limit, which is Dan's to say).
+
+**The terminal is handed to nobody.** A command in a group of its own is in a background group of
+the caller's terminal, and one that reads or sets the terminal is suspended by the system until the
+limit (reproduced by the review with `cat` on a terminal of the probe's own making, 2026-11-27).
+The runner is for agents and gates, which have no terminal, so it says so (the usage, the README)
+and what it says with 124 tells when the command was suspended and not running. It names the
+terminal as the likely cause only: the runner's look shows that the command was suspended, never
+why, and a command that stopped itself gets the same words. Considered: giving the
+terminal's foreground to the command's group and taking it back (rejected: taking it back safely
+means handling the signals a background writer gets, and Ctrl Z would then stop the command and
+leave the runner to notice, which is the job control shell again).
+
+**The runner takes its own group record away.** A record left for every run ties its number to
+the session for as long as the marker folder lives, and process ids came round again within minutes
+(one sample on 2026-11-27). The file is removed when the group is known to hold nothing and just
+before the collect: the uncollected command still pins the number the file is named for, so no
+shell and no other runner can have made a file of that name. It stays when the runner could not
+end the group, after a fault, and when the runner was ended outright, which are the cases the
+record is for. What is lost: a member this user may not signal reads as nothing, so its record
+goes too.
+
+**The limit stays out of the no network wrapper.** The issue asked whether the wrapper should carry
+the limit. The wrapper takes no option and reads no setting, so that nothing on a command line can
+weaken it, and a limit would be its first option. The two compose: the wrapper first, the runner
+after it, which the suite runs.
+
+**Not built here.** No gate reads through the runner to the command behind it. That lets commands run
+that the Slack drafts gate, the payload write gate and the area check refuse today, so it needs Dan's
+sign off, and it should recognise the runner by its installed path, as the no network wrapper is
+recognised, so that a home made copy stays refused. `bounded_run`'s eight callers and the three
+private copies are not moved onto the runner either.
 
 ## A fresh worktree's first edit waits for an up to date base (#2517)
 

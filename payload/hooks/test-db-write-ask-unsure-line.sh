@@ -10,8 +10,21 @@
 # through with that line riding along; and a commit of an unapproved line onto a test project list
 # was not asked about. The reader now reads on where every shell does, and names the # it cannot
 # tell from a comment, but only for a caller that asks. So: a write on such a line is asked about as
-# any other, a # that cannot be told is asked about saying so, nothing is let through unless both
-# readings find the same one run, and what the hook did with an ordinary command it still does.
+# any other, nothing is let through unless both readings find the same one run, and what the hook
+# did with an ordinary command it still does.
+#
+# A line the reader names is refused, as a command the hook could not check, in a sentence true of
+# the mark it was named with (section 6). The reader names more than a #: a heredoc it cannot find
+# the end of, which holds none. The hook asked the reader only about a command holding a #, so a
+# write or a commit the shell runs out of such a heredoc was not asked about, each kind reproduced
+# here against the unchanged hook, and where it did ask it said of every mark that the command
+# held a # the reader could not tell from a comment.
+#
+# A refusal is printed whatever state the notice library is in beside the hook (section 7): beside
+# one that loaded and had no builder for a refusal, the hook printed nothing and left with 0, which
+# passes the command. The hook's other broken states still ask, on that same command. What the
+# hook passes on from the library is one refusal with at most the library's notice beside it:
+# beside anything else, the hook writes the refusal itself.
 #
 # Every command here is only ever text in a payload handed to the hook: nothing a case names runs.
 # The only programs started are the hook, python3 and, for the commit cases, git in a checkout this
@@ -43,7 +56,7 @@ WORK="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 
 cat > "$WORK/cases.py" <<'PY'
-import datetime, hashlib, importlib.util, json, os, subprocess, sys, types
+import datetime, hashlib, importlib.util, json, os, shutil, subprocess, sys, types
 
 hook, work = sys.argv[1], sys.argv[2]
 home = os.path.join(work, "home")
@@ -70,12 +83,12 @@ READ_ON = (("an escaped space", "\\ "), ("an escaped tab", "\\\t"),
 UNSURE = "cannot tell from a comment"
 
 
-def decided(command, cwd, transcript=None):
+def decided(command, cwd, transcript=None, by=None):
     d = {"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": cwd, "tool_name": "Bash",
          "tool_input": {"command": command, "description": "d"}}
     if transcript is not None:
         d["transcript_path"] = transcript
-    p = subprocess.run(["bash", hook], input=json.dumps(d).encode(), stdout=subprocess.PIPE,
+    p = subprocess.run(["bash", by or hook], input=json.dumps(d).encode(), stdout=subprocess.PIPE,
                        stderr=subprocess.DEVNULL, env=env, cwd=work)
     out = p.stdout.decode("utf-8", "replace").strip()
     if not out:
@@ -91,6 +104,15 @@ def write(path, text):
     with open(path, "w") as f:
         f.write(text)
     return path
+
+
+def say(verdict, label):
+    """One case on one line, whatever its verdict holds. A verdict quotes what the hook printed, and
+    a line break or a tab in that was read below as a second case, so one failing case was counted
+    as several failures (the second review of #3793)."""
+    flat = [s.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r")
+            for s in (verdict, label)]
+    print("%s\t%s" % (flat[0], flat[1]))
 
 
 def sha_of(path):
@@ -167,24 +189,25 @@ for what, hidden, names in WRITES:
                      front + before + "# c; " + hidden + "\n", work, None, names, None))
     rows.append(("ask", "%s on the line of a # after two lines joined mid word is asked about" % what,
                  R + " -o js\\\non\\\n# c; " + hidden + "\n", work, None, names, None))
-    # Where the reader cannot tell which the shell does, and names the line.
+    # Where the reader cannot tell which the shell does, and names the line: refused, as a command
+    # the hook could not check (the choice made for the issue's second open question).
     rows += [
-        ("ask", "%s on the line of a # after a word that ends in a parenthesis is asked about" % what,
+        ("deny", "%s on the line of a # after a word that ends in a parenthesis is refused" % what,
          R + " -o a(b)# c; " + hidden + "\n", work, None, UNSURE, None),
-        ("ask", "%s on the line of a # after a cd to a folder that ends in a parenthesis is asked about" % what,
+        ("deny", "%s on the line of a # after a cd to a folder that ends in a parenthesis is refused" % what,
          "cd /tmp/a(b)# c; " + hidden + "\n" + R + "\n", work, None, UNSURE, None),
-        ("ask", "%s on the line of a # after a cd and a stray ) is asked about" % what,
+        ("deny", "%s on the line of a # after a cd and a stray ) is refused" % what,
          "cd /tmp/x)# c; " + hidden + "\n" + R + "\n", work, None, UNSURE, None),
-        ("ask", "%s on a # line after an unsure comment that ends in a backslash is asked about" % what,
+        ("deny", "%s on a # line after an unsure comment that ends in a backslash is refused" % what,
          R + " -o a(b)# c\\\n# d; " + hidden + "\n", work, None, UNSURE, None),
     ]
 # The line in front need not name a database at all.
 rows += [
     ("ask", "a delete on the line of a # after an escaped space in a command that reads no database is asked about",
      "printf done\\ # c; " + WRITES[0][1] + "\n", work, None, WRITES[0][2], None),
-    ("ask", "a delete on the line of a # after a word ending in a parenthesis in a command that reads no database is asked about",
+    ("deny", "a delete on the line of a # after a word ending in a parenthesis in a command that reads no database is refused",
      "printf a(b)# c; " + WRITES[0][1] + "\n", work, None, UNSURE, None),
-    ("ask", "the question about a # that cannot be told names this issue",
+    ("deny", "the refusal of a # that cannot be told names this issue",
      R + " -o a(b)# c; " + WRITES[0][1] + "\n", work, None, "claude-config#3472", None),
 ]
 
@@ -197,18 +220,18 @@ for what, hidden in RIDERS:
     rows += [
         ("ask", "an applied push with %s on the line of a # after two lines joined mid word is asked about, not let through" % what,
          "supabase db push --linked --y\\\nes\\\n# c; " + hidden + "\n", proj, GOOD_T, None, None),
-        ("ask", "an applied push with %s on the line of a # after a word that ends in a parenthesis is asked about, not let through" % what,
+        ("deny", "an applied push with %s on the line of a # after a word that ends in a parenthesis is refused, not let through" % what,
          PUSH + " a(b)# c; " + hidden + "\n", proj, GOOD_T, UNSURE, None),
-        ("ask", "an applied push after a cd to a folder that ends in a parenthesis, a # and %s is asked about, not let through" % what,
+        ("deny", "an applied push after a cd to a folder that ends in a parenthesis, a # and %s is refused, not let through" % what,
          "cd /tmp/a(b)# c; " + hidden + "\n" + PUSH + " --workdir " + proj + "\n", elsewhere, GOOD_T, UNSURE, None),
-        ("ask", "an applied push after a cd, a stray ), a # and %s is asked about, not let through" % what,
+        ("deny", "an applied push after a cd, a stray ), a # and %s is refused, not let through" % what,
          "cd /tmp/x)# c; " + hidden + "\n" + PUSH + " --workdir " + proj + "\n", elsewhere, GOOD_T, UNSURE, None),
-        ("ask", "an applied push with %s on a # line after an unsure comment that ends in a backslash is asked about, not let through" % what,
+        ("deny", "an applied push with %s on a # line after an unsure comment that ends in a backslash is refused, not let through" % what,
          PUSH + " a(b)# c\\\n# d; " + hidden + "\n", proj, GOOD_T, UNSURE, None),
         # The write from a file Dan applied, the skill's other run.
         ("ask", "an applied write from a file with %s on the line of a # after a line joined mid word is asked about, not let through" % what,
          WRITE_Q + "\\\n# c; " + hidden + "\n", proj, CHANGE_T, None, None),
-        ("ask", "an applied write from a file after a cd to a folder that ends in a parenthesis, a # and %s is asked about, not let through" % what,
+        ("deny", "an applied write from a file after a cd to a folder that ends in a parenthesis, a # and %s is refused, not let through" % what,
          "cd /tmp/a(b)# c; " + hidden + "\ncd " + proj + " && " + WRITE_Q + "\n", elsewhere, CHANGE_T, UNSURE, None),
     ]
 rows.append(("ask", "the question about an applied push with a line riding along says the push is not the whole command",
@@ -309,12 +332,16 @@ for shape, before in READ_ON:
 rows += [
     ("ask", "a commit of an unapproved list line on the line of a # after two lines joined mid word is asked about",
      "printf do\\\nne\\\n# c; " + COMMIT + "\n", listed, NONE_T, "unapprovedref00001", None),
-    ("ask", "a commit on the line of a # after a word that ends in a parenthesis is asked about",
+    ("deny", "a commit on the line of a # after a word that ends in a parenthesis is refused",
      "printf a(b)# c; " + COMMIT + "\n", listed, NONE_T, UNSURE, None),
-    ("ask", "a commit on the line of a # after a cd to a folder that ends in a parenthesis is asked about",
+    ("deny", "a commit on the line of a # after a cd to a folder that ends in a parenthesis is refused",
      "cd /tmp/a(b)# c; " + COMMIT + "\nprintf done\n", listed, NONE_T, UNSURE, None),
-    ("ask", "a commit on a # line after an unsure comment that ends in a backslash is asked about",
+    ("deny", "a commit on a # line after an unsure comment that ends in a backslash is refused",
      "printf a(b)# c\\\n# d; " + COMMIT + "\n", listed, NONE_T, UNSURE, None),
+    # A commit in plain sight beside such a line is refused too: his answer to the question about
+    # the commit would have let whatever the line hides run with it.
+    ("deny", "a commit of an unapproved list line in plain sight beside a # that cannot be told is refused",
+     COMMIT + "\nprintf a(b)# c; printf done\n", listed, NONE_T, UNSURE, None),
     ("ask", "(control) a commit of an unapproved list line in plain sight is asked about",
      COMMIT, listed, NONE_T, "would commit the line unapprovedref00001", None),
     ("ask", "(control) the same commit with a comment after it is asked about",
@@ -326,6 +353,85 @@ rows += [
      COMMIT + " # c\n", clean, NONE_T, None, None),
     ("none", "(control) a commit on the line of a # after an escaped space, in a checkout with no list, is not asked about",
      "printf done\\ # c; " + COMMIT + "\n", clean, NONE_T, None, None),
+]
+
+# ---- 6. every mark the reader names is refused, in a sentence true of that mark -------------------
+# The reader names more than a #: a heredoc it cannot find the end of, which needs no # at all
+# (claude-config#3492, #3566). The hook asked the reader only about a command holding a #, so a
+# write behind any of these heredocs was not asked about (each reproduced against the unchanged
+# hook), and where it did ask it gave the # sentence for every mark, which is untrue of a heredoc.
+# What each mark's refusal says that no other mark's does:
+SAYS = {
+    "comment": "holds a # the shared reader cannot tell from a comment",
+    "unread": "past which the shared reader could not read the text to its end",
+    "close": "opens a heredoc the shared reader cannot find the end of",
+    "joined": "on a line that ends in a backslash before the heredoc's end marker is whole",
+    "split": "whose end marker is quoted and holds a line break",
+    "dollar": "whose end marker holds a dollar quote",
+    "one line": "opens a heredoc in a text with no line break",
+}
+# How each says to write the command so that it can be read.
+HOW = {
+    "comment": "Write that # inside quotes, or put the comment on a line of its own",
+    "unread": "Write that # inside quotes, or put the comment on a line of its own",
+    "close": "End the heredoc with its marker alone on a line that follows no backslash",
+    "joined": "Write the << and its whole end marker on one line",
+    "split": "Write the end marker as one word on the line that opens the heredoc",
+    "dollar": "Write the end marker as a plain word",
+    "one line": "Put the heredoc's body and its end marker on lines of their own",
+}
+
+
+def behind(hidden):
+    """(the mark, the shape, a command) for every mark the reader names: in each, some shell runs
+    hidden, and the reader's own reading shows no such command."""
+    quoted = "echo '$(" + hidden + ")'"
+    return (
+        ("comment", "a # after a word that ends in a parenthesis", "printf a(b)# c; " + hidden + "\n"),
+        # Every shell joins `x\` to the marker's line, keeps the heredoc open and runs the $( ).
+        ("close", "a heredoc whose marker stands right after a body line that ends in a backslash",
+         "cat <<E\nx\\\nE\n" + quoted + "\nE\n"),
+        ("close", "a heredoc that no line ends, with a $( ) after it", "cat <<E\nx\n" + quoted + "\n"),
+        # The marker is EOF, so the E line ends nothing and the $( ) is in the body.
+        ("joined", "a heredoc whose opener line ends in a backslash", "cat <<E\\\nOF\nx\nE\n" + quoted + "\nEOF\n"),
+        # bash and zsh never end it, so sh is fed every line: the quote its first line opens is
+        # closed by the one that, to the reader, opens a string around the hidden command.
+        ("split", "a heredoc whose quoted marker holds a line break", "sh <<'E\nF'\n: '\nE\nF\n' ; " + hidden + "\n: '\n"),
+        # dash ends it at the line $E, and runs the next.
+        ("dollar", "a heredoc whose marker holds a dollar quote", "cat <<$'E'\nx\n$E\n" + hidden + "\nE\n"),
+        ("one line", "a heredoc typed on one line", "cat <<E; " + hidden + "; E"),
+    )
+
+
+marked = []
+for what, hidden, cwd, t in (("a delete", WRITES[0][1], work, None),
+                             ("a commit of an unapproved list line", COMMIT, listed, NONE_T)):
+    for kind, shape, command in behind(hidden):
+        marked.append(("%s behind %s is refused, in the words for that mark" % (what, shape), kind, command, cwd, t))
+marked += [
+    ("an applied push with a folder removal behind a heredoc the reader cannot find the end of is refused, not let through",
+     "close", PUSH + "\n" + behind("rm -rf supabase/migrations")[1][2], proj, GOOD_T),
+    # The unchanged hook asked about this one, since it holds a #, and said the # was the trouble.
+    ("a delete behind a heredoc the reader cannot find the end of, under a line that is all comment, is refused in the heredoc's words",
+     "close", "# the runs of last night\n" + behind(WRITES[0][1])[1][2], work, None),
+    # Every shell reads this # inside its word, so the reader reads on past it, and the quote that
+    # opens after it never closes. The reader can tell this # from a comment, so the refusal does
+    # not say it cannot.
+    ("a read with a # the reader reads on past and then cannot read to the end is refused, in the words for that",
+     "unread", R + " -o json\\ # it's a note\n", work, None),
+]
+# What the hook did with an ordinary heredoc it still does.
+PLAIN_DOC = "cat <<'EOF' >/dev/null\nnote\nEOF\n"
+rows += [
+    ("none", "(control) a read after an ordinary heredoc is not asked about", PLAIN_DOC + R + "\n", work, None, None, None),
+    ("none", "(control) a read after a heredoc whose body holds a backslash line and a substitution is not asked about",
+     "cat <<EOF >/dev/null\na \\\nb $(date)\nEOF\n" + R + "\n", work, None, None, None),
+    ("ask", "(control) a delete in plain sight after an ordinary heredoc is asked about",
+     PLAIN_DOC + WRITES[0][1] + "\n", work, None, WRITES[0][2], None),
+    ("none", "(control) a commit whose message is an ordinary heredoc, in a checkout with no list, is not asked about",
+     "git commit -q -F - <<'EOF'\nlist\nEOF\n", clean, NONE_T, None, None),
+    ("ask", "(control) a commit of an unapproved list line whose message is an ordinary heredoc is asked about",
+     "git commit -q -F - <<'EOF'\nlist\nEOF\n", listed, NONE_T, "unapprovedref00001", None),
 ]
 
 # The whole reason of each ordinary question, as the unchanged hook gave it.
@@ -352,7 +458,398 @@ for want, label, command, cwd, t, holds, exact in rows:
         verdict = "the reason is not the one it always was: %s" % reason[:600]
     else:
         verdict = "ok"
-    print("%s\t%s" % (verdict, label))
+    say(verdict, label)
+
+
+def of_another(kind, text):
+    """What text says that is true of a mark other than kind."""
+    return [SAYS[k] for k in SAYS if k != kind and SAYS[k] in text]
+
+
+for label, kind, command, cwd, t in marked:
+    got, reason = decided(command, cwd, t)
+    if got != "deny rc=0":
+        verdict = "wanted deny rc=0, got %s: %s" % (got, reason[:400])
+    elif SAYS[kind] not in reason:
+        verdict = "the refusal does not say [%s]: %s" % (SAYS[kind], reason[:500])
+    elif of_another(kind, reason):
+        verdict = "the refusal says what is true of another mark %s: %s" % (of_another(kind, reason), reason[:500])
+    elif HOW[kind] not in reason:
+        verdict = "the refusal does not say how to write it [%s]: %s" % (HOW[kind], reason[:700])
+    elif "could not check" not in reason or "claude-config#3472" not in reason:
+        verdict = "the refusal does not say it could not check, or names no issue: %s" % reason[:500]
+    else:
+        verdict = "ok"
+    say(verdict, label)
+
+# A copy of the hook with no lib/hook-notice.sh beside it still refuses, in the characters that
+# need no escaping, and says the library is missing.
+bare = os.path.join(work, "bare")
+os.makedirs(bare)
+shutil.copy(hook, bare)
+shutil.copytree(os.path.join(os.path.dirname(hook), "lib"), os.path.join(bare, "lib"),
+                ignore=lambda folder, names: [n for n in names if n in ("hook-notice.sh", "__pycache__")])
+got, reason = decided(behind(WRITES[0][1])[1][2], work, None, os.path.join(bare, os.path.basename(hook)))
+say("ok" if got == "deny rc=0" and SAYS["close"] in reason and "lib/hook-notice.sh is missing" in reason
+    else "got %s: %s" % (got, reason[:400]),
+    "a hook with no lib/hook-notice.sh beside it still refuses a heredoc the reader cannot find the end of")
+
+# ---- 7. a refusal the notice library cannot build is still a refusal ------------------------------
+# The hook builds a refusal with the notice library's hook_deny_json (added for #3618, used here
+# since #3793). Beside a library that loads and has no such function (a copy from before #3618 that
+# the sync held back), a hook that
+# called it would print nothing and leave with 0, so the command would run with no decision at all,
+# where the hook before #3472 asked about it. Each
+# stand in here is a copy of the real library, changed in this suite's own folder and put beside a
+# copy of the hook; the real library is never touched.
+LIB = os.path.join(os.path.dirname(hook), "lib")
+with open(os.path.join(LIB, "hook-notice.sh")) as f:
+    NOTICE = f.read()
+GONE = object()
+# The library as it was before #3618, with no hook_deny_json: it loads, and its ask and its allow
+# are built as before.
+RENAMED = NOTICE.replace("hook_deny_json", "hook_deny_built")
+# The function is there and prints nothing.
+SILENT = NOTICE + "\nhook_deny_json() { return 0; }\n"
+# The function is there and prints a refusal cut short, which no JSON reader takes.
+CUT = (NOTICE + "\nhook_deny_json() { printf '%s' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", "
+       "\"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"cut sh'; }\n")
+# The function is there and prints a whole object that is no refusal.
+ASKS = (NOTICE + "\nhook_deny_json() { printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", "
+        "\"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"r\"}}'; }\n")
+
+
+def prints(name, text):
+    """The library with a hook_deny_json that prints text exactly, bytes and all (#3793 review)."""
+    return NOTICE + "\nhook_deny_json() { cat '%s'; }\n" % write(os.path.join(work, name + ".printed"), text)
+
+
+def prints_bytes(name, data):
+    """The same for bytes that are no text, which write() cannot hold (the third review of #3793)."""
+    path = os.path.join(work, name + ".printed")
+    with open(path, "wb") as f:
+        f.write(data)
+    return NOTICE + "\nhook_deny_json() { cat '%s'; }\n" % path
+
+
+# Five outputs that each start with {, end with } and name deny somewhere, and none of which is the
+# one refusal the library's builder prints. A bash match of { .* "deny" .* } took every one, since a
+# dot there takes a line break too, and the hook passed each on as its refusal.
+HEAD = '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny"'
+NOT_ONE_REFUSAL = (
+    ("a refusal cut short at a brace inside its reason", "brace",
+     HEAD + ', "permissionDecisionReason": "cut at a }'),
+    ("two objects on two lines", "two", '{"systemMessage": "x"}\n' + HEAD + "}}\n"),
+    ("a refusal with a raw line break inside its reason", "rawnl",
+     HEAD + ', "permissionDecisionReason": "a\nb"}}\n'),
+    ("an ask with a deny under another key", "nested",
+     '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask"}, '
+     '"x": {"permissionDecision": "deny"}}\n'),
+    ("a refusal for another event", "event",
+     '{"hookSpecificOutput": {"hookEventName": "PostToolUse", "permissionDecision": "deny"}}\n'),
+)
+# The library with its decisions built by its no python3 arm, as on a Mac whose python3 fails
+# inside the builder.
+PY_ARM = 'if command -v python3 >/dev/null 2>&1; then\n    HN_DECISION='
+BASH_ARM = NOTICE.replace(PY_ARM, 'if false; then\n    HN_DECISION=') if NOTICE.count(PY_ARM) == 1 else None
+# A copy of lib/db-write-calls.py whose advice on rewriting holds what JSON must escape: both
+# quotes, a backslash, a tab and a line break, and a pair of braces.
+ODD = 'Write "it" as \'a\\b\' \tso,\non two lines {x}'
+ODD_TAIL = "\n\ndef unsure_fix(told):\n    return %r if isinstance(told, (Unsure, UnsureFinding)) else None\n" % ODD
+# The same, ending in a character that is not ASCII, which the no python3 arm writes as it is and
+# python3 writes as an escape: so its raw presence shows which arm built the refusal.
+ODD_U = ODD + " Dan’s"
+ODD_U_TAIL = "\n\ndef unsure_fix(told):\n    return %r if isinstance(told, (Unsure, UnsureFinding)) else None\n" % ODD_U
+NO_BUILDER = "lib/hook-notice.sh beside this hook has no hook_deny_json"
+NO_REFUSAL = "hook_deny_json in lib/hook-notice.sh beside this hook printed no refusal"
+NO_VERDICT = "lib/hook-notice.sh beside this hook has no hook_decision_verdict"
+NOT_TAKEN = "hook_decision_verdict in lib/hook-notice.sh beside this hook did not take"
+# A whole refusal, as a stand in hook_deny_json prints it.
+DENY = ('{"hookEventName": "PreToolUse", "permissionDecision": "deny", '
+        '"permissionDecisionReason": "printed by a stand in"}')
+# The library as it was before hook_decision_verdict: it loads and builds a refusal as it does now.
+NO_VERDICT_LIB = NOTICE.replace("hook_decision_verdict", "hook_decision_checked")
+# The function is there and does not take the refusal: it says so, it fails, or it says so on stderr.
+SAYS_NO = NOTICE + "\nhook_decision_verdict() { echo 'not a decision'; }\n"
+FAILS = NOTICE + "\nhook_decision_verdict() { return 1; }\n"
+SAYS_ASIDE = NOTICE + "\nhook_decision_verdict() { echo 'not a decision' >&2; }\n"
+
+
+def beside(name, notice=None, calls_tail=None, broken=()):
+    """A copy of the hook in a folder of its own, beside a copy of lib/ in which hook-notice.sh
+    holds the text notice (GONE: the file is left out), lib/db-write-calls.py ends in calls_tail,
+    and each file of broken is one python3 cannot load."""
+    folder = os.path.join(work, name)
+    os.makedirs(folder)
+    shutil.copy(hook, folder)
+    shutil.copytree(LIB, os.path.join(folder, "lib"), ignore=shutil.ignore_patterns("__pycache__"))
+    if notice is GONE:
+        os.remove(os.path.join(folder, "lib", "hook-notice.sh"))
+    elif notice is not None:
+        write(os.path.join(folder, "lib", "hook-notice.sh"), notice)
+    if calls_tail is not None:
+        with open(os.path.join(folder, "lib", "db-write-calls.py"), "a") as f:
+            f.write(calls_tail)
+    for file in broken:
+        write(os.path.join(folder, "lib", file), "def (\n")
+    return os.path.join(folder, os.path.basename(hook))
+
+
+def loaded(by, name):
+    """0 when the notice library beside the hook by loads and then has a function called name,
+    1 when it loads and has none, 3 when it does not load."""
+    return subprocess.run(["bash", "-c", '. "$1" 2>/dev/null || exit 3; declare -F "$2" >/dev/null', "-",
+                           os.path.join(os.path.dirname(by), "lib", "hook-notice.sh"), name], env=env).returncode
+
+
+def shown(by, command, cwd, t=None, home_dir=None, sent=None):
+    """(what the hook by left with, the reason it gave, the notice beside it, all it printed), for
+    command, or for the bytes sent when the payload is to be one that is no JSON."""
+    d = {"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": cwd, "tool_name": "Bash",
+         "tool_input": {"command": command, "description": "d"}}
+    if t is not None:
+        d["transcript_path"] = t
+    p = subprocess.run(["bash", by], input=json.dumps(d).encode() if sent is None else sent, stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL, env=env if home_dir is None else dict(env, HOME=home_dir), cwd=work)
+    out = p.stdout.decode("utf-8", "replace")
+    if not out.strip():
+        return "none rc=%d" % p.returncode, "", "", out
+    try:
+        whole = json.loads(out)
+        h = whole.get("hookSpecificOutput") or {}
+    except (ValueError, AttributeError):
+        return "badjson rc=%d" % p.returncode, "", "", out
+    # A reason or a notice that is no text is shown as words that say so: a case that wants a
+    # refusal's words then fails on that one line, where a number here stopped the whole program.
+    reason, message = h.get("permissionDecisionReason", ""), whole.get("systemMessage", "")
+    if not isinstance(reason, str):
+        reason = "(the reason is not a text: %r)" % (reason,)
+    if not isinstance(message, str):
+        message = "(the notice is not a text: %r)" % (message,)
+    return "%s rc=%d" % (h.get("permissionDecision", "none"), p.returncode), reason, message, out
+
+
+stood = []
+
+
+def refused(label, by, command, cwd, t, holds, lacks=(), home_dir=None, notice=(), bare=False):
+    """One case: the hook by refuses command, in one JSON object that holds every text of holds in
+    its reason and none of lacks, and every text of notice in the notice beside it. With bare, the
+    object holds no notice beside the refusal at all."""
+    got, reason, message, out = shown(by, command, cwd, t, home_dir)
+    if got != "deny rc=0":
+        verdict = "wanted deny rc=0, got %s: %s" % (got, (reason or out)[:400])
+    elif [w for w in holds if w not in reason]:
+        verdict = "the refusal does not say %s: %s" % ([w for w in holds if w not in reason], reason[:700])
+    elif [w for w in lacks if w in reason]:
+        verdict = "the refusal holds %s: %s" % ([w for w in lacks if w in reason], reason[:700])
+    elif [w for w in notice if w not in message]:
+        verdict = "the notice beside the refusal does not say %s: %s" % ([w for w in notice if w not in message], message[:500])
+    elif bare and "systemMessage" in out:
+        verdict = "the refusal written without the library builds a notice beside it by hand: %s" % out[-500:]
+    else:
+        verdict = "ok"
+    stood.append((verdict, label))
+
+
+def asked(label, by, command, cwd, t, holds, sent=None):
+    """One case: the hook by asks, and its question holds every text of holds."""
+    got, reason, _, out = shown(by, command, cwd, t, sent=sent)
+    if got != "ask rc=0":
+        verdict = "wanted ask rc=0, got %s: %s" % (got, (reason or out)[:400])
+    elif [w for w in holds if w not in reason]:
+        verdict = "the question does not say %s: %s" % ([w for w in holds if w not in reason], reason[:700])
+    else:
+        verdict = "ok"
+    stood.append((verdict, label))
+
+
+CLOSE = behind(WRITES[0][1])[1][2]
+SAID = (SAYS["close"], HOW["close"], "could not check", "claude-config#3472")
+renamed, silent = beside("renamed", RENAMED), beside("silent", SILENT)
+got = (loaded(renamed, "hook_ask_json"), loaded(renamed, "hook_deny_json"))
+stood.append(("ok" if got == (0, 1) else "got %s" % (got,),
+              "(control) the stand in library as it was before #3618 loads, names an ask and has no hook_deny_json"))
+got = (loaded(silent, "hook_ask_json"), loaded(silent, "hook_deny_json"))
+stood.append(("ok" if got == (0, 0) else "got %s" % (got,),
+              "(control) the stand in library whose hook_deny_json prints nothing loads and has one"))
+asked("(control) beside a notice library with no hook_deny_json, a delete in plain sight is asked about as it always was",
+      renamed, WRITES[0][1], work, None, (WRITES[0][2],))
+refused("beside a notice library with no hook_deny_json, a delete behind a heredoc the reader cannot find the end of is "
+        "refused, never passed in silence", renamed, CLOSE, work, None, SAID + (NO_BUILDER,),
+        ("lib/hook-notice.sh is missing", NO_REFUSAL))
+refused("beside a notice library with no hook_deny_json, a commit of an unapproved list line behind a # that cannot be "
+        "told is refused, never passed in silence", renamed, "printf a(b)# c; " + COMMIT + "\n", listed, NONE_T,
+        (UNSURE, "could not check", NO_BUILDER))
+refused("beside a notice library whose hook_deny_json prints nothing, the same delete is refused, never passed in silence",
+        silent, CLOSE, work, None, SAID + (NO_REFUSAL,), ("lib/hook-notice.sh is missing", NO_BUILDER))
+refused("beside a notice library whose hook_deny_json prints a refusal cut short, the same delete is refused in an "
+        "object that can be read", beside("cut", CUT), CLOSE, work, None, SAID + (NO_REFUSAL,))
+refused("beside a notice library whose hook_deny_json prints an ask where a refusal was meant, the same delete is "
+        "refused", beside("asks", ASKS), CLOSE, work, None, SAID + (NO_REFUSAL,))
+# A refusal whose words hold what JSON must escape. Beside the real library every character of
+# them arrives (which is also what shows the stand in advice reaches the refusal); in the form
+# built without it they are taken out, and the object is still one a JSON reader takes.
+refused("(control) beside the real notice library, a refusal whose advice holds quotes, a backslash, a tab, a line "
+        "break and braces arrives whole, as the library built it", beside("odd", calls_tail=ODD_TAIL), CLOSE, work, None,
+        (SAYS["close"], ODD), (NO_REFUSAL, NO_BUILDER))
+# The same through the library's no python3 arm, which builds the same grammar by hand (#3793 review).
+if BASH_ARM is None:
+    stood.append(("the python3 arm of _hn_decision_json in lib/hook-notice.sh no longer starts with %r, so the no "
+                  "python3 arm could not be forced; update PY_ARM in this suite" % PY_ARM,
+                  "(control) beside a notice library building by its no python3 arm, a refusal arrives whole"))
+else:
+    got, reason, _, out = shown(beside("odd-bash-arm", BASH_ARM, ODD_U_TAIL), CLOSE, work, None)
+    stood.append(("ok" if got == "deny rc=0" and ODD_U in reason and "’" in out and NO_REFUSAL not in reason
+                  else "got %s, the no python3 arm %s: %s" % (got, "ran" if "’" in out else "did not run", out[:500]),
+                  "(control) beside a notice library building by its no python3 arm, a refusal whose advice holds "
+                  "quotes, a backslash, a tab, a line break and braces arrives whole, as the library built it"))
+for label, name, text in NOT_ONE_REFUSAL:
+    refused("beside a notice library whose hook_deny_json prints %s, the same delete is refused in the hook's own "
+            "words, never passed on" % label, beside("not-one-" + name, prints(name, text)), CLOSE, work, None,
+            SAID + (NO_REFUSAL,))
+# A whole refusal with something beside it that is not the library's notice (the second review of
+# #3793). Claude Code lets a call go ahead when a hook's object fails its validation, and continue,
+# suppressOutput and a top level decision are not texts there, so a refusal beside one of them
+# written as a text is no refusal. The check took any one key beside the refusal that held a text,
+# and passed each of the first four on. Only the notice field, holding a text, may stand there.
+# The hook may not write that field's name (#1906), so it asks the library, the name's one home,
+# through hook_decision_verdict, and passes the built text on only when that function is there,
+# returned 0 and said nothing.
+for label, name, text, why in (
+        ("beside a continue written as a text", "continue", '{"hookSpecificOutput": %s, "continue": "false"}\n' % DENY, NOT_TAKEN),
+        ("beside a suppressOutput written as a text", "suppress", '{"hookSpecificOutput": %s, "suppressOutput": "yes"}\n' % DENY,
+         NOT_TAKEN),
+        ("after a top level decision that is no decision", "decision", '{"decision": "zzz", "hookSpecificOutput": %s}\n' % DENY,
+         NOT_TAKEN),
+        ("after a top level decision of approve", "approve", '{"decision": "approve", "hookSpecificOutput": %s}\n' % DENY,
+         NOT_TAKEN),
+        ("beside a key nobody knows", "unknown", '{"hookSpecificOutput": %s, "other": "text"}\n' % DENY, NOT_TAKEN),
+        ("with a notice and one more key beside it", "two-keys",
+         '{"hookSpecificOutput": %s, "systemMessage": "n", "stopReason": "s"}\n' % DENY, NO_REFUSAL),
+        ("with two keys beside it and no notice", "two-others",
+         '{"hookSpecificOutput": %s, "continue": "false", "suppressOutput": "yes"}\n' % DENY, NO_REFUSAL),
+        ("whose notice is a number", "number", '{"hookSpecificOutput": %s, "systemMessage": 1}\n' % DENY, NO_REFUSAL),
+        ("written after an ask under the same key", "twice",
+         '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask"}, "hookSpecificOutput": %s}\n'
+         % DENY, NO_REFUSAL),
+        ("after a blank line", "blank", '\n{"hookSpecificOutput": %s}\n' % DENY, NO_REFUSAL)):
+    refused("beside a notice library whose hook_deny_json prints a whole refusal %s, the same delete is refused in the "
+            "hook's own words, never passed on" % label, beside("beside-" + name, prints(name, text)), CLOSE, work, None,
+            SAID + (why,), ("printed by a stand in",), bare=True)
+# (control) The same stand in printing a whole refusal alone, and one with the notice field holding
+# a text beside it, is passed on as it printed it: so the cases above are refused for what stands
+# beside the refusal, and for nothing else about the stand in.
+for label, name, text, message in (
+        ("alone", "alone", '{"hookSpecificOutput": %s}\n' % DENY, ()),
+        ("with a notice beside it", "noticed", '{"hookSpecificOutput": %s, "systemMessage": "said beside it"}\n' % DENY,
+         ("said beside it",))):
+    refused("(control) beside a notice library whose hook_deny_json prints a whole refusal %s, that refusal is passed "
+            "on as it was printed" % label, beside("whole-" + name, prints(name, text)), CLOSE, work, None,
+            ("printed by a stand in",), (NO_REFUSAL, NOT_TAKEN, NO_VERDICT), notice=message)
+# A refusal with no key beside it, and something wrong INSIDE its hookSpecificOutput: more than its
+# event, its decision and a reason, or a value that is no text (the third review of #3793). For a
+# refusal that stands alone the hook never asks the library, so its own two rules on what stands
+# inside are all that decides. No case here reached either: with both lines taken out of
+# refusal_shape this suite passed whole, while the hook passed on each of these ten. Claude Code's
+# own reader does not take the NaN one as JSON at all, so that call would have gone ahead.
+
+
+def inside(more):
+    """A whole refusal, alone, with more written inside its hookSpecificOutput."""
+    return '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", %s}}\n' % more
+
+
+STAND_IN = '"permissionDecisionReason": "printed by a stand in"'
+for label, name, text in (
+        ("holding an updatedInput that is an object", "input-object", inside('"updatedInput": {"command": "printed by a stand in"}')),
+        ("holding an updatedInput that is a text", "input-text", inside(STAND_IN + ', "updatedInput": "x"')),
+        ("holding an additionalContext", "context", inside(STAND_IN + ', "additionalContext": "x"')),
+        ("holding the notice field inside the decision", "notice-inside", inside(STAND_IN + ', "systemMessage": "x"')),
+        ("holding an empty key", "empty-key", inside(STAND_IN + ', "": "x"')),
+        ("holding a look alike of the reason beside the reason", "look-alike",
+         inside(STAND_IN + ', "permissionDecisionRe%sson": "x"' % chr(0x430))),
+        ("whose reason is a number", "reason-number", inside('"permissionDecisionReason": 5')),
+        ("whose reason is null", "reason-null", inside('"permissionDecisionReason": null')),
+        ("whose reason is a list", "reason-list", inside('"permissionDecisionReason": ["printed by a stand in"]')),
+        ("whose reason is NaN", "reason-nan", inside('"permissionDecisionReason": NaN'))):
+    refused("beside a notice library whose hook_deny_json prints a refusal alone %s, the same delete is refused in the "
+            "hook's own words, never passed on" % label, beside("inside-" + name, prints(name, text)), CLOSE, work, None,
+            SAID + (NO_REFUSAL,), ("printed by a stand in", "is not a text"), bare=True)
+# Bytes that are not UTF-8 in a form Python's JSON reader takes when it is handed bytes: a lone
+# surrogate written as the three bytes ED A0 80 (the third review of #3793). The hook reads the
+# text as strict UTF-8 first, so such a refusal is replaced, in the reason and in the notice.
+SURROGATE = b"\xed\xa0\x80"
+for label, name, data in (
+        ("whose reason holds a lone surrogate written as three bytes", "surrogate-reason",
+         inside('"permissionDecisionReason": "printed by a stand in @"').encode().replace(b"@", SURROGATE)),
+        ("whose notice holds a lone surrogate written as three bytes", "surrogate-notice",
+         ('{"hookSpecificOutput": %s, "systemMessage": "said beside it @"}\n' % DENY).encode().replace(b"@", SURROGATE))):
+    stood.append(("ok" if SURROGATE in data and data.count(b"@") == 0 else "the stand in text holds no surrogate bytes",
+                  "(control) the stand in refusal %s holds the bytes ED A0 80" % label))
+    refused("beside a notice library whose hook_deny_json prints a whole refusal %s, the same delete is refused in the "
+            "hook's own words, never passed on" % label, beside("bytes-" + name, prints_bytes(name, data)), CLOSE, work,
+            None, SAID + (NO_REFUSAL,), ("printed by a stand in",), bare=True)
+for name, text, why in (("odd-renamed", RENAMED, NO_BUILDER), ("odd-gone", GONE, "lib/hook-notice.sh is missing")):
+    refused("with the notice library %s, a refusal whose advice holds quotes, a backslash, a tab and a line break is "
+            "still one JSON object, with those characters taken out"
+            % ("left out" if text is GONE else "holding no hook_deny_json"),
+            beside(name, text, ODD_TAIL), CLOSE, work, None,
+            (SAYS["close"], "Write it as ab so,on two lines", why), ('"', "'", "\\", "\t", "\n"))
+# The notice a question carries beside it is carried by a refusal too. Beside the real library it
+# is the library's own notice beside the refusal. A refusal written without the library says it
+# inside its reason and builds no notice of its own: a notice is built only by the library
+# (claude-config#1906, whose scan in test-hook-notice.sh failed on one built here).
+sf_home = os.path.join(work, "sf-home")
+os.makedirs(os.path.join(sf_home, ".claude"))
+write(os.path.join(sf_home, ".claude", "settings.local.json"),
+      json.dumps({"permissions": {"allow": ["mcp__claude_ai_SFDC_USE__createSobjectRecord"]}}))
+SF_SAID = ("SALESFORCE WRITES SKIP AUTO MODE", "mcp__claude_ai_SFDC_USE__createSobjectRecord")
+refused("(control) beside the real notice library, a refusal carries the notice about pre-allowed Salesforce writes "
+        "beside it", hook, CLOSE, work, None, SAID, home_dir=sf_home, notice=SF_SAID)
+for by, state, why in ((renamed, "with no hook_deny_json", NO_BUILDER),
+                       (beside("gone", GONE), "left out", "lib/hook-notice.sh is missing")):
+    refused("beside a notice library %s, a refusal says the notice about pre-allowed Salesforce writes inside its "
+            "reason, and builds no notice beside it by hand" % state, by, CLOSE, work, None,
+            SAID + SF_SAID + (why,), home_dir=sf_home, bare=True)
+# A refusal that carries a notice is passed on only when the library's hook_decision_verdict takes
+# it (the second review of #3793). Beside a library with no such function (a copy the sync held
+# back), or one whose function does not take the refusal, the notice is said inside the hook's own
+# refusal. Such a Mac loses the escaped words of a refusal that carries a notice, never the refusal.
+no_verdict = beside("no-verdict", NO_VERDICT_LIB)
+got = (loaded(hook, "hook_deny_json"), loaded(hook, "hook_decision_verdict"),
+       loaded(no_verdict, "hook_deny_json"), loaded(no_verdict, "hook_decision_verdict"))
+stood.append(("ok" if got == (0, 0, 0, 1) else "got %s" % (got,),
+              "(control) the real notice library has a hook_decision_verdict, and the stand in library from before it "
+              "loads, builds a refusal and has none"))
+refused("beside a notice library with no hook_decision_verdict, a refusal says the notice about pre-allowed Salesforce "
+        "writes inside its reason, in the hook's own words, and builds no notice beside it by hand", no_verdict, CLOSE,
+        work, None, SAID + SF_SAID + (NO_VERDICT,), (NO_BUILDER, NO_REFUSAL, NOT_TAKEN), home_dir=sf_home, bare=True)
+refused("(control) beside a notice library with no hook_decision_verdict, a refusal that carries no notice arrives "
+        "whole, as the library built it", beside("no-verdict-odd", NO_VERDICT_LIB, ODD_TAIL), CLOSE, work, None,
+        (SAYS["close"], ODD), (NO_VERDICT, NOT_TAKEN, NO_REFUSAL, NO_BUILDER))
+for name, text, how in (("says-no", SAYS_NO, "says the refusal is no decision"), ("fails", FAILS, "fails and says nothing"),
+                        ("says-aside", SAYS_ASIDE, "says so on stderr and returns 0")):
+    refused("beside a notice library whose hook_decision_verdict %s, a refusal that carries a notice is written in the "
+            "hook's own words, with the notice inside its reason" % how, beside("verdict-" + name, text), CLOSE, work,
+            None, SAID + SF_SAID + (NOT_TAKEN,), (NO_VERDICT, NO_REFUSAL), home_dir=sf_home, bare=True)
+# The hook's other broken states, on that same command: each asks, as it did before #3472 and
+# after it, since no rewriting of the command mends any of them. None passes it in silence.
+asked("with lib/db-write-calls.py one python3 cannot load, a delete behind a heredoc the reader cannot find the end of "
+      "is asked about, naming the file", beside("no-calls", broken=("db-write-calls.py",)), CLOSE, work, None,
+      ("lib/db-write-calls.py could not be loaded beside the hook",))
+asked("with lib/shell-words.py one python3 cannot load, the same delete is asked about, naming the file",
+      beside("no-reader", broken=("shell-words.py",)), CLOSE, work, None,
+      ("lib/shell-words.py could not be loaded beside the hook", "could not be read"))
+NAMED_PAYLOAD = json.dumps({"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": work, "tool_name": "Bash",
+                            "tool_input": {"command": CLOSE, "description": "d"}})
+asked("with its payload cut short, the same delete is asked about, as a payload that could not be read",
+      hook, CLOSE, work, None, ("the hook payload could not be read as a tool call",),
+      sent=NAMED_PAYLOAD[:NAMED_PAYLOAD.index("delete from runs") + len("delete from runs")].encode())
+# The same payload whole, for the case with no python3, which the shell below runs.
+write(os.path.join(work, "named-line-payload.json"), NAMED_PAYLOAD)
+for verdict, label in stood:
+    say(verdict, label)
 
 # ---- 5. the library's own answers ----------------------------------------------------------------
 
@@ -403,17 +900,69 @@ fact("a push beside a # that cannot be told is not one an Apply can cover",
      isinstance(got, list) and bool(got) and not any(calls.is_applicable(f) for f in got), got)
 fact("(control) a read with a comment after it has no finding", findings(R + " # c\n") == [], findings(R + " # c\n"))
 fact("the reader it was handed reads as it did afterwards", sw.commands is reads_as, sw.commands)
-# A reader with no `unsure` to ask for: what holds a # cannot be vouched for, what holds none is read
-# as it always was.
+# A reader with no `unsure` to ask for: nothing it reads can be vouched for, whether or not the
+# command holds a #.
 older = types.SimpleNamespace(**{k: getattr(sw, k) for k in dir(sw) if not k.startswith("__")})
 older.commands = lambda s, cwd="", heredocs=None, parts=None, spans=None, comments=None: reads_as(
     s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments)
 got = findings(R + " # c\n", work, older)
 fact("a reader that cannot be asked gives a read with a # a finding saying so",
      isinstance(got, list) and len(got) == 1 and unsure_one(got[0]) and "unsure" in got[0][0], got)
-fact("(control) a reader that cannot be asked still reads a read with no # as a read", findings(R, work, older) == [], findings(R, work, older))
+# A heredoc the reader cannot find the end of needs no #, so a command holding none cannot be
+# vouched for by such a reader either. It is asked about, never refused: no rewriting of the
+# command would let that reader be asked.
+unsure_fix = getattr(calls, "unsure_fix", lambda f: None)
+got = findings(R, work, older)
+fact("a reader that cannot be asked gives a read with no # a finding saying so too",
+     isinstance(got, list) and len(got) == 1 and unsure_one(got[0]) and "unsure" in got[0][0]
+     and unsure_fix(got[0]) is None, got)
 got = findings(W, work, older)
-fact("(control) a reader that cannot be asked still finds a delete with no #", got == plain_delete, got)
+fact("a reader that cannot be asked still finds a delete with no #, after the finding saying so",
+     isinstance(got, list) and len(got) == 2 and unsure_one(got[0]) and unsure_fix(got[0]) is None
+     and got[1:] == plain_delete, got)
+
+# Every mark the reader names, as the library answers for it.
+asked_reading = getattr(calls, "asked_reading", lambda reader, read: (None, None))
+for kind, shape, command in behind(W):
+    got = findings(command)
+    fact("the first finding for a delete behind %s is that mark's, and says how to write it" % shape,
+         isinstance(got, list) and bool(got) and unsure_one(got[0]) and SAYS[kind] in got[0][0]
+         and not of_another(kind, got[0][0]) and HOW[kind] in (unsure_fix(got[0]) or "")
+         and not any(calls.is_applicable(f) for f in got), got)
+    got = asked_reading(sw, lambda: sw.commands(command))
+    fact("the reading that asks says of %s what is true of it and of no other mark" % shape,
+         got[0] is None and isinstance(got[1], str) and SAYS[kind] in got[1] and not of_another(kind, got[1])
+         and HOW[kind] in (unsure_fix(got[1]) or ""), got)
+got = calls.second_reading(behind(COMMIT)[1][2], sw, listed, None, lambda: "read again")
+fact("a costly read is told of a heredoc the reader cannot find the end of in a command holding no #",
+     got[0] is None and isinstance(got[1], str) and SAYS["close"] in got[1], got)
+fact("the reader reads as it did after the readings of every mark", sw.commands is reads_as, sw.commands)
+
+
+# A reader that names a line by a mark this library has no words for (neither a # nor a <<), in a
+# command holding no #: the command is not vouched for, and is told nothing untrue about it.
+def naming(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None, joined=None):
+    if unsure is not None:
+        unsure.append((0, len(s)))
+    return reads_as(s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments, joined=joined)
+
+
+# The reader's own functions read through its commands(), so the stand in is put in its place for
+# these two readings and taken out again.
+sw.commands = naming
+try:
+    got = findings(R, work)
+    try:
+        dry = calls.dry_push_dir("supabase db push --dry-run", sw, proj)
+    except Exception as e:
+        dry = "raised " + type(e).__name__
+finally:
+    sw.commands = reads_as
+fact("a line named by a mark with no words of its own is a finding that claims neither a # nor a heredoc",
+     isinstance(got, list) and len(got) == 1 and unsure_one(got[0]) and "is unsure of" in got[0][0]
+     and not of_another("", got[0][0]) and bool(unsure_fix(got[0])), got)
+fact("a dry run holding no # that the reader names a line of is reported as unread, never as a dry run",
+     dry == "raised UnsureLine", dry)
 
 
 def dry_dir(command, cwd):
@@ -433,8 +982,8 @@ fact("a dry run beside a # that cannot be told is reported as unread, never as a
 fact("the reader reads as it did after the dry run readings", sw.commands is reads_as, sw.commands)
 
 for label, ok, got in facts:
-    print("%s\t%s" % ("ok" if ok else "got %s" % (str(got)[:400],), label))
-print("ran\t%d" % (len(rows) + len(facts)))
+    say("ok" if ok else "got %s" % (str(got)[:400],), label)
+print("ran\t%d" % (len(rows) + len(marked) + 1 + len(stood) + len(facts)))
 PY
 rows="$(python3 -B "$WORK/cases.py" "$HOOK" "$WORK" 2>&1)"
 ran=""
@@ -443,8 +992,25 @@ while IFS=$'\t' read -r verdict label; do
   if [ -n "$label" ]; then check "#3472 $label" "$verdict"; elif [ -n "$verdict" ]; then check "#3472 the cases program said something that is not a case" "${verdict:0:300}"; fi
 done <<< "$rows"
 # A program that stopped early checks nothing and would read as a pass (L288).
-WANT_RAN=166
+WANT_RAN=263
 [ "$ran" = "$WANT_RAN" ] && check "#3472 all $WANT_RAN cases ran" ok || check "#3472 all $WANT_RAN cases ran" "ran: ${ran:-none}; ${rows: -300}"
+
+# With no python3 on PATH nothing can be read at all, so the same command, a delete behind a
+# heredoc the reader cannot find the end of, is asked about and never passed in silence.
+. "$DIR/lib/no-python-path.sh"
+NOPY="$WORK/nopy/bin"
+npp_build_bin "$NOPY"
+if npp_reaches_python3 "$NOPY"; then
+  check "#3472 the bare directory reaches no python3" "it found one, so nothing here measures its absence"
+elif [ ! -s "$WORK/named-line-payload.json" ]; then
+  check "#3472 with no python3, a delete behind a heredoc the reader cannot find the end of is asked about, naming python3" "the cases program left no payload to send"
+else
+  r="$(cd "$WORK" && env -u CLAUDE_HOME HOME="$WORK/home" PATH="$NOPY" "$NOPY/bash" "$HOOK" < "$WORK/named-line-payload.json" 2>/dev/null; printf '\nrc=%s' "$?")"
+  case "$r" in
+    *'"permissionDecision": "ask"'*"python3 is not on PATH"*$'\nrc=0') check "#3472 with no python3, a delete behind a heredoc the reader cannot find the end of is asked about, naming python3" ok ;;
+    *) check "#3472 with no python3, a delete behind a heredoc the reader cannot find the end of is asked about, naming python3" "${r:0:400}" ;;
+  esac
+fi
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

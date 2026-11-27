@@ -19,7 +19,13 @@ back.
   A pull never leaves a line naming a script that is not on disk, even for the seconds it takes: it
   takes out the lines the shared copy dropped before the scripts move, and puts the new ones in
   after. A line whose script is still missing is left out, said once, and logged; the shared config
-  keeps it, and the first pull that finds the script registers it (#1913)
+  keeps it, and the first pull that finds the script registers it (#1913). Any other top level key
+  somebody puts in this file is applied on neither Mac: the pull says so, naming it, in its output
+  and the log and once in a notification per set of keys, and the send writes the hooks block into
+  the file it read, so the key stays in the repository rather than being deleted (#3741). The send
+  writes the whole file afresh, so in such a key this Mac's home path becomes `__CLAUDE_HOME__`, as
+  in the hooks block, and its spacing follows jq's layout. A setting both Macs share goes in
+  `settings.shared.json` instead
 - `payload/settings.shared.json`: the few other `settings.json` settings both Macs share, today
   `ultracode` (off since 2026-10-06), the effort level per model, as
   `modelSettings.<full model name>.effortLevel` (`high` for `claude-opus-5-5`, and for
@@ -284,7 +290,9 @@ merge. The file scan is unchanged and still leaves repository names out.
 Pull request and issue text goes further (#2105). `check-work-names-publish.sh` judges every
 `gh pr create`, `pr edit`, `pr comment`, `pr review`, `issue create`, `issue edit` and
 `issue comment`, and every `gh api` write to a repository's issues, pulls or comments endpoints, in
-any repository GitHub reports as public; a private one passes without the list being read, and so
+any repository GitHub reports as public, and since #3582 in one that declares itself public while
+GitHub reports it private (see "A repository that declares itself public is judged while it is
+private" below); any other private one passes without the list being read, and so
 does a public repository a work owner holds. It reads the whole command, a heredoc body included,
 and every body file it names, and refuses text naming a work organisation OR a work repository,
 showing the name it matched so the text can be rewritten. The names are read live on each judged
@@ -356,9 +364,50 @@ shell feeds that stage only the last; the issue field gate still reads such a fi
 command, as before. Still not covered: gh run by
 its absolute path, a script that rewrites PATH, and curl or an API library.
 
-**Text posted while a repository was private (#3582).** The publish gate judges text posted to a
-public repository and lets a private one through without reading its lists, so nothing judges text
-posted while a repository is private, and it is still unjudged when the repository turns public.
+**A repository that declares itself public is judged while it is private (#3582).** A repository
+whose `.github/expected-visibility` says `public` is judged by the publish gate exactly as a public
+one is, whatever GitHub says its visibility is today (Dan, by picker on 2026-11-25: "Yes, check it
+anyway (Recommended)"). A repository that is not public and has no such file, or whose file says
+`private` or `internal`, passes as before, without the lists being read. This only ever makes the
+gate judge and refuse more.
+
+- **Whose declaration is read**: the one of the repository the text goes to. When the command runs
+  in a checkout whose `origin` is that repository, it is the checkout's own file, read through
+  `hooks/lib/expected-visibility.py`, the reader the session start notice uses, so the two cannot
+  read the file differently: the working tree's copy from the checkout's root (a worktree's own,
+  from any folder inside it), and with nothing at that path the copy on origin's default branch as
+  last fetched. For any other repository (`--repo`, `GH_REPO` or a `gh api` path naming one the
+  folder is no checkout of, a folder in no checkout, an origin that is not a GitHub address) the
+  folder's own file says nothing about it, so GitHub is asked for the copy on that repository's
+  default branch, in one GraphQL read that names the repository back.
+- **What the file may hold**: its first line that is not a comment or blank, that line's first
+  word, in any letter case: `public`, `private` or `internal`.
+- **Cannot tell is refused**, whatever the text: a file that is there and cannot be read, an empty
+  one, one of comments alone, a word that is none of the three, a folder at that path, GitHub
+  failing to hand it over, an answer about another repository, or git not answering which
+  checkout the command runs in, what its origin is or what origin's copy of the file holds (never
+  read as no checkout, no origin or no file, each of which would ask GitHub in the checkout's
+  place). The refusal says which, and says
+  the repository is judged because of its own declaration.
+- **A work owner's repository** that declares itself public may still name its own work, as a
+  public one may.
+- **What it costs**, measured on the personal MacBook on 2026-11-26 over five runs each at a load
+  average near 40: 0.020 to 0.023 seconds to read a checkout's own declaration, with no call, and
+  0.39 to 0.50 seconds for the one call to GitHub about a repository the folder is no checkout
+  of. A public repository is never asked for its declaration.
+- **What it does not close**: text that reaches the repository without a `gh` command a session
+  runs (the website, another program) is still judged by nothing, so the scan below is still the
+  check to run before a repository turns public again. A checkout is read as it stands: one that
+  holds no file and has not fetched since its origin gained one reads as stating nothing, and a
+  branch whose working tree changes the file is read as changed.
+
+Tests: `hooks/test-work-names-publish.sh` (the command hook), `hooks/test-work-names-scripts.sh`
+(the guard on `gh`) and `hooks/test-repo-visibility-notice.sh` (the reader).
+
+**Text posted while a repository was private (#3582).** Until that rule the publish gate let every
+private repository through without reading its lists, and it still does for one that does not
+declare itself public, and for text no `gh` command posts. So text posted while a repository is
+private can be unjudged when the repository turns public.
 On 2026-11-24 this repository was private for some hours and 8 lines naming a work organisation or
 repository were posted to it meanwhile. One command rechecks such a window, and the gate's refusal
 of `gh repo edit --visibility public` names it:
@@ -456,8 +505,10 @@ password, so it is made by hand once per Mac. Both Macs have had it since 2026-1
 Why it is needed: on a Team or Enterprise account (Dan's is one), or on any Mac with managed
 settings, Claude Code's built-in security default seats itself ahead of every plugin and sends
 every `classic.*`, `prompt.section` and `prompt.context` hook (and, since 2.1.299, every
-`session.compact` and `prompt.attachment` hook, and since 2.1.331 every `session.info` and
-`session.redact` hook) past the user tier our mods load in,
+`session.compact` and `prompt.attachment` hook, since 2.1.331 every `session.info` and
+`session.redact` hook, and on every build read since #3697 the `session.append` rows of the
+attachment, hook-context and compaction doors, `telemetry.log` and `session.identity`) past the
+user tier our mods load in,
 so those hooks never run and only a debug log line says so (#875). A managed `prependPlugins` list
 that leaves it out moves it to last, where it still loads. Without the file, the mod hooks listed
 in `tools/sec-default-bypassed-hooks.tsv` (scope-modes and manual-steps refusing a turn end, the
@@ -2249,9 +2300,15 @@ settled:
   in violet, one line saying where the draft stands, then Copy, Mark sent and Not announcing; the
   row never draws the wording, and Copy copies nothing for wording that failed the claimed check,
   saying why. Mark sent and Not announcing settle it for every session, and only a press of the
-  row's own button does. `/live` lists it. Every session started in that project says it in one
-  line, to Dan and with the session's first prompt. And the turn end of the session whose card found
-  it live is refused once per chain of turn ends.
+  row's own button does. Mark sent settles on one press, since it records that he posted it.
+  Not announcing settles only on a second press (#3847): on 2026-11-27 one press, made by a slip,
+  ended an announcement Dan had approved, for good. The first press records nothing, changes the
+  button's label to `Confirm: not announcing #<number>` and says so; a press within 10 seconds
+  settles it, and left alone the label goes back. A press of Copy or Mark sent disarms it. Armed
+  is that session's own state, never the store, decided by the clock and not by a timer, and a
+  session start forgets it. A settled announcement stays final. `/live` lists it. Every session
+  started in that project says it in one line, to Dan and with the session's first prompt. And the
+  turn end of the session whose card found it live is refused once per chain of turn ends.
 - The merge gate's allow for an announce merge (`require-changelog-tag.sh`) always carries one line
   of context: the merge owes agents a draft, and a session whose card says nothing about it is
   running an old copy of the mod and should run `/reload-plugins`. Nothing the gate decides changes.
@@ -2417,6 +2474,35 @@ on 2026-10-24, it would have refused 3 of 633 in claude-config and 12 of 1,925 i
 merges closed an issue their body meant to leave open, 4 relinked an issue already closed, and 2 were
 closes the body did intend, each cleared by editing the body. Override for a body that has to quote
 the phrasing: `SKIP_CLOSING_CHECK=1 <the same command>`.
+
+A lesson entry added to `~/.claude/LESSONS.md` goes to the lesson picker, where Dan reads its rule
+and its SHORT line. A pull request that edits a checkout's `payload/LESSONS.md` reached the same
+file on both Macs at the next pull with nothing shown to him, so `lessons-merge-gate.sh`
+(claude-config#3343; Dan, 2026-11-20: "Guard the merge") holds its merge until he has answered for
+exactly that change. It reads the file at the pull request's merge base and at its head (at the
+pinned commit when the merge names a whole one, since that is what GitHub would merge, read even
+when the head's file list leaves the file alone) and finds the entries added, changed (any line of one, a rule wrapped another way included), removed, or
+moved to another section. Text above the first section, blank lines and the order of entries or
+sections are no entry's change and are never asked about. The refusal names one picker (metadata
+`source` `lesson-merge`, the repository, the number and a sha256 of the change) and the lines its
+question must hold: a line saying how many entries are added, changed, removed and moved, with
+their numbers, then each added or changed entry's rule and SHORT line word for word. A change too
+large for those to fit in the dialog is a sweep: the question holds the count line and a line
+starting "The change: " in the session's words. His "Merge these lessons" is read from the
+session's transcript as his Apply is for a database push (`lib/db-apply-approval.py`), and kept in
+`~/.claude/state/lesson-merges/answers.jsonl` on that Mac with the question he read, because
+`merge-when-ready.sh` asks the gate with no transcript. An answer counts only while the change,
+read again from GitHub, gives the sha256 it named and the question held every line it had to, so
+an answer for another pull request, or one given before a push changed an entry, covers nothing.
+Asleep he is not asked: the refusal says the merge waits. An entry whose rule a picker would draw
+as less than its text names no picker until the entry is reworded. The sync's own send is a push,
+never a pull request, so it never meets the gate. A file list naming the file while GitHub returns
+it at neither commit, and a shortened pin that does not start the head, are refused rather than
+read as untouched. There is no override. What it cannot see: a
+merge made on GitHub's own page or app or in a terminal Dan types in, a push straight to main, a
+head pushed after `gh pr merge --auto` was typed, and a line written into the record by an Edit or
+a script (a shell command naming the record's folder is refused). The rule is
+`lib/lesson-merge.py`; the cases are `test-lessons-merge-gate.sh`.
 
 gh takes a subcommand's flags written in front of it, `gh -R owner/name pr merge 7` and `gh pr -R
 owner/name merge 7` (claude-config#1186; before, all three gates let these through unjudged). The
@@ -2766,6 +2852,8 @@ exit and what it means. It updates the branch, starts the new head's lessons rev
 checks, waits for both, updates again if the base has moved meanwhile, and
 then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh`,
 `require-changelog-tag.sh`, `check-closing-merge.sh`, `check-work-names-merge.sh` (#1995),
+`lessons-merge-gate.sh` (#3343, also asked at the first look, so a merge waiting for Dan's answer
+about lesson entries stops before any check run is spent on it),
 `design-score-gate.sh` and `require-verification-run.sh` and merges only
 when every one allows it, so it decides nothing any gate would refuse. What a gate allows with
 something to say, such as the verification gate's warn mode verdict, is written to its log. The changelog record gate is also asked at the first look, before any update, wait or
@@ -3407,10 +3495,14 @@ it took 174 to 273 ms (3 runs).
 
 What it does not cover:
 
-- A process that left its shell's group (`setsid`, a job control shell, a runner that puts what it
-  starts in a group of its own) is not tied. The time limit runner of claude-config#3578 is to
-  record the group it makes the same way: an empty file named for the group's id in the folder
-  `python3 hooks/lib/agent-leftovers.py dir "$CLAUDE_CODE_SESSION_ID"` prints.
+- A process that left its shell's group (`setsid`, a job control shell) is not tied. The time
+  limit runner (`hooks/lib/run-with-limit.sh`, the next section) puts what it starts in a group of
+  its own and records that group the same way: an empty file named for the group's id in the folder
+  `python3 hooks/lib/agent-leftovers.py dir "$CLAUDE_CODE_SESSION_ID"` prints. The runner takes
+  that file away again once the group holds nothing, so the file stays only for a group the runner
+  could not end or did not live to end. A group is listed only once its leader has gone, so a
+  command that runs on after its runner was killed outright is not listed until it ends and leaves
+  something behind.
 - A group whose oldest process started after the agent's command ended (each generation started
   the next and ended) is said as one that could not be told, never as the agent's.
 - The hand back is where an agent can still act, so an agent that ends by plain text is not asked
@@ -3421,6 +3513,173 @@ What it does not cover:
 
 Tests: `hooks/test-agent-leftovers.sh`, with stand in process tables (a suite never leaves a real
 stray process); the marker line alone is run for real, in bash and in zsh.
+
+### A time limit that ends the whole process group (#3578)
+
+Every agent brief says a loop, a harness or a generated command runs under a time limit that ends
+its whole process group (L1040). Until 2026-11-27 nothing an agent could run did that: the one
+shared limit, `lib/bounded-run.sh`, is a function a script has to load, and macOS ships no
+`timeout`. So each agent wrote its own in perl or python, the gates could not read it, and a suite
+went unrun where it most needed a limit (four sightings on claude-config#3578).
+
+    bash ~/.claude/hooks/lib/run-with-limit.sh <seconds> <command> [its words]
+
+The command runs as the leader of a process group of its own, on the caller's own input and output
+(nothing is captured). The limit is a whole number of seconds from 1 to 86400.
+
+**It is for commands that do not read a terminal.** An agent and a gate have none. Typed at a
+prompt, the command is in a background group of the terminal, and a command that reads or sets
+the terminal there (`git commit` opening an editor, `sudo`, `ssh`, anything that asks) is
+suspended by the system until the limit ends it. The runner hands the terminal to nobody; the
+usage says so, and what it says with 124 tells when the command was suspended and not running.
+The runner sees that the command was suspended and never why (it may have stopped itself, or
+been sent STOP), so that sentence names the terminal as the likely cause and no more.
+
+| Comes back as | What happened |
+| --- | --- |
+| the command's own code | It ended in time and left nothing running. Nothing is said. |
+| 124 | It reached the limit. The whole group was sent TERM, then KILL 2 seconds later (a setting, not measured) if anything was still there. |
+| 123 | It ended in time and left a process running in its group, which was stopped the same way. |
+| 125 | Nothing was run: a bad limit, no command, no usable python3, or a system it cannot keep its rule on. Also a fault inside the runner once the command's process exists: its group is sent KILL. |
+| ended by the signal | The runner was sent a signal it can catch, and ended the group before it went. A shell reports that as 128 plus the signal's number. |
+
+A command a signal ended comes back as 128 plus that signal's number, and one that could not be
+started as 127 or 126, as a shell reports them. An executable file with no interpreter line is
+handed to `sh`, as a shell hands it. When something was stopped the runner says so in one line on
+standard error, naming the group's id, whether TERM or KILL ended it, and the command. A command
+can itself exit with 123, 124 or 125 (another runner inside this one does), and only that line
+tells the runner's code from the command's. One 125 of the runner's has no line on standard
+error: the words `--prove <anything>` given as a run are the launcher's own question to the
+program, and the answer is one line on standard output.
+
+- **A process left running fails the run.** A suite that passes and leaves a process behind is
+  what cost 40 GB on 2026-11-24, so the run comes back as 123 whatever the command's own code
+  was, and the line names that code. What a command leaves is first given one second to end by
+  itself: a shell does not wait for a process substitution, so `exec > >(tee log)` ends with
+  `tee` a moment behind it, and ending `tee` at once would cut the log short and fail a passing
+  run by a race. The 123 is Dan's to reverse (stop the process and keep the command's code).
+- **The command is never started with no limit, and a run with nothing run is not a pass, with
+  the one exception below.** With python3 missing, the program behind the launcher missing, or a
+  system where the runner cannot see a process group or keep its own children, nothing runs and
+  125 comes back. The launcher asks the program one question before it hands a command over and
+  goes on only at the program's own answer, so a `python3` that starts and is not Python (a
+  version manager's shim with no python chosen) is 125 too, where its exit code 0 used to read
+  as a pass. The exception: a `python3` built to give that answer and then exit 0 is a pass with
+  nothing run, since this is a time limit and no security boundary. A fault inside the runner
+  once the command's process exists sends the group KILL, and a fault before that is 125 in
+  words. The command starts only once the runner is watching it: a runner that dies first, or
+  is told to stop first, leaves a child that ends without becoming the command. What can take
+  the limit away AFTER the start (the runner ended by KILL, for one) is under "What it does not
+  cover".
+- **It signals a number only while its own child pins it.** A child that has not been collected
+  keeps its process id, running or ended, and the group it leads has that number. So the runner
+  learns that the command ended without collecting it (a kqueue process event on macOS, `waitid`
+  with `WNOWAIT` on Linux), ends whatever the group still holds, and collects the command last.
+  After the collect it signals nothing: the number can by then belong to any new process. One
+  class in `lib/run-with-limit.py` holds the calls that signal the command or its group and the
+  call that collects it. It refuses a signal after the collect, and after either of its own
+  looks at the command (the one before a fault's KILL, the one for a suspended command) was
+  told the command is no longer the runner's child.
+- **It keeps its own children whatever its caller set.** A caller that ignores SIGCHLD hands
+  that down, and on Linux a process with it has its children collected by the system the moment
+  they end, which would leave the number pinned by nothing (found by review, claude-config#3833).
+  The runner puts SIGCHLD back to its default before it starts anything, proves with a child of
+  its own that an ended child stays until the runner collects it, and runs nothing (125) where
+  that fails. The command still starts with SIGCHLD as its caller had it. Before the KILL it
+  sends on a fault, the runner asks the system whether the command is still its own child.
+- **A signal that would end the runner ends the command's group first.** TERM, INT, HUP, QUIT,
+  USR1, USR2, ALRM, VTALRM, PROF and XCPU are carried over (on Linux also IO, PWR, STKFLT and
+  the real time signals python can set, from its SIGRTMIN up, which is 34 with glibc), unless
+  the caller had the signal ignored. The runner then ends by that signal itself, so a shell loop
+  around it stops at Ctrl C. A stop the runner has noted by its last look before it lets the
+  command go starts nothing. Both hold from the moment the runner's handlers are in, which is
+  after the command's process exists and before it is let go. Three spans are outside that,
+  each read from the code and none measured:
+  - Before the handlers are in, TERM and the others end the runner at once and the command
+    never starts. An INT there is turned by python into an error, so the run comes back 125
+    with nothing run, where an end by INT was meant, and a shell loop around it goes on. Inside
+    a session that span includes the reader that names the marker folder.
+  - A stop that lands in the few steps between the runner's last look for one and its letting
+    the command go starts the command and stops it at once.
+  - While the launcher waits for the answer to its question, an INT sent to the launcher's
+    process alone can be dropped by bash (its rule for a child it waits on), and the command
+    then starts and runs to its limit. The limit is kept; the sender's stop is lost. Ctrl C at
+    a terminal goes to the whole group and is not affected.
+- **A signal that would stop the runner does not stop it,** since a stopped runner keeps no
+  limit. TSTP (Ctrl Z) is caught and not acted on. TTIN and TTOU are ignored while a command
+  runs: ignored and not caught, because a write that raised a caught TTOU fails and is tried
+  again for ever. The command does not inherit that. It starts with TTIN and TTOU as its caller
+  had them.
+- **It reads no `ps`,** which cannot start under `hooks/no-network-run.sh` (macOS refuses a
+  setuid program in a sandbox). On macOS it asks with signal 0: measured on 2026-11-27 on the
+  personal MacBook (macOS 26.6.2) with a probe's own children, a group holding only its ended,
+  uncollected leader answers EPERM, a group with one more member answers success, and 15 ms after
+  that member ended it answers EPERM again. On Linux signal 0 succeeds for a group holding only
+  its ended leader, so the members are read from `/proc`. Either way the runner first asks about
+  its own group, where the answer is known, and runs nothing where that fails. Under the no
+  network wrapper the order is the wrapper first, then the runner.
+- **Its group is recorded for the leftover process check** above, before the command starts, when
+  the run is inside a session whose shells are recorded. A session with no marker folder is left
+  alone, since the folder's being there is what tells the reader the shells are recorded. A record
+  that should have been made and could not be is said in one line, and the limit is kept. The
+  runner takes its own file away once the group holds nothing, just before it collects the
+  command, while the command still pins the number the file is named for. Process ids came round
+  again within minutes on this Mac (2026-11-27, one sample), and a file left for every run would
+  tie each number to the session for as long as the folder lives. The file stays when the runner
+  could not end the group, after a fault, and when the runner did not live to take it away;
+  nothing else removes it, and macOS empties the folder of what nobody has touched for about
+  three and a half days (`bash-shell-mark.sh`). While a file is there, the check's count of
+  "other commands of this session" in the same span is one too high for it.
+- **A command that left its own group is ended by its own process id, late.** It keeps that id
+  for as long as the runner has not collected it, so the same pin covers it. At the limit its
+  group reads empty at once, and the runner then watches for the command's end for up to 10
+  seconds (a setting, not a measurement) before it sends TERM to that id, with KILL after the
+  same wait a group gets. So such a command runs up to that long past its limit. The watch is
+  not cut short, because on macOS a leader that is ending reads for a moment exactly as one
+  that left its group: it stops counting as a member at the start of its exit, and the event
+  the runner waits for comes near the end of it (Apple's published kernel source, read on
+  2026-11-27, not measured). A TERM by id sent in that moment would have the runner say a
+  command had left a group it never left. What the command started outside the group is not
+  reached.
+
+What it does not cover:
+
+- **A process can outlive the limit by the wait between TERM and KILL** (2 seconds, a setting,
+  not a measurement) when it ignores TERM, and a command that left its own group by the watch
+  described just above.
+- A process the command starts outside the group (`setsid`, a job control shell) is not stopped
+  and not seen.
+- A process this user may not signal (a setuid program) reads as nothing left, and when the
+  runner has taken its record away the leftover process check no longer ties it either.
+- A runner ended by KILL stops nothing, and a runner stopped by STOP keeps no limit while it is
+  stopped and applies it late when it goes on. Nothing can catch either. A real fault in the
+  runner's own process cannot be answered either, since a python handler cannot return from
+  one, so the signals a fault raises (ABRT, BUS, FPE, ILL, SEGV, SYS, TRAP, and EMT on macOS)
+  are left at their default. That leaves the same signals sent from outside unanswered too, by
+  choice: ABRT, TRAP, SYS and EMT could be carried over when something else sends them, and are
+  not. On Linux signals 32 and 33 belong to the C library, and python cannot set them. In each
+  case the command runs on with no limit, and the leftover process check lists its group only
+  once its leader has gone.
+- A command that reads the terminal, as said above. With a python3 that has no `os.waitid` (the
+  developer tools' 3.9.6, read on 2026-11-27) what it says with 124 cannot tell that.
+- A `python3` that never answers the launcher's question holds the launcher for as long, with
+  nothing run. A `python3` built to answer the question and then do something else is not
+  caught: this is a time limit and no security boundary.
+- The gates do not read through it yet. The Slack drafts gate, the payload write gate and the
+  area check judge a command behind it as they judge any program they do not know. Reading through
+  lets commands run that are refused today, so it waits for Dan's sign off (claude-config#3578).
+- `lib/bounded-run.sh`'s eight callers and the three private perl copies of it
+  (`lib/sleep-queue.sh`, `subagent-issue-harvest.sh`, `tools/lib/pinned-compiler.sh`) are not
+  moved onto it. By its code, `bounded_run` signals its group from an alarm that can arrive just
+  after the command was collected (read on 2026-11-27, not reproduced), which is the fault this
+  runner's order exists to rule out.
+
+Tests: `hooks/test-run-with-limit.sh`. The fixtures are real processes, and every case ends by
+checking none is left. The rule about signals is held by running the program with stand ins for
+the calls that start, signal and collect. A stand in sends a signal only to a child it saw the
+program start and has not seen collected; any other signal asked for is recorded and never sent.
+No changed copy of the runner is ever run: a case stands in for what is around the program (the
+system's answers, the clock, the record step) and never takes a protection out of it.
 
 ### An agent getting past the checks, and a report that says it did not
 
@@ -3581,21 +3840,27 @@ Reading an old checkout is the other half, and that one is said rather than refu
   and the account's minutes ran out, and the publish gate judged none of the text posted meanwhile.
   The expectation has one home, the first line of `.github/expected-visibility` that is not a
   comment (`public`, `private` or `internal`), which this repository carries and
-  `.github/workflows/tests.yml` points at. A checkout that does not hold the file yet, being behind
+  `.github/workflows/tests.yml` points at, and one reader, `hooks/lib/expected-visibility.py`,
+  which the publish gate reads it through as well (it judges a repository whose file says public
+  even while GitHub says private, see "A repository that declares itself public is judged while it
+  is private"). A checkout that does not hold the file yet, being behind
   its origin, is judged by the copy on origin's default branch as last fetched, and a repository
-  with no such file in either place is never asked about.
+  with no such file in either place is never asked about. Something at that path that is not a
+  file, and an empty copy on origin's default branch, are said as a file that could not be read or
+  understood, never taken as no file.
   When GitHub agrees the hook says nothing; when it does not, one notice names the repository, what
   it is, what that costs and the command to run before it turns public again; when it cannot tell
   (gh failed, answered something else or outlasted its 4 second bound, the file or the origin could
   not be read) it says it could not tell, never that all is well. It costs one `gh repo view` per
-  session start in a repository that carries the file, measured on 2026-11-25 at 0.51 to 0.80
-  seconds over five runs, against 0.10 in a repository with no file and 0.05 to 0.06 outside one.
+  session start in a repository that carries the file, measured on the personal MacBook on
+  2026-11-26 at 0.52 to 0.56 seconds over five runs, against 0.13 to 0.24 over five in a repository
+  with no file and 0.05 over three outside one, at a load average near 40.
   It is wired to SessionStart only, never to a prompt.
   Tests: `hooks/test-repo-visibility-notice.sh`.
 
 ### What a push actually waits on
 
-Forty-three PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty-four PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -3989,6 +4254,21 @@ beside `block-red-merge.sh`, which reads the same pull request
 timed from outside and so including a python start of about 0.02 seconds; it leaves before loading
 anything on a command naming no merge. On a merge, two GitHub reads: the pull request's title,
 description and commits, and the scanner at its base commit
+
+</td></tr>
+<tr><td>
+
+`lessons-merge-gate.sh` (#3343)
+
+</td><td>
+
+2026-11-24: 0.006 seconds on `git status`, five readings at load average 11 to 19, timed from
+outside; it leaves before loading anything on a command with no `merge` word. 0.075 to 0.082
+seconds on `git push -u origin fix/3343-guard-the-merge-lessons`, whose branch name holds the word
+and so loads the shared reader to find no merge. On a merge, through the real gh: about 1 second for
+claude-config #3367, which leaves the lessons file alone (one read, the pull request's file list);
+about 3 seconds for #1598, which changes 51 entries (four reads: the file list, the merge base and
+the file at both commits)
 
 </td></tr>
 <tr><td>
@@ -5082,12 +5362,30 @@ sanctioned route past the gate:
 
 `hooks/no-network-run.sh` runs the command after it inside a macOS sandbox that denies every network
 operation, and since #3288 a hand off to something outside the sandbox as well (below). Every
-process the command starts inherits that, a detached one included, and none can take it off. It takes no option and reads no setting, there is no "this Mac only" mode, and the
+process the command starts inherits that, a detached one included, and none can take it off, with
+the one exception the wrapper makes itself, `ps` (#3482, below). It takes no option and reads no setting, there is no "this Mac only" mode, and the
 command's own exit code comes through unchanged. The gate passes a call that is that installed file
 and its command and nothing else, without reading what runs under it. The refusal of a file whose
 imports reach code
 that posts names the route and the path to write, in full, and `skills/orchestrate/agent-rules.md`
-lets an agent run a refused command again that way when the refusal says so.
+lets an agent run a refused command again that way when the refusal says so. Since #3476 one more
+refusal names it: that of a shell script the gate judged by a name in it and did not read as
+commands. The gate reads the commands of three scripts in a chain, and a shell script behind those
+three is refused where it names a send call, whatever it does. That refused a plain run of
+`test-slack-drafts-gate-qos.sh`, which starts itself again under `taskpolicy` and so reaches the
+gate's own script, which names the call it guards, behind three. A shell script binary from its
+first line and run by bash is judged the same way at any depth, alone or behind one script, since
+bash runs no such file, and its refusal names the route too. The verdict is as it was in every
+case; only the refusal's last sentence is new. A script that does post, reached that deep, gets the
+same sentence, since the gate cannot tell the two apart, and under the wrapper it has no network,
+with the one exception above, `ps`. The route reads the name the command wrote for the file, while
+the gate decides what is a shell script from the file's real path. So a Python or JavaScript file
+run by a link whose name has a shell ending (`python3 link.sh`) gets the sentence as well, though
+it is never read as commands, and a shell script written by a name with another ending or none gets
+no route, even behind three (both found by review on 2026-11-27; the route's suite holds the first
+as it stands, so a change to it is seen). The refusals that suite holds to name no route: a script
+whose commands the gate read, a request, and a file that names the call under a written name with
+no shell ending (JavaScript, Python).
 
 The gate does not read what runs under the wrapper, so the rule is no wider than this: the shell of
 the call starts the installed wrapper, by its real path, and everything the call runs is under it.
@@ -5160,6 +5458,87 @@ and 25 name a file that does, and every one of those is the Python function, a w
 prose. This repository's own suites start none of them for real: the ones that concern `launchctl`
 or `osascript` put a stand in on the `PATH` or replace the call, and several refuse to run
 otherwise. So nothing was exempted.
+
+One program is let out of the sandbox: `/bin/ps` (#3482). macOS refuses to start a setuid program
+from inside any sandbox, whatever the profile allows, and `ps` is one. The kernel's log line is
+`deny(1) forbidden-exec-sugid`, and a profile naming the network alone gives it (measured
+2026-11-24, macOS 26.6.2, the personal MacBook). So every `ps` under the wrapper ended "Operation
+not permitted", and four suites that read a process through it failed there:
+`test-unwaited-children.sh` (1 case), `test-payload-write-gate.sh` (not run at all, its fixture
+watcher could not be read), `test-gates-fail-closed.sh` (5 cases) and `test-pr-review.sh`
+(4 cases). The first three passed run directly the same night, and the fourth two days before.
+The wrapper is the route the gate names for a refused suite, so a builder sent there could not
+finish.
+
+Reading the process list was never something the wrapper set out to stop: the profile allows
+everything it does not name. But the one form a profile takes for a setuid program, `(with
+no-sandbox)`, starts the program it names outside the sandbox altogether, network included. Eight
+forms were tried and no other starts `ps`. So the rule names `ps` by its real path and nothing
+else (`OUTSIDE` in the wrapper), and `test-no-network-run.sh` holds each of these as measured:
+
+- `ps` runs under the wrapper, by its path and through a link. Another program called `ps`, found
+  first on the `PATH`, stays in the sandbox. A copy of the wrapper without the rule still refuses
+  `ps`, kept as a case so that a macOS which stops refusing it turns something red: the rule would
+  otherwise go on starting `ps` outside the sandbox with nothing to say it was no longer needed.
+- The command that ran `ps` is where it was, and so is a program it starts afterwards: the
+  connection is refused, and so are `open`, `osascript` and `launchctl`. Every other setuid
+  program in `/bin`, `/usr/bin`, `/sbin` and `/usr/sbin` is still refused, found on disk at each
+  run (nine on this Mac; the three that ask for a password are never started by the suite, refused
+  or not).
+- macOS does not load into `ps` a library the caller names (`DYLD_INSERT_LIBRARIES`), though it
+  loads it into a program compiled on the spot. That holds for a `ps` started under a debugger's
+  hold or paused as well, and macOS refuses the caller the task port of a `ps` held either way,
+  though it gives the port of a program signed on the spot to allow it. A traced `ps` runs as the
+  user, outside the sandbox, stopped, with the wrapped command holding it: the one state in which
+  a wrapped command holds a process that has the network. Those two refusals are macOS's own and
+  are all that keeps that state safe, so both are cases, each beside its control. So the caller's
+  own code does not leave with `ps`.
+- A socket the command makes and hands to `ps` as its output carries nothing out: the sandbox
+  refuses its connection before `ps` has it.
+- What a wrapped command gains is what `ps` prints. The arguments and the environment of this
+  user's other processes it could already read from the kernel with no `ps` (`sysctl`, measured
+  under the profile without the rule), so `ps eww` shows nothing new of them. New is the arguments
+  of processes that are not this user's, which the kernel refuses a wrapped command and `ps`
+  prints.
+
+Two things the suite does not measure:
+
+- That `ps` itself opens no connection and starts no program. That is how `ps` is written (it reads
+  the process table and prints it), and nothing watches what `ps` does as it runs.
+- The environment of other users' processes. No marker can be put into one without being root, so
+  there is no case. It was read once by hand, on the personal MacBook on 2026-11-24 (the review of
+  that day): `ps` asked for environments under the wrapper showed one for 0 of 192 processes of
+  other users, against 88 of 387 of this user's own. That is one Mac on one day and not a
+  guarantee, and it has not been read on the work MacBook.
+
+One program and never a list. Whatever a rule with `(with no-sandbox)` names runs with the network
+on, so a second program is Dan's decision and not a line to add. Twelve ways of writing a second
+one into the profile were each run in a copy of the wrapper, and in every one `curl`'s post arrived
+(2026-11-24, the personal MacBook): a second rule on the same line, on a continued line, built from
+a variable, written `process-exec*`, a regex in place of the literal, a subpath, a prefix, a second
+literal inside the one rule, a later line that adds to the profile, a line just before the command
+is run, a rule in a file the profile imports, and the one rule naming `curl`. The suite's first
+guard counted the lines of the wrapper that said `with no-sandbox` and passed eleven of the twelve
+(the review of 2026-11-24). Two things hold the promise now:
+
+- The wrapper checks its own profile on every run, before anything is handed to the sandbox tool,
+  and runs nothing when it fails (exit 70). It reads the profile as put together, whatever lines
+  made it: with the one rule for `ps` taken out once, nothing left may say `no-sandbox`, and what
+  is left must be the opening and then refusals naming their paths with `(literal ...)`. Then the
+  profile is made read only. The rule is written out a second time for this check (`ONE_OUT`) and
+  is not built from `OUTSIDE`, so changing either alone is refused. This does not wait for a suite
+  to be run, and it is the same on both Macs.
+- The suite replaces the wrapper's sandbox tool, in a copy, with a stand in that writes down what
+  it is handed and then is the real tool. Every profile handed over must be the one the suite
+  holds whole, in its own words, so a change made to the profile and to the wrapper's check
+  together is still caught there. Each of the twelve spellings is a case twice: as written, the
+  wrapper refuses and hands the sandbox tool nothing (for the line placed just before the command
+  is run, the write to the read only profile fails and the profile handed over is the held one);
+  with the wrapper's check taken out of the copy, `curl`'s post arrives and the suite's check
+  alone catches it.
+
+Neither stops somebody who rewrites the wrapper itself: the sandbox allows every file write, as
+the next paragraph says.
 
 What the route is, so nobody reads more into it. It stops code from using the network while it runs
 under the wrapper, which is what makes an accidental post from a test impossible, and it refuses the
@@ -6542,6 +6921,49 @@ line he approved passes, and says so when the record could not take one (below).
   largest: the libraries are compiled on every run (about 19 ms), because `-B` keeps python3 from
   writing bytecode into the synced hooks folder, and a cache elsewhere would be a file no hook asks
   about that the hook then runs. Nothing was added: the hook is not started after a call.
+  Since #3472 the database call library loads for every commit again, because the command is read
+  a second time whatever it holds (below): 60 runs a side taken turn about on 2026-11-26, at a load
+  average of 35 to 36, gave a median of 127.5 ms before and 139.8 after, least 101.3 and 118.6.
+
+What it refuses (`deny`), the one thing, since #3472: a Bash command holding a line the shared
+reader (`lib/shell-words.py`) names as one it cannot vouch for. The reader takes a `#` for a comment
+by a rule the shell does not always follow, and closes a heredoc at a line where some shells do
+not, so a command the shell runs there was in nothing the hook judged. Asked which lines it is
+unsure of, the reader reads on where every shell does and names the rest: a `#` it cannot tell from
+a comment, a `#` it read on past and then could not read to the end, and a heredoc it cannot find
+the end of (its marker follows a body line ending in a backslash, or no line ends it; its opener
+line ends in a backslash; its quoted marker holds a line break; its marker holds a dollar quote; or
+it is typed on one line). The hook asks the reader about every command naming a database client and
+every command holding `commit` or the test project list's name, whatever else the command holds. It
+used to ask only about one holding a `#`, and a heredoc holds none, so a write or a commit run out
+of such a heredoc was not asked about (each kind reproduced at the hook). A command with a named
+line is refused as one the hook could not check, where one holding a `#` used to be asked about: an
+answer to a question about the part that was read lets the rest run with it. The refusal says which
+line, in a sentence true of the mark the reader named it with (`UNSURE` in
+`lib/db-write-calls.py`), and how to write the command so that it can be read. A refusal is printed
+whatever state `lib/hook-notice.sh` is in beside the hook, since a hook that prints nothing passes
+the command: when the library is missing, is a copy with no `hook_deny_json` (the library's name for
+a refusal, added for #3618 and used here since #3793), or that function prints anything other than
+exactly one JSON object holding a PreToolUse refusal (its event, its decision and at most a reason,
+all texts) with at most the library's notice, a text, beside it, the hook writes the refusal
+itself, without the characters that need escaping, and says which it found. So a refusal cut
+short, two objects, a raw line break in the reason, an ask holding a deny elsewhere, a refusal for
+another event, and a whole refusal beside any other key (`continue`, `suppressOutput` or a top
+level `decision` written as a text, which Claude Code's validation refuses, letting the call go
+ahead) are all replaced. The hook reads the object with Python's JSON reader and never learns the
+name of a key beside the refusal, since only the library may write the notice field's name
+(#1906): for a refusal with one key beside it, it asks the library's `hook_decision_verdict`, and
+passes the refusal on only when that function is there, returned 0 and said nothing. Beside a
+library with no such function, the hook writes the refusal itself and says so. What is still
+trusted is that function's own answer, which `test-hook-notice.sh` holds to each wrong text.
+A refusal written by the hook is the decision alone: a notice the library would have put beside it
+(the one about pre-allowed Salesforce writes) is said inside the refusal's reason, since only the
+library builds a notice (#1906).
+`read-only-query-allow.sh` approves no such command either. A reader that cannot be asked at all is
+still asked about, since no rewriting helps, and so is a push whose earlier dry run held such a
+line. Over 105,627 Bash calls recorded on the personal MacBook (86,010 distinct commands, 2026-11-26)
+the change refuses none, asks about none more and lets through none more: the reader names a line
+in none of them. Suite: `test-db-write-ask-unsure-line.sh`.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
@@ -6618,6 +7040,67 @@ names and the date and run the suite. Not established: Better Stack's tool names
 server name Regal is reached under, which are on the work MacBook only, so for them the hook rests
 on the name parts and the verbs; and no live question has been exercised, since no connector was
 called.
+
+## A skill shipped by an MCP server asks Dan first
+
+An MCP server can ship skills beside its tools. In auto mode such a skill loads with no prompt:
+Claude Code's documentation says "The classifier decides whether the skill loads, without reading
+it", and "Servers can change skills at any time." Dan accepted on 2026-11-25 "Ask before a
+server's skill loads" (#3615). `hooks/server-skill-ask.sh` runs before every Skill call Claude
+makes and asks first when the skill is a server's. The question names the skill and the server and
+says that its text is the server's and can change at any time. While sleep mode is on the load is
+refused with the reason, and it is refused when the hook cannot tell whether Dan is asleep; that
+rule is `hooks/lib/ask-awake.sh`.
+
+It is a hook and not the `permissions.ask` rule the documentation gives (`Skill(mcp__docs__*)`),
+because the sync carries no ask rule to either Mac. The one permission setting it shares is
+`permissions.deny`, for a fixed list of rules (#3686), and an ask rule in `settings.shared.json`
+makes the pull refuse that whole file, saying such a rule stays each Mac's own (read in
+`claude-sync` on 2026-11-26; the section above holds the measurement, taken before the deny rules
+were shared). A hook also needs no list of server names, so a server connected later is covered the
+day it is connected.
+
+Which skill is a server's is `hooks/lib/server-skills.py`'s rule. The documentation names a
+server's skill `<server>:<skill>`, with `claude_ai_<name>:` for a claude.ai connector and
+`plugin_<plugin>_<server>:` for a plugin's server, which is the same form an installed plugin's
+own skill takes (`<plugin>:<skill>`). So the form cannot tell them apart, and the hook goes by
+what is on this Mac:
+
+- A name with no prefix passes: Dan's own skills and the bundled ones.
+- `anthropic-skills:` passes: Claude Code reserves it for skills synced from claude.ai.
+- Any other prefixed name passes only when the skill is found on disk, under the install folder
+  of a plugin of that name (`~/.claude/plugins/installed_plugins.json`) or, for a directory's
+  own skill such as `apps/web:deploy`, under that directory of the working directory.
+- Inside a plugin's folder only the places Claude Code reads a plugin's skills and commands from
+  count (its plugin pages, read 2026-11-26): `skills/<name>/SKILL.md` at the plugin's root, named
+  by the folder or in the file's own text; the same under a directory the manifest's `skills` key
+  lists; a `SKILL.md` at the root when there is no `skills/` and no `skills` key; and `commands/`
+  at the root, a subfolder adding a part to the name, or what the manifest's `commands` key lists
+  there in its place. A file anywhere else in the plugin, such as a `SKILL.md` among its examples
+  or a page under another folder named `commands`, does not make a name the plugin's.
+- Asked about although a plugin may hold them, each costing one question: a command the manifest
+  lists outside `commands/` or writes inline, a skill or command a marketplace entry adds, and
+  anything in a plugin whose manifest is there and cannot be read, which the question says.
+- Everything else prefixed is asked about, and so is any name starting `mcp__`, a name holding
+  punctuation the hook cannot place, a Skill call naming no skill, and a payload it cannot read.
+
+A skill Dan types as a command is never asked about: by the documentation a typed command does
+not reach a PreToolUse hook, and needs no approval under an ask rule either.
+
+What it costs on a Skill call (personal MacBook, 2026-11-26, two runs of 30 samples a case, one
+process per call, the one minute load average 99 for the first run and 11 for the second): one of
+Dan's own skills takes 8.2 and 8.8 ms at the median, against 6.7 and 7.4 ms for a bash that only
+reads its input, and python3 never starts. A prefixed name starts python3: 41 and 42 ms at the
+median for an installed plugin's skill, 38 and 41 ms for one synced from claude.ai, and 68 and
+67 ms when it asks. The 37 prefixed skill names this Mac's sessions list or have called were run
+through the hook in each run, and all 37 passed in silence both times. After the rule was narrowed
+to the places listed above, later that day, the 37 passed in silence again in one run; the times
+were not taken again.
+
+Not established: no server skill has loaded on either Mac, since the feature is off for the
+account, so the name forms are the documentation's (read 2026-11-26) and no real payload for one
+has been seen. The first real one should be checked against `lib/server-skills.py`. If a server
+ships a skill under the exact name of a plugin skill that is on disk, the hook passes it.
 
 ## A trusted path that has gone is said
 
@@ -9098,6 +9581,23 @@ Each `claude` question is stopped after `SYNC_CLAUDE_CHECK_TIMEOUT` seconds (30 
 answered in under half a second when measured), because the check runs under the sync lock and a hung
 `claude` would otherwise hold every sync behind it.
 
+A validation stopped that way says nothing about the mod, only that `claude` was too slow, so it is
+said as "could not check mod <name>", never as a mod that is not loading (#3759). A mod Claude Code
+does not list, or that validation refuses, still notifies at once ("a mod is not loading on this
+Mac"). A run of time outs notifies once the same mod's check has timed out on
+`SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` syncs in a row (5 by default; the longest real run measured in
+this Mac's sync log was 4, under load), and once per run of them, so a check that can never finish is
+still heard. The count goes up once per sync, however many times that sync checks the mods (a send
+that changes the mod names checks them, and the apply its reconcile runs checks them again). One sync
+posts at most one notification about time outs, naming every mod it covers. `claude-sync status`
+lists every mod the last syncs could not check, with how many in a row and since when. The count is
+kept in `.mod-check-timeouts` in the clone. A record that cannot be read is said so by the pull and
+by status, and never counted as none. Two more notifications come from that: when the pull can set
+the record aside, a time out it meets in that same sync notifies, since nothing can say it is the
+first; when it cannot (an earlier `.mod-check-timeouts.unreadable` is still there), it notifies once,
+and not again until a sync has read the record again. While it stays that way nothing is counted, so
+no later time out notifies; status says so on every run.
+
 Deleting a mod deletes it on the other Mac. Deleting the whole `~/.claude/mods` folder does not: a
 Mac with no mods folder cannot be told apart from one that never had mods yet, and reading that as a
 deletion would wipe the other Mac's mods the first time a fresh Mac sends. Delete the mods inside it.
@@ -9907,12 +10407,13 @@ cleared, as before.
 A merge labelled `changelog/announce` also owes agents a Slack draft of the wording Dan approved
 (#3667). The mod keeps it in its store outside the cards, the live card asks for the draft, and a
 band row with Copy, Mark sent and Not announcing, `/live`, each session start in that project and
-one refused turn end say it until it is drafted on the claimed wording or Dan settles it. The rules
+one refused turn end say it until it is drafted on the claimed wording or Dan settles it. Not
+announcing settles only on a second press within 10 seconds of the first (#3847). The rules
 are in "An approved announcement is owed as a Slack draft until it is settled (#3667)" above.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849, #3667
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849, #3667, #3847
 
 </td></tr>
 <tr><td>
@@ -10104,7 +10605,8 @@ command whose words show that it only reads the file runs unasked, as ever: `cat
 `sed -n`, `awk`, `diff`, a copy of it made elsewhere, output redirected to another file, an inline
 program that only reads it, and `claude-sync lesson`, `next-lesson`, `lesson-faults` and `pull`.
 Left as they were: a checkout's `payload/LESSONS.md`, which Dan decided on #3343 to guard at the
-merge and is not built yet; a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md`, through a
+merge (`hooks/lessons-merge-gate.sh` holds a pull request that changes an entry there until he has
+answered for it); a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md`, through a
 variable only a command's output sets), which is as likely a scratch copy and is asked about as
 before; a removal (`rm`), which the reader counts as no write; and a script that writes the file
 with no word of the command naming it, which no reader of the words can see.
@@ -10957,7 +11459,12 @@ command itself with nothing built or loaded as it runs, never a file run by name
 opens, while everything else on the list keeps "Do not look for another way", and a write through
 `&>`, which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
-file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
+file handed it as its argument included, #1592), write tools under claude.ai and PostHog, since
+#3740 a tool on any other MCP server (a plugin's own, one added by hand) whose own name holds
+delet, remov or paus in any case, since the list named only those two families and a worker's
+prompt for a delete on any other server was answered yes (reproduced in the mod's tests on
+2026-11-26, never seen on a real night; a read whose name holds one of the three is refused too,
+on every server, and every other tool on a server outside the two families still goes ahead), any
 Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
 #3099 it may also close, and only close, a tab first listed in its tab group after its own click,
 typing, form fill or script in a tab it created, since a clicked link can open one, and never a tab
@@ -11758,13 +12265,27 @@ reader marks as putting something in the background, running nohup, setsid or di
 read in full, which withholds it for the rest of the session. The look follows each carrier's
 parents by pid and parent pid, never a command's text: one that meets the look's own line of
 parents, which the session's own process is on, is still attached (the session's connected servers
-are, for as long as it is open) and withholds nothing; one that reaches launchd was left behind;
-one whose parents cannot be followed withholds as unread
-(`tests/test-close-card-process-look.sh` runs the look on real processes). A reading that cannot be
-taken withholds it. Each reason is written to
+are, for as long as it is open) and withholds nothing; one that reaches launchd was left behind,
+when the look's own line was followed to launchd too;
+one whose own parents cannot be followed counts as nothing either way (Dan, 2026-11-26: "2.1
+Unreadable counts as nothing"), never a reason to withhold or to pin, and is kept as a note
+(`notes`) in the reasons file, seen and not counted. When the look cannot follow its OWN line (a
+parent of it missing from the list and not read from the kernel), a carrier that reaches launchd
+cannot be told apart, left behind or attached above the break, so the card is withheld for those,
+in one reason naming them and saying the check could not find its own place among the processes:
+his answer does not cover that case, and the card was withheld for it before his answer too
+(`tests/test-close-card-process-look.sh` runs the look on real processes and on planted process
+lists). A reading that cannot be taken withholds it, with two exceptions, both in this look and
+both written as notes that never withhold or pin the card: a process whose own parents cannot be
+followed, and a look that could not be finished (ps or the look failed, ran past its limit or
+answered something else, or the process list came back cut short, where what the look saw before
+the cut still counts), which is also said in the debug log. Each reason is written to
 `~/.claude/state/close-session/<session id>.json`, newest
-replacing the one before. The next turn start takes the card down as withdrawn; it comes back
-only after the next box. Invisible to both readings: a program that detaches itself without the
+replacing the one before, with the notes and `attached`, the look's count of carriers still
+attached (null when it gave none): in a session with connected servers a 0 there is a look that
+saw no environment at all, and nothing is decided from it. The next turn start takes the card
+down as withdrawn; it comes back only after the next box. Invisible to both readings: a
+program that detaches itself without the
 command saying so, and an Apple signed program (a shell, sleep) left behind, whose environment
 the kernel does not show.
 
@@ -11870,7 +12391,16 @@ It also fails a mod whose hook is on an event Claude Code's built-in security de
 the user tier every mod loads in (#875): every `classic.*` event, `prompt.section`, `prompt.context`,
 `prompt.compose`, `skill.prompt`, `attribution.text` and `settings.read`, and since Claude Code
 2.1.299 `prompt.attachment` and `session.compact` too (#1185), and since 2.1.331 `session.info`
-and `session.redact` (#3508). Seated outermost for a
+and `session.redact` (#3508). Some routes carry a matcher, written as Claude Code writes it
+(#3697): `session.append{door=attachment}`, `{door=hook-context}` and `{door=compaction}`, and
+`telemetry.log{to=collector}`; and `session.identity` is refused to a mod's caller and routed for
+every other, so no call of it reaches a mod either. A hook with a matcher is keyed by the part a
+route reads (`session.append{door=hook-context}`), and a hook hears a route unless the two name one
+field with different values, so a `session.append` hook with no door is reported for the doors it
+is passed over on. A second list holds the routes passed over for some calls only (the Skill tool's
+`session.append{door=tool-message}` rows, `{door=note}` and a few engine reads made by the guard
+or the prepend and append tiers); a hook on one is reported too, saying "for some of its calls".
+Seated outermost for a
 Team or Enterprise organization, it routes each of those straight past our mods, so such a hook
 never runs and only a debug log line says so (`bypassed by cc-plugin-sec-default`). Both Macs keep
 it out of first place with the managed settings file in "Setting up a new Mac" above, so these
@@ -11884,7 +12414,13 @@ on a Mac still running an older one. Where a `claude` binary is found, its route
 the ones listed for that build (each route is listed with the first build known to route it, read
 from `claude --version`, every route when the version cannot be read), and a difference fails, so
 the next build that adds or drops a route fails on the first Mac to install it while the other Mac
-and CI stay as they were.
+and CI stay as they were. The reading finds each registration in three shapes, with or without a
+matcher: a handler that routes every call, one that refuses or routes (every call), and one that
+routes or passes on (some calls); a handler with a body in braces is not read. Each list is
+compared on its own. A route the documentation names (the admin page's table of hooks that do not
+run, read on 2026-11-25, and the guard's readme) that the reading does not find in any shape fails
+on a line of its own, since it means either a shape the reading does not know or a build that no
+longer routes it.
 It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` says, with the
 TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed on CI before the
 suites; `TSC_BIN` overrides it, and `tsc` on the path is the last resort). A checkout without it, as
@@ -12168,7 +12704,8 @@ overnight with a changelog sentence you have not read, as you chose on 2026-11-2
 merge or deploy anywhere the list below says wait, or anywhere it has no
 answer for; push straight to a default branch; force push or delete branches; switch branches in
 your main checkout; write to a database (Supabase, psql); use claude.ai, Chrome or PostHog tools that
-write; run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
+write; use a tool on any other connector whose name says it deletes, removes or pauses (#3740);
+run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
 work an issue someone else opened. Nor does any session hand you a result while you sleep, a
 worker or not: a page published or opened for you (the Artifact tool) or a Claude doc is held in
 that session, and when sleep mode ends, by any route, the noon end included, every session that
@@ -12492,6 +13029,53 @@ removed, so the refusal is never published as a deletion; and the apply, to say 
 absent means no line is being left out for want of its script, which is the normal state. Losing it
 while a line is refused costs one repeated message, and lets the next send read that line as removed
 here
+
+</td></tr>
+<tr><td>
+
+`.hooks-file-keys-told`
+
+</td><td>
+
+every apply that read `settings.hooks.json` and found a top level key other than `hooks` in it, once
+the notification naming those keys was posted; removed when the file holds no such key (#3741)
+
+</td><td>
+
+the apply, to post that notification once per set of keys rather than on every pull. Its output and
+the log say it on every pull regardless
+
+</td><td>
+
+absent or unreadable means the next pull that meets such a key notifies again, which is the loud
+side. Losing it costs one repeated notification
+
+</td></tr>
+<tr><td>
+
+`.mod-check-timeouts`
+
+</td><td>
+
+every mod check that gave every mod an outcome: one line per mod whose `claude plugin validate` did
+not answer in time, with how many syncs in a row, since when, whether that was notified, and which
+sync last counted it (so one sync that checks twice counts once); removed when every check finished
+(#3759)
+
+</td><td>
+
+the same check, to notify only at `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` time outs in a row and once per
+run of them; and `claude-sync status`, which lists each mod it names
+
+</td><td>
+
+absent means every mod's last check finished. Unreadable is never read as none: the pull and status
+say so, the pull keeps it as `.mod-check-timeouts.unreadable` and starts a new one from that sync,
+and a time out it meets notifies, since nothing can say it is the first. When an earlier
+`.unreadable` is already there, the pull cannot set it aside: it leaves both, counts nothing, says so
+on every sync, and notifies once (`.mod-check-timeouts.stuck-told` records that, and the first sync
+that reads the record again removes it). Lost, a run of time outs starts counting again, so a check
+that never finishes is heard that many syncs later
 
 </td></tr>
 <tr><td>
