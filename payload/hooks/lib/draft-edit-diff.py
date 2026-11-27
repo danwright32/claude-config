@@ -43,7 +43,10 @@ HOW A PAIR IS MADE.
   * A post more than PAIR_WITHIN_DAYS days after that draft is not paired with it. Both are left
     out and counted.
   * Both are compared after Slack's formatting is set aside (links, bold, italics, bullets, quote
-    markers at the start of a line, spacing and case), by words, with difflib.
+    markers at the start of a line, the name a read adds inside a mention, spacing and case), by
+    words, with difflib.
+  * The FIRST post after a draft takes it. A later post that is more like that draft is left out
+    and counted, so the count says how often that rule may have made the wrong pair.
 
 WHAT IT CANNOT SEE, so nobody reads more into a count than it measured.
   * A thread no later session read back. Its draft is counted as having no post read back after it.
@@ -83,16 +86,27 @@ offered: neither says what to write differently.
 WHAT THE SHAPE RESTS ON (L48). The record around a call (a tool_use item in an assistant record, its
 tool_result in a user record, the result a string or a list of text items holding JSON, and copies
 of a request kept with no time) was measured on the personal MacBook on 2026-11-27 from 24 calls to
-other tools of the same Slack connector. That Mac held no draft call and no read that succeeded, so
-the layout INSIDE a thread or channel read (the headings and the From, Time and Message TS lines)
-was not measured there. It is written as the connector was seen to answer earlier, and it is the
-part most likely to differ. So a read result with no message this can find is COUNTED and said, a
-run in which no read result could be read exits 4 and says nothing was measured, and --shapes prints
-what the results are made of so the layout can be checked on a Mac that holds them (L98, L177).
+other tools of the same Slack connector. That Mac held no draft call and no read that succeeded.
+The layout INSIDE a thread or channel read was measured on the work MacBook on 2026-11-27, by counts,
+field names and the punctuation of headings only (pull request 3848), over 1,765 read results:
+  * a detailed or default read holds the thread parent, reply and channel message headings this
+    looks for, with From, Time and Message TS lines under a thread heading, in the two fields
+    "messages" and "pagination_info";
+  * a read that asked for response_format "concise" holds none of them, and no time for a post: 998
+    of the 1,013 results this could not read. It is counted as its own kind and never paired;
+  * a channel message heading can have no name, or an address and more fields in its brackets;
+  * a heading of the shape "=== words (words) ===" in a thread read holds no message;
+  * a line beginning "Reactions:" sits in the body of some thread messages, and is set aside;
+  * a mention is <@id> in a draft call and <@id|name> in a read result.
+A read result with no message this can find is still COUNTED and said, a run in which no read result
+could be read exits 4 and says nothing was measured, and --shapes prints what the results are made
+of (L98, L177). What was NOT measured: any other line the connector writes under a message, what a
+concise read looks like inside, and a read result too large for the session.
 
 WHERE THE TEXT SITS is part of that layout, and matching headings say nothing about it. The text of
-a message is read as the lines under its Message TS line. The connector's own account of a read says
-its default answer "includes reactions + thread info", and where those lines go was not measured. So:
+a message is read as the lines under its Message TS line, less any Reactions line. The connector's
+own account of a read says its default answer "includes reactions + thread info", and no line for
+thread info was measured. So:
   * a message with no text under its Message TS line is counted, and is no post: never a pair;
   * a pair whose post ends in a line shaped like a label (a word or three and a colon, as From and
     Time are written) is set aside and counted, since that line may be the connector's and not his;
@@ -100,7 +114,8 @@ its default answer "includes reactions + thread info", and where those lines go 
     line above the Message TS line that is neither From nor Time, or end in such a label line;
   * --shapes counts the lines of text under and above the Message TS lines, and names a label line
     only when its name is in KNOWN_LABELS, a fixed list. Any other is counted by its length alone.
-None of this was measured against a real read. It makes a layout that differs fail aloud.
+These four guards have not met a real read yet: the run that measured the layout was made before
+they were written. They make a layout that differs fail aloud.
 
 Exit codes: 0 measured; 2 a wrong argument; 3 the records folder or the decisions file could not be
 read; 4 read results were there and none could be read, or the text of most messages is not where
@@ -144,10 +159,26 @@ OFFERED = ("figures cut", "length cut", "the ask reworded", "the opening changed
 # decisions.py, and the skill's suite fails when the two differ.
 DECIDED_FOR_GOOD = ("accepted", "never")
 
-CHANNEL_HEAD = re.compile(r"^=== Message from (.+?) \(([A-Z0-9]+)\) at .* ===\s*$")
+# A channel message heading. The name can be EMPTY, and can carry an address in angle brackets, and
+# the brackets can hold more fields than the member id: 198 headings with no name and three with an
+# address were measured on the work MacBook on 2026-11-27, and the pattern that wanted a name and a
+# bare id dropped the message under each one.
+CHANNEL_HEAD = re.compile(r"^=== Message from\s*(.*?)\s*\(([^()]*)\) at .* ===\s*$")
+MEMBER_ID = re.compile(r"\b[A-Z][A-Z0-9]{5,}\b")
 PARENT_HEAD = re.compile(r"^=== THREAD PARENT MESSAGE ===\s*$")
 REPLY_HEAD = re.compile(r"^--- Reply \d+ of \d+ ---\s*$")
+# A heading of the shape "=== words (words) ===", as the one over a thread's replies: it holds no
+# message (364 measured there, all in thread reads).
+SECTION_HEAD = re.compile(r"^=== [^=()]+ \([^()]*\) ===\s*$")
 OTHER_HEAD = re.compile(r"^(?:=== .* ===|--- .* ---)\s*$")
+# A line the connector writes under the text of a message, measured there in 694 of 3,820 thread
+# messages. It is no part of what was sent, so it is set aside wherever it sits in the body. A line
+# of his own that begins with this word would go with it.
+REACTIONS_LINE = re.compile(r"^Reactions:")
+# A mention is <@id> in a draft call and <@id|name> in a read result (measured there: 39 of 144
+# pairs counted as the opening changed differed in nothing else).
+MENTION = re.compile(r"<@([A-Za-z0-9]+)\|[^>]*>")
+CONCISE = "concise reads, which carry no time and cannot be paired"
 FROM_LINE = re.compile(r"^From: (.+?)(?: \(([A-Z0-9]+)\))?\s*$")
 TS_LINE = re.compile(r"^Message TS: (\d+\.\d+)\s*$")
 TIME_LINE = re.compile(r"^Time: ")
@@ -238,7 +269,10 @@ def posts_in(text, shape):
         if not (cur["ts"] and (cur["name"] or cur["uid"])):
             shape["headings with no author or no Message TS under them"] += 1
             return
-        lines = [x for x in cur["body"] if x.strip()]
+        kept = [x for x in cur["body"] if not REACTIONS_LINE.match(x)]
+        shape["Reactions lines under a message, set aside"] += len(cur["body"]) - len(kept)
+        cur["body"] = kept
+        lines = [x for x in kept if x.strip()]
         shape[FOUND] += 1
         shape[TEXT_LINES] += len(lines)
         if cur["above"]:
@@ -258,16 +292,17 @@ def posts_in(text, shape):
         if m:
             close()
             shape["channel message headings"] += 1
-            cur = {"name": m.group(1), "uid": m.group(2), "ts": "", "body": [], "above": 0}
+            uid = MEMBER_ID.search(m.group(2))
+            cur = {"name": m.group(1), "uid": uid.group(0) if uid else "", "ts": "", "body": [], "above": 0}
             continue
         if PARENT_HEAD.match(line) or REPLY_HEAD.match(line):
             close()
             shape["thread parent headings" if PARENT_HEAD.match(line) else "thread reply headings"] += 1
             cur = {"name": "", "uid": "", "ts": "", "body": [], "above": 0}
             continue
-        if OTHER_HEAD.match(line):
+        if SECTION_HEAD.match(line) or OTHER_HEAD.match(line):
             close()
-            shape["other headings"] += 1
+            shape["section headings with no message under them" if SECTION_HEAD.match(line) else "other headings"] += 1
             cur = None
             continue
         if cur is None:
@@ -299,7 +334,8 @@ def read_records(root, shape):
     """Every saved draft and every message read back, from the record files under root."""
     drafts = {}   # call id -> {"place", "text", "at"}
     saved = {}    # call id -> whether Slack saved it
-    reads = {}    # call id -> (tool, channel, parent ts)
+    reads = {}    # call id -> (tool, channel, parent ts, whether it asked for the concise layout, its time)
+    concise = {}  # place -> the latest time a concise read read it back (None: a time this could not read)
     posts = {}    # (channel, ts) -> (place, name, member id, body, whether its last line is label shaped)
     done = set()  # read call ids whose result was taken
     files = 0
@@ -337,8 +373,8 @@ def read_records(root, shape):
                     if item.get("type") == "tool_use":
                         take_call(item, rec, drafts, reads)
                     elif item.get("type") == "tool_result":
-                        take_result(item, drafts, saved, reads, posts, done, shape)
-    return files, drafts, saved, posts
+                        take_result(item, drafts, saved, reads, posts, done, shape, concise)
+    return files, drafts, saved, posts, concise
 
 
 def take_call(item, rec, drafts, reads):
@@ -360,15 +396,24 @@ def take_call(item, rec, drafts, reads):
         # A resumed session and the kept copy of a request repeat a call: one draft, at its earliest time.
         if known is None or (at is not None and (known["at"] is None or at < known["at"])):
             drafts[call] = {"place": (channel, thread if isinstance(thread, str) else ""), "text": text, "at": at}
-    elif tool.endswith("__" + THREAD_TOOL):
-        parent = args.get("message_ts")
-        if isinstance(parent, str) and parent:
-            reads[call] = (THREAD_TOOL, channel, parent)
-    elif tool.endswith("__" + CHANNEL_TOOL):
-        reads[call] = (CHANNEL_TOOL, channel, "")
+    elif tool.endswith("__" + THREAD_TOOL) or tool.endswith("__" + CHANNEL_TOOL):
+        which = THREAD_TOOL if tool.endswith("__" + THREAD_TOOL) else CHANNEL_TOOL
+        parent = args.get("message_ts") if which == THREAD_TOOL else ""
+        if which == THREAD_TOOL and not (isinstance(parent, str) and parent):
+            return
+        # A read that asked for the concise layout is answered with no heading, no From line and no
+        # Message TS line (measured on the work MacBook on 2026-11-27: 998 such reads, 24 of them
+        # holding any number shaped like a message time). Its posts cannot be placed in time, so it
+        # is its own kind, and no pairing is guessed for it.
+        short = args.get("response_format") == "concise"
+        at = record_time(rec)
+        known = reads.get(call)
+        if known is not None and known[4] is not None and (at is None or known[4] > at):
+            at = known[4]  # the copies of one call: its latest known time
+        reads[call] = (which, channel, parent, short, at)
 
 
-def take_result(item, drafts, saved, reads, posts, done, shape):
+def take_result(item, drafts, saved, reads, posts, done, shape, concise):
     call = item.get("tool_use_id")
     if call in drafts:
         text, error = result_text(item)
@@ -377,11 +422,19 @@ def take_result(item, drafts, saved, reads, posts, done, shape):
     if call not in reads or call in done:
         return
     done.add(call)
-    tool, channel, parent = reads[call]
+    tool, channel, parent, short, read_at = reads[call]
     text, error = result_text(item)
     shape["read results"] += 1
     if error:
         shape["read results marked as an error"] += 1
+        return
+    if short:
+        shape[CONCISE] += 1
+        place = (channel, parent)
+        # The place it read back, and when, so a draft there can be said to have been read back this
+        # way. None stands for a time this could not read, which is taken as after any draft.
+        if place not in concise or read_at is None or (concise[place] is not None and read_at > concise[place]):
+            concise[place] = read_at
         return
     inner, fields = unwrap(text)
     for field in fields:
@@ -410,6 +463,7 @@ def take_result(item, drafts, saved, reads, posts, done, shape):
 def sentences(text):
     """The text with Slack's formatting set aside, as a list of sentences in lower case."""
     t = html.unescape(text)
+    t = MENTION.sub(r"<@\1>", t)
     t = re.sub(r"<(?:https?|mailto):[^|>\s]+\|([^>]*)>", r"\1", t)
     t = re.sub(r"<((?:https?|mailto):[^>\s]+)>", r"\1", t)
     t = re.sub(r"\[([^\]]+)\]\((?:https?|mailto):[^)\s]+\)", r"\1", t)
@@ -453,7 +507,7 @@ def kinds_of(draft, sent):
     return kinds, likeness
 
 
-def pair_up(drafts, saved, posts, author):
+def pair_up(drafts, saved, posts, author, concise):
     """Pairs as (place, post time, draft text, sent text), and what was left out."""
     want = author.strip().lower()
     by_place = collections.defaultdict(list)
@@ -466,12 +520,19 @@ def pair_up(drafts, saved, posts, author):
             mine[place].append((float(ts), body, labelled))
     pairs, used, no_draft, doubtful = [], set(), 0, 0
     late, late_posts = set(), 0
+    paired_at, closer = {}, 0  # draft call -> the likeness of the pair it made
     for place, sent in mine.items():
         ds = sorted(by_place.get(place, []))
         for at, body, labelled in sorted(sent):
             before = [d for d in ds if d[0] < at]
             if not before or before[-1][1] in used:
                 no_draft += 1
+                # The first post after a draft takes it. When this later one is MORE like that draft,
+                # the pair made may be the wrong one, so it is counted. The rule is not changed here:
+                # whether the likeliest post should take the draft is for Dan (pull request 3848).
+                took = paired_at.get(before[-1][1]) if before else None
+                if took is not None and not labelled and kinds_of(before[-1][2], body)[1] > took:
+                    closer += 1
                 continue
             if at - before[-1][0] > PAIR_WITHIN_DAYS * 86400:
                 # Too long after that draft to be read as what became of it: neither is in a pair.
@@ -484,8 +545,9 @@ def pair_up(drafts, saved, posts, author):
                 # compared, a post sent word for word would read as edited (L648).
                 doubtful += 1
                 continue
+            paired_at[before[-1][1]] = kinds_of(before[-1][2], body)[1]
             pairs.append((place, at, before[-1][2], body))
-    replaced = unread = 0
+    replaced = unread = unread_concise = 0
     for place, ds in by_place.items():
         ds.sort()
         for i, (at, call, _text) in enumerate(ds):
@@ -496,12 +558,16 @@ def pair_up(drafts, saved, posts, author):
                 replaced += 1
             else:
                 unread += 1
+                # Read back afterwards by a concise read, which shows no time: a post may be there.
+                if place in concise and (concise[place] is None or concise[place] > at):
+                    unread_concise += 1
     # A saved draft kept only in the copy of a request has no time, so nothing can be said to come
     # after it. It is in no pair, and it is counted so that it is in a count (S7).
     untimed = sum(1 for call, d in drafts.items() if saved.get(call) and d["at"] is None)
     return sorted(pairs, key=lambda p: p[1]), {"unread": unread, "replaced": replaced, "no_draft": no_draft,
                                                "doubtful": doubtful, "late_posts": late_posts,
-                                               "late_drafts": len(late), "untimed": untimed}
+                                               "late_drafts": len(late), "untimed": untimed,
+                                               "unread_concise": unread_concise, "closer": closer}
 
 
 def decisions_path():
@@ -581,9 +647,9 @@ def main():
             return 3
     skipped = decided | set(args.skip)
     shape = collections.Counter()
-    for key in (FOUND, TEXT_LINES, NO_TEXT, ABOVE, ABOVE_LINES, LABELLED):
+    for key in (FOUND, TEXT_LINES, NO_TEXT, ABOVE, ABOVE_LINES, LABELLED, CONCISE):
         shape[key] = 0  # printed by --shapes at zero too: where the text sits is what a first run checks
-    files, drafts, saved, posts = read_records(args.records, shape)
+    files, drafts, saved, posts, concise = read_records(args.records, shape)
     n_saved = sum(1 for call in drafts if saved.get(call))
     shape["draft calls"] = len(drafts)
     shape["draft calls Slack saved"] = n_saved
@@ -591,7 +657,7 @@ def main():
     if args.shapes:
         print_shapes(shape)
         return 0
-    pairs, left = pair_up(drafts, saved, posts, args.author)
+    pairs, left = pair_up(drafts, saved, posts, args.author, concise)
     unreadable = shape["in a layout this cannot read"]
     print("Slack drafts compared with what was sent")
     blind = shape["folders that could not be read"]
@@ -606,15 +672,20 @@ def main():
     print("draft calls: %d (saved: %d)" % (len(drafts), n_saved))
     print("read results: %d (with messages: %d, marked as an error: %d)" % (
         shape["read results"], shape["read results with messages"], shape["read results marked as an error"]))
+    print("%s: %d. A post read back only that way is in none of the counts below." % (CONCISE, shape[CONCISE]))
     if unreadable:
         print("read results in a layout this cannot read: %d. Their messages are in none of the counts below; "
               "run this with --shapes to see what they are made of." % unreadable)
     found, wordless = shape[FOUND], shape[NO_TEXT]
     print("messages found in them: %d (no text under the Message TS line: %d; a line above it that is neither "
           "From nor Time: %d; last line shaped like a label: %d)" % (found, wordless, shape[ABOVE], shape[LABELLED]))
-    if shape["read results"] and not shape["read results with messages"] and unreadable:
-        print("Nothing was measured: thread or channel reads are in the records and not one could be read, so "
-              "a count of pairs here would be a count of this program's blind spot.")
+    if shape["read results"] and not shape["read results with messages"] and (unreadable or shape[CONCISE]):
+        if not unreadable:
+            print("Nothing was measured: every thread or channel read in the records is a concise read, which "
+                  "shows no time for a post, so no draft can be paired with what was sent.")
+        else:
+            print("Nothing was measured: thread or channel reads are in the records and not one could be read, so "
+                  "a count of pairs here would be a count of this program's blind spot.")
         return 4
     # The headings can all match while the TEXT sits where this does not look (review M1). Each of the
     # three is a failure when it is true of most messages, never a count: a post read with no text, or
@@ -638,6 +709,10 @@ def main():
     print("pairs: %d in %s" % (len(pairs), plural(len(threads), "thread")))
     print("left out: drafts with no post read back after them: %d; drafts replaced by a later draft: %d; "
           "posts with no draft before them: %d" % (left["unread"], left["replaced"], left["no_draft"]))
+    print("drafts with no post read back: of those, in a place a concise read read back afterwards: %d (a post "
+          "may be there, and a concise read shows no time to pair it by)" % left["unread_concise"])
+    print("posts whose draft was already paired: of those, more like that draft than the post it was paired "
+          "with: %d (the first post after a draft takes it)" % left["closer"])
     print("also left out: pairs whose post ends in a line shaped like a label: %d (that line may be the "
           "connector's and not his)" % left["doubtful"])
     print("also left out: posts more than %d days after the draft before them: %d (drafts: %d). The %d days "

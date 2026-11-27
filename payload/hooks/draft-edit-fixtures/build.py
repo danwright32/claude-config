@@ -8,9 +8,15 @@ said in ../lib/draft-edit-diff.py, under WHAT THE SHAPE RESTS ON.
 
 It writes its records under the folder it is handed and nowhere else, and reads nothing.
 
-Only the first layout is written as the connector was seen to answer. "body_first", "trailing",
-"split" and "some_trailing" move only the TEXT of a message, or put a line under it, to places the
-connector could put them; "unknown" has no heading at all. None of those five was seen. They are
+WHAT WAS MEASURED, by counts, field names and the punctuation of headings only, on the work MacBook
+on 2026-11-27 (pull request 3848): the thread and channel headings, the From, Time and Message TS
+lines, the two fields "messages" and "pagination_info", a "Reactions:" line under the text of some
+thread messages (layout "trailing"), the section heading over a thread's replies, a concise read
+with none of those, a channel heading with no name or with an address, and the two ways a mention
+is written. Every fixture of those is still invented text in that layout.
+
+"body_first", "labelled", "split" and "some_labelled" were NOT seen. They move only the TEXT of a
+message, or put an unmeasured label line under it, and "unknown" has no heading at all. They are
 here so the suite can show the reader fails aloud, or sets a pair aside, instead of counting edits
 nobody made.
 """
@@ -103,15 +109,17 @@ def thread_text(posts, layout):
                 out.append("=== THREAD REPLIES (%d total) ===\n" % (len(posts) - 1))
             out.append("--- Reply %d of %d ---" % (i, len(posts) - 1))
         head = "From: %s (%s)\nTime: 2026-11-02 10:00:00 EST\n" % (who[0], who[1])
-        marked = layout in ("trailing", "split") or (layout == "some_trailing" and i % 5 == 2)
+        marked = layout == "labelled" or (layout == "some_labelled" and i % 5 == 2)
         if text == "":                       # a post that holds a file and no words
             out.append(head + "Message TS: %s\n" % ts(seconds))
         elif layout == "body_first":         # the text sits above the Message TS line
             out.append(head + "%s\nMessage TS: %s\n" % (text, ts(seconds)))
-        elif layout == "split":              # the text above it, and a line of the connector's own under it
-            out.append(head + "%s\nMessage TS: %s\nReactions: thumbsup (2)\n" % (text, ts(seconds)))
-        elif marked:                         # the known layout, with a line of the connector's own under the text
+        elif layout == "split":              # the text above it, and a label line nobody measured under it
+            out.append(head + "%s\nMessage TS: %s\nAttachments: 1\n" % (text, ts(seconds)))
+        elif layout == "trailing":           # MEASURED: a Reactions line under the text of a message
             out.append(head + "Message TS: %s\n%s\nReactions: thumbsup (2)\n" % (ts(seconds), text))
+        elif marked:                         # a label line nobody measured, under the text
+            out.append(head + "Message TS: %s\n%s\nAttachments: 1\n" % (ts(seconds), text))
         else:
             out.append(head + "Message TS: %s\n%s\n" % (ts(seconds), text))
     return "\n".join(out)
@@ -247,6 +255,70 @@ def unknown(folder):
     r.write(folder, "session-unknown.jsonl")
 
 
+def concise(folder, detailed_too):
+    """MEASURED on the work MacBook on 2026-11-27: a read whose call passes response_format "concise"
+    answers with no heading, no From line and no Message TS line, in the same two fields. Two drafts
+    in two threads, each posted word for word and read back only that way; with detailed_too, a
+    third thread read back in the layout the reader knows."""
+    r = Records()
+    for n, channel in enumerate(("C0FIXTURE80", "C0FIXTURE81")):
+        start = 1000 * n
+        r.draft(start + 100, channel, start, "The lock gates close at nine.")
+        call = r.use(start + 900, "slack_read_thread",
+                     {"channel_id": channel, "message_ts": ts(start), "response_format": "concise"})
+        r.result(start + 901, call, json.dumps({
+            "messages": "Ben Sample: When do the lock gates close?\nAda Example: The lock gates close at nine.",
+            "pagination_info": ""}))
+    if detailed_too:
+        r.draft(5100, "C0FIXTURE82", 5000, "The slipway reopens on Friday at nine.")
+        r.thread(5900, "C0FIXTURE82", 5000, [(5000, OTHER, "When does the slipway reopen?"),
+                                               (5200, ME, "The slipway reopens on Friday at nine.")])
+    r.write(folder, "session-concise.jsonl")
+
+
+def headings(folder):
+    """MEASURED on the work MacBook on 2026-11-27, by punctuation only: a channel message heading can
+    have NOTHING between "Message from" and the bracketed id, and can carry an address in angle
+    brackets with more fields inside the brackets. Three drafts at the top of a channel, each posted
+    word for word, one under each such heading. How the spaces fall was not measured, so both are here."""
+    r = Records()
+    texts = ("The winter mooring list is ready.", "The pilot boat is back in the water.", "The ferry timetable is out.")
+    heads = ("=== Message from  (%s) at 2026-11-02 10:00:00 EST ===" % ME[1],
+             "=== Message from (%s) at 2026-11-02 10:00:00 EST ===" % ME[1],
+             "=== Message from %s <ada@example.invalid> (%s, guest: no) at 2026-11-02 10:00:00 EST ===" % ME)
+    out = []
+    for n, (text, head) in enumerate(zip(texts, heads)):
+        r.draft(1000 * n + 100, "C0FIXTURE85", None, text)
+        out.append("%s\nMessage TS: %s\n%s\n" % (head, ts(1000 * n + 200), text))
+    call = r.use(9000, "slack_read_channel", {"channel_id": "C0FIXTURE85"})
+    r.result(9001, call, json.dumps({"messages": "\n".join(out), "pagination_info": ""}))
+    r.write(folder, "session-headings.jsonl")
+
+
+def mentions(folder):
+    """MEASURED on the work MacBook on 2026-11-27: a mention is <@id> in a draft call and <@id|name>
+    in a read result. One draft that opens with a mention, posted word for word."""
+    r = Records()
+    r.draft(100, "C0FIXTURE86", 0, "<@%s> the tide table is ready for Friday, and <@%s> has the keys." % (OTHER[1], ME[1]))
+    r.thread(900, "C0FIXTURE86", 0, [
+        (0, OTHER, "Is the tide table ready?"),
+        (200, ME, "<@%s|%s> the tide table is ready for Friday, and <@%s|%s> has the keys." % (OTHER[1], OTHER[0], ME[1], ME[0]))])
+    r.write(folder, "session-mentions.jsonl")
+
+
+def second_post(folder):
+    """A draft, then a quick line of his own about something else, then the draft posted word for
+    word. The reader pairs the draft with the first post after it. Not measured anywhere: it is here
+    to show what that rule does, and that the count beside it says so."""
+    r = Records()
+    r.draft(100, "C0FIXTURE87", 0, "The harbour office has the winter mooring list and will answer by Friday.")
+    r.thread(900, "C0FIXTURE87", 0, [
+        (0, OTHER, "Any word on the moorings?"),
+        (160, ME, "Give me a minute."),
+        (220, ME, "The harbour office has the winter mooring list and will answer by Friday.")])
+    r.write(folder, "session-second-post.jsonl")
+
+
 def broadcast(folder, channel_first):
     """One reply the author sent, which Slack also shows in the channel, read back both ways. An
     older draft for the top of that channel was never sent. The truth: one pair, in the thread."""
@@ -306,8 +378,18 @@ def main():
         many(folder, [4, 4, 4], nearly=5)
     elif which == "unknown":
         unknown(folder)
-    elif which in ("wordforword", "body_first", "trailing", "split", "some_trailing"):
+    elif which in ("wordforword", "body_first", "trailing", "labelled", "split", "some_labelled"):
         word_for_word(folder, "thread" if which == "wordforword" else which)
+    elif which == "concise":
+        concise(folder, detailed_too=False)
+    elif which == "concise_beside_detailed":
+        concise(folder, detailed_too=True)
+    elif which == "headings":
+        headings(folder)
+    elif which == "mentions":
+        mentions(folder)
+    elif which == "second_post":
+        second_post(folder)
     elif which == "some_wordless":
         word_for_word(folder, "thread", wordless=1)
     elif which in ("broadcast", "broadcast_channel_first"):

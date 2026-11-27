@@ -151,7 +151,7 @@ check_not "shapes: prints no message text for a layout it can read" "harbour" "$
 # --- where the TEXT of a message sits (review M1) ------------------------------------------------------
 # Every heading, From line and Message TS line below is one the reader knows. Only the place of the
 # text differs, and each of these twelve drafts was posted word for word, so any edit counted is false.
-for f in wordforword body_first trailing split some_trailing some_wordless; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
+for f in wordforword body_first trailing labelled split some_labelled some_wordless; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
 out="$(run wordforword)"; rc=$?
 check_eq "word for word, in the layout this knows: measured" "0" "$rc"
 check "word for word: twelve of twelve are sent as drafted" "sent as drafted: 12 of 12 pairs" "$out"
@@ -171,21 +171,71 @@ check_not "shapes: prints none of that text" "Gauge" "$out"
 out="$(run wordforword --shapes)"
 check "shapes: in the layout this knows, one line of text under each Message TS line" "lines of text under a Message TS line: 15" "$out"
 check "shapes: and none above it" "lines above a Message TS line that are neither From nor Time: 0" "$out"
-out="$(run trailing)"; rc=$?
-check_eq "trailing: a line of the connector's own under every text is a failure, never twelve edits" "4" "$rc"
-check "trailing: said as nothing measured" "Nothing was measured" "$out"
-check "trailing: with how many messages end that way" "last line shaped like a label: 15" "$out"
-check_not "trailing: and no pair is counted" "pairs:" "$out"
-out="$(run trailing --shapes)"
-check "shapes: a label from the fixed list is named, with its count" "label lines under a Message TS line, Reactions: 15" "$out"
-check_not "shapes: and what follows the label is not printed" "thumbsup" "$out"
+out="$(run labelled)"; rc=$?
+check_eq "labelled: a label line nobody measured under every text is a failure, never twelve edits" "4" "$rc"
+check "labelled: said as nothing measured" "Nothing was measured" "$out"
+check "labelled: with how many messages end that way" "last line shaped like a label: 15" "$out"
+check_not "labelled: and no pair is counted" "pairs:" "$out"
+out="$(run labelled --shapes)"
+check "shapes: a label from the fixed list is named, with its count" "label lines under a Message TS line, Attachments: 15" "$out"
+check_not "shapes: and nothing of the message under it is printed" "Gauge" "$out"
 out="$(run split)"; rc=$?
 check_eq "split: text above the line and a label under it is a failure" "4" "$rc"
 check "split: said as nothing measured" "Nothing was measured" "$out"
-out="$(run some_trailing)"; rc=$?
-check_eq "some trailing: a label under a few messages is measured" "0" "$rc"
-check "some trailing: those pairs are set aside and counted" "pairs whose post ends in a line shaped like a label: 3" "$out"
-check "some trailing: and the rest are read as they were sent" "sent as drafted: 9 of 9 pairs" "$out"
+out="$(run some_labelled)"; rc=$?
+check_eq "some labelled: a label under a few messages is measured" "0" "$rc"
+check "some labelled: those pairs are set aside and counted" "pairs whose post ends in a line shaped like a label: 3" "$out"
+check "some labelled: and the rest are read as they were sent" "sent as drafted: 9 of 9 pairs" "$out"
+
+# --- the layout as it was measured on the work MacBook on 2026-11-27 (pull request 3848) ----------------
+# Counts, field names and the punctuation of headings were measured there. Every word below is invented.
+for f in concise concise_beside_detailed headings mentions second_post; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
+# A Reactions line under a message's text is the connector's, and is no part of what he sent.
+out="$(run trailing)"; rc=$?
+check_eq "trailing: a Reactions line under every text is measured" "0" "$rc"
+check "trailing: and the twelve are read as they were sent" "sent as drafted: 12 of 12 pairs" "$out"
+check "trailing: no pair is set aside for it" "pairs whose post ends in a line shaped like a label: 0" "$out"
+out="$(run trailing --shapes)"
+check "shapes: the Reactions lines set aside are counted" "Reactions lines under a message, set aside: 15" "$out"
+check_not "shapes: and what follows the label is not printed" "thumbsup" "$out"
+# The Time line between From and Message TS is passed over, and the section heading over a thread's
+# replies holds no message: neither is text, and neither is an unknown heading.
+out="$(run wordforword --shapes)"
+check "shapes: the Time lines are counted, and are no text" "Time lines: 15" "$out"
+check "shapes: the heading over a thread's replies is a section heading" "section headings with no message under them: 3" "$out"
+check_not "shapes: and is no longer an unknown heading" "other headings" "$out"
+# A concise read has no heading and no time: its own kind, counted, and never called unreadable.
+out="$(run concise_beside_detailed)"; rc=$?
+check_eq "concise: beside a detailed read the run is measured" "0" "$rc"
+check "concise: the concise reads are counted as their own kind" "concise reads, which carry no time and cannot be paired: 2" "$out"
+check_not "concise: and are not called a layout it cannot read" "in a layout this cannot read" "$out"
+check "concise: the thread read back in the detailed layout is paired" "pairs: 1 in 1 thread" "$out"
+check "concise: the two drafts read back only that way are counted as unread" "drafts with no post read back after them: 2" "$out"
+check "concise: and said to be where a concise read came afterwards" "of those, in a place a concise read read back afterwards: 2" "$out"
+check_not "concise: none of the concise text is printed" "lock gates" "$out"
+check "concise: --shapes counts them too" "concise reads, which carry no time and cannot be paired: 2" "$(run concise_beside_detailed --shapes)"
+out="$(run concise)"; rc=$?
+check_eq "concise: with no other read, nothing was measured" "4" "$rc"
+check "concise: and it says why" "every thread or channel read in the records is a concise read" "$out"
+check_not "concise: with no pair counted" "pairs:" "$out"
+check "a draft nothing read back at all is not counted there" "of those, in a place a concise read read back afterwards: 0" "$(run basics)"
+# A channel heading with no name, or with an address and more fields in its brackets, still holds a message.
+out="$(run headings)"
+check "headings: all three messages are read, and paired" "pairs: 3 in 1 thread" "$out"
+check "headings: each as it was sent" "sent as drafted: 3 of 3 pairs" "$out"
+out="$(run headings --shapes)"
+check "headings: each is counted as a channel message heading" "channel message headings: 3" "$out"
+check_not "headings: none is an unknown heading" "other headings" "$out"
+check_not "headings: and the address is not printed" "example.invalid" "$out"
+# A mention is <@id> in a draft and <@id|name> in a read: the same mention.
+out="$(run mentions)"
+check "mentions: a draft posted word for word is sent as drafted" "sent as drafted: 1 of 1 pair" "$out"
+check "mentions: and its opening is not counted as changed" "the opening changed: 0 of 1 pair" "$out"
+# The first post after a draft takes it. When a later one is more like the draft, that is counted.
+out="$(run second_post)"
+check "second post: the draft is paired with the first post after it" "heavily rewritten: 1 of 1 pair" "$out"
+check "second post: and the later post that is more like the draft is counted" "of those, more like that draft than the post it was paired with: 1" "$out"
+check "no such post in the basics" "of those, more like that draft than the post it was paired with: 0" "$(run basics)"
 out="$(run some_wordless)"; rc=$?
 check_eq "some wordless: a few posts with no words are measured" "0" "$rc"
 check "some wordless: they are counted" "no text under the Message TS line: 3" "$out"
