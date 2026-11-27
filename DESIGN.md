@@ -3417,7 +3417,11 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   the call's 12 seconds (`CHECK_SECONDS`), not the number: sessions are read newest first, a call
   out of time stops before the next one, and the sessions left unread, for either reason, are
   counted in the call's answer. Ruled out: stopping in silence, which would make a refusal after a
-  short read indistinguishable from one that looked everywhere and found no approval.
+  short read indistinguishable from one that looked everywhere and found no approval. The merge
+  gate's two questions about a finishing pull request share those 12 seconds (the first answer's
+  `spent`, handed to the second as `--spent`), where each had 12 of its own. Ruled out: asking
+  the second of the record alone, which would forget the sessions the first left unread and let
+  a decline clear where the first would not have.
 
 `hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh`,
 `hooks/test-announce-answer-note.sh`, the #3666 and #3669 sections of `hooks/test-changelog-tag.sh`

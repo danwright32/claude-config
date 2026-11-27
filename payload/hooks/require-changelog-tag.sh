@@ -563,7 +563,7 @@ read_closing() {
 # about, and any pull request in a repository that does not announce, which is not read at all.
 finishes_announced_feature() {
   [ "$announces" = true ] || return 0
-  local was_overridden="$overridden" verdict9="" state9="" n other other_state unmerged=""
+  local was_overridden="$overridden" verdict9="" state9="" n other other_state unmerged="" spent9=""
   r9_unread() {  # $1 = what could not be read
     [ -n "$closing_file" ] && rm -f "$closing_file"
     if [ "$was_overridden" = true ]; then
@@ -572,8 +572,12 @@ finishes_announced_feature() {
     overridden=false
     deny "Cannot tell whether PR #$number finishes a feature Dan said yes to announcing to agents: $1. Where a repository announces, the pull request that finishes such a feature merges under changelog/announce unless he declined in a picker, and what could not be read is never taken as a pull request that finishes none. Try the merge again. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
   }
-  r9_ask() {  # $1 = the pull requests GitHub says did not merge as an announcement, comma separated, or nothing
-    verdict9=$(printf '%s' "$payload" | python3 -B "$HOOK_DIR/lib/announce-approval.py" finishes --repo "$slug" --pr "$number" --answer-file "$closing_file" ${1:+--unmerged "$1"} --hook 2>/dev/null)
+  # $1 = the pull requests GitHub says did not merge as an announcement, comma separated, or nothing.
+  # $2 = for the second question, what the first one spent of the time one call has for reading
+  # noted sessions back. The two share that time, so asking twice reads back no longer than asking
+  # once, and the library reads what is no count of seconds as no time left.
+  r9_ask() {
+    verdict9=$(printf '%s' "$payload" | python3 -B "$HOOK_DIR/lib/announce-approval.py" finishes --repo "$slug" --pr "$number" --answer-file "$closing_file" ${1:+--unmerged "$1"} ${2:+--spent "$2"} --hook 2>/dev/null)
     state9=$(printf '%s' "$verdict9" | jq -r '.state // ""' 2>/dev/null)
   }
   read_closing || r9_unread "$closing_unread"
@@ -616,7 +620,10 @@ finishes_announced_feature() {
         *) unmerged="${unmerged:+$unmerged,}$n" ;;
       esac
     done
-    [ -z "$unmerged" ] || r9_ask "$unmerged"
+    if [ -n "$unmerged" ]; then
+      spent9=$(printf '%s' "$verdict9" | jq -r 'if (.spent | type) == "number" then .spent else "unknown" end' 2>/dev/null)
+      r9_ask "$unmerged" "${spent9:-unknown}"
+    fi
   fi
   rm -f "$closing_file"; closing_file=""
   case "$state9" in

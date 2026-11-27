@@ -1885,6 +1885,37 @@ for odd in '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"to
 done
 rm -rf "$dir" "$BROKEN"
 
+# The gate's second question shares the first one's time for reading sessions back (review of #3669,
+# low 10): each had a whole call's time of its own (the library's CHECK_SECONDS, a setting and not a
+# measurement), so two of them and the GitHub reads could pass the time the gate is registered with. Driven with a copy of the hooks whose approval library writes down
+# what it was asked: the first answer says what it spent, and the second question is handed that.
+SPY="$(mktemp -d)"
+cp "$HOOK" "$SPY/"
+cp -R "$HOOK_DIR/lib" "$SPY/lib"
+cp "$HOOK_DIR/gh_issue_scan.py" "$SPY/"
+cat > "$SPY/lib/announce-approval.py" <<'PY'
+import os, sys
+with open(os.environ["SPY_LOG"], "a", encoding="utf-8", errors="replace") as f:
+    f.write(" ".join(sys.argv[1:]) + "\n")
+if "--unmerged" in sys.argv:
+    print('{"state": "owed", "why": "it closes the last open issue of the milestone \\"Hand back\\"", "how": "", "notes": [], "announced": []}')
+elif os.environ.get("SPY_SPENT"):
+    print('{"state": "clear", "why": "", "how": "", "notes": [], "announced": [5], "spent": ' + os.environ["SPY_SPENT"] + '}')
+else:
+    print('{"state": "clear", "why": "", "how": "", "notes": [], "announced": [5]}')
+PY
+dir=$(make_repo acme/widget "$VISIBLE_OK" "$REGISTRY_ANNOUNCES")
+out=$(SPY_LOG="$dir/asks.log" SPY_SPENT=7.25 HOOK="$SPY/require-changelog-tag.sh" FAKE_PR5_JSON="$(pr5 OPEN)" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+first="$(sed -n 1p "$dir/asks.log" 2>/dev/null)"; second="$(sed -n 2p "$dir/asks.log" 2>/dev/null)"
+if denied "$out" && [ "$(grep -c "" "$dir/asks.log" 2>/dev/null)" = 2 ] && ! says "$first" "--spent" && says "$second" "--unmerged 5" && says "$second" "--spent 7.25"; then pass
+else fail "#3669 R9 G: the gate's second question was not handed what the first one spent reading sessions back, or the gate did not ask exactly twice: [$first] [$second] $out"; fi
+rm -f "$dir/asks.log"
+out=$(SPY_LOG="$dir/asks.log" HOOK="$SPY/require-changelog-tag.sh" FAKE_PR5_JSON="$(pr5 OPEN)" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+second="$(sed -n 2p "$dir/asks.log" 2>/dev/null)"
+if denied "$out" && says "$second" "--unmerged 5" && says "$second" "--spent unknown"; then pass
+else fail "#3669 R9 G: a first answer that does not say what it spent was followed by a second question with time of its own: [$second] $out"; fi
+rm -rf "$dir" "$SPY"
+
 # An announcement that finishes the feature merges as an announcement does: its one line, and the
 # milestone's number on the record.
 dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")

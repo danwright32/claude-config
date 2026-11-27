@@ -1693,7 +1693,7 @@ echo "the pull request that finishes a feature Dan said yes to announcing (#3669
 finishes() {
   local a="$WORK/answer.json"; printf '%s' "$2" > "$a"
   if [ -n "${3:-}" ]; then
-    printf '{"session_id": "s1", "transcript_path": "%s"}' "$3" | ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" finishes --repo acme/widget --pr 7 --answer-file "$a" --hook ${UNMERGED:+--unmerged "$UNMERGED"}
+    printf '{"session_id": "s1", "transcript_path": "%s"}' "$3" | ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" finishes --repo acme/widget --pr 7 --answer-file "$a" --hook ${UNMERGED:+--unmerged "$UNMERGED"} ${SPENT:+--spent "$SPENT"}
   else
     ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" finishes --repo acme/widget --pr 7 --answer-file "$a" ${UNMERGED:+--unmerged "$UNMERGED"} </dev/null
   fi | python3 -c 'import json, sys
@@ -1959,6 +1959,25 @@ r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T")"
 check "R9 #3669 E the call that finds a repository's noted session gone settles its note and says so, and his decline does not clear on that call" "$([[ "$r" == "unread||"*'`Not announcing`'*"f-behind-other-2.jsonl, can never be read"* && "$r" != *"could not be read back"* ]] && settled_as "$BEHIND2" 'transcript is gone' && [ "$(kinds settled)" = "$((settled_before + 1))" ] && echo ok || echo "$r")"
 r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T")"
 check "still possible #3669 E: it is said once and read no more, and his decline clears the next call" "$([[ "$r" == "clear||"* ]] && [ "$(kinds settled)" = "$((settled_before + 1))" ] && echo ok || echo "$r")"
+# The gate asks twice when GitHub says a pull request let through did not merge as an announcement,
+# and each question read the noted sessions back with a whole call's time of its own (review of
+# #3669, low 10; the time is the library's CHECK_SECONDS, a setting and not a measurement). The two
+# now share one: the first answer says what it spent (`spent`), the gate hands that to the second
+# (--spent), and the second reads back only in what is left. SPENT is that flag here.
+printf '%s' "$YES12" > "$WORK/answer-g.json"
+r="$(printf '{"session_id": "s1", "transcript_path": "%s"}' "$T" | ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" finishes --repo acme/widget --pr 7 --answer-file "$WORK/answer-g.json" --hook | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+s = d.get("spent")
+print(d["state"] + "|" + ("a number" if isinstance(s, (int, float)) and not isinstance(s, bool) and 0 <= s < 12 else repr(s)), end="")')"
+check "#3669 G the answer says how much of the time for reading sessions back the question spent" "$([[ "$r" == "clear|a number" ]] && echo ok || echo "$r")"
+r="$(UNMERGED=5 SPENT=0.5 finishes "$STORE_USED" "$YES12" "$T")"
+check "still possible #3669 G: a second question with time left reads the noted session back, and his decline clears it" "$([[ "$r" == "clear|"* ]] && echo ok || echo "$r")"
+r="$(UNMERGED=5 SPENT=12 finishes "$STORE_USED" "$YES12" "$T")"
+check "R9 #3669 G a second question whose first spent all 12 seconds reads no session back: his decline is unread, saying the shared time ran out" "$([[ "$r" == "unread|"*'`Not announcing`'*"1 session holding a picker the record notes was left unread, because the 12 seconds this merge's two questions share ran out"* ]] && echo ok || echo "$r")"
+for odd in unknown -3 nan inf; do
+  r="$(UNMERGED=5 SPENT="$odd" finishes "$STORE_USED" "$YES12" "$T")"
+  check "R9 #3669 G what the first question spent, handed over as no count of seconds, is read as no time left [$odd]" "$([[ "$r" == "unread|"*"left unread, because the 12 seconds this merge's two questions share ran out"* ]] && echo ok || echo "$r")"
+done
 # What GitHub does not answer is never read as "not the last".
 for bad in '' '{}' '{"data":{"repository":{"pullRequest":null}}}' \
   '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":60,"nodes":[]}}}}}' \

@@ -326,7 +326,9 @@ payload is on standard input, his pickers are read, and what they hold is writte
                                       [--description-file <file>]    create-milestone.sh's question
   announce-approval.py finishes --repo <owner/name> --pr <number> --answer-file <GitHub's answer>
                                 [--unmerged <number>,<number>]    the merge gate's second question,
-                                naming the pull requests of `announced` GitHub says have not merged
+                                naming the pull requests of `announced` GitHub says did not merge as
+                                an announcement
+                                [--spent <seconds>]    with it, what the first answer gave as "spent"
 A file named to either is read whole or not at all (_read_text): one that cannot be opened, or is
 larger than TEXT_BYTES, is said in the answer's "why", never cut and never read as empty.
 """
@@ -1388,12 +1390,13 @@ def _file_hash(path, deadline):
     return answer["hash"], None
 
 
-def _read_back(entries, noted, looked, unjudged, deadline, unlooked):
+def _read_back(entries, noted, looked, unjudged, deadline, unlooked, shared=False):
     """The noted sessions one call reads back, as (session, its transcript, its notes, its unjudged
     ones), NEWEST first: the sessions other than looked that hold a noted picker the record has no
     outcome for (unjudged(session)), ranked by their newest such note, at most NOTED_SESSIONS of
-    them, and only while the call's time lasts (deadline, CHECK_SECONDS from its start). One rule
-    for both judges (_harvest, _harvest_decisions).
+    them, and only while the call's time lasts (deadline, CHECK_SECONDS from its start, or what an
+    earlier question of the same merge left of them: shared, which only changes how running out
+    is said). One rule for both judges (_harvest, _harvest_decisions).
 
     A session is ranked by its newest note and not its first: every picker is noted, so a session's
     first note is its first picker of any kind, long before the one about an announcement. The
@@ -1417,7 +1420,8 @@ def _read_back(entries, noted, looked, unjudged, deadline, unlooked):
 
     for n, session in enumerate(waiting[:NOTED_SESSIONS]):
         if _clock() >= deadline:
-            left_unread(len(waiting) - n, "because the " + str(CHECK_SECONDS) + " seconds one call has ran out")
+            left_unread(len(waiting) - n, "because the " + str(CHECK_SECONDS) + (
+                " seconds this merge's two questions share ran out" if shared else " seconds one call has ran out"))
             return
         yield session, noted[session][0], noted[session][1], unjudged(session)
     if len(waiting) > NOTED_SESSIONS:
@@ -1895,7 +1899,7 @@ def decisions(session_id, transcript_path, deadline=None, done=(), sought=()):
     return [line for _, line in sorted(lines, key=lambda pair: pair[0])], untaken, None
 
 
-def _harvest_decisions(payload, notes, key=None, short=None):
+def _harvest_decisions(payload, notes, key=None, short=None, spent=None):
     """This session's pickers of DISCOVERY, the pickers the record notes that nothing has judged
     (in any session: a note is by its ids alone, so only the transcript says which is of DISCOVERY;
     with a repository key, a note naming another repository is left out), and the record, read once
@@ -1910,8 +1914,10 @@ def _harvest_decisions(payload, notes, key=None, short=None):
     judged), for a caller that must not lean on his last answer then (finishes). A call that names
     no transcript of its own tried none. A noted session whose transcript is gone can never be
     read: its notes are settled here, and where one named a repository the call that settles it
-    says so once and counts it among these, so no later call does."""
-    deadline = time.monotonic() + CHECK_SECONDS
+    says so once and counts it among these, so no later call does. spent, when given, is the
+    seconds an earlier question of the same merge already used of CHECK_SECONDS: this one reads
+    back only in what is left of them (finishes)."""
+    deadline = time.monotonic() + (CHECK_SECONDS if spent is None else max(0.0, CHECK_SECONDS - spent))
     entries, unreadable = read_record()
     noted = _noted(entries)
     # A picker the record holds any outcome for has been judged, an approval picker's lines
@@ -1934,7 +1940,8 @@ def _harvest_decisions(payload, notes, key=None, short=None):
     unlooked = [unlooked] if unlooked else []
     read, seen = [], {f["picker"] for f in found}
     before = len(unlooked)
-    for session, transcript, _, left in _read_back(entries, noted, looked, unjudged, deadline, unlooked):
+    for session, transcript, _, left in _read_back(entries, noted, looked, unjudged, deadline, unlooked,
+                                                   spent is not None):
         if _gone(transcript):
             # As in _harvest: what its noted pickers asked can never be read, so each is settled
             # here and read no more. One that named a repository is said, once, and on the call
@@ -2151,7 +2158,7 @@ def _announced(entries, key, number, title):
     return out
 
 
-def finishes(repo, pr, answer, payload=None, unmerged=()):
+def finishes(repo, pr, answer, payload=None, unmerged=(), spent=None):
     """The merge gate's question about a pull request that does not carry changelog/announce, in a
     repository that announces (claude-config#3669, R9): does it finish a feature Dan said yes to
     announcing, with no announcement let through for it and no decline of his?
@@ -2182,8 +2189,11 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
     `announced` that GitHub then said did not merge as an announcement (not merged, or merged
     without the changelog/announce label, since the line is written before the merge runs and the
     label can be taken off after it): asked again with them, their lines cover nothing, and the
-    refusal says so."""
-    out = {"state": "clear", "why": "", "how": "", "notes": [], "announced": []}
+    refusal says so. spent is what the first question's answer gave as "spent", the seconds it
+    used of the time one call has for reading noted sessions back (CHECK_SECONDS): the second
+    question reads back only in what is left, so the gate's two questions about one merge read
+    back no longer than one, and what it leaves unread is said like any other."""
+    out = {"state": "clear", "why": "", "how": "", "notes": [], "announced": [], "spent": spent or 0.0}
     key = repo_key(repo)
 
     def unread(why):
@@ -2230,8 +2240,12 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
         found, untaken, unlooked = [], [], None
         entries, unreadable = read_record()
     else:
+        began = time.monotonic()
         found, untaken, unlooked, entries, unreadable = _harvest_decisions(
-            payload if isinstance(payload, dict) else {}, out["notes"], key, short)
+            payload if isinstance(payload, dict) else {}, out["notes"], key, short, spent)
+        # What this question and any before it used of the time for reading sessions back, for
+        # the gate to hand to its next question about the same merge.
+        out["spent"] = round((spent or 0.0) + time.monotonic() - began, 3)
     if entries is None:
         return unread(unreadable + ", so whether Dan said yes to announcing the milestone this pull request finishes, "
                       "an announcement was let through for it, or he declined one, could not be told")
@@ -2441,8 +2455,18 @@ def main(argv):
         except ValueError:
             answer = None
         unmerged = [int(n) for n in (_flag(args, "--unmerged") or "").split(",") if n.isdigit()]
+        spent = None
+        if "--spent" in args:
+            # What is no count of seconds (the first answer did not say, or nothing follows the
+            # flag) is read as no time left, never as a whole call's time over again.
+            try:
+                spent = float(_flag(args, "--spent"))
+            except (TypeError, ValueError):
+                spent = float(CHECK_SECONDS)
+            if not 0.0 <= spent <= CHECK_SECONDS:
+                spent = float(CHECK_SECONDS)
         json.dump(finishes(_flag(args, "--repo"), int(pr) if pr and pr.isdigit() else None, answer,
-                           _hook_payload(args), unmerged), sys.stdout)
+                           _hook_payload(args), unmerged, spent), sys.stdout)
         return 0
     if command == "list":
         entries, why = read_record()
@@ -2454,7 +2478,8 @@ def main(argv):
                      "[--unread <why>] | answered, with the PostToolUse payload on standard input | decision --repo "
                      "<owner/name> --feature <name> [--milestone <number>] [--hook] | milestone-line --repo <owner/name> "
                      "--feature <name> --answer <yes|no|unasked> [--description-file <file>] | finishes --repo "
-                     "<owner/name> --pr <number> --answer-file <file> [--unmerged <number>,<number>] [--hook]. "
+                     "<owner/name> --pr <number> --answer-file <file> [--unmerged <number>,<number>] [--spent <seconds>] "
+                     "[--hook]. "
                      "milestone-line reads the record only and takes no --hook. decision and finishes read the record "
                      "only unless they carry --hook, with the hook payload on standard input\n")
     return 2
