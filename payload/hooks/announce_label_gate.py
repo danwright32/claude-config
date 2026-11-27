@@ -7,6 +7,11 @@ that an announcement merges only on wording he approved. This is the early refus
 ordinary command to put the label on a pull request is refused until he has, so the label is never
 sitting on wording nobody asked him about.
 
+One call is read and never refused for what it is (claude-config#3669): a Bash call naming the
+milestone helper, create-milestone.sh, and not the label. Before it runs, Dan's answers about whether
+a feature is announced to agents are read from the session's pickers into the record
+(approval.read_answers), where the helper's own question, which reads the record only, finds them.
+
 Judged here, each only when the command names the label:
   gh pr create --label, gh pr edit --add-label, gh issue edit --add-label (gh's issue edit answers
     for a pull request's number too)
@@ -33,12 +38,26 @@ And the record of what he approved, whatever the command names:
   Edit, Write, MultiEdit, NotebookEdit of a file under the record's folder
   a Bash command naming that folder that is not one only reading it (lib/db-apply-approval.py's
     reading of "only reads", the one the record of approved test project lines is held by)
+  a Bash command that runs lib/announce-approval.py, the library that writes the record, in any
+    form but the two that only read: `list`, and `check` without --claim and with every value
+    written out (claude-config#3703). Refused: `check --claim` and `used`, which are the merge
+    gate's and write; a command or flag the shell fills in at run time; the file run through
+    `python -m` or named in a program handed to `python -c`; and the file named in a heredoc
+    body. A command that names the file and runs none of it (git, grep, a suite, a compile) passes.
+    A review found the library's check command writing an approval from a made up transcript, and
+    that command names neither the label nor the record's folder.
 
 Every refusal is a deny. Commands are read by the shared gh reader (gh_issue_scan.py). No override.
 
 What it cannot see: a label named through a variable, a file or a script, a gh alias, a label id in
 a GraphQL call that does not spell the name. Those reach the merge gate, which reads the pull
-request itself.
+request itself. And the library run by a program that is not python by name and is handed the file
+(uv run, ipython, coverage run), or reached without its file being named in the command: a script
+file that runs it, a path built at run time, a copy under another name, a hook run by hand. No list
+of the programs that can run a python file is kept, because such a list is only ever short of one;
+the hook judges python where it is named, and the library
+holds its own line there (a picker counts only from a transcript kept where Claude Code keeps them),
+and a session that forges one in that folder is not stopped by anything on the same Mac.
 """
 
 import importlib.util
@@ -348,24 +367,6 @@ def _judge_rename(args):
                      "carrying that one with no wording read for any of them. " + USE_PR_EDIT)
 
 
-def _api_write(args):
-    return "DELETE" not in {v.upper() for v in scan.flag_values(args, "--method", "-X")} and scan.api_writes(args)
-
-
-def _api_calls(command):
-    """The arguments of each gh api call the command makes, as the session link gate finds them."""
-    out = []
-    pipelines, _bodies = scan._stages(command)
-    for stages in pipelines:
-        if not isinstance(stages, list):
-            continue
-        for words, _redirects, _heredocs in stages:
-            found = scan.gh_command(words)
-            if found and found[0] == "api":
-                out.append(list(found[2]) + list(found[3]))
-    return out
-
-
 def _judge_api(args, cwd, payload, notes):
     """One gh api write, in a command that names the label somewhere."""
     names = LABEL in " ".join(args).lower()
@@ -401,11 +402,10 @@ def judge_label(command, cwd, payload, notes):
     if LABEL not in command.lower() or not re.search(r"\bgh\b", command):
         return None
     try:
-        found = scan.scan_gh_in_context(command, cwd, dict(os.environ), KINDS)
-        apis = [args for args in _api_calls(command) if _api_write(args)]
         # How many commands of this call write to GitHub: an edit that leaves the description to
-        # GitHub is judged by what GitHub holds now, which holds only when it is the one write.
-        writes = sum(1 for kind, _, _, _ in found if kind in PUTS) + len(apis)
+        # GitHub is judged by what GitHub holds now, which holds only when it is the one write. The
+        # count is the shared reader's, which the merge gate asks too (claude-config#3742).
+        found, apis, writes = scan.gh_writes(command, cwd, dict(os.environ), KINDS)
         for kind, args, envs, place in found:
             if kind in PUTS:
                 _judge_put(kind, args, envs, place, command, cwd, payload, notes, writes)
@@ -447,7 +447,138 @@ def judge_record(command, cwd):
     return None
 
 
+LIBRARY_FILE = "announce-approval.py"
+# The script that files a milestone and its issues, by its file name: the call that runs it is
+# where Dan's answer about announcing the feature is read into the record (main, below).
+MILESTONE_HELPER = "create-milestone.sh"
+PYTHON = re.compile(r"(?:python|pypy)[0-9.]*")
+# python's one letter options that take a value: the rest of their word, or else the next word.
+PYTHON_VALUE_LETTERS = "cmXW"
+# Modules that read a file handed to `python -m` and run none of it.
+COMPILES = ("py_compile", "compileall")
+
+
+def _library_verb(args):
+    """None when the words after the library's file are one of its two forms that only read, else
+    what stands in the way."""
+    verb = args[0] if args else ""
+    if verb == "list":
+        return None
+    if verb != "check":
+        return "runs it with " + ("`" + verb + "`" if verb else "no command") + ", and only `list` and `check` read"
+    if any(a.startswith("--claim") for a in args[1:]):
+        return "runs its check with --claim, which is the merge gate's question and writes"
+    if any("$" in a or "`" in a for a in args[1:]):
+        return ("runs its check with a word the shell fills in at run time, so whether it carries --claim cannot be "
+                "read here; write each value out")
+    return None
+
+
+def _python_runs(rest):
+    """None when the python these words follow does not run the library, else how it does in a form
+    that may write. python's options are read as python reads them: one letter options may share a
+    word (-Bc), and -c, -m, -X and -W take the rest of their word as their value (-c"...") or else
+    the next word, so a program or a module is found however it is spelled."""
+    i = 0
+    while i < len(rest):
+        word = rest[i]
+        if not word.startswith("-") or word == "-":
+            # The script python runs, or its standard input. Another script handed the file's name
+            # is not this library run.
+            if os.path.basename(word).lower() == LIBRARY_FILE:
+                return _library_verb(rest[i + 1:])
+            return None
+        # python's one long option that takes the next word as its value.
+        step = 2 if word == "--check-hash-based-pycs" else 1
+        if not word.startswith("--"):
+            for k, letter in enumerate(word[1:], 1):
+                if letter not in PYTHON_VALUE_LETTERS:
+                    continue
+                glued = word[k + 1:]
+                value = glued or (rest[i + 1] if i + 1 < len(rest) else "")
+                after = rest[i + 1:] if glued else rest[i + 2:]
+                named = LIBRARY_FILE in value.lower() or any(LIBRARY_FILE in w.lower() for w in after)
+                if letter == "c":
+                    if named:
+                        return "hands python a program that names it, and what that program does cannot be read here"
+                    return None
+                if letter == "m":
+                    if value in COMPILES or not named:
+                        return None
+                    return "runs it through python -m " + value + ", and what that does with it cannot be read here"
+                step = 1 if glued else 2
+                break
+        i += step
+    return None
+
+
+def _runs_library(text, unread, sw, only_reads):
+    """None, or how one command naming the library's file runs it in a form that may write.
+
+    Every python among the command's words is read, wherever it stands: what a program in front of
+    it takes as its own options and their values (sudo -u root, env -u NAME, xargs -I {}) cannot be
+    listed, so nothing is asked of the words before it. The one exception is a command known only to
+    read (grep -n python3 <the file>), which names python and runs nothing."""
+    if unread:
+        return "names it inside a wrapper whose string could not be read (" + unread + ")"
+    try:
+        words = sw.command_words(sw.command_rest(text)[0])
+    except Exception:  # noqa: BLE001  a command nobody can read is not one known only to read
+        return "names it and could not be read as words"
+    if not words:
+        return None
+    pythons = [i for i, w in enumerate(words) if PYTHON.fullmatch(os.path.basename(w).lower())]
+    if pythons:
+        if pythons[0] != 0 and only_reads(text):
+            return None
+        for at in pythons:
+            held = _python_runs(words[at + 1:])
+            if held:
+                return held
+        return None
+    # No python named. The file carries no interpreter line, so run by its own path it is read by
+    # the shell and never by python, in front of a command or behind a program that runs what
+    # follows it (measured 2026-11-25, and test-announce-approval.sh holds that it carries none).
+    # So no list of such programs is kept here, which could only ever be short of one. The file as
+    # a command of its own is still refused, since nothing good comes of the shell reading it.
+    if os.path.basename(words[0]).lower() == LIBRARY_FILE:
+        return _library_verb(words[1:])
+    return None
+
+
+def judge_library(command, cwd):
+    """None, or why a Bash command naming the library that writes the record may run it to write
+    (claude-config#3703). Its two forms that only read pass, and so does a command that names the
+    file without running it."""
+    if LIBRARY_FILE not in command.lower():
+        return None
+    ap = _load("db_apply_approval_shared", "lib", "db-apply-approval.py")
+    sw = _load("shell_words_shared", "lib", "shell-words.py")
+    calls = _load("db_write_calls_shared", "lib", "db-write-calls.py")
+    here = cwd if isinstance(cwd, str) and cwd.startswith("/") else ""
+
+    def only_reads(text):
+        return ap._only_reads(text, sw, calls.strip_redirects, ap.GIT_LIST_READS, ("rg",))
+
+    rest = command
+    for _, text, _, why, _ in sw.every_command(command, here):
+        if LIBRARY_FILE in text.lower():
+            held = _runs_library(text, why, sw, only_reads)
+            if held:
+                return "the command `" + ap._shown(text) + "` " + held
+            rest = rest.replace(text, "", 1)
+    if LIBRARY_FILE in rest.lower():
+        return ("it is named where no command of this call could be read naming it (a heredoc body, a string), so "
+                "whether a program there runs it could not be told; put that text in a file with Write")
+    return None
+
+
 RECORD_IS = "the record of the announcement wording Dan approved (state/" + approval.RECORD_NAME + ")"
+LIBRARY_RULE = ("It is not a session's to run that way: only a hook writes his approval there, when it reads his "
+                "answer in this session's own picker, as the label goes on or at the merge. A session may read the "
+                "record with `python3 ~/.claude/hooks/lib/" + LIBRARY_FILE + " list`, or ask whether a wording is on "
+                "it with `python3 ~/.claude/hooks/lib/" + LIBRARY_FILE + " check --repo <owner/name> --hash <sha256>`, "
+                "without --claim and with each value written out. " + approval.HOW_TO_ASK)
 RECORD_RULE = ("It is not a session's to write: only his own answer in the picker adds to it, when a hook reads that "
                "answer and writes his approval there. Read it with `python3 ~/.claude/hooks/lib/announce-approval.py "
                "list`. " + approval.HOW_TO_ASK)
@@ -477,7 +608,26 @@ def main():
     held = judge_record(command, cwd)
     if held:
         return deny("this command may write " + RECORD_IS + ": " + held + ". " + RECORD_RULE)
+    held = judge_library(command, cwd)
+    if held:
+        return deny("this command runs lib/" + LIBRARY_FILE + ", or may, in a form that can write " + RECORD_IS + ": "
+                    + held + ". " + LIBRARY_RULE)
     notes = []
+    if MILESTONE_HELPER in command.lower() and LABEL not in command.lower():
+        # The milestone helper is about to run (claude-config#3669). It takes a plan's "announce":
+        # "yes" or "no" only from the record, which only a hook writes his answer to, so his pickers
+        # about announcing a feature are read in here, from the session making the call and from
+        # the sessions the record notes. Nothing about the call is judged: what could not be read
+        # in is said beside it, and the helper then refuses in its own words.
+        #
+        # The helper is found by its file name anywhere in the call, so a call that only names it
+        # (a search, a commit message) reads his answers in too. That is the same reading a merge
+        # does, of the session's own pickers, and it writes nothing he did not answer.
+        #
+        # ONE JOB PER CALL: a call that also names the label is judged for the label alone, whose
+        # reads already fill the time this hook is registered with (GITHUB_SECONDS, above). His
+        # answers are then not read in, and the helper says so in its own refusal: run it apart.
+        notes += approval.read_answers(data)
     why = judge_label(command, cwd, data, notes)
     if why:
         # True of every refusal below it: wording he never approved, an approval another pull

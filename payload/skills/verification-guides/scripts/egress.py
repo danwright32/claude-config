@@ -242,6 +242,7 @@ class Monitor:
         self.sandbox = os.environ.get("VERIFICATION_EGRESS_SANDBOX") or SANDBOX_EXEC
         self.log = os.environ.get("VERIFICATION_EGRESS_LOG") or LOG
         self.proc = None
+        self.stream_exit = None  # how the report stream ended, kept by stop_stream
         self.thread = None
         self.cond = threading.Condition()
         self.reports = []
@@ -719,21 +720,33 @@ class Monitor:
     # -- stopping --------------------------------------------------------------------------------
 
     def stop_stream(self):
+        """Stop the report stream, and read and keep how it ended (claude-config#3663): its status,
+        whether it had ended by itself before it was stopped, and whether it had to be killed. The
+        first stop's reading is kept; finish() stops it again in its finally."""
         if self.proc is None:
             return
-        if self.proc.poll() is None:
+        early = self.proc.poll()  # not None: it had ended by itself, or an earlier stop ended it
+        status, killed = early, False
+        if early is None:
             try:
                 os.killpg(self.proc.pid, signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
                 pass
             try:
-                self.proc.wait(timeout=STREAM_STOP_S)
+                status = self.proc.wait(timeout=STREAM_STOP_S)
             except subprocess.TimeoutExpired:
+                killed = True
                 try:
                     os.killpg(self.proc.pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
                     pass
-                self.proc.wait()
+                status = self.proc.wait()
+        if self.stream_exit is None:
+            self.stream_exit = {"exit": status, "early": early is not None, "killed": killed}
+            try:
+                self._event(dict({"event": "stream-ended", "at": v.utc_now()}, **self.stream_exit))
+            except OSError:
+                pass
         if self.thread is not None:
             self.thread.join(timeout=STREAM_STOP_S)
 
