@@ -17,9 +17,12 @@
 # the personal MacBook held (32 days): 235 of the first and 31 of the second, 111 and 17 of them on
 # 2026-11-26, when that Mac ran at a load of 100 to 350. Dan decided on 2026-11-26 (his picker
 # answer: "2.2 Timed out gets one resend") that they get the same one unchanged resend. The words
-# are narrow on purpose: this repository's own guards print look-alikes ("Dan did not answer", a
-# merge gate's "GitHub did not answer within this hook's read budget") when they give a verdict or
-# ask Dan, and section 2 holds the rule to quoting nothing found in those.
+# are narrow on purpose. This repository prints look-alikes of three kinds: a dialog Dan left
+# unanswered ("Dan did not answer"), a merge gate that could not read GitHub ("GitHub did not answer
+# within this hook's read budget"), and a guard out of time in its OWN words, which the rule does
+# not cover (the design round guard's "could not check this call because it timed out", whose own
+# sentence ends "This is not a refusal: try the same call again"). Section 2 holds the rule to
+# quoting nothing found in those, and to quoting exactly the wordings this suite knows.
 #
 # The rule has ONE home (L83): one bullet of the global CLAUDE.md, the only rule file every kind of
 # session loads (a main session, an overnight worker, a headless run and a dispatched agent alike).
@@ -30,13 +33,17 @@
 #   1. the home exists exactly once and states all four parts: what no verdict looks like, in the
 #      words a session is shown; the one identical resend; what a second refusal means and where it
 #      is recorded; and that every other refusal stays final. It carries Dan's decision and date.
+#      The four sentences that decide which refusals get a resend and how many sends there are
+#      are held whole, since a phrase check passes a sentence that keeps the phrase and turns its
+#      meaning round.
 #   2. the words the home quotes are words Claude Code really writes, held against the refusal a
 #      session received on 2026-11-19 (L48), and the rule asks nothing that message forbids. The
 #      words for a hook out of time and an unanswered guard are held against refusals recorded on
-#      2026-11-26, and nothing the rule quotes is found in a look-alike this repository prints.
+#      2026-11-26, nothing the rule quotes is found in a look-alike this repository prints, and
+#      the rule quotes exactly the wordings this suite knows, so a new one cannot be added unseen.
 #   3. the rules every dispatched agent reads point at the home and keep their own rule: the
-#      exception they add names the home and the issue, and its own sentence on a second refusal
-#      sends it under item 6 of the report.
+#      exception they add names the home and the issue, names the home's three refusals and no
+#      other, and its own sentence on a second refusal sends it under item 6 of the report.
 #   4. no other document states the absolute form bare. A scan by spelling (L564): it finds a line
 #      that puts the check beside "is final" or "never retried". Such a line passes when it carries
 #      the exception itself (it says "no verdict") or its file names the home.
@@ -124,6 +131,42 @@ says "carries the date of Dan's decision on a guard out of time" '2026-11-26'
 says "carries the issue of that decision" 'claude-config#3822'
 says "quotes Dan's answer on a guard out of time" '"2.2 Timed out gets one resend"'
 says "declares itself the one home" 'one home'
+# The four sentences that decide WHICH refusals get a resend and HOW MANY sends there are, each held
+# whole, from the full stop before its first word to its own full stop. A phrase check passes a
+# sentence that keeps the phrase and turns its meaning round: on 2026-11-27 the review of pull
+# request 3851 changed one sentence at a time on a scratch copy (a guard's time limit no longer said
+# to fall before the call ran, "send it a second and a third time, then stop there", "is not its
+# verdict; do not think this rule gives it no resend") and every phrase check above still passed.
+# The wording is Dan's, so a change to one of these sentences changes its copy here in the same
+# commit, on purpose. What this cannot hold: a whole new sentence added beside them.
+whole() { # whole <line> <sentence>   ok when the line holds the sentence between two sentence ends
+  case " $1 " in
+    *". $2 "*) echo ok ;;
+    *) echo "the rule does not hold this sentence whole: $2" ;;
+  esac
+}
+SENTENCE_WHICH="The same is true of two refusals Claude Code words for a guard that ran out of time before the call could run: a hook stopped at its timeout ($MARK_TIMED) and a mod's guard that another mod left unanswered ($MARK_UNANSWERED)."
+SENTENCE_SEND='Send that call once more, alone in a response of its own, exactly as it was, or with exactly the input the refusal quotes when a hook had rewritten the call.'
+SENTENCE_AGAIN='If it is refused again, stop there: never a third send and never another way to the same end.'
+SENTENCE_OTHER="A hook's or a guard's refusal in any other words is its verdict, and this rule gives it no resend."
+check "the rule names the two refusals of a guard out of time, and only those, as falling before the call could run" \
+  "$(whole "$home_line" "$SENTENCE_WHICH")"
+check "the rule's sentence on the one resend is whole" "$(whole "$home_line" "$SENTENCE_SEND")"
+check "the rule's sentence on a second refusal stops there, with no further send in it" \
+  "$(whole "$home_line" "$SENTENCE_AGAIN")"
+check "the rule's sentence on a hook's or a guard's refusal in other words is whole, not turned round" \
+  "$(whole "$home_line" "$SENTENCE_OTHER")"
+# Seen to fail (L1) on the changed sentences of that review, and to pass the sentence as it stands.
+check "the whole sentence check fails a guard's time limit not said to fall before the call could run" \
+  "$([ "$(whole "It is safe. The same is true of two refusals Claude Code words: a hook stopped at its timeout ($MARK_TIMED) and a mod's guard that another mod left unanswered ($MARK_UNANSWERED). Send it." "$SENTENCE_WHICH")" != ok ] && echo ok || echo "a sentence without 'before the call could run' passed")"
+check "the whole sentence check fails a wording added after the two marks, quoted or not" \
+  "$([ "$(whole "It is safe. ${SENTENCE_WHICH%.} or any refusal that says it ran out of time. Send it." "$SENTENCE_WHICH")" != ok ] && echo ok || echo "a sentence with a third wording after the two marks passed")"
+check "the whole sentence check fails a second and a third send" \
+  "$([ "$(whole 'Sent. If it is refused again, send it a second and a third time, then stop there: never a third send and never another way to the same end. Record it.' "$SENTENCE_AGAIN")" != ok ] && echo ok || echo "a sentence allowing a second and a third send passed")"
+check "the whole sentence check fails the sentence turned round with its words kept" \
+  "$([ "$(whole "Final. A hook's or a guard's refusal in any other words is not its verdict; do not think this rule gives it no resend. This is the home." "$SENTENCE_OTHER")" != ok ] && echo ok || echo "a negated sentence that keeps the checked words passed")"
+check "the whole sentence check passes the sentence as it stands, last on the line too" \
+  "$([ "$(whole "Sent. $SENTENCE_AGAIN" "$SENTENCE_AGAIN")" = ok ] && echo ok || echo "the sentence as it stands was failed")"
 
 # ---- 2. the quoted words are the ones Claude Code writes ----
 # The refusal a session received on 2026-11-19 on Claude Code 2.1.328, twice in one hour, for a Bash
@@ -171,10 +214,14 @@ in_text "the mark of a hook stopped at its timeout is in the refusal Claude Code
 in_text "the mark of an unanswered guard is in the refusal a session is shown" "$MARK_UNANSWERED" "$REAL_UNANSWERED"
 
 # The marks are narrow on purpose. This repository's own guards print look-alike words when THEY
-# refuse, and such a refusal is that guard's verdict or a question for Dan: a resend after "Dan did
-# not answer" would put the same dialog in front of him again. So nothing the rule quotes may be
-# found in one of them, which is what fails if a mark is ever shortened to "did not answer" or
-# "timed out".
+# refuse, and three are read here. Two are a question Dan left unanswered and a gate that could not
+# read GitHub: a resend after "Dan did not answer" would put the same dialog in front of him again.
+# The third is a guard out of time in its OWN words (the design round guard's, whose sentence ends
+# "This is not a refusal: try the same call again"). It is neither a verdict nor a question for Dan.
+# The rule covers only the two wordings Claude Code writes, so it quotes nothing from that one
+# either, and whether such a refusal should get the resend is Dan's to decide (asked on pull
+# request 3851), not this suite's. So nothing the rule quotes may be found in any of the three,
+# which is what fails if a mark is ever shortened to "did not answer" or "timed out".
 quotations() { # quotations <line>   prints each text the line holds between two double quotes
   local rest="$1" inside
   while [[ "$rest" == *'"'*'"'* ]]; do
@@ -202,7 +249,7 @@ lookalike() { # lookalike <description> <fixed text of it> <file that prints it>
     "$([ -n "$line" ] && echo ok || echo "no '$2' in $3, so the look-alike was not read")"
   hit="$(quoted_in "$home_line" "$line")"
   check "the rule quotes nothing found in the look-alike refusal $1" \
-    "$([ -z "$hit" ] && echo ok || echo "the rule's \"$hit\" is also in a refusal that is not a guard out of time: $2")"
+    "$([ -z "$hit" ] && echo ok || echo "the rule's \"$hit\" is also in a refusal the rule does not cover: $2")"
 }
 lookalike "of a dialog Dan did not answer" 'Dan did not answer: the dialog closed by itself' "$DIR/../mods/area-check/hooks/register.ts"
 lookalike "of a merge gate that could not read GitHub" "GitHub did not answer within this hook's read budget" "$DIR/check-closing-merge.sh"
@@ -217,6 +264,57 @@ check "the look-alike check passes a rule that quotes the narrow words" \
   "$([ -z "$(quoted_in 'A guard that "did not answer within 10000ms" gets one resend.' "$DIALOG")" ] && echo ok || echo "the narrow words were reported")"
 check "the look-alike check reads every quotation on the line, not only the first" \
   "$([ "$(quotations 'One "first mark" and "second mark" here.' | tr '\n' '|')" = 'first mark|second mark|' ] && echo ok || echo "the quotations were read as: $(quotations 'One "first mark" and "second mark" here.' | tr '\n' '|')")"
+
+# The rule quotes exactly the wordings this suite knows, in the order it writes them, and no other.
+# The checks above ask that each known wording is PRESENT and that none is found in three chosen
+# look-alikes, which a fourth quoted wording passes: on 2026-11-27 the review of pull request 3851
+# added or says "it ran out of time" to a scratch copy, the words the mod kit puts in both of its
+# refusals, the one for a mod's own tool included, where part of the call may already have run
+# (mods/mod-kit/hooks/hold.ts), and all 76 checks passed. So the whole list is held: Dan's two
+# answers, the two marks of a refusal with no verdict, the two of a guard out of time, the two
+# placeholders of the recording command, and the first mark again where the rule says which
+# refusal by the check is a verdict. A new wording, a dropped one or a reworded one fails here,
+# and widening the rule then means changing this list in the same commit, on purpose.
+unquoted() { local bare="${1#\"}"; printf '%s\n' "${bare%\"}"; }
+KNOWN_QUOTATIONS="$(
+  printf '%s\n' 'One unchanged resend' '2.2 Timed out gets one resend'
+  unquoted "$MARK_ONE"; unquoted "$MARK_TWO"; unquoted "$MARK_TIMED"; unquoted "$MARK_UNANSWERED"
+  printf '%s\n' "<what was refused, and the refusal's words>" '<who is reporting>'
+  unquoted "$MARK_ONE"
+)"
+exact_quotations() { # exact_quotations <rule line> <known list>   prints ok, or what differs
+  local found extra="" missing="" q
+  found="$(quotations "$1")"
+  if [ "$found" = "$2" ]; then echo ok; return 0; fi
+  while IFS= read -r q; do
+    [ -n "$q" ] || continue
+    grep -q -x -F -- "$q" <<< "$2" || extra="$extra \"$q\""
+  done <<FOUND
+$found
+FOUND
+  while IFS= read -r q; do
+    [ -n "$q" ] || continue
+    grep -q -x -F -- "$q" <<< "$found" || missing="$missing \"$q\""
+  done <<KNOWN
+$2
+KNOWN
+  if [ -n "$extra" ]; then echo "the rule quotes a wording this suite does not know:$extra"
+  elif [ -n "$missing" ]; then echo "the rule no longer quotes:$missing"
+  else echo "the rule quotes the known wordings in another order or number: $(tr '\n' '|' <<< "$found")"
+  fi
+}
+check "the rule quotes exactly the known wordings and no other" "$(exact_quotations "$home_line" "$KNOWN_QUOTATIONS")"
+# Seen to fail (L1): a fourth wording, a missing one and a repeated one, and the known list passes.
+QUOTES_KNOWN='first mark
+second mark'
+check "the exact wordings check names a wording that was added" \
+  "$([ "$(exact_quotations 'One "first mark" and "second mark" or says "it ran out of time".' "$QUOTES_KNOWN")" = 'the rule quotes a wording this suite does not know: "it ran out of time"' ] && echo ok || echo "a line with a third quotation gave: $(exact_quotations 'One "first mark" and "second mark" or says "it ran out of time".' "$QUOTES_KNOWN")")"
+check "the exact wordings check names a wording that was dropped" \
+  "$([ "$(exact_quotations 'Only "first mark" here.' "$QUOTES_KNOWN")" = 'the rule no longer quotes: "second mark"' ] && echo ok || echo "a line missing a quotation gave: $(exact_quotations 'Only "first mark" here.' "$QUOTES_KNOWN")")"
+check "the exact wordings check fails a known wording quoted once more than the list has it" \
+  "$([ "$(exact_quotations 'One "first mark" and "second mark" and "first mark".' "$QUOTES_KNOWN")" != ok ] && echo ok || echo "a repeated quotation passed")"
+check "the exact wordings check passes the known list" \
+  "$([ "$(exact_quotations 'One "first mark" and "second mark" here.' "$QUOTES_KNOWN")" = ok ] && echo ok || echo "the known list was failed")"
 
 # ---- 3. the agent rules point at the home and keep their own rule ----
 pointer="$(grep -m 1 -F -- "$RULE_NAME" "$RULES" 2>/dev/null)"
@@ -272,6 +370,21 @@ check "the agent rules' exception names a hook stopped at its timeout" \
   "$(grep -q -F -- 'stopped at its timeout' <<< "$lead" && echo ok || echo "the exception's lead in does not name a hook stopped at its timeout")"
 check "the agent rules' exception names a guard another mod did not answer" \
   "$(grep -q -F -- 'no answer from another mod' <<< "$lead" && echo ok || echo "the exception's lead in does not name a guard that got no answer from another mod")"
+# The lead in names those three and no other, so it is held whole. Three phrase checks pass a lead in
+# that keeps the phrases and adds a fourth refusal: on 2026-11-27 the review of pull request 3851
+# wrote "a hook was stopped at its timeout or refused the call for any reason" into a scratch copy
+# and every check passed, which would have told every dispatched agent that any hook's refusal is
+# not a verdict.
+KNOWN_LEAD=" a refusal in which auto mode's safety check says it gave no verdict, a hook was stopped at its timeout, or a guard got no answer from another mod is not a verdict on the command, and which words mark each of the three and what to do then is \""
+lead_is() { # lead_is <lead in>   ok when it is the known one, word for word
+  if [ "$1" = "$KNOWN_LEAD" ]; then echo ok
+  else echo "the exception's lead in is not the known one, so it may name a refusal the home does not cover. Found:$1"
+  fi
+}
+check "the agent rules' exception names those three refusals and no other" "$(lead_is "$lead")"
+# Seen to fail (L1) on the widened lead in of that review.
+check "the lead in check fails a lead in that adds any refusal by a hook" \
+  "$([ "$(lead_is "${KNOWN_LEAD/its timeout,/its timeout or refused the call for any reason,}")" != ok ] && echo ok || echo "a widened lead in passed")"
 check "the agent rules carry the issue that added the two refusals" \
   "$(grep -q -F -- '#3822' <<< "$exception" && echo ok || echo "the exception naming the rule does not carry #3822")"
 check "the agent rules leave the words that mark a hook out of time to the home" \
