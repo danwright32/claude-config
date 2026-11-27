@@ -15,10 +15,16 @@
 #     file written out, each form of that by name;
 #   * the refusal of a file whose imports reach code that posts names the route, and so does the
 #     refusal of a shell script the gate judged by a name in it and did not read as commands
-#     (claude-config#3476), and no other refusal does: not a script whose commands the gate read, a
-#     request, or a file that is not a shell script and names the send call. A script that posts,
-#     reached too deep to be read, is judged by the name in it like any other, so its refusal names
-#     the route as well. Where no wrapper is installed none does;
+#     (claude-config#3476): one behind three other scripts, or one binary from its first line and
+#     run by bash, which is judged so alone or behind one script. A script that posts, reached too
+#     deep to be read, is judged by the name in it like any other, so its refusal names the route
+#     as well. The route reads the name the command wrote for the file, and the gate tests the
+#     file's real path, so a Python or JavaScript file run by a link whose name has a shell ending
+#     (python3 link.sh) gains the sentence too, though it is never read as commands. That is held
+#     here as it stands today, so a change to it is a decision someone sees. The refusals held to
+#     name no route: a script whose commands the gate read, a request, and a file that names the
+#     send call under a written name with no shell ending. Where no wrapper is installed none
+#     does;
 #   * every other call is judged as it was before the rule, which for each case here is a refusal:
 #     a copy elsewhere, a variable, a tilde, a program, an assignment, a redirection or a word of
 #     the shell's own in front of the wrapper, such as time or if, any command before it but the one
@@ -213,8 +219,8 @@ run_here "bash dpost1.sh"
 read_refused "#3476 a script that posts, reached three scripts down, is refused"
 says "#3476 and it is judged by the name in it as well" "the script post.sh $NAMED"
 says "#3476 so its refusal names the wrapper too" "$W"
-# Where the gate did read a command that posts, or judged a file that is never read as commands,
-# the refusal is as it was: no route.
+# Where the gate did read a command that posts, or judged a file written by a name with no shell
+# ending, the refusal is as it was: no route.
 run_here "bash dpost2.sh"
 read_refused "#3476 the same script reached two scripts down is read, and refused"
 says "#3476 for the request it sends" "curl sends a request to chat.postMessage"
@@ -223,6 +229,44 @@ run_here "node post.js"
 read_refused "#3476 a file that is not a shell script and names the send call is refused"
 says "#3476 for the name in it, as such a file always is" "the script post.js $NAMED"
 says_not "#3476 and that refusal names no route" "no network wrapper"
+
+# Held as it stands today, found by the review of 2026-11-27 and not chosen by anyone: the same kind
+# of file run by a link whose name has a shell ending. The gate decides what is a shell script from
+# the file's real path, so it judges the Python or JavaScript file by the name in it, at once, as it
+# always did. The refusal carries the name the command wrote, which is all the route reads, so the
+# sentence is added although the file is never read as commands. A change that takes the sentence
+# off these two, or off anything else here, fails a case and so is seen.
+printf '%s\n' 'import urllib.request' \
+  "urllib.request.urlopen('https://slack.com/api/chat.postMessage', data=b'text=hi')" > "$P/post.py"
+ln -s post.py "$P/link.sh"
+ln -s post.js "$P/linkjs.sh"
+run_here "python3 link.sh"
+read_refused "#3476 a python file run by a link whose name has a shell ending is refused, as it was"
+says "#3476 for the name in it, under the name the command wrote" "the script link.sh $NAMED"
+says "#3476 and today its refusal names the wrapper, though the file is never read as commands" "$W"
+run_here "python3 post.py"
+read_refused "#3476 the same python file run by its own name is refused"
+says "#3476 for the name in it" "the script post.py $NAMED"
+says_not "#3476 and that refusal names no route" "no network wrapper"
+run_here "node linkjs.sh"
+read_refused "#3476 a javascript file run by a link whose name has a shell ending is refused, as it was"
+says "#3476 for the name in it, under the name the command wrote" "the script linkjs.sh $NAMED"
+says "#3476 and today its refusal names the wrapper, though the file is never read as commands" "$W"
+
+# A shell script binary from its first line, run by bash: bash refuses such a file, so the gate does
+# not read it as commands and searches its binary part for a send call, at any depth. Refused for
+# the name there alone and behind one script, with no chain of three, and each refusal names the
+# route. The NUL bytes are written by printf from an escape, so this file holds none.
+printf '\000\000\000 https://slack.com/api/chat.postMessage\n\000\000\n' > "$P/binfirst.sh"
+printf '%s\n' 'bash binfirst.sh' > "$P/runbin.sh"
+run_here "bash binfirst.sh"
+read_refused "#3476 a shell script binary from its first line that names the send call is refused, as it was"
+says "#3476 for the name in its binary part, with no script in front of it" "the script binfirst.sh $NAMED"
+says "#3476 and its refusal names the wrapper" "$W"
+run_here "bash runbin.sh"
+read_refused "#3476 the same script behind one script is refused, as it was"
+says "#3476 for the name in its binary part, one script down" "the script runbin.sh runs a command that posts: the script binfirst.sh $NAMED"
+says "#3476 and its refusal names the wrapper" "$W"
 
 # The refusal the issue records, of the priority suite as it stands beside this one: only ever read
 # here, never run. A change that lets the plain run pass (the issue's other build, which waits for

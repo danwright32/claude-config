@@ -133,10 +133,22 @@ IMPORTS = ", which imports "
 # (claude-config#3476). The gate reads a shell script's commands wherever it reads the script, and
 # then says it "runs a command that posts". It says a shell script "posts to Slack (it names ...)"
 # only of one it did not read: one behind three other scripts, the most it reads in a chain (its
-# MAX_DEPTH), or a binary part of one. SHELL_EXT is the gate's own list of the endings it takes for
-# a shell script, copied here because this file is handed only the gate's folder; the route's suite
-# holds the copy to the gate's. A shell script known only by its first line is not matched, so its
-# refusal names no route, as before.
+# MAX_DEPTH), or one whose binary part names the call, which a script binary from its first line
+# and run by bash is at any depth, alone or behind one script. SHELL_EXT is the gate's own list of
+# the endings it takes for a shell script, copied here because this file is handed only the gate's
+# folder; the route's suite holds the copy to the gate's.
+#
+# Equal lists do not make the two tests equal. The gate decides what is a shell script from the
+# file's real path, a hint from the program that runs it and its first line. This pattern reads
+# the refusal's text, which carries only the name the command wrote for the file. So (measured
+# 2026-11-27, each held by the route's suite unless it says otherwise):
+#   * a Python or JavaScript file run by a link whose name has a shell ending (python3 link.sh)
+#     is matched, and its refusal gains the sentence, though the file is never read as commands;
+#   * a shell script whose written name has another ending or none (.ksh, .SH, a link named .txt,
+#     one known only by its first line) is not matched, so its refusal behind three names no
+#     route, as before (held by the suite for a name with no ending only);
+#   * a refusal whose text holds these words for another reason, such as a script the gate read
+#     whose own file name holds them, is matched (not held by the suite).
 SHELL_EXT = (".sh", ".bash", ".zsh", ".command")
 NAMED_UNREAD = re.compile(r"(?:" + "|".join(re.escape(e) for e in SHELL_EXT) + r") posts to Slack \(it names ")
 # What a later file is said to have been written by, where one may have been.

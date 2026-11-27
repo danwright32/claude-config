@@ -5144,11 +5144,19 @@ refusal names it: that of a shell script the gate judged by a name in it and did
 commands. The gate reads the commands of three scripts in a chain, and a shell script behind those
 three is refused where it names a send call, whatever it does. That refused a plain run of
 `test-slack-drafts-gate-qos.sh`, which starts itself again under `taskpolicy` and so reaches the
-gate's own script, which names the call it guards, behind three. The verdict is as it was; only the
-refusal's last sentence is new. A script that does post, reached that deep, gets the same sentence,
-since the gate cannot tell the two apart, and under the wrapper it has no network. No other refusal
-names the route: not a script whose commands the gate read, not a request, and not a file that is
-never read as commands (JavaScript, Python) and names the call.
+gate's own script, which names the call it guards, behind three. A shell script binary from its
+first line and run by bash is judged the same way at any depth, alone or behind one script, since
+bash runs no such file, and its refusal names the route too. The verdict is as it was in every
+case; only the refusal's last sentence is new. A script that does post, reached that deep, gets the
+same sentence, since the gate cannot tell the two apart, and under the wrapper it has no network,
+with the one exception above, `ps`. The route reads the name the command wrote for the file, while
+the gate decides what is a shell script from the file's real path. So a Python or JavaScript file
+run by a link whose name has a shell ending (`python3 link.sh`) gets the sentence as well, though
+it is never read as commands, and a shell script written by a name with another ending or none gets
+no route, even behind three (both found by review on 2026-11-27; the route's suite holds the first
+as it stands, so a change to it is seen). The refusals that suite holds to name no route: a script
+whose commands the gate read, a request, and a file that names the call under a written name with
+no shell ending (JavaScript, Python).
 
 The gate does not read what runs under the wrapper, so the rule is no wider than this: the shell of
 the call starts the installed wrapper, by its real path, and everything the call runs is under it.
