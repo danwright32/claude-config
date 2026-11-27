@@ -454,7 +454,7 @@ for f in "$WORK"/*/project; do
     # shellcheck disable=SC2086
     out="$(run "$which" $mode)"
     runs=$((runs + 1))
-    if printf '%s\n' "$out" | grep -qE "$WORDS"; then
+    if [[ "$out" =~ $WORDS ]]; then  # matched in the shell: a pipe into a quiet grep can end early and read as no match
       leaks=$((leaks + 1)); echo "  a word of a fixture was printed by: $which $mode"
     fi
   done

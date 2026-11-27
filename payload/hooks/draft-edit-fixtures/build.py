@@ -25,7 +25,8 @@ NOT seen either, and here for the same reason (the second review of pull request
 above it, with the text in place), "most_wordless", "unlisted" (labels in no fixed list),
 "pagination" (text in the result's other fields: the field was measured, whether it ever holds
 text was not), "no_messages_field", "odd_id", "other_mentions" (a channel, a group and a here
-mention with a name added) and "own_drafted" and "own_added" (his own lines shaped like a label).
+mention with a name added), "own_drafted", "own_added" and "own_every" (his own lines shaped like
+a label) and "alerts" (most messages, by somebody else, beginning and ending in such a line).
 "bands" is ten pairs whose likeness is known by construction, for the count by likeness.
 """
 import datetime
