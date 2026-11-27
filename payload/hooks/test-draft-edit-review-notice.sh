@@ -122,6 +122,17 @@ if [ "$(id -u)" != 0 ]; then
   check_eq "the same at the next start" "$out" "$(start $((T0 + 60)))"
   chmod 755 "$STATE"
 
+  # A folder that is there and shut before any draft was marked: the mark is lost at the draft tool,
+  # in silence there, so the session start is where it is said.
+  fresh shutearly
+  mkdir -p "$STATE"; chmod 555 "$STATE"
+  check_eq "a draft saved into a shut folder says nothing at the tool" "" "$(saved $T0)"
+  check_eq "and leaves no mark" "" "$(cat "$STATE/draft-saved" 2>/dev/null)"
+  out="$(start $((T0 + 60)))"
+  check "the session start says the folder cannot be written" "cannot be written" "$out"
+  check "and that no saved draft is marked" "no saved Slack draft is marked" "$out"
+  chmod 755 "$STATE"
+
   # The folder itself cannot be made: the mark of a saved draft is lost, and a session start says so.
   fresh nofolder
   mkdir -p "$WORK/nofolder"; : > "$WORK/nofolder/state"

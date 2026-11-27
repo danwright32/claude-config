@@ -25,7 +25,7 @@ check_eq(){ if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 
 T0=1793631600   # 10:00 AM ET on 2026-11-02
 export TZ=America/New_York
 export HOOK_TESTS_RUNNING=1
-export CLAUDE_HOME="$WORK/home"   # so a seam that stopped being read lands here, never in the real state
+export CLAUDE_HOME="$WORK/config"   # so a seam that stopped being read lands here, never in the real state
 fresh(){ export DRAFT_EDIT_REVIEW_STATE_DIR="$WORK/$1/state/draft-edit-review"; }
 dec(){ DRAFT_EDIT_REVIEW_NOW="${NOW:-$T0}" python3 -B "$TOOL" "$@" 2>&1; }
 
@@ -92,6 +92,18 @@ printf '\xff\xfe not text' > "$DRAFT_EDIT_REVIEW_STATE_DIR/decisions.json"
 out="$(dec status)"; rc=$?
 check_eq "decisions holding bytes that are not UTF-8: status fails, and does not crash" "3" "$rc"
 check_not "with no traceback" "Traceback" "$out"
+# A time no calendar holds is state that cannot be read, never a crash.
+fresh farfuture
+mkdir -p "$DRAFT_EDIT_REVIEW_STATE_DIR"
+echo 999999999999999 > "$DRAFT_EDIT_REVIEW_STATE_DIR/last-review"
+out="$(dec status)"; rc=$?
+check_eq "a last review at a time no calendar holds: status fails" "3" "$rc"
+check_not "with no traceback" "Traceback" "$out"
+rm -f "$DRAFT_EDIT_REVIEW_STATE_DIR/last-review"
+printf '{"version": 1, "decisions": {"length cut": {"decision": "never", "at": 99999999999999999999}}}\n' > "$DRAFT_EDIT_REVIEW_STATE_DIR/decisions.json"
+out="$(dec status)"; rc=$?
+check_eq "a decision dated at a time no calendar holds: status fails" "3" "$rc"
+check_not "with no traceback either" "Traceback" "$out"
 if [ "$(id -u)" != 0 ]; then
   fresh shut
   dec record "length cut" never >/dev/null
@@ -149,7 +161,7 @@ check_eq "and that check sees a long dash when one is there" "1" "$(printf 'a ru
 
 # Outside the suites the folder and the clock cannot be moved by the environment.
 out="$(HOOK_TESTS_RUNNING=0 DRAFT_EDIT_REVIEW_STATE_DIR="$WORK/elsewhere" python3 -B "$TOOL" status 2>&1)"
-check "outside a suite the state folder is not taken from the environment" "state folder: $WORK/home/state/draft-edit-review" "$out"
+check "outside a suite the state folder is not taken from the environment" "state folder: $WORK/config/state/draft-edit-review" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"

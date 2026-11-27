@@ -82,7 +82,8 @@ if [ "$event" = "PostToolUse" ]; then
   case "$tool" in
     mcp__*__slack_send_message_draft) mkdir -p "$STATE" 2>/dev/null && put "$STATE/draft-saved" "$NOW" ;;
   esac
-  # A mark that could not be kept is said at the next session start, where it is read.
+  # Nothing is said here when the mark could not be kept: the next session start finds the folder
+  # missing or shut, and says so there.
   exit 0
 fi
 [ "$event" = "SessionStart" ] || exit 0
@@ -96,6 +97,12 @@ cannot_tell() {   # $1 = why
 
 if ! mkdir -p "$STATE" 2>/dev/null; then
   printf '[%s] could not make %s, where this Mac keeps when a Slack draft was last saved and when the weekly review of how Dan edits them was last offered. Until it can, no saved draft is marked and that review never comes due. Tell Dan.\n' "$NAME" "$STATE"
+  exit 0
+fi
+# A folder that is there and cannot be written loses the same two things, so it is said the same way,
+# at every start until it is put right, whether or not a review would have been due.
+if ! [ -w "$STATE" ] || ! [ -x "$STATE" ]; then
+  printf '[%s] could not record anything in %s, which cannot be written: no saved Slack draft is marked there and no offer of the weekly review of draft edits can be noted, so that review is not being offered. Tell Dan.\n' "$NAME" "$STATE"
   exit 0
 fi
 

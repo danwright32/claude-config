@@ -47,6 +47,7 @@ sys.stderr.reconfigure(errors="replace")
 KINDS = ("figures cut", "length cut", "the ask reworded", "the opening changed")
 SKIPPED = ("accepted", "never")  # decisions that keep a kind from being offered again
 MEMBER_ID = re.compile(r"[A-Z0-9]{6,20}\Z")
+LATEST = 10 ** 11  # seconds since 1970 past any time a calendar here can show: a stored time at or over it is not one
 
 
 class Unreadable(Exception):
@@ -100,7 +101,8 @@ def load():
         raise Unreadable("%s could not be read (it holds no decisions object)" % path)
     for kind, entry in found.items():
         if kind not in KINDS or not isinstance(entry, dict) or entry.get("decision") not in ("accepted", "not-now", "never") \
-                or not isinstance(entry.get("at"), int) or not isinstance(entry.get("where", ""), str):
+                or not isinstance(entry.get("at"), int) or isinstance(entry.get("at"), bool) \
+                or not 0 <= entry["at"] < LATEST or not isinstance(entry.get("where", ""), str):
             raise Unreadable("%s could not be read (its entry for %r is not one this wrote)" % (path, str(kind)[:40]))
     return found
 
@@ -133,7 +135,7 @@ def status():
     reviewed = (read_text("last-review") or "").strip()
     if author and not MEMBER_ID.match(author):
         raise Unreadable("%s could not be read (it does not hold a Slack member id)" % os.path.join(state_dir(), "author"))
-    if reviewed and not reviewed.isdigit():
+    if reviewed and not (reviewed.isdigit() and len(reviewed) <= 12 and int(reviewed) < LATEST):
         raise Unreadable("%s could not be read (it does not hold a time)" % os.path.join(state_dir(), "last-review"))
     print("state folder: " + state_dir())
     print("author: " + (author or "not set"))

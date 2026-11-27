@@ -178,7 +178,7 @@ else
   python3 -B "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORK/gate/runs" draft-edit-diff.py >/dev/null 2>&1
   printf '\n\ndef keep(text):\n    with open("kept.txt", "w") as f:\n        f.write(text)\n' >> "$WORK/gate/writes/draft-edit-diff.py"
   printf '\n\ndef start(text):\n    return os.system(text)\n' >> "$WORK/gate/runs/draft-edit-diff.py"
-  check_eq "the copies the gate is asked about hold the reader's own text" "2" "$(grep -c -l 'def pair_up' "$WORK/gate/writes/draft-edit-diff.py" "$WORK/gate/runs/draft-edit-diff.py" | grep -c ':1$')"
+  check_eq "the copies the gate is asked about hold the reader's own text" "2" "$(( $(grep -c 'def pair_up' "$WORK/gate/writes/draft-edit-diff.py" 2>/dev/null || true) + $(grep -c 'def pair_up' "$WORK/gate/runs/draft-edit-diff.py" 2>/dev/null || true) ))"
   judged(){ # judged <script>: the gate's exit code for running it over the record
     python3 -c '
 import json, sys
