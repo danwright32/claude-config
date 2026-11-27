@@ -1925,6 +1925,41 @@ take before the command is even read (the library that reads it cannot be loaded
 python3 is installed, the payload is not a call any reader takes) say it too, where they said
 nothing: of a command, since not even whether it merges a pull request was read.
 
+`push-scope-notice.sh` also refuses a push from a repository whose `core.hooksPath` names a folder
+that does not exist (claude-config#2070), because git then runs none of the repository's own hooks
+for the push and says nothing. A work project sets it to `.husky/_`, which only `pnpm install` creates,
+so a worktree that never ran the install pushed a live migration (in one of its pull requests) with no SQL
+suite, test gate or style gate. The folder is the one git resolves (`git rev-parse --git-path
+hooks` at the top level), so a linked worktree is judged by its own copy. The refusal names the
+folder and the install that creates it, read from the lockfile at the top level (`pnpm install`,
+`yarn install`, `bun install`, `npm install`, or the repository's install in general words when
+there is none). The main session can push past it once with `SKIP_HOOKS_PATH_CHECK=1`; an agent
+cannot, as it cannot skip the repository's hooks any other way (`no-verify-gate.sh`, #1666).
+Something at the path that is not a folder, such as `/dev/null`, is hooks switched off on purpose
+and is left alone, and a setting that cannot be read refuses the push. On 2026-11-02 the personal
+MacBook had 5 repositories setting `core.hooksPath` across 8 working trees, every folder present,
+so no push there would have been refused. That leaving alone is the main session's only
+(claude-config#2135): for an AGENT's push, a location that exists but holds no hook git would run
+(`/dev/null`, an empty folder, a folder of samples) refuses too, since an agent may have set it
+itself. A hook git runs is an executable file named after one. On 2026-11-03 each of those 5
+repositories pointed at a folder holding an executable `pre-push`, so no agent push there is
+refused.
+
+To measure a Mac, run `bash ~/.claude/hooks/measure-hooks-path.sh <folder> [<folder>...]` with the
+folders the repositories live in (claude-config#2098). It lists every working tree, linked worktrees
+included wherever they are, with where `core.hooksPath` is set and to what, and the gate's own verdict
+on a push from there for the main session and for an agent. Finding no repository, or a verdict the
+gate gave as an error, exits non zero rather than reporting no refusals. On the personal MacBook on
+2026-11-12 it found 36 working trees, 7 setting the key, all folders with a runnable hook, `/dev/null`
+nowhere, and no push refused. The work MacBook has not been measured yet.
+
+No hook runs the install when a worktree is created (claude-config#2098): Claude Code's worktree
+creation hook replaces its own creation of the worktree in every project rather than adding a step
+after it, and a worktree made for reading needs no install. Instead the orchestrate agent rules tell
+an agent to read `core.hooksPath` right after `git worktree add` and run the install in the worktree
+before its first commit, because until the folder exists git runs none of the repository's hooks on a
+commit either, and this refusal only arrives at the push.
+
 #### An announcement merges only on wording Dan approved (#3666)
 
 A pull request labelled `changelog/announce` carries the post for agents under `## Announcement`,
@@ -2014,15 +2049,24 @@ A note is not an approval and is not his answer: it names no answer. His answer 
 the hook is handed, and it is deliberately not read from there, since a payload is whatever the
 caller hands over. Whichever hook next asks the library (the label hook, the merge gate typed or
 through the helper) reads each noted session's transcript back, in one pass for all of the
-session's noted pickers the record has no outcome for (no `approved`, `withdrawn` or `settled`
-line), and judges each from the transcript. An announcement's picker is judged by every rule above,
-unchanged. A picker that names no source the record reads gets a `settled` line naming no
-repository, so it is read once and never again: it approves nothing and takes nothing back,
+session's noted pickers the record has no outcome for (no `approved`, `withdrawn`, `settled` or
+`decided` line), and judges each from the transcript. An announcement's picker is judged by every
+rule above, unchanged. A picker that names no source the record reads gets a `settled` line naming
+no repository, so it is read once and never again: it approves nothing and takes nothing back,
 whatever he answered it. So does an announcement's picker that can never count (its metadata names
 no repository and file, or the session sent it with its answer filled in), once it has been read.
 One the transcript does not hold yet is left and looked for again, and one
-noted by its ids alone whose transcript is gone is settled, since what it asked can never be read.
-One call reads back five sessions, the ones whose newest unjudged note is newest.
+whose transcript is gone is settled, since what it asked can never be read: one noted by its ids
+alone with nothing said, and one whose note names a repository with one sentence, said once by the
+call that settles it, that an answer of his there is lost. On the call that settles either kind a
+decline of his does not clear a finishing merge (#3669, below), and there the settling of notes by
+their ids alone is said too, once: a picker asking whether a feature is announced is always noted
+by its ids alone, so a newer answer of his may have been among them. On every later call the
+decline clears.
+The picker that asks whether a feature is announced at all (#3669, below) is the record's other
+source, with a judge of its own: the judge of wording gives it no line and leaves it for that one.
+One call reads back at most fifty sessions (Dan, 2026-11-26, by picker: "Raise it to 50
+(Recommended)"; it was five), the ones whose newest unjudged note is newest, newest first.
 
 The wording he answered about comes from the note only when the note holds a hash for the same
 repository and file as the transcript's picker: then a write to the file afterwards neither loses
@@ -2036,12 +2080,19 @@ not.
 A subagent's picker writes nothing and says nothing. The hook speaks only when the note itself
 could not be written (the record cannot be read or appended to, the hook was not handed the
 session, its transcript and the picker's id, or the library could not be asked): the one case where
-an approval would be lost. It says so to Dan and to the session in the same words (one notice
-through `hooks/lib/hook-notice.sh`, on exit 0, the picker being already answered), with the command
-that reads his answer into the record if the picker was an announcement's, and that nothing is lost
-if it was not.
+an answer of his would be lost. It says so to Dan and to the session in the same words (one notice
+through `hooks/lib/hook-notice.sh`, on exit 0, the picker being already answered), with what reads
+his answer into the record for each of the two pickers it may have been (the label command for an
+approval of wording; a Bash call that runs `create-milestone.sh`, or a merge typed in that session,
+for whether a feature is announced), and that nothing is lost if it was neither.
 
-What bounds it: one call reads back at most five sessions' transcripts, one pass each. Nothing
+What bounds it: one call reads back at most fifty sessions' transcripts, one pass each, and only
+while its 12 seconds last (`CHECK_SECONDS`): a call out of time stops before the next session. At
+five, an approval was missed, and he was asked again, whenever five or more other sessions had a
+picker answered between his Approve and a merge that names no session. A call that stops short
+says so: the sessions it left unread, past the fifty or because its time ran out, are counted in
+its answer, so a refusal after a short read never reads as one that looked everywhere and found
+nothing. Nothing
 shortens the record itself, which is only ever added to: a picker costs it one `answered` line
 (about 280 bytes) and, once judged, one line more (about 350). Measured on invented lines of those
 shapes on 2026-11-26, a record of 10,000 judged pickers is 6.3 MB and reads in 0.04 to 0.25
@@ -2215,40 +2266,127 @@ What none of this sees: whether and when Dan sends a draft; a merge made in GitH
 no session cards and which has no claim line, so it is never drafted from here; and an announcement
 settled or approved on one Mac, which the other does not know.
 
-`push-scope-notice.sh` also refuses a push from a repository whose `core.hooksPath` names a folder
-that does not exist (claude-config#2070), because git then runs none of the repository's own hooks
-for the push and says nothing. A work project sets it to `.husky/_`, which only `pnpm install` creates,
-so a worktree that never ran the install pushed a live migration (in one of its pull requests) with no SQL
-suite, test gate or style gate. The folder is the one git resolves (`git rev-parse --git-path
-hooks` at the top level), so a linked worktree is judged by its own copy. The refusal names the
-folder and the install that creates it, read from the lockfile at the top level (`pnpm install`,
-`yarn install`, `bun install`, `npm install`, or the repository's install in general words when
-there is none). The main session can push past it once with `SKIP_HOOKS_PATH_CHECK=1`; an agent
-cannot, as it cannot skip the repository's hooks any other way (`no-verify-gate.sh`, #1666).
-Something at the path that is not a folder, such as `/dev/null`, is hooks switched off on purpose
-and is left alone, and a setting that cannot be read refuses the push. On 2026-11-02 the personal
-MacBook had 5 repositories setting `core.hooksPath` across 8 working trees, every folder present,
-so no push there would have been refused. That leaving alone is the main session's only
-(claude-config#2135): for an AGENT's push, a location that exists but holds no hook git would run
-(`/dev/null`, an empty folder, a folder of samples) refuses too, since an agent may have set it
-itself. A hook git runs is an executable file named after one. On 2026-11-03 each of those 5
-repositories pointed at a folder holding an executable `pre-push`, so no agent push there is
-refused.
+#### Dan is asked whether a feature is announced, and a yes cannot be dropped (#3669)
 
-To measure a Mac, run `bash ~/.claude/hooks/measure-hooks-path.sh <folder> [<folder>...]` with the
-folders the repositories live in (claude-config#2098). It lists every working tree, linked worktrees
-included wherever they are, with where `core.hooksPath` is set and to what, and the gate's own verdict
-on a push from there for the main session and for an agent. Finding no repository, or a verdict the
-gate gave as an error, exits non zero rather than reporting no refusals. On the personal MacBook on
-2026-11-12 it found 36 working trees, 7 setting the key, all folders with a runnable hook, `/dev/null`
-nowhere, and no push refused. The work MacBook has not been measured yet.
+Dan, 2026-11-25: "also, it should ask me before applying the label. It can be part of the new
+feature discovery". Whether a feature is announced to agents is his decision, asked once at feature
+discovery, carried by the feature's milestone, and held to at the merge that finishes it. It applies
+only where this Mac's dev update registry names an announcements channel for the repository.
 
-No hook runs the install when a worktree is created (claude-config#2098): Claude Code's worktree
-creation hook replaces its own creation of the worktree in every project rather than adding a step
-after it, and a worktree made for reading needs no install. Instead the orchestrate agent rules tell
-an agent to read `core.hooksPath` right after `git worktree add` and run the install in the worktree
-before its first commit, because until the folder exists git runs none of the repository's hooks on a
-commit either, and this refusal only arrives at the push.
+- **Feature discovery asks.** Agenda item 7 of `skills/feature-discovery/SKILL.md` puts one picker
+  of one question: `Will "<feature name>" be announced to agents when it ships? The test: agents
+  must or can act differently.`, with the options `Announce it` and `Not announcing` and the
+  metadata `{"source": "announce-discovery", "repo": "<owner/name>", "feature": "<feature name>"}`.
+  His answer counts only as the option alone, with nothing typed beside it, in a picker of one
+  question that was not sent with its answer filled in, did not time out or come back in error,
+  that he could read as written, whose question holds the words "agents must or can act
+  differently" and names the feature in the metadata's very words, as a name of its own (between
+  quotation marks, straight or curled, the closing mark directly after the name: the first words
+  of a longer name are another feature's name, and a name with no quotation marks does not count,
+  since nothing then says where it ends), and whose options include both `Announce it` and `Not announcing`. An answer that breaks one of
+  these is recorded as deciding nothing and, being his last answer, stands in front of an earlier
+  yes or no. His last answer about a feature decides, by repository and the feature's name in any
+  letter case and spacing.
+- **The milestone carries it.** For a repository that announces, the plan handed to
+  `skills/milestone/create-milestone.sh` must carry `"announce": "yes" | "no" | "unasked"`. `yes` and
+  `no` put a decision in his name, so the helper takes them only when
+  `hooks/lib/announce-approval.py` finds that answer of his on this Mac's record, and writes one
+  line into the milestone's description: `Announce to agents: yes (Dan answered "Announce it" on
+  2026-11-26)`, the same with `no` and `Not announcing`, or `Announce to agents: not asked yet` for
+  `unasked`, which needs nothing. So a milestone made for alert fixes or an audit never carries a
+  decision he did not make. `unasked` is refused where the record holds his answer about that
+  feature. One name only (Dan, by picker, 2026-11-26): his answer counts for a milestone only when
+  the picker named the feature exactly as the milestone is titled, letter case and spacing aside,
+  so name the feature in the picker as the milestone will be titled, and if the title changes he
+  is asked again. The helper asks the library about the title, the library writes no line for a
+  feature that is not the title, and a plan carrying the old second name, `announce_feature`, is
+  refused (exit 12). The title is the milestone's own on GitHub: a plan is filed into an existing
+  milestone whose title matches on letters and digits alone, so once the milestone is resolved the
+  helper asks again under that title, in a dry run too, and a plan titled "Handback" that lands in
+  the milestone "Hand back" is refused with no issue filed and no description changed (exit 12).
+  The line holds no name, only the answer, his option's words and the day in US
+  Eastern time, and the library is its one writer and one reader. The helper writes it into an
+  existing milestone too, reads it back from GitHub before it files any issue, and files nothing
+  (exit 12) when the plan's value is missing or not one of the three, when the record does not hold
+  what it claims, when the registry cannot be read (which is never taken as "does not announce"),
+  or when the line could not be written and read back. The milestone, plan-lite and plan-council
+  skills say where the value comes from.
+- **The merge gate holds him to a yes (R9).** `hooks/require-changelog-tag.sh` reads the issues a
+  pull request closes, each with its milestone's description and open issues, in the one GraphQL
+  read the announce path already made. When the pull request does not carry `changelog/announce`
+  and closes the last open issue of a milestone whose line says yes, or whose title this Mac's
+  record holds his yes about as his last yes or no whatever the line says (the line is text on
+  GitHub that a command or a hand can drop or alter; the record is the guarded store, and since
+  the helper writes the line only from his answer about the title, the title is the one name
+  both are looked up by), the merge is denied, saying
+  either to label it with wording he approved or to ask him with a picker whether it is still
+  being announced, and giving that picker's metadata (the same as above, with `"milestone":
+  <number>` and the milestone's title as the feature). It is let through when the record holds an
+  announcement let through for that milestone that GitHub says merged, written after his last yes
+  about the milestone's title where the record holds one (an announcement older than his newest
+  `Announce it` covers nothing: a milestone is reused for a feature's next phase, he is asked
+  again, and that yes is owed an announcement of its own, which the refusal says), or his `Not announcing` in
+  a picker naming that milestone, while that is also his last answer about the feature (the
+  milestone's title) in any picker: a newer answer of his in a picker naming no milestone, as the
+  one at feature discovery does, takes the decline back, and the refusal says what he answered
+  after it. `ALLOW_UNTAGGED_MERGE=1` does not clear the refusal, and a pull
+  request the dependency bot opened is held to it like any other. Only where whether the pull
+  request finishes such a feature could not be read does the override let the merge through, and
+  it says so. His decline is one such case when the call that leans on it left noted sessions
+  unread (past the fifty, or out of time), tried one and could not read it (a transcript that is
+  there and unreadable or misplaced, this session's own included when the record notes a picker
+  of it nothing has judged), or found a newer answer of his about that feature whose picker could
+  not be checked just now, and nothing else clears the milestone: a newer
+  `Announce it` of his there would be his last answer, so the merge is refused as what could not
+  be told, saying what was left unread (decided by the main session on the stricter side,
+  2026-11-26). A decline with every noted session read clears as before. "Finishes" means every issue still open in the milestone is one the pull request
+  closes, a milestone with none left open included, and only milestones of the pull request's own
+  repository are judged. A pull request that closes no issue is settled by GitHub's answer alone,
+  before the library is asked. A `used` line in the record says the gate let a merge go ahead,
+  never that GitHub merged it, so the gate asks GitHub about each such pull request, its state and
+  its labels in one read, and asks the library again with `--unmerged` naming the ones that did
+  not merge as an announcement: one that has not merged, and one that merged without
+  `changelog/announce`, because the line is written before the merge runs and the label can be
+  taken off after it. An answer that does not hold both is refused as what could not be told.
+  A pull request that first comes up in the second answer (a milestone the first answer cleared
+  by his decline, sent on to its own line once a session is left unread) is asked of GitHub the
+  same way; no answer about it, or an answer that it did not merge as an announcement, is refused
+  as what could not be told, because the library is asked twice for one merge and never a third
+  time. The two questions share the 12 seconds one call has for reading sessions back: the first answer
+  says what it spent (`spent`), the gate hands that to the second (`--spent`), and the second
+  reads back only in what is left, saying what it left unread. The gate sets no time limit on its
+  GitHub reads (`mt_pr_view` and `mt_api_read` run gh as it is), so the 30 seconds the gate is
+  registered with hold the whole of it only while GitHub answers promptly.
+
+How his answer reaches the record is the path an approval takes (#3789, above). The picker is
+noted when he answers it, by its ids alone like every picker, and a hook that asks later reads the
+session's transcript and writes one `decided` line for the picker (`answer` yes, no or other), or a
+`settled` line for one that was no answer of his. Two hooks ask: the merge gate, at the merge, and
+`hooks/announce-label-ask.sh`, on a Bash call that runs `create-milestone.sh` by name, since the
+helper's own question reads the record only. The discovery picker is the record's second source
+(`NOTED_SOURCES`) and has its own judge. Each judge gives a line to a noted picker of its own
+source, settles one that names no source the record reads, and gives the other source's picker no
+line at all, so whichever hook reads a session first, the other judge still finds its picker
+unjudged. A noted discovery picker that can never count (sent with its answer filled in, or naming
+no feature) is settled once it has been read and said, as an approval picker that can never count
+is. What that costs: a session whose only unjudged picker belongs to the other judge is read again,
+and counts among the fifty one call reads, until the other judge has asked.
+
+The command line a session can run reads the record only. The library's three verbs for this
+(`decision`, `milestone-line`, `finishes`) are the helper's and the gate's to run from inside those
+scripts; a session's own Bash command running one is refused by the label hook, which knows only
+`list` and `check` as forms that read. A description or answer file handed to them is read whole or
+refused, never cut.
+
+Known edge: a feature whose last open issue is cleanup rather than the release asks him at that
+point. Not covered: a merge made in GitHub's own page, which skips every gate here; a milestone
+whose line was edited by hand in GitHub; an answer given on one Mac, which the other does not
+know and asks for again; and a change that deserved an announcement that nobody proposed one for.
+
+`hooks/test-announce-approval.sh` holds the picker's rules, the line and the two judges,
+`hooks/test-changelog-tag.sh` the gate (its #3669 section), `hooks/test-announce-label-ask.sh` the
+reading in before the helper runs, `hooks/test-announce-answer-note.sh` the note, and
+`skills/milestone/test-create-milestone.sh` the helper.
 
 Every merge gate judges a merge however it is made (claude-config#1181): `gh pr merge`, a repo's own
 merge tool, the GitHub API's merge endpoint (`gh api -X PUT repos/<owner>/<name>/pulls/<n>/merge`,
@@ -6406,6 +6544,38 @@ line he approved passes, and says so when the record could not take one (below).
   largest: the libraries are compiled on every run (about 19 ms), because `-B` keeps python3 from
   writing bytecode into the synced hooks folder, and a cache elsewhere would be a file no hook asks
   about that the hook then runs. Nothing was added: the hook is not started after a call.
+  Since #3472 the database call library loads for every commit again, because the command is read
+  a second time whatever it holds (below): 60 runs a side taken turn about on 2026-11-26, at a load
+  average of 35 to 36, gave a median of 127.5 ms before and 139.8 after, least 101.3 and 118.6.
+
+What it refuses (`deny`), the one thing, since #3472: a Bash command holding a line the shared
+reader (`lib/shell-words.py`) names as one it cannot vouch for. The reader takes a `#` for a comment
+by a rule the shell does not always follow, and closes a heredoc at a line where some shells do
+not, so a command the shell runs there was in nothing the hook judged. Asked which lines it is
+unsure of, the reader reads on where every shell does and names the rest: a `#` it cannot tell from
+a comment, a `#` it read on past and then could not read to the end, and a heredoc it cannot find
+the end of (its marker follows a body line ending in a backslash, or no line ends it; its opener
+line ends in a backslash; its quoted marker holds a line break; its marker holds a dollar quote; or
+it is typed on one line). The hook asks the reader about every command naming a database client and
+every command holding `commit` or the test project list's name, whatever else the command holds. It
+used to ask only about one holding a `#`, and a heredoc holds none, so a write or a commit run out
+of such a heredoc was not asked about (each kind reproduced at the hook). A command with a named
+line is refused as one the hook could not check, where one holding a `#` used to be asked about: an
+answer to a question about the part that was read lets the rest run with it. The refusal says which
+line, in a sentence true of the mark the reader named it with (`UNSURE` in
+`lib/db-write-calls.py`), and how to write the command so that it can be read. A refusal is printed
+whatever state `lib/hook-notice.sh` is in beside the hook, since a hook that prints nothing passes
+the command: when the library is missing, is a copy with no `_hn_decision_json` (the private builder
+a refusal is made with), or that builder prints anything but one whole refusal, the hook writes the
+refusal itself, without the characters that need escaping, and says which of the three it found.
+A refusal written that way is the decision alone: a notice the library would have put beside it
+(the one about pre-allowed Salesforce writes) is said inside the refusal's reason, since only the
+library builds a notice (#1906).
+`read-only-query-allow.sh` approves no such command either. A reader that cannot be asked at all is
+still asked about, since no rewriting helps, and so is a push whose earlier dry run held such a
+line. Over 105,627 Bash calls recorded on the personal MacBook (86,010 distinct commands, 2026-11-26)
+the change refuses none, asks about none more and lets through none more: the reader names a line
+in none of them. Suite: `test-db-write-ask-unsure-line.sh`.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
@@ -6482,6 +6652,67 @@ names and the date and run the suite. Not established: Better Stack's tool names
 server name Regal is reached under, which are on the work MacBook only, so for them the hook rests
 on the name parts and the verbs; and no live question has been exercised, since no connector was
 called.
+
+## A skill shipped by an MCP server asks Dan first
+
+An MCP server can ship skills beside its tools. In auto mode such a skill loads with no prompt:
+Claude Code's documentation says "The classifier decides whether the skill loads, without reading
+it", and "Servers can change skills at any time." Dan accepted on 2026-11-25 "Ask before a
+server's skill loads" (#3615). `hooks/server-skill-ask.sh` runs before every Skill call Claude
+makes and asks first when the skill is a server's. The question names the skill and the server and
+says that its text is the server's and can change at any time. While sleep mode is on the load is
+refused with the reason, and it is refused when the hook cannot tell whether Dan is asleep; that
+rule is `hooks/lib/ask-awake.sh`.
+
+It is a hook and not the `permissions.ask` rule the documentation gives (`Skill(mcp__docs__*)`),
+because the sync carries no ask rule to either Mac. The one permission setting it shares is
+`permissions.deny`, for a fixed list of rules (#3686), and an ask rule in `settings.shared.json`
+makes the pull refuse that whole file, saying such a rule stays each Mac's own (read in
+`claude-sync` on 2026-11-26; the section above holds the measurement, taken before the deny rules
+were shared). A hook also needs no list of server names, so a server connected later is covered the
+day it is connected.
+
+Which skill is a server's is `hooks/lib/server-skills.py`'s rule. The documentation names a
+server's skill `<server>:<skill>`, with `claude_ai_<name>:` for a claude.ai connector and
+`plugin_<plugin>_<server>:` for a plugin's server, which is the same form an installed plugin's
+own skill takes (`<plugin>:<skill>`). So the form cannot tell them apart, and the hook goes by
+what is on this Mac:
+
+- A name with no prefix passes: Dan's own skills and the bundled ones.
+- `anthropic-skills:` passes: Claude Code reserves it for skills synced from claude.ai.
+- Any other prefixed name passes only when the skill is found on disk, under the install folder
+  of a plugin of that name (`~/.claude/plugins/installed_plugins.json`) or, for a directory's
+  own skill such as `apps/web:deploy`, under that directory of the working directory.
+- Inside a plugin's folder only the places Claude Code reads a plugin's skills and commands from
+  count (its plugin pages, read 2026-11-26): `skills/<name>/SKILL.md` at the plugin's root, named
+  by the folder or in the file's own text; the same under a directory the manifest's `skills` key
+  lists; a `SKILL.md` at the root when there is no `skills/` and no `skills` key; and `commands/`
+  at the root, a subfolder adding a part to the name, or what the manifest's `commands` key lists
+  there in its place. A file anywhere else in the plugin, such as a `SKILL.md` among its examples
+  or a page under another folder named `commands`, does not make a name the plugin's.
+- Asked about although a plugin may hold them, each costing one question: a command the manifest
+  lists outside `commands/` or writes inline, a skill or command a marketplace entry adds, and
+  anything in a plugin whose manifest is there and cannot be read, which the question says.
+- Everything else prefixed is asked about, and so is any name starting `mcp__`, a name holding
+  punctuation the hook cannot place, a Skill call naming no skill, and a payload it cannot read.
+
+A skill Dan types as a command is never asked about: by the documentation a typed command does
+not reach a PreToolUse hook, and needs no approval under an ask rule either.
+
+What it costs on a Skill call (personal MacBook, 2026-11-26, two runs of 30 samples a case, one
+process per call, the one minute load average 99 for the first run and 11 for the second): one of
+Dan's own skills takes 8.2 and 8.8 ms at the median, against 6.7 and 7.4 ms for a bash that only
+reads its input, and python3 never starts. A prefixed name starts python3: 41 and 42 ms at the
+median for an installed plugin's skill, 38 and 41 ms for one synced from claude.ai, and 68 and
+67 ms when it asks. The 37 prefixed skill names this Mac's sessions list or have called were run
+through the hook in each run, and all 37 passed in silence both times. After the rule was narrowed
+to the places listed above, later that day, the 37 passed in silence again in one run; the times
+were not taken again.
+
+Not established: no server skill has loaded on either Mac, since the feature is off for the
+account, so the name forms are the documentation's (read 2026-11-26) and no real payload for one
+has been seen. The first real one should be checked against `lib/server-skills.py`. If a server
+ships a skill under the exact name of a plugin skill that is on disk, the hook passes it.
 
 ## A trusted path that has gone is said
 
@@ -10821,7 +11052,12 @@ command itself with nothing built or loaded as it runs, never a file run by name
 opens, while everything else on the list keeps "Do not look for another way", and a write through
 `&>`, which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
-file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
+file handed it as its argument included, #1592), write tools under claude.ai and PostHog, since
+#3740 a tool on any other MCP server (a plugin's own, one added by hand) whose own name holds
+delet, remov or paus in any case, since the list named only those two families and a worker's
+prompt for a delete on any other server was answered yes (reproduced in the mod's tests on
+2026-11-26, never seen on a real night; a read whose name holds one of the three is refused too,
+on every server, and every other tool on a server outside the two families still goes ahead), any
 Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
 #3099 it may also close, and only close, a tab first listed in its tab group after its own click,
 typing, form fill or script in a tab it created, since a clicked link can open one, and never a tab
@@ -12047,7 +12283,8 @@ overnight with a changelog sentence you have not read, as you chose on 2026-11-2
 merge or deploy anywhere the list below says wait, or anywhere it has no
 answer for; push straight to a default branch; force push or delete branches; switch branches in
 your main checkout; write to a database (Supabase, psql); use claude.ai, Chrome or PostHog tools that
-write; run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
+write; use a tool on any other connector whose name says it deletes, removes or pauses (#3740);
+run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
 work an issue someone else opened. Nor does any session hand you a result while you sleep, a
 worker or not: a page published or opened for you (the Artifact tool) or a Claude doc is held in
 that session, and when sleep mode ends, by any route, the noon end included, every session that
