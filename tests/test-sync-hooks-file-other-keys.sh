@@ -86,7 +86,7 @@ export -f branch shared_file
 # A publishes a hooks block registering one gate.
 script "$HA" keep.sh; settings "$HA" keep.sh
 run sync "$HA" "$RA" "$WORK/a1"
-check "fixture: A published its hooks block" "shared_file '$RA' | grep -q 'hooks/keep.sh'"
+check "fixture: A published its hooks block" "grep -q 'hooks/keep.sh' <<< \"\$(shared_file '$RA')\""
 
 # Somebody puts a permissions block into the shared file, beside the hooks block, as the builder of
 # #3618 did in a throwaway folder: committed and pushed, the way any edit to the repository arrives.
@@ -119,7 +119,7 @@ jq --arg c "$HB/hooks/mine.sh" '.hooks.PreToolUse[0].hooks += [{type: "command",
 cp "$WORK/b-settings.json" "$HB/settings.json"
 run sync "$HB" "$RB" "$WORK/b2"
 fetch "$RB"
-check "the send publishes this Mac's new gate" "shared_file '$RB' | grep -q 'hooks/mine.sh'"
+check "the send publishes this Mac's new gate" "grep -q 'hooks/mine.sh' <<< \"\$(shared_file '$RB')\""
 check "and keeps the permissions block in the shared file, unchanged" \
   "[ \"\$(shared_file '$RB' | jq -c '.permissions')\" = '$PERMS' ]"
 if ! shared_file "$RB" | jq -e '.permissions' >/dev/null 2>&1; then
