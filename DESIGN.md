@@ -2534,7 +2534,7 @@ A script file is read as it is on disk when the gate runs, which was the open qu
 or refuse what was not read. Both, on the safe side. A shell script is read by the reading
 `lib/shell-words.py` already has for the other gates (#2301), one it runs included; one too large
 for that reader, up to 4 MB, is searched for its link commands as text; a python, perl, ruby,
-node or php script is searched for the calls that make a link. Only a link, and only one whose
+node, php, deno or bun script is searched for the calls that make a link. Only a link, and only one whose
 path can be placed: this repository's suites make links in temporary folders named by a variable,
 in at least eleven files, and judging each as the payload write it may be would refuse running
 them from a session with no hold. A script file that cannot be read (not there, named by a value,

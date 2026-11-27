@@ -1327,7 +1327,7 @@ for m in re.finditer(OPENED_PATH, shell_text):
 # Each script file the command runs is now read as it is on disk at this moment. A shell script is
 # read by lib/shell-words.py, which already reads the script files a command runs for the other
 # gates (its scripts list, claude-config#2301), a script it runs included; one larger than that
-# reader takes is searched for its link commands as text. A python, perl, ruby, node or php script
+# reader takes is searched for its link commands as text. A python, perl, ruby, node, php, deno or bun script
 # is searched for the calls that make a link, the ones LINK_CALLS and LN_STRING name for an inline
 # script.
 #
@@ -1466,7 +1466,7 @@ def file_text(p):
         return None, e.strerror or "it could not be opened"
 
 def script_links(text, base, bare):
-    """The links a python, perl, ruby, node or php script makes, from its text: each quoted payload
+    """The links a python, perl, ruby, node, php, deno or bun script makes, from its text: each quoted payload
     path it names, and each other quoted path by where it really is, when it calls anything that
     makes a link; and the words of an ln command it runs as a string."""
     if any(re.search(p, text) for p in LINK_CALLS + ((BARE_LINK,) if bare else ())):

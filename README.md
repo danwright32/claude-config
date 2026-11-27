@@ -885,7 +885,7 @@ script fills in is read as one only the shell knows. Only a list that writes is 
 counts toward the 256. A destination written as a pattern (`rm pay*/hooks/x.sh`, a list in
 braces) is judged as each file it matches at that moment. And each script file the command runs
 is read from disk for the links it makes, a shell script by `lib/shell-words.py` and a python,
-perl, ruby, node or php script by the calls that make a link. What the gate cannot tell is refused
+perl, ruby, node, php, deno or bun script by the calls that make a link. What the gate cannot tell is refused
 in its own words, which say to run the command directly: a command string whose program is a value
 (`os.system(cmd)`), a command string that goes on past what the gate reads, and
 a script file it could not read, each only when the call names a `payload/` path besides or runs

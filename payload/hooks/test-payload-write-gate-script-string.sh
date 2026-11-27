@@ -611,26 +611,11 @@ echo "a path in a command string takes nothing from the read of the whole comman
 # the same set: a string naming the same path in an open( call, after a cd this gate follows and
 # the shell does not (one in brackets, or a pushd and a popd), placed it elsewhere, and the write
 # to the checkout the command really runs in was let through. The gate on main refused all three.
-TWO_LINE_OPEN="$(cat <<'EOF'
-python3 -c 'import os
-open("payload/hooks/x.sh",
-"w").write("x")'
-EOF
-)"
-STRING_NAMES_IT="$(cat <<'EOF'
-python3 -c 'import os
-os.system("echo open(\"payload/hooks/x.sh\", \"w\")")
-open("payload/hooks/x.sh",
-"w").write("x")'
-EOF
-)"
-STRING_NAMES_IT_WITH="$(cat <<'EOF'
-python3 -c 'import os
-os.system("echo open(\"payload/hooks/x.sh\", \"w\")")
-with open(
-"payload/hooks/x.sh", "w") as f: f.write("x")'
-EOF
-)"
+# Each command is written as one $'...' word, its line breaks as \n: a heredoc holding a quote
+# inside a command substitution is refused by bash 3.2 on macOS (claude-config#1690).
+TWO_LINE_OPEN=$'python3 -c \'import os\nopen("payload/hooks/x.sh",\n"w").write("x")\''
+STRING_NAMES_IT=$'python3 -c \'import os\nos.system("echo open(\\"payload/hooks/x.sh\\", \\"w\\")")\nopen("payload/hooks/x.sh",\n"w").write("x")\''
+STRING_NAMES_IT_WITH=$'python3 -c \'import os\nos.system("echo open(\\"payload/hooks/x.sh\\", \\"w\\")")\nwith open(\n"payload/hooks/x.sh", "w") as f: f.write("x")\''
 runbash "(cd $FIX/elsewhere); $TWO_LINE_OPEN" "$FIX/dev"
 refused "#3775 control: an open over two lines, after a cd in brackets, is refused where the session is"
 runbash "pushd $FIX/elsewhere; popd; $TWO_LINE_OPEN" "$FIX/dev"
