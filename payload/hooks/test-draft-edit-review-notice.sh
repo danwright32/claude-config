@@ -22,7 +22,11 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/draft-edit-review-notice.sh"
-SETTINGS="$DIR/../settings.hooks.json"
+# Which file holds the hooks block differs between the repository and an installed copy, so the one
+# shared lookup answers (lib/settings-file.sh). Neither being there leaves this empty, and the wiring
+# cases at the end then fail as unreadable, never as wired to nothing.
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
 WORK="$(mktemp -d)"
 trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 pass=0; fail=0
