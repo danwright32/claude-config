@@ -3380,7 +3380,13 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   decline naming the milestone outlived a newer yes under the picker's name. Now the helper asks
   the library about the title, the library writes no line for a feature that is not the title, a
   plan carrying the old field is refused, and a title changed after he answered means he is asked
-  again. Ruled out: writing the picker's name into the line and having the gate ask about both
+  again. The title is the milestone's own, not the plan's: the helper files a plan into an existing
+  milestone whose title matches on letters and digits alone, and the record keeps spaces and
+  punctuation in a name, so a plan titled "Handback" would land in "Hand back" carrying a line from
+  an answer the gate never finds under the milestone's title. Once the milestone is resolved the
+  helper asks the library again under its own title, in a dry run too, and refuses the plan with
+  nothing filed. Ruled out there: making the two keys agree, which changes which milestones every
+  other plan reuses. Ruled out: writing the picker's name into the line and having the gate ask about both
   names, which closes the second fault and not the first. What it costs: every merge
   that finishes a milestone in a repository that announces reads the record, and a record that
   cannot be read refuses that merge as what could not be told. The line has

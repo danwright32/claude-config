@@ -2298,7 +2298,11 @@ only where this Mac's dev update registry names an announcements channel for the
   so name the feature in the picker as the milestone will be titled, and if the title changes he
   is asked again. The helper asks the library about the title, the library writes no line for a
   feature that is not the title, and a plan carrying the old second name, `announce_feature`, is
-  refused (exit 12). The line holds no name, only the answer, his option's words and the day in US
+  refused (exit 12). The title is the milestone's own on GitHub: a plan is filed into an existing
+  milestone whose title matches on letters and digits alone, so once the milestone is resolved the
+  helper asks again under that title, in a dry run too, and a plan titled "Handback" that lands in
+  the milestone "Hand back" is refused with no issue filed and no description changed (exit 12).
+  The line holds no name, only the answer, his option's words and the day in US
   Eastern time, and the library is its one writer and one reader. The helper writes it into an
   existing milestone too, reads it back from GitHub before it files any issue, and files nothing
   (exit 12) when the plan's value is missing or not one of the three, when the record does not hold

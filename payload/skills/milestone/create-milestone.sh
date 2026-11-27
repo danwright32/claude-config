@@ -219,13 +219,17 @@ abort_announce() {
   echo "ABORTED: no issues were filed, and the milestone was not touched." >&2
   exit 12
 }
-# announce_line_for <description>: asks the library for the line and the description carrying it.
-# Sets line_json; the library reads the record only, and its standard input is not read.
+# announce_line_for <description> [<the milestone's own title>]: asks the library for the line and
+# the description carrying it. Sets line_json; the library reads the record only, and its standard
+# input is not read. The feature asked about is always the plan's title. The title it is held to is
+# the plan's until the milestone is resolved, and the milestone's own after that, because
+# ensure-milestone.sh reuses a milestone whose title is the plan's once everything but letters and
+# digits is dropped, while the record keeps spaces and punctuation in a feature's name.
 announce_line_for() {
-  local held
+  local held ms_title="${2:-$title}"
   held="$(mktemp)"
   printf '%s' "$1" >"$held"
-  line_json="$(python3 -B "$HOOKS_LIB/announce-approval.py" milestone-line --repo "$repo" --feature "$title" --title "$title" --answer "$announce" --description-file "$held" </dev/null 2>/dev/null)"
+  line_json="$(python3 -B "$HOOKS_LIB/announce-approval.py" milestone-line --repo "$repo" --feature "$title" --title "$ms_title" --answer "$announce" --description-file "$held" </dev/null 2>/dev/null)"
   rm -f "$held"
   [[ "$(printf '%s' "$line_json" | jq -r '.ok // false' 2>/dev/null)" == true ]]
 }
@@ -490,6 +494,23 @@ fi
 # gate reads it from there, and a line that is not in it stops the plan here, with nothing filed:
 # written is not kept (L3). Re-running reuses the milestone.
 if [[ "$announces" -eq 1 ]]; then
+  # One name only is held to the milestone's OWN title. The plan's title was checked against the
+  # record before anything was written; the milestone it resolved to can be titled differently (the
+  # comment above), and the merge gate looks Dan's answers up under the milestone's title. So the
+  # library is asked again under that title, in a dry run too, and a plan whose title is not its
+  # milestone's own by the record's key stops here, with no issue filed and no description changed.
+  if ! announce_line_for "$description" "$ms_ref"; then
+    if [[ -z "$line_json" ]]; then
+      echo "ANNOUNCE-UNREAD hooks/lib/announce-approval.py, which python3 runs and which holds Dan's answers about announcing a feature, gave no answer, so the plan's \"announce\": \"$announce\" could not be checked against the milestone \"$ms_ref\". Reinstall the hooks with claude-sync pull." >&2
+    else
+      echo "ANNOUNCE-NOT-HIS-ANSWER $(printf '%s' "$line_json" | jq -r '.why // ""')" >&2
+      if [[ "$ms_ref" != "$title" ]]; then
+        echo "The plan is titled \"$title\" and its milestone on GitHub is \"$ms_ref\". The merge gate looks his answers up under the milestone's own title, so title the plan exactly as the milestone is titled, letter case and spacing aside, and ask him again with a picker that names the feature that way." >&2
+      fi
+    fi
+    echo "ABORTED: no issues were filed, and the milestone's description was not changed." >&2
+    exit 12
+  fi
   if [[ -n "$dry" ]]; then
     echo "WOULD-WRITE-ANNOUNCE-LINE $announce_line"
   else
@@ -508,7 +529,7 @@ if [[ "$announces" -eq 1 ]]; then
     ms_json="$(gh api "repos/$repo/milestones/$ms_num" 2>"$ms_err")" \
       || unwritten "ANNOUNCE-LINE-UNREAD GitHub did not give the description of milestone $ms_num ($(tr '\n' ' ' <"$ms_err")), so the line about announcing could not be written into it or read back."
     current="$(printf '%s' "$ms_json" | jq -r '.description // ""' 2>/dev/null)"
-    announce_line_for "$current" \
+    announce_line_for "$current" "$ms_ref" \
       || unwritten "ANNOUNCE-LINE-UNWRITTEN hooks/lib/announce-approval.py gave no line for milestone $ms_num's description ($(printf '%s' "$line_json" | jq -r '.why // "no answer"' 2>/dev/null))."
     announce_line="$(printf '%s' "$line_json" | jq -r '.line')"
     wanted="$(printf '%s' "$line_json" | jq -r '.description')"
