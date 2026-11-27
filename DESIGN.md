@@ -3356,7 +3356,11 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   a newer `Announce it` and clear every later merge finishing that milestone. His decline
   clears it only when the call read every noted session: with any left unread and nothing else to
   clear the milestone, the answer is unread, since a newer `Announce it` there would be his last
-  answer (decided by the main session on the stricter side, 2026-11-26). The line alone does not
+  answer (decided by the main session on the stricter side, 2026-11-26). Left unread is one class:
+  a session past the fifty or out of time, a noted session the call tried and could not read, and
+  a newer answer of his about the feature whose picker could not be checked yet and so has no
+  line. A call that names no transcript tried none, or every merge by the merge helper would be
+  refused once a decline is on the record. The line alone does not
   decide whether a milestone says yes: the gate also counts a milestone whose title the record
   holds his yes about as his last yes or no, so a line that was dropped, altered, or written from
   his answer about another feature cannot hide a yes the record holds. What it costs: every merge

@@ -1736,7 +1736,7 @@ def decisions(session_id, transcript_path, deadline=None, done=(), sought=()):
     his or names no repository and feature. untaken is [{repo, feature, why}] for what a caller
     should say and the lines do not: a picker sent with its answer filled in, one whose metadata
     cannot be read, and one whose reading by him could not be checked just now, which gets no line
-    and is read again.
+    and is read again, and alone carries "unchecked": True, being an answer of his not yet taken.
 
     sought is the ids of this session's noted pickers nothing has judged yet (EVERY PICKER IS NOTED,
     module docstring), looked for in the same pass (_asked). lines also holds a `settled` line for
@@ -1831,7 +1831,9 @@ def decisions(session_id, transcript_path, deadline=None, done=(), sought=()):
         except ap.PickerCheckFailed as e:
             faults = None
             for _, line, chosen in judged:
-                untaken.append({"repo": line["repo"], "feature": line["feature"],
+                # unchecked marks the one kind of untaken that IS an answer of his, waiting to be
+                # read: finishes() does not lean on an older decline about that feature meanwhile.
+                untaken.append({"repo": line["repo"], "feature": line["feature"], "unchecked": True,
                                 "why": "whether Dan could read the picker he answered `" + chosen + "` in could not be "
                                        "checked (" + str(e) + "), so his answer is not taken until it can be"})
         for (p, line, chosen), fault in zip(judged, faults or []):
@@ -1854,7 +1856,11 @@ def _harvest_decisions(payload, notes, key=None, short=None):
     written, and only a hook reaches it. It is _harvest's twin for the other source, and reads back
     the same sessions by the same rule (_read_back). short, when a list is handed in, is given the
     sentences of unlooked that say noted sessions were left unread (past the number one call reads,
-    or out of time), for a caller that must not lean on his last answer then (finishes)."""
+    or out of time) or were tried and could not be read (a transcript that is there and unreadable
+    or misplaced, this session's own included when the record notes a picker of it nothing has
+    judged), for a caller that must not lean on his last answer then (finishes). A call that names
+    no transcript of its own tried none, and a transcript that is gone is not one that can be
+    read later."""
     deadline = time.monotonic() + CHECK_SECONDS
     entries, unreadable = read_record()
     noted = _noted(entries)
@@ -1872,6 +1878,9 @@ def _harvest_decisions(payload, notes, key=None, short=None):
     found, untaken, unlooked = decisions(payload.get("session_id"), payload.get("transcript_path"), deadline, done,
                                          set(unjudged(own)))
     looked = own if _text(payload.get("transcript_path")) else None
+    # This session's own transcript, named and not read, where the record notes a picker of this
+    # session nothing has judged: a noted session the call tried and could not read.
+    tried = [unlooked] if unlooked and looked and own and unjudged(own) else []
     unlooked = [unlooked] if unlooked else []
     read, seen = [], {f["picker"] for f in found}
     before = len(unlooked)
@@ -1887,13 +1896,19 @@ def _harvest_decisions(payload, notes, key=None, short=None):
         # A picker a forked session carries under two session ids is judged once in one call.
         more, less, why = decisions(session, transcript, deadline, done | seen, set(left))
         seen |= {f["picker"] for f in more}
-        read.append((gone + more, less, why and (
-            "an answer of his the record notes, in the session whose transcript is " + transcript
-            + ", could not be read back: " + why)))
+        why = why and ("an answer of his the record notes, in the session whose transcript is " + transcript
+                       + ", could not be read back: " + why)
+        read.append((gone + more, less, why))
+        if why and not _gone(transcript):
+            # Tried and not read: its transcript is there and could not be read, or is not where
+            # Claude Code keeps one. An answer of his may be in it, as in a session left unread.
+            tried.append(why)
     # Whatever joined unlooked while the sessions were read back is _read_back's own: the sessions
-    # it left unread. What a session read here could not tell is added only below.
+    # it left unread. With them go the noted sessions the call tried and could not read (tried):
+    # for a caller that must not lean on his last answer, both are sessions whose answers it does
+    # not know. What a session read here could not tell joins unlooked itself only below.
     if short is not None:
-        short.extend(unlooked[before:])
+        short.extend(unlooked[before:] + tried)
     # Read newest first, and kept in the order the sessions' notes were taken.
     for more, less, why in reversed(read):
         found += more
@@ -2105,8 +2120,10 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
     of his in a picker naming no milestone, as the one at feature discovery does, takes the
     decline back, and the milestone is owed again. His
     decline clears it only when this call read every noted session: when it left any unread (past
-    NOTED_SESSIONS, or out of time) and his decline is all that would clear the milestone, the
-    answer is "unread", saying what was left unread, because a newer ANNOUNCE_IT of his there
+    NOTED_SESSIONS, or out of time), tried one and could not read it (a transcript that is there
+    and unreadable or misplaced), or found a newer answer of his about that feature whose picker
+    could not be checked just now (it has no line yet), and his decline is all that would clear
+    the milestone, the answer is "unread", saying which, because a newer ANNOUNCE_IT of his there
     would be his last answer. The question that reads the record only reads no session, and is
     not held to that.
     Anything GitHub's answer or the record does not say is "unread", never "clear" (L98). payload
@@ -2167,7 +2184,7 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
     if entries is None:
         return unread(unreadable + ", so whether Dan said yes to announcing the milestone this pull request finishes, "
                       "an announcement was let through for it, or he declined one, could not be told")
-    why, how, behind = [], [], []
+    why, how, behind, unsure = [], [], [], []
     for s in sorted(finished, key=lambda s: s["number"]):
         # The milestone says yes when its line does, or when the record holds yes as his last yes
         # or no about its title, whatever the line says: a line that was dropped, altered, or
@@ -2186,10 +2203,14 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
                       and not (_text(newest.get("picker")) and newest.get("picker") == last.get("picker")))
         declined = last is not None and last.get("answer") == "no" and not taken_back
         # His decline clears the milestone only when this call read every noted session. With
-        # sessions left unread (short), a newer ANNOUNCE_IT of his may be in one of them and would
-        # be his last answer, so the decline is leaned on only if nothing else clears it: an
-        # announcement let through does not depend on his last answer, and is looked for first.
-        if declined and not short:
+        # sessions left unread or tried and not read (short), a newer ANNOUNCE_IT of his may be in
+        # one of them and would be his last answer, so the decline is leaned on only if nothing
+        # else clears it: an announcement let through does not depend on his last answer, and is
+        # looked for first. The same holds while an answer of his about this feature waits for the
+        # check of whether he could read its picker (unchecked): it has no line yet, and is newer.
+        waiting = [u["why"] for u in untaken if u.get("unchecked") and u["repo"] == key
+                   and _feature_key(u["feature"]) == _feature_key(s["title"])]
+        if declined and not short and not waiting:
             continue
         let_through = _announced(entries, key, s["number"], s["title"])
         announced = [n for n in let_through if n not in unmerged]
@@ -2198,6 +2219,7 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
             continue
         if declined:
             behind.append("the milestone " + json.dumps(s["title"]) + " (number " + str(s["number"]) + ")")
+            unsure += [w for w in waiting if w not in unsure]
             continue
         said = ("it closes the last open issue of the milestone " + json.dumps(s["title"]) + " (number " + str(s["number"])
                 + "), whose description says Dan said yes to announcing it to agents")
@@ -2250,7 +2272,7 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
             # the gate's override lets an unread through and never an owed.
             return unread("this Mac's record holds Dan's `" + NOT_ANNOUNCING + "` for " + " and ".join(behind)
                           + ", which this pull request finishes, and whether that is still his last answer could "
-                          "not be told: " + ". ".join(w.rstrip(".") for w in short))
+                          "not be told: " + ". ".join(w.rstrip(".") for w in short + unsure))
         return out
     if unlooked:
         why.append(unlooked)

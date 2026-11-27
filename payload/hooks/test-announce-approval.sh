@@ -1854,8 +1854,61 @@ r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T" "" late)"
 check "R9 #3669 and once GitHub says that one has not merged, his decline with sessions left unread is unread again" "$([[ "$r" == "unread||"*"2 sessions holding a picker the record notes were left unread"* ]] && echo ok || echo "$r")"
 r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T")"
 check "still possible #3669: with every noted session read, his decline clears it whatever was let through" "$([[ "$r" == "clear||"* ]] && echo ok || echo "$r")"
+# Left unread is also what the call TRIED and could not read (the lessons review of this branch, and
+# review low 10): a noted session whose transcript is there and cannot be read, and a newer answer of
+# his whose check (could he read the picker as written) could not run, which gets no line. Either
+# may hold his newer Announce it, so his decline does not clear the merge on that call.
+STORE_USED="$WORK/store-f-tried"
+T="$WORK/f-tried.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+F="$(shown tried)"
+aaf_new "$WORK/f-tried-other.jsonl"
+PX="$(talk "$WORK/f-tried-other.jsonl" put acme/widget "$F" "" "tried1")"
+note "$WORK/f-tried-other.jsonl" payload "$PX" acme/widget "$F" "" "" "tried1" >/dev/null
+r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
+check "still possible #3669 D: with the noted session read, his decline clears it (the control for the next case)" "$([[ "$r" == "clear||"* ]] && echo ok || echo "$r")"
+# That session's transcript is there and cannot be read: a folder stands where the file was.
+rm -f "$WORK/f-tried-other.jsonl"; mkdir "$WORK/f-tried-other.jsonl"
+r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
+check "R9 #3669 D his decline does not clear it when a noted session's transcript could not be read: unread, naming the milestone and that session" "$([[ "$r" == "unread||"*'`Not announcing`'*'"Hand back" (number 28)'*"f-tried-other.jsonl, could not be read back"* ]] && echo ok || echo "$r")"
+r="$(finishes_short "$STORE_USED" "$BOTH" "$T")"
+check "R9 #3669 D and a second milestone with no answer of his is owed in front of it, the sentence still said" "$([[ "$r" == "owed||"*'"Hand over" (number 29)'*"could not be read back"* ]] && echo ok || echo "$r")"
+check "still possible #3669 D: the question that reads the record only tries no session, and his decline on the record clears it" "$([[ "$(finishes "$STORE_USED" "$YES12")" == "clear|"* ]] && echo ok || echo no)"
+# This session's own transcript, where the record notes a picker nothing has judged, is the same.
+STORE_USED="$WORK/store-f-tried-own"
+T="$WORK/f-tried-own.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
+F="$(shown triedown)"
+PX="$(talk "$T" put acme/widget "$F")"
+note "$T" payload "$PX" acme/widget "$F" >/dev/null
+rm -f "$T"; mkdir "$T"
+r2="$(finishes_short "$STORE_USED" "$YES12" "$T")"
+check "R9 #3669 D nor when this session holds a noted picker and its own transcript could not be read" "$([[ "$r" == "clear||"* && "$r2" == "unread||"*'`Not announcing`'*"this session's transcript could not be read"* ]] && echo ok || echo "$r / $r2")"
+# A newer answer about the feature, in a picker whose check could not run: it gets no line and is
+# read again, and until it is his decline is not known to be his last answer.
+STORE_USED="$WORK/store-f-unchecked"
+T="$WORK/f-unchecked.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
+check "still possible #3669 D: his decline, read into the record, clears it (the control for the next case)" "$([[ "$r" == "clear||"* ]] && [ "$(kinds decided)" = 1 ] && echo ok || echo "$r")"
+talk "$T" decide acme/widget "Hand back" "Announce it"
+r="$(NO_NODE=1 finishes_short "$STORE_USED" "$YES12" "$T")"
+check "R9 #3669 D his decline does not clear it while a newer answer about that feature could not be checked: unread, saying which answer" "$([[ "$r" == "unread||"*'`Not announcing`'*'whether Dan could read the picker he answered `Announce it` in could not be checked'* ]] && [ "$(kinds decided)" = 1 ] && echo ok || echo "$r")"
+r="$(NO_NODE=1 finishes_short "$STORE_USED" "$BOTH" "$T")"
+check "R9 #3669 D and a second milestone with no answer of his is owed in front of that too" "$([[ "$r" == "owed||"*'"Hand over" (number 29)'* ]] && echo ok || echo "$r")"
+r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
+check "R9 #3669 D once the check runs, that newer answer is his last and the milestone is owed" "$([[ "$r" == "owed||"*"is not his last answer about announcing it"* ]] && [ "$(kinds decided)" = 2 ] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-f-unchecked-other"
+T="$WORK/f-unchecked-other.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
+talk "$T" decide acme/widget "Hand over" "Announce it"
+r="$(NO_NODE=1 finishes_short "$STORE_USED" "$YES12" "$T")"
+check "still possible #3669 D: an answer about another feature that could not be checked leaves his decline about this one standing" "$([[ "$r" == "clear||"* ]] && echo ok || echo "$r")"
 # A noted session whose transcript is gone, its note naming a repository, is tried on every call and
 # can never be read. It is no session the call left unread, so it does not stand in his decline's way.
+STORE_USED="$WORK/store-f-behind"; T="$WORK/f-behind.jsonl"
 rm -f "$WORK/f-behind-other-2.jsonl"
 r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T")"
 check "still possible #3669: a noted session whose transcript is gone is no session left unread, and his decline still clears it" "$([[ "$r" == "clear||"* ]] && echo ok || echo "$r")"

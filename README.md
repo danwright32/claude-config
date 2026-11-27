@@ -2310,7 +2310,10 @@ only where this Mac's dev update registry names an announcements channel for the
   request the dependency bot opened is held to it like any other. Only where whether the pull
   request finishes such a feature could not be read does the override let the merge through, and
   it says so. His decline is one such case when the call that leans on it left noted sessions
-  unread (past the fifty, or out of time) and nothing else clears the milestone: a newer
+  unread (past the fifty, or out of time), tried one and could not read it (a transcript that is
+  there and unreadable or misplaced, this session's own included when the record notes a picker
+  of it nothing has judged), or found a newer answer of his about that feature whose picker could
+  not be checked just now, and nothing else clears the milestone: a newer
   `Announce it` of his there would be his last answer, so the merge is refused as what could not
   be told, saying what was left unread (decided by the main session on the stricter side,
   2026-11-26). A decline with every noted session read clears as before. "Finishes" means every issue still open in the milestone is one the pull request
