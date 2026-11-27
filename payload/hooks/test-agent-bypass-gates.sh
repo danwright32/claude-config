@@ -574,6 +574,13 @@ mon 'git commit -m wip'
 refused "a commit in a Monitor is refused"
 mon 'until PR_REVIEW_READ=$k bash ~/.claude/hooks/lib/merge-when-ready.sh 2679 --squash; do sleep 60; done'
 refused "the merge helper run from a Monitor is refused"
+# A text the reader gives up on (a quote left open) is judged by the crude cut, and runs-script
+# answers at the first record that runs a shell. The helper's record must come before any record
+# the cut has since learned to list, here the `bash other.sh` after the single ampersand
+# (claude-config#3786: listed ahead of it, that record answered and the Monitor was allowed).
+mon $'(true & bash other.sh) ; x=$(bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash)\necho \'never closed'
+refused "#3786 the merge helper in a Monitor the reader cannot read, behind another script after a single ampersand, is refused"
+says "#3786 as the merge helper" "runs the merge helper"
 mon 'tail -n +1 -f /tmp/x/merge.log | grep --line-buffered -E "merged|Stopped"'
 allowed "watching the merge helper's log is allowed"
 mon 'until ! pgrep -f "merge-when-ready.sh 923" >/dev/null; do sleep 15; done; tail -3 /tmp/x/merge.log'
@@ -963,6 +970,8 @@ rs_says() { # rs_says <label> <command> <expected exit>
 }
 rs_says "runs-script finds the helper run by path" 'bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash' 0
 rs_says "runs-script answers 10 when nothing runs it" 'tail -f /tmp/x/merge-when-ready.log' 10
+rs_says "#3786 runs-script finds the helper in a text the reader cannot read, behind another script after a single ampersand" \
+  $'(true & bash other.sh) ; x=$(bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash)\necho \'never closed' 0
 run_crashpy "$MON_GATE" "$(bash_payload 'until PR_REVIEW_READ=$k bash ~/.claude/hooks/lib/merge-when-ready.sh 2679 --squash; do sleep 60; done' '' Monitor)"
 refused "a reader that crashes still refuses the merge helper run from a Monitor"
 says "saying it could not read it" "could not read it"

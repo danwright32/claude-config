@@ -513,36 +513,77 @@ def in_order(before, after):
 
 row("#3786 the order check itself: two records the wrong way round are told from the right way round",
     "" if in_order([1, 2], [0, 1, 9, 2]) and not in_order([1, 2], [2, 1]) else "it cannot tell them apart")
-lost = strangers = more = fewer = shuffled = 0
-first_lost = first_stranger = first_fewer = first_shuffled = ""
+# The strong form (the review of claude-config#3786's pull request): the cut as #3473 left it is the
+# START of the list, record for record, each with its directory, and everything this change lists
+# comes after all of it. A superset in the old order is not enough: a caller that answers at the
+# first record that settles its question (agent-overrides.py runs_script, push-scope.sh's
+# ps__action_record) was answered by a new record standing between two old ones.
+row("#3786 the prefix check itself: a new record between two old ones, and an old one in another folder, are told from a prefix",
+    "" if kept_first([("", "a"), ("", "b")], [("", "a"), ("", "b"), ("/s", "a")])
+    and not kept_first([("", "a"), ("", "b")], [("", "a"), ("/s", "a"), ("", "b")])
+    and not kept_first([("", "a")], [("/s", "a")]) else "it cannot tell them apart")
+# Each text the review found a new record ahead of an old one in, with the folder it is read in.
+for what, line in (
+    ("a case arm holding a single ampersand", "case $x in a) true & ;; b) git push origin main;; esac"),
+    ("another script after a single ampersand, then the merge helper in a $( )",
+     "(true & bash other.sh) ; x=$(bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash)"),
+    ("a merge after a single ampersand, then a cd and the same merge in a $( )",
+     "(true & gh pr merge 5 --squash) ; cd /tmp/y ; x=$(gh pr merge 5 --squash)"),
+    ("a cd in a subshell before a later $( )", "(cd /tmp/x && git push) ; x=$(git status)"),
+):
+    text = line + OPEN
+    for folder in ("", "/s"):
+        was, now = cut_3473(text, folder), sw.crude_commands(text, folder)
+        row("#3786 %s, read in %r: the cut as it was is the start of the list, and more follows it" % (what, folder),
+            "" if unreadable(text) and kept_first(was, now) and len(now) > len(was)
+            else "the cut was %r, the list is %r" % (was, now))
+# What push-scope.sh's ps__action_record hands a merge gate is the FIRST record that runs the
+# action, and its folder is where the merge is judged. It is the one the cut always gave.
+for tool in ("gh pr merge 5 --squash", "git push origin main"):
+    text = "(true & %s) ; cd /tmp/y ; x=$(%s)" % (tool, tool) + OPEN
+    first = [d for d, t, _, _, _ in sw.every_command(text, "/s") if sw.program_field(t)[0].strip() == tool][:1]
+    row("#3786 the first record that runs `%s` is the one the cut always gave, in the folder the cd before it names" % tool,
+        "" if unreadable(text) and first == ["/tmp/y"] else "the first is read in %r" % (first,))
+lost = strangers = more = fewer = shuffled = behind = 0
+first_lost = first_stranger = first_fewer = first_shuffled = first_behind = ""
 TEXTS = 3000
+FOLDERS = ("", "/s")
 for _ in range(TEXTS):
     text = "".join(rng.choice(BITS) for _ in range(rng.randint(1, 14)))
-    before, after = cut_before(text), sw.crude_commands(text)
-    gone = collections.Counter(cut_3473(text)) - collections.Counter(after)
-    if gone:
-        fewer += 1
-        first_fewer = first_fewer or "%r is no longer given for %r" % (sorted(gone)[0], text)
-    elif not in_order(cut_3473(text), after):
-        shuffled += 1
-        first_shuffled = first_shuffled or repr(text)
-    if not kept_first(before, after):
-        lost += 1
-        first_lost = first_lost or repr(text)
-    if any(t not in text for _, t in after):
-        strangers += 1
-        first_stranger = first_stranger or repr(text)
-    if len(after) > len(before):
-        more += 1
-row("over %d made up texts, the old cut is given first and whole, each record in its directory and order" % TEXTS,
+    was_lost = was_fewer = was_shuffled = was_behind = was_stranger = was_more = False
+    for folder in FOLDERS:
+        before, was, after = cut_before(text, folder), cut_3473(text, folder), sw.crude_commands(text, folder)
+        gone = collections.Counter(was) - collections.Counter(after)
+        if gone:
+            was_fewer = True
+            first_fewer = first_fewer or "%r is no longer given for %r read in %r" % (sorted(gone)[0], text, folder)
+        elif not in_order(was, after):
+            was_shuffled = True
+            first_shuffled = first_shuffled or "%r read in %r" % (text, folder)
+        if not kept_first(was, after):
+            was_behind = True
+            first_behind = first_behind or "%r read in %r: the cut was %r, the list is %r" % (text, folder, was, after)
+        if not kept_first(before, after):
+            was_lost = True
+            first_lost = first_lost or "%r read in %r" % (text, folder)
+        if any(t not in text for _, t in after):
+            was_stranger = True
+            first_stranger = first_stranger or repr(text)
+        if len(after) > len(before):
+            was_more = True
+    lost, fewer, shuffled, behind = lost + was_lost, fewer + was_fewer, shuffled + was_shuffled, behind + was_behind
+    strangers, more = strangers + was_stranger, more + was_more
+row("over %d made up texts, each read in two folders, the old cut is given first and whole, each record in its directory and order" % TEXTS,
     "" if not lost else "%d texts lost a record or gave a new one ahead of an old one, the first: %s" % (lost, first_lost))
 row("#3786 over the same texts, every record the cut gave before this change it still gives, in the same directory, as many times",
     "" if not fewer else "%d texts lost a record, the first: %s" % (fewer, first_fewer))
 row("#3786 over the same texts, the records the cut gave before this change come in the order they had",
     "" if not shuffled else "%d texts gave them in another order, the first: %s" % (shuffled, first_shuffled))
+row("#3786 over the same texts, the cut as it was before this change is the start of the list, record for record with its folder, and every new record comes after all of it",
+    "" if not behind else "%d texts gave a new record ahead of an old one, or an old one changed, the first: %s" % (behind, first_behind))
 row("over the same texts, every record's text is written in the text it was cut from",
     "" if not strangers else "%d texts gave a text not written in them, the first: %s" % (strangers, first_stranger))
-# Without this the two rows above would pass on a reader that lists nothing new.
+# Without this the five rows above would pass on a reader that lists nothing new.
 row("the made up texts reach the new listing (some text is given more records than before)",
     "" if more >= TEXTS // 10 else "only %d of %d texts were given more records" % (more, TEXTS))
 

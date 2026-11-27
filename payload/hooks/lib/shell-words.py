@@ -1690,8 +1690,12 @@ def crude_listed(text, cut):
     with its own words (`git push origin main & wait` gave the push the words `& wait`). A stretch
     the first pass gave whole is still given whole, so `(git push --force & x)` is still read as
     one push with every word it had, and once more as the push the shell runs.
+
+    The two passes are handed back apart, (the first's, the second's), because crude_commands gives
+    every stretch of the first pass, of every piece, before any of the second: the list as #3473
+    left it is then the start of the list, record for record.
     """
-    out, spans, at, first = [], set(), 0, True
+    out, more, spans, at, first = [], [], set(), 0, True
     for m in CRUDE_EDGE.finditer(text):
         if m.group() == "(" and after_a_name(text, m.start()):
             continue
@@ -1708,9 +1712,9 @@ def crude_listed(text, cut):
         if not part.strip() or not (left or right in (")", "`") or right[:1] == "&"):
             continue
         if (start, end) not in spans:
-            out.append((start, part))
-        out.extend((start, more) for more in crude_more(part, left))
-    return out
+            more.append((start, part))
+        more.extend((start, again) for again in crude_more(part, left))
+    return out, more
 
 
 # The edges of the finer cut (claude-config#3786): CRUDE_EDGE's, and three more places a command
@@ -1834,12 +1838,21 @@ def crude_commands(s, cwd=""):
 
     A second reading of the directories runs beside that one (crude_nests, claude-config#3786), in
     which a cd inside a subshell or a substitution governs what follows it there and nothing after
-    the nest closes. Where it puts a command somewhere else, the command is given once more, there,
-    after the record it always had: the push of `(cd /tmp/x && git push)` is read in the session's
-    folder as before and in /tmp/x. A text is cut on the separators it always was, so the pieces
-    are the same; the separators are kept only to tell where a list starts.
+    the nest closes. Where it puts a command somewhere else, the command is given once more, there:
+    the push of `(cd /tmp/x && git push)` is read in the session's folder as before and in /tmp/x.
+    A text is cut on the separators it always was, so the pieces are the same; the separators are
+    kept only to tell where a list starts.
+
+    Everything claude-config#3786 lists comes after EVERYTHING the cut gave before it: the pieces,
+    then the commands #3473 found inside them, exactly the list that change left, and only then the
+    stretches of the finer cut and the second folder of any record. Placed beside the record they
+    belong to, the new ones stood ahead of old ones of a later piece, and a caller that answers at
+    the first record settling its question was answered by a new one: agent-overrides.py's
+    runs_script took `bash other.sh`, listed after a single ampersand, ahead of the merge helper in
+    a later `$( )`, and a Monitor that was refused was allowed. A new record can now only be
+    reached where every old one settled nothing.
     """
-    out, found, old = [], [], None
+    out, found, more, old = [], [], [], None
     nests, joined = [[cwd, None, "", cwd, None]], False
     parts = re.split(r"(&&|\|\||;|\||\n)", s)
     for n in range(0, len(parts), 2):
@@ -1854,16 +1867,21 @@ def crude_commands(s, cwd=""):
         cut = crude_cut(text)
         there = crude_nests(text, cut, nests, sep == "|")
         if there[0] != cwd:
-            found.append((there[0], text))
-        for start, inner in crude_listed(text, cut):
+            more.append((there[0], text))
+        before, after = crude_listed(text, cut)
+        for start, inner in before:
             found.append((cwd, inner))
             if there.get(start, cwd) != cwd:
-                found.append((there[start], inner))
+                more.append((there[start], inner))
+        for start, inner in after:
+            more.append((cwd, inner))
+            if there.get(start, cwd) != cwd:
+                more.append((there[start], inner))
         out.append((cwd, text))
         target = cd_target(text)
         if target is not None:
             cwd, old = moved(cwd, old, target)
-    return out + found
+    return out + found + more
 
 
 def alone(text):
