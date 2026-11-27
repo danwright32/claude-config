@@ -97,6 +97,38 @@ const NEEDS_YOU_TO = /\bneeds? you to (?:run|paste|apply|click|approve|enter|sig
 const YOUR_STEP = /\byour (?:manual )?step\b/gi
 const notQuoted = (plain: string, at: number): boolean => !quotedOnLine(plain.slice(0, at))
 
+// #3842: on 2026-11-27 the permission check refused a call and the session handed Dan the step in
+// five wordings no phrase read. Each is named, so tools/steps-phrase-count.ts counts it by itself
+// over the session records with this file's own matcher, and each stays only while the turns it
+// catches hold steps for Dan (the counts: docs/mods-design.md "Manual steps").
+// "One step left for you.", "The one step left for you": a step counted or singled out. Counted
+// on 2026-11-27, the bare words "step left for you" were also said of none ("no manual step left
+// for you") and of an issue's title ("a step left for you after a refusal"), so neither is it.
+const STEP_LEFT_FOR_YOU = /\b(?:one|two|three|four|five|\d+|the (?:one|last|only)) (?:(?:more|manual|small|last) )?steps? left for you\b/gi
+// "Still yours: the row is on Waiting, and Status needs setting to Done", leading its sentence and
+// closed by its colon, so "the decision is still yours" is not it. Counted on 2026-11-27 it was
+// said once, of two open questions, so it counts only where what follows names a step, as
+// "waiting on you" must (#1613), or says that a thing needs setting, doing or the like.
+const STILL_YOURS = new RegExp(`${LEAD}still yours:`, 'gim')
+const NEEDS_DOING = /^[^.!?\n]{0,200}\bneeds? (?:setting|doing|running|applying|pasting|clicking|approving|entering|typing|signing)\b/i
+const stillYoursIsAStep = (plain: string, at: number, end: number): boolean =>
+  handsOverAStep(plain, at, end) || (notQuoted(plain, at) && NEEDS_DOING.test(plain.slice(end)))
+// "the one only you can do", naming one thing; never "something only you can do", said of a rule.
+const ONLY_YOU_CAN_DO = /\b(?:the|that|this|one) (?:(?:one|last|only|remaining) )?(?:one|step|thing|part) only you can do\b/gi
+// "The row still needs you to set Status to Done". Its own phrase beside NEEDS_YOU_TO, so it is
+// counted by itself; "Set" is still no word that begins a numbered step (Dan, 2026-11-27).
+const NEEDS_YOU_TO_SET = /\bneeds? you to set\b/gi
+// A thing left undone "because my update was refused by the permission check".
+const REFUSED_SO_LEFT = /\bbecause my [\w-]+(?: [\w-]+)? (?:was|were|got) (?:refused|denied|blocked) by (?:the |auto mode's )?(?:permission|safety) check\b/gi
+/** #3842's five, each by the name the count prints for it. */
+export const AFTER_REFUSAL: ReadonlyMap<string, RegExp> = new Map([
+  ['step left for you', STEP_LEFT_FOR_YOU],
+  ['Still yours:', STILL_YOURS],
+  ['the one only you can do', ONLY_YOU_CAN_DO],
+  ['needs you to set', NEEDS_YOU_TO_SET],
+  ['because my (call) was refused by the permission check', REFUSED_SO_LEFT],
+])
+
 // #1811: numbered steps handed to Dan, a numbered line that begins with something a person does at a
 // screen, counted only where the message holds two or more. Measured on 2026-10-27 over the 19,420
 // messages Claude wrote in this Mac's transcripts: 20 held two or more such lines, and every one of
@@ -147,6 +179,7 @@ const ALSO: ReadonlyMap<RegExp, (plain: string, at: number, end: number) => bool
   [NUMBERED, numberedTwice],
   [THEN_TELL_ME, dansNow],
   [CMD_S, dansNow],
+  ...[...AFTER_REFUSAL.values()].map(rx => [rx, rx === STILL_YOURS ? stillYoursIsAStep : notQuoted] as const),
 ])
 
 // Each says a step is Dan's to do. "waiting on you" never matches "waiting on your", and a step is
@@ -185,6 +218,8 @@ export const PHRASES: readonly RegExp[] = [
   THEN_TELL_ME,
   SAVE_FILE,
   CMD_S,
+  // #3842: the five wordings that handed Dan a step after a refused call.
+  ...AFTER_REFUSAL.values(),
 ]
 
 // #1811: Claude saying plainly that none of the steps it handed over are Dan's to do now, which
@@ -194,12 +229,25 @@ export const PHRASES: readonly RegExp[] = [
 // now" led by "none of" or "nothing", so a sentence that hands a step over never reads as one.
 const NONE_NOW = /\b(?:none of (?:these|those|the|its|them|this page's|the page's)(?: (?:steps?|edits?|changes?|items?|checks?))?(?: on (?:the|this|that) page)?|nothing(?: here| on (?:the|this|that) page)?) (?:is|are) (?:still )?yours to do now\b/gi
 
-/** Whether any of `texts`, Claude's messages of the turn, says none of the steps are Dan's to do now. */
-export const saysNoneNow = (texts: readonly string[]): boolean =>
+/** Whether any of `texts` holds `sentence` said, not quoted. */
+const saysPlainly = (texts: readonly string[], sentence: RegExp): boolean =>
   texts.some(text => {
     const plain = text.replace(/’/g, "'")
-    return [...plain.matchAll(NONE_NOW)].some(m => !quotedOnLine(plain.slice(0, m.index ?? 0)))
+    return [...plain.matchAll(sentence)].some(m => !quotedOnLine(plain.slice(0, m.index ?? 0)))
   })
+
+/** Whether any of `texts`, Claude's messages of the turn, says none of the steps are Dan's to do now. */
+export const saysNoneNow = (texts: readonly string[]): boolean => saysPlainly(texts, NONE_NOW)
+
+// #3842: the one line that answers the hold for a call the permission check refused, when nothing
+// from it is left for Dan. The hold gives the sentence, "Nothing from the refusal is yours to do.";
+// said of "that refusal", "the refusals" or "the refused call" it counts too, and quoted it does
+// not. It must begin "nothing from" and name a refusal, so no sentence about other work is read as
+// it by accident, and saying a call was refused is not saying this.
+const NOTHING_FROM_REFUSAL = /\bnothing from (?:the|that|this|those|these) (?:refusals?|refused (?:calls?|actions?|commands?)) is yours to do\b/gi
+
+/** Whether any of `texts` says nothing from a refused call is Dan's to do (#3842). */
+export const saysNothingFromRefusal = (texts: readonly string[]): boolean => saysPlainly(texts, NOTHING_FROM_REFUSAL)
 
 // The phrase said the other way round: "nothing else is waiting on you", "this is no longer
 // waiting on you". Only a negation attached to the phrase counts, in the same clause and within

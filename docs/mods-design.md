@@ -2480,6 +2480,52 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   offer ("you can also type"), a description ("it now tells you to run"), Claude's own run or a
   later step ("once it installs I'll ask you to run"); the one missed hand over put the command
   after a colon with no verb ("To run when convenient: `/reload-plugins`").
+- **A call the permission check refused is answered by a step pinned after it, or by one line**
+  (#3842). On 2026-11-27 the permission check refused a call that set a row of Dan's to do list.
+  The session rightly did not send it again, then told him in eight replies that the row was his
+  to set, and pinned nothing: none of its five wordings was a phrase the check read, and nothing
+  tied a refused call to the card. Dan's answer that day was "Both". So the turn's end now judges
+  the refused call itself, whatever the reply says, and the five wordings are phrases as well.
+  The refusal is read from Claude Code's own session record, which the check already reads for the
+  turn (`hooks/turn.ts`): the record of a refused call carries `toolDenialKind`, and only
+  `automode-blocked`, the permission check's verdict, counts. `automode-unavailable` is the check
+  giving no verdict, which is sent once more by rule and leaves Dan nothing; `permission-rule` is a
+  hook's or a rule's refusal, which says what to do in its place; `user-rejected` is a prompt Dan
+  declined himself. Measured on 2026-11-27 over the main conversations' records of 30 days on the
+  personal MacBook (Claude Code 2.1.311 to 2.1.332): 22 `automode-blocked` (Bash 20, Agent 1,
+  SendMessage 1, each result beginning with the check's own "denied" sentence), 93
+  `automode-unavailable`, 1,938 `permission-rule`, 65 `user-rejected`, 12 cancelled or
+  interrupted; 10 more `automode-blocked` sat in subagents' own records, which the main session's
+  check never reads. A turn holding one, with no call of the `steps` tool after it, is blocked
+  once and told both ways out: pin what the refusal left for Dan, or say "Nothing from the refusal
+  is yours to do." A card pinned before the refusal holds some other step and does not answer it.
+  The block begins with its own mark (`REFUSED_MARK`), so a turn holding it is never blocked by
+  this mod again, and a turn that could not be read names no refusal. Not built: a hook on
+  `classic.PermissionDenied`. A mod's hook there needs a line on two lists of exceptions
+  (`tools/sec-default-bypassed-hooks.tsv` and the exempt list of `tests/test-sleep-silence.sh`),
+  and what that event says of no verdict is the words "Classifier unavailable" (614 of the 619
+  refusals scope modes noted overnight on this Mac by 2026-11-27), read by scope modes alone. No
+  MCP tool was among the 22, and the refused call of 2026-11-27 was one, on the work MacBook, so
+  whether its record carries the kind is what that Mac's count shows.
+  Counted with the check's own reader and matcher (`tools/steps-phrase-count.ts`, which prints
+  counts and never a message's text) on 2026-11-27 over the personal MacBook's 7,594 session
+  records of 30 days, 10,491 turns: 19 turns held a call the permission check refused, 3 were
+  answered by a call of the `steps` tool after it, and 16 would be held, once each, about one every
+  two days. Read one by one, 3 of the 16 left Dan a step no card held (2 said so in prose), 9 left
+  him nothing and would be answered by the one line, and 4 could not be told from the turn. The
+  five wordings, as first written and then as kept (counts are turns; "newly held" is the most it
+  could be, since the card as it stood is not in the record):
+
+  | Wording | Said in | Newly held | Read | Kept |
+  |---|---|---|---|---|
+  | "step left for you" | 3 | 1 | 1 said no step was left, 1 was an issue's title, 1 a real step already on the card | narrowed to a step counted or singled out ("One step left for you", "The one step left for you") |
+  | "Still yours:" | 1 | 1 | two open questions, no step | only where a step follows, as "waiting on you" must (#1613), or a thing "needs setting" or the like |
+  | "the one only you can do" | 2 | 2 | both steps for Dan | yes |
+  | "needs you to set" | 0 | 0 | never said | yes, on the wording of 2026-11-27 alone |
+  | "because my (call) was refused by the permission check" | 0 | 0 | never said; its turn holds a refused call anyway | yes, until the work MacBook is counted |
+
+  "Set" did not join the words that begin a numbered step (Dan, 2026-11-27): it also leads
+  Claude's own plans, and the same list decides what a page of steps is.
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On

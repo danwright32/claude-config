@@ -2250,3 +2250,93 @@ test('a held Done answered not done, pressed again while idle, goes once and is 
   await w.clock.settle()
   expect(w.prompts).toEqual(['step 1 done'])
 })
+
+// ---- #3842: a call the permission check refused, with no step pinned after it ----
+
+// The refused call as the transcript reader prints it, whole: Claude Code's own record of the tool
+// result, carrying the turn's promptId and which kind of refusal it was (measured 2026-11-27, see
+// tests/turn.test.ts). The session of 2026-11-27 told Dan in these words, which no phrase read.
+const refusedCall = (kind = 'automode-blocked') => JSON.stringify({ type: 'user', isSidechain: false, promptId: 'p1', toolDenialKind: kind, message: { content: [{ type: 'tool_result', is_error: true, content: 'refused' }] } })
+const pinnedAfter = JSON.stringify({ type: 'assistant', isPinning: true })
+const ROW_REPLY = 'I checked the deploy and it is live. The update to the row did not go through.'
+
+test('a turn in which the permission check refused a call, with nothing pinned after it, is held once and told both ways out (#3842)', withKit, async ($, on) => {
+  world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  const r = await turnStop($, ROW_REPLY)
+  expect(r.block).toMatch(/^The permission check refused a call of yours in this turn/)
+  expect(r.block).toMatch(/mcp__manual-steps__steps\b/)
+  expect(r.block).toContain('"Nothing from the refusal is yours to do."')
+  expect(r.block).toMatch(/never run it again/i)
+  // No phrase of the prose check is in the reply, so that block is not given beside it.
+  expect(r.block).not.toMatch(/leaves Dan a step in prose/)
+})
+
+test('the hold says how many calls were refused when there were several (#3842)', withKit, async ($, on) => {
+  world(on, { turn: [prompt(), refusedCall(), refusedCall(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  expect((await turnStop($, ROW_REPLY)).block).toMatch(/in this turn \(2 calls\)/)
+})
+
+test('a step pinned after the refusal answers it, and one pinned before it does not (#3842)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [prompt(), refusedCall(), pinnedAfter, prompt(), wrote('The row is on the card.')].join('\n') })
+  await start($)
+  await hand($, [step()])
+  expect((await turnStop($, 'The row is on the card.')).block).toBeUndefined()
+  // An unfinished step already on the card when the call was refused is some other step.
+  w.turn = [prompt(), pinnedAfter, prompt(), refusedCall(), wrote(ROW_REPLY)].join('\n')
+  expect((await turnStop($, ROW_REPLY)).block).toMatch(/^The permission check refused a call of yours/)
+})
+
+test('the one line the hold asks for answers it, and so does saying none of the steps are his now (#3842)', withKit, async ($, on) => {
+  const line = 'The push was refused and I left it there. Nothing from the refusal is yours to do.'
+  const { w } = world(on, { turn: [prompt(), refusedCall(), wrote(line)].join('\n') })
+  await start($)
+  expect((await turnStop($, line)).block).toBeUndefined()
+  w.turn = [prompt(), refusedCall(), wrote('None of these steps are yours to do now.')].join('\n')
+  expect((await turnStop($, 'None of these steps are yours to do now.')).block).toBeUndefined()
+  // The line quoted, as in talk about this check, is not the line said.
+  const quoted = 'The hold asks me to say "Nothing from the refusal is yours to do." when that is true.'
+  w.turn = [prompt(), refusedCall(), wrote(quoted)].join('\n')
+  expect((await turnStop($, quoted)).block).toMatch(/^The permission check refused a call of yours/)
+})
+
+test('once held for a refusal, the same turn is never held again, so it cannot loop (#3842)', withKit, async ($, on) => {
+  const held = JSON.stringify({ type: 'user', promptId: 'p1', isOurs: true })
+  world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY), held, wrote('Carrying on without it.')].join('\n') })
+  await start($)
+  expect((await turnStop($, 'Carrying on without it.', true)).block).toBeUndefined()
+})
+
+test('no verdict, a hook\'s refusal and a prompt Dan declined hold nothing (#3842)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: '' })
+  await start($)
+  for (const kind of ['automode-unavailable', 'permission-rule', 'user-rejected']) {
+    w.turn = [prompt(), refusedCall(kind), wrote(ROW_REPLY)].join('\n')
+    expect((await turnStop($, ROW_REPLY)).block).toBeUndefined()
+  }
+})
+
+test('a refusal in the turn before is not asked about in this one (#3842)', withKit, async ($, on) => {
+  const earlier = JSON.stringify({ type: 'user', promptId: 'p0', isOurs: false })
+  world(on, { turn: [earlier, refusedCall().replace('"promptId":"p1"', '"promptId":"p0"'), wrote('Stopped there.'), prompt(), wrote('Merged #12.')].join('\n') })
+  await start($)
+  expect((await turnStop($, 'Merged #12.')).block).toBeUndefined()
+})
+
+test('a step left in prose and a refused call in one turn are asked about together, in one block (#3842)', withKit, async ($, on) => {
+  world(on, { turn: [prompt(), refusedCall(), wrote(PROSE_STEP)].join('\n') })
+  await start($)
+  const r = await turnStop($, PROSE_STEP)
+  expect(r.block).toMatch(/leaves Dan a step in prose/)
+  expect(r.block).toMatch(/The permission check refused a call of yours in this turn/)
+})
+
+test('where nobody is at the prompt, or the turn could not be read, a refused call holds nothing (#3842)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY)].join('\n') })
+  await $.session.start({ cwd: ROOT, surface: null, isInteractive: false } as never)
+  expect((await turnStop($, ROW_REPLY)).block).toBeUndefined()
+  await start($)
+  w.turn = { fails: '/t: No such file or directory' }
+  expect((await turnStop($, ROW_REPLY)).block).toBeUndefined()
+})

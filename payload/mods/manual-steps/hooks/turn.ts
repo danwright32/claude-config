@@ -12,8 +12,32 @@ import { PAGE_MARK } from './page.ts'
 
 /** The words this mod's prose block begins with, so a turn that already holds it is never blocked twice. */
 export const PROSE_MARK = 'Your reply leaves Dan a step in prose'
-/** Every block this mod gives, the prose one and the page one (#1811): a turn holding either is never blocked by it again. */
-const MARKS = [PROSE_MARK, PAGE_MARK]
+/** The words this mod's block for a call the permission check refused begins with (#3842). */
+export const REFUSED_MARK = 'The permission check refused a call of yours in this turn'
+/** Every block this mod gives: the prose one, the page one (#1811) and the refused call one (#3842). A turn holding any is never blocked by this mod again. */
+const MARKS = [PROSE_MARK, PAGE_MARK, REFUSED_MARK]
+
+// #3842: a call the permission check refused, read from Claude Code's own record of its result and
+// never from words. The record of a refused call carries `toolDenialKind`, measured on 2026-11-27
+// over the main conversations' records of 30 days on the personal MacBook (Claude Code 2.1.311 to
+// 2.1.332): 22 `automode-blocked` (the permission check's verdict; each one's result began with
+// its "denied by the auto mode classifier" sentence), 93 `automode-unavailable` (it gave no
+// verdict, which is sent once more by rule and is no step for Dan), 1,938 `permission-rule` (a
+// hook's or a rule's refusal, which says what to do in its place), 65 `user-rejected` (Dan declined
+// a prompt, so he knows) and 12 cancelled or interrupted; 10 more `automode-blocked` were in
+// subagents' own records, which this reader is never handed. Only the first counts here. No hook on the refusal
+// itself is used: a mod's hook on `classic.PermissionDenied` needs an entry on two lists of
+// exceptions (tools/sec-default-bypassed-hooks.tsv, tests/test-sleep-silence.sh), and what that
+// event calls no verdict is the word "Classifier unavailable", read by scope modes alone.
+export const REFUSED_KIND = 'automode-blocked'
+/** The tool whose call after a refusal answers it: the step went on the card. */
+export const STEPS_TOOL = 'mcp__manual-steps__steps'
+/**
+ * The longest record of a refused call kept whole. The 32 measured on 2026-11-27 (22 of the main
+ * conversation, 10 of subagents) were 3.3 to 4.4 KB; a longer
+ * line naming the kind is some other record that holds those words, and is cut down like any other.
+ */
+export const REFUSED_BYTES = 65_536
 
 /**
  * How many bytes from the transcript's end are read. Measured over the 12,514 turns in this Mac's
@@ -34,19 +58,26 @@ export const TURN_TIMEOUT_MS = 2_000
 // inside a tool result, which a transcript holds escaped, do not. Perl, not tail and awk: on the last
 // 4 MB of a 200 MB transcript macOS's `tail -c` took 140 ms, reading the whole file, and awk 90 to 125
 // ms over its long lines, where perl reads and filters it in 15 (measured 2026-10-23). The byte count,
-// the file and the marks are its arguments, never part of its text.
+// the file, the steps tool and the marks are its arguments, never part of its text.
+// #3842: the record of a call the permission check refused is printed whole, being small, so its kind
+// is read from the record itself; and a call of the steps tool with no text beside it is printed as a
+// mark of its own, so a step pinned after a refusal is seen in its place in the turn.
 const TURN_READ = [
-  'my ($n, $f, @marks) = @ARGV;',
+  'my ($n, $f, $tool, @marks) = @ARGV;',
   'open(my $h, "<", $f) or die "$f: $!\n";',
   'my $size = -s $h;',
   'seek($h, $size > $n ? $size - $n : 0, 0) or die "$f: $!\n";',
   'while (my $l = <$h>) {',
   '  if (index($l, q{"type":"user"}) >= 0) {',
+  `    if (index($l, q{"toolDenialKind":"${REFUSED_KIND}"}) >= 0 && length($l) <= ${REFUSED_BYTES}) { print $l; next; }`,
   '    my $id = $l =~ /("promptId":"[^"]*")/ ? ",$1" : "";',
   '    my $ours = index($l, q{"content":"Stop hook feedback:}) >= 0 && grep({ index($l, $_) >= 0 } @marks) ? "true" : "false";',
   '    print qq({"type":"user"$id,"isOurs":$ours}\n);',
   '  } elsif (index($l, q{"type":"assistant"}) >= 0 && index($l, q{"type":"text"}) >= 0) {',
   '    print $l;',
+  '  } elsif (index($l, q{"type":"assistant"}) >= 0 && index($l, q{"type":"tool_use"}) >= 0 && index($l, qq{"name":"$tool"}) >= 0) {',
+  '    my $side = index($l, q{"isSidechain":true}) >= 0 ? "true" : "false";',
+  '    print qq({"type":"assistant","isSidechain":$side,"isPinning":true}\n);',
   '  }',
   '}',
   'close($h) or die "$f: $!\n";',
@@ -59,9 +90,18 @@ export type TurnRead = {
   isOurs: boolean
   /** The prompt the turn answers, or null when the window held no record of it. */
   promptId: string | null
+  /** The calls of the turn the permission check refused, with no call of the steps tool after them (#3842). */
+  refused: number
 }
 
-type Rec = { type?: unknown; promptId?: unknown; isOurs?: unknown; isSidechain?: unknown; message?: { content?: unknown } }
+type Rec = { type?: unknown; promptId?: unknown; isOurs?: unknown; isSidechain?: unknown; isPinning?: unknown; toolDenialKind?: unknown; message?: { content?: unknown } }
+
+/** Whether this record of Claude's holds a call of the steps tool: the reader's own mark, or the call in a record kept whole. */
+const pins = (r: Rec): boolean => {
+  if (r.isPinning === true) return true
+  const c = r.message?.content
+  return Array.isArray(c) && c.some(b => b && typeof b === 'object' && (b as { type?: unknown }).type === 'tool_use' && (b as { name?: unknown }).name === STEPS_TOOL)
+}
 
 const textOf = (r: Rec): string | null => {
   const c = r.message?.content
@@ -89,10 +129,16 @@ export const turnIn = (out: string): TurnRead => {
   // starts inside the turn, the turn before's once a record of another prompt is reached.
   let pending: string[] = []
   let isBounded = false
+  // Walking back, so a call of the steps tool already met is one made later than the record in hand.
+  // One met past the turn's first record belongs to the turn before, whose refusals are not counted.
+  let isPinnedLater = false
+  let refused = 0
   for (let i = recs.length - 1; i >= 0; i--) {
     const r = recs[i] as Rec
     if (r.type === 'assistant') {
-      const t = r.isSidechain === true ? null : textOf(r)
+      if (r.isSidechain === true) continue
+      if (pins(r)) isPinnedLater = true
+      const t = textOf(r)
       if (t !== null) pending.unshift(t)
       continue
     }
@@ -103,12 +149,19 @@ export const turnIn = (out: string): TurnRead => {
       break
     }
     if (r.isOurs === true) isOurs = true
+    if (r.toolDenialKind === REFUSED_KIND && r.isSidechain !== true && !isPinnedLater) refused++
     texts.unshift(...pending)
     pending = []
   }
   if (!isBounded) texts.unshift(...pending)
-  return { texts, isOurs, promptId }
+  return { texts, isOurs, promptId, refused }
 }
+
+/**
+ * The reader's command for the last `bytes` of the transcript at this path. One spelling, so the
+ * count of what the turn end check would hold (tools/steps-phrase-count.ts) runs this same reader.
+ */
+export const turnReadArgv = (transcript: string, bytes: number = TURN_BYTES): string[] => ['perl', '-e', TURN_READ, '--', String(bytes), transcript, STEPS_TOOL, ...MARKS]
 
 export type TurnRun = (argv: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string; isStdoutTruncated: boolean }>
 /** The turn now ending, or why it could not be read (never read as an empty turn). */
@@ -119,7 +172,7 @@ export const turnAt = async (transcript: string, run: TurnRun): Promise<TurnAt> 
   if (!transcript) return { state: 'unreadable', why: 'no transcript was given' }
   let r: Awaited<ReturnType<TurnRun>>
   try {
-    r = await run(['perl', '-e', TURN_READ, '--', String(TURN_BYTES), transcript, ...MARKS])
+    r = await run(turnReadArgv(transcript))
   } catch (err) {
     return { state: 'unreadable', why: err instanceof Error ? err.message : String(err) }
   }

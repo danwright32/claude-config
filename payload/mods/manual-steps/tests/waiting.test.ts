@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { saysNoneNow, waitingPhrase } from '../hooks/waiting.ts'
+import { saysNoneNow, saysNothingFromRefusal, waitingPhrase } from '../hooks/waiting.ts'
 
 // #863: what in a message of Claude's says a step is waiting on Dan, judged on every message of the
 // turn since #1608. Narrow on purpose: each phrase was measured on real turns before it shipped
@@ -345,5 +345,102 @@ describe('saysNoneNow (#1811)', () => {
   test('it is read across every message of the turn', () => {
     expect(saysNoneNow(['The page is up.', 'None of these steps are yours to do now.'])).toBe(true)
     expect(saysNoneNow([])).toBe(false)
+  })
+})
+
+// #3842: on 2026-11-27 the permission check refused a call that set a to do list row, and the
+// session told Dan the row was his to set in these five wordings, across eight replies, none of
+// which any phrase read. They are the issue's own words, as its comment says they may be used.
+describe('the five wordings that handed Dan a step after a refused call (#3842)', () => {
+  const NUMBERED_REPLY = [
+    '**One step left for you.** The to do list row is still on Waiting, because my update was refused by the permission check:',
+    '',
+    '1. Open the row: (link)',
+    '2. Set **Status** to **Done**.',
+  ].join('\n')
+
+  test('"One step left for you", over a numbered list whose second line begins with Set', () => {
+    expect(waitingPhrase(NUMBERED_REPLY)).toBe('One step left for you')
+  })
+
+  test('"Still yours:", leading its sentence', () => {
+    expect(waitingPhrase('Still yours: the to do list row is on Waiting, and Status needs setting to Done.')).toBe('Still yours:')
+  })
+
+  test('"the one only you can do"', () => {
+    const said = "That closes every point from the reflection except the one only you can do: set the to do list row's Status to Done at (link)."
+    expect(waitingPhrase(said)).toBe('the one only you can do')
+  })
+
+  test('"needs you to set"', () => {
+    expect(waitingPhrase('The row still needs you to set Status to Done: (link)')).toBe('needs you to set')
+  })
+
+  test('a thing left undone "because my update was refused by the permission check"', () => {
+    const said = 'The to do list row is still on Waiting, because my update was refused by the permission check.'
+    expect(waitingPhrase(said)).toBe('because my update was refused by the permission check')
+  })
+
+  test('none of the five fires when it is negated, quoted, or said of no step', () => {
+    for (const said of [
+      'There is no step left for you.',
+      'The check now reads "step left for you" as a hand over.',
+      'The decision is still yours.',
+      'Typing a slash command is something only you can do, which is why it goes on the card.',
+      'The check now reads "needs you to set" as a hand over.',
+      'A call was refused by the permission check, and I did not run it again.',
+      'Set is not an action word: "2. Set the flag" leads my own plans.',
+    ])
+      expect(waitingPhrase(said)).toBeNull()
+  })
+
+  // Counted on 2026-11-27 over the personal MacBook's turns of 30 days (docs/mods-design.md "Manual
+  // steps"): "step left for you" was said of no step and of an issue's title, and "Still yours:" of
+  // two open questions. Paraphrased from what fired, never copied.
+  test('what the count found the first wordings also caught does not fire', () => {
+    for (const said of [
+      'The plug-in started by itself, so there is no manual step left for you.',
+      'The highest one nobody holds is about a step left for you after a refusal being handed over the wrong way.',
+      'Still yours: the second question of the issue, and any limit.',
+    ])
+      expect(waitingPhrase(said)).toBeNull()
+    // The same words where they do hand a step over.
+    expect(waitingPhrase('The one step left for you, clearing the goal, is on the card.')).toBe('The one step left for you')
+    expect(waitingPhrase('- **Still yours:** click **Allow** in the dialog that is open.')).toBe('Still yours:')
+  })
+
+  // Dan's answer on 2026-11-27: "Set" does not join the words that begin a numbered step, so two
+  // numbered lines of which one begins with Set are still not two steps.
+  test('a numbered line beginning with Set still does not count as a step line', () => {
+    expect(waitingPhrase(['1. Open the row', '2. Set the flag to on'].join('\n'))).toBeNull()
+  })
+})
+
+// #3842: the one line that answers the hold for a refused call when nothing is left for Dan. The
+// hold gives the sentence; only it, or the same sentence about "the refused call", counts.
+describe('saysNothingFromRefusal (#3842)', () => {
+  test('the sentence the hold asks for, and its plain variants, count', () => {
+    for (const said of [
+      'Nothing from the refusal is yours to do.',
+      'The push was refused and I stopped. Nothing from that refusal is yours to do.',
+      'nothing from the refused call is yours to do',
+      'Nothing from the refusals is yours to do.',
+    ])
+      expect(saysNothingFromRefusal([said])).toBe(true)
+  })
+
+  test('the sentence quoted, a step handed over, or a refusal only mentioned, do not', () => {
+    for (const said of [
+      'The hold asks me to say "Nothing from the refusal is yours to do." when that is true.',
+      'The refusal leaves one thing that is yours to do.',
+      'The call was refused and I did not run it again.',
+      'Nothing is left.',
+    ])
+      expect(saysNothingFromRefusal([said])).toBe(false)
+  })
+
+  test('it is read across every message of the turn', () => {
+    expect(saysNothingFromRefusal(['The push was refused.', 'Nothing from the refusal is yours to do.'])).toBe(true)
+    expect(saysNothingFromRefusal([])).toBe(false)
   })
 })
