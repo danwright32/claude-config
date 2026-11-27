@@ -5439,8 +5439,13 @@ the same path written out in the function always was. A variable that only a fun
 after the call or in another function, is read with that one value, and a refusal found that way
 says the check could not be made, since the function may not have run. Each is a further reading,
 made only where the ones before it found nothing, so it can only refuse more. Not read: a name
-several functions set to different values, a name anything else in the text binds, and a function
-called after a cd, whose relative path is read against the directory the reader follows. One
+several functions set to different values, a name anything else in the text binds (an assignment
+at the top level, a `read`, a `for`, a `local` with an option; a bare `local kept` in a function
+is no second value and is not counted), and a function
+called after a cd, whose relative path is read against the directory the reader follows. A quiet
+script run through a variable in a function is refused wherever the same script named by a
+literal path there is: one that finds its own folder from `BASH_SOURCE` and sources a file beside
+it, since the folder a function runs in is not known to the gate. One
 command is left out of that further reading: a shell handed the script being read and nothing else
 (`sc_run(){ bash "${BASH_SOURCE[0]}" 2>&1; }` in a suite that runs itself), where a second reading
 of the same text can find nothing the first does not, and refused the suite over a path it could

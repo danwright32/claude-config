@@ -189,6 +189,41 @@ script 'run() {' '  kept=posts.sh' '  read -r kept' '  bash "$kept"' '}' 'run'
 judge_script
 allowed "a name the function reads in after setting it is not followed, as before"
 
+# A name declared with a bare `local` and set on a line after it, the ordinary way to write a
+# function. The declaration counted as something else that binds the name, so the name got no
+# value and the script it ran was read by nobody: allowed on main at 969bb0fce0 and at 5019457df1,
+# the first build of this change (the review's probe b02, 2026-11-27). A bare local gives the
+# name no value, so it is no second one. The walk holds none for it at the command, so the answer
+# is the one a value only a function sets gets: a check the gate could not make.
+while IFS= read -r body; do
+  [ -n "$body" ] || continue
+  body="${body//@NL@/$NL}"
+  for file in posts quiet; do
+    printf '%s\n' "${body//@F@/$file}" > "$FV/case.sh"
+    judge_script
+    if [ "$file" = posts ]; then
+      refused "a script that posts, run through a variable a bare local declares and the next line sets, is refused: $(shown "$body")"
+      says "as a check it could not make: $(shown "$body")" "REFUSED: the gate could not check whether this command posts to Slack"
+      says "naming the variable: $(shown "$body")" "runs a file through \$kept, whose value the gate cannot follow to that command"
+    else
+      allowed "the same function running a script that does not post passes: $(shown "$body")"
+    fi
+  done
+done <<'SHAPES'
+run() { local kept; kept=@F@.sh; bash "$kept"; }; run
+run() {@NL@  local kept@NL@  kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() {@NL@  local other kept@NL@  kept=lib/@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+set_it() {@NL@  local kept@NL@  kept=@F@.py@NL@  python3 "$kept"@NL@}@NL@set_it
+SHAPES
+# What a bare local does not excuse: a name the body goes on to read in is still one the gate
+# holds no value for, and the answer is the one it was.
+script 'run() {' '  local kept' '  kept=posts.sh' '  read -r kept' '  bash "$kept"' '}' 'run'
+judge_script
+allowed "a name declared with a bare local, set, and then read in is not followed, as before"
+# Not covered, and so not asserted either way: a name a function sets that the top level sets as
+# well (`kept=""` or `kept=quiet.sh` above the function; the review's probes b08 and b01), and a
+# name a local declares with an option (`local -a kept`).
+
 echo "slack drafts only: a script that runs itself in a function is not read a second time, and anything else is read as before (claude-config#3497)"
 
 # test-pipefail-shortcircuit.sh runs itself inside a function (`sc_run(){ ... bash
