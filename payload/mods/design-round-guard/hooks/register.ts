@@ -1027,7 +1027,9 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
         ...(a.path ? { path: a.path } : {}),
         ...(a.folder ? { folder: a.folder } : {}),
         ...(r.tool ? { tool: true as const } : {}),
-        ...(a.unexpanded ? { unexpanded: true as const } : {}),
+        // Only the reader's own `true` (#3620): anything else there is no mark, and the word is
+        // judged as one the shell may fill in.
+        ...(a.unexpanded === true ? { unexpanded: true as const } : {}),
         // #3323: a program the reader does not know, with the reader's own words for it.
         ...(r.unknown ? { unknown: { why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '' } } : {}),
         run: r.path ?? r.script,
@@ -2244,9 +2246,16 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       // `$(` is text and it is read as the name it spells. Four of this repository's suites hand
       // their helpers a command as such a word, to be judged by the gate under test and never run,
       // and nine plain runs of them were held on 2026-11-24 and 2026-11-25 as naming a file a
-      // command's output fills in. Only a script's text is read so: the same word typed whole on a
-      // command line is judged as it was.
-      const asWritten = t.unexpanded === true && t.inScript !== undefined && t.path !== undefined
+      // command's output fills in.
+      // #3620: the same word typed whole on a command line carries the same mark and was still held
+      // (`mystery "x \$(a | b) y"`, and the suites' own lines typed whole). It is read by the mark
+      // there too, whichever run is handed it (a program the reader does not know, a script file, a
+      // tool), with one thing kept as it was: typed whole, a word that names a look changing file
+      // anywhere in its text is judged as before, since a program that runs what it is handed as a
+      // command (a remote shell, a helper that evaluates its argument) would write that file, and
+      // such a word was held only by this reading (`mystery "cp x app/page.css; echo y/\$(a|b)"`).
+      // A word with no mark, or with anything but the reader's own `true` for one, is judged as before.
+      const asWritten = t.unexpanded === true && t.path !== undefined && (t.inScript !== undefined || mentionedLookFiles(t.word).length === 0)
       const may = spelled !== undefined ? patternMayBeLook(spelled) : variable || folderFilled ? 'unread' : patternMayBeLook(t.word, asWritten)
       if (may === 'not') continue
       const shown = t.path ?? (folder === undefined ? t.word : `${folder}/${t.word.split('/').pop() ?? ''}`)

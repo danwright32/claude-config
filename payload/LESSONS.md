@@ -7648,6 +7648,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Join a time to its AM or PM, and a figure to its unit, with a non-breaking space, or a narrow column wraps the suffix alone.
 
 ## External systems
+- **L871. A quota that refuses everything once it is reached (a spending cap, a plan limit, a storage allowance) warns of nothing and names no failed step, so read every such meter on a schedule and alert at a share of its cap.**
+  (bidspoke#4087, 2026-11-26)
+  NO CHECK: each platform meter needs its own scheduled reader, and bidspoke#4087 builds the one for GitHub Actions
+  SHORT: A quota that refuses everything at its cap warns of nothing, so read each such meter on a schedule and alert at a share of the cap.
 - **L870. A macOS launchd service with no ProcessType key runs as a background daemon, throttled onto the efficiency cores, so set ProcessType on any service whose speed matters (a CI runner, a build host) and read its spawn type back with launchctl print.**
   (slate#5373, 2026-11-26)
   NO CHECK: none is built yet; slate#5373 asks for one that reads each service's spawn type

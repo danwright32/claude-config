@@ -781,6 +781,12 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged db-write-ask.sh mcp__claude_ai_Supabase__execute_sql '{"query": "update runs set note = '"'"'@@'"'"' where false", "project_id": "probe"}' '{}' "ask db-write-ask.sh header"
   # And about a database client in a shell command it cannot parse (#2536).
   judged db-write-ask.sh              Bash "$(bash_call "psql -c 'delete from runs where false'")" '{}' "ask db-write-ask.sh header"
+  # It asks Dan before a connector tool deletes or changes something live (#3618), so a delete it
+  # cannot parse is asked about, naming the payload. No connector is reached: it reads a name.
+  judged connector-change-ask.sh mcp__claude_ai_Regal_MCP__delete-team '{"teamId": "team-@@", "description": "cut @@"}' '{}' "ask connector-change-ask.sh header"
+  # It asks Dan before a skill shipped by an MCP server loads (#3615), so a Skill call it cannot
+  # parse is asked about, naming the payload. No skill is loaded and no server reached: it reads a name.
+  judged server-skill-ask.sh Skill '{"skill": "claude_ai_Docs:pdf-@@", "args": "cut @@"}' '{}' "ask server-skill-ask.sh header"
 } > "$WORK/judged"
 # Every blocking gate is in the table, so one added later is not exempt by being unlisted (L96).
 while IFS= read -r g; do
