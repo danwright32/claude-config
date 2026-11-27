@@ -615,6 +615,54 @@ row("the made up texts reach the new listing (some text is given more records th
     "" if more >= TEXTS // 10 else "only %d of %d texts were given more records" % (more, TEXTS))
 
 
+# ---- the cost of one long piece (the review of claude-config#3786's pull request) ----------------
+# A cd with a nest among its words has its directory read from the rest of the piece. Read whole
+# for every such cd, a piece of nothing but them cost the square of its length: 40,000 characters
+# of `cd a (` took 7 seconds where the cut before took none (measured 2026-11-27 by the review),
+# and a gate past its time limit refuses. Counted, never timed (L290): the characters cd_target is
+# handed while one piece is read, which is what the time is spent on, against the length of the
+# piece. Measured 2026-11-27 on the first five of these texts: before the fix between 1,400 and
+# 4,000 times the text, after it under 100. The limit is 200. The sixth holds a `&>`, so its
+# directories are read twice, and it must stay under the same limit.
+handed = [0]
+real_cd_target = sw.cd_target
+
+
+def counting(text):
+    handed[0] += len(text)
+    return real_cd_target(text)
+
+
+for what, bit in (
+    ("a cd before a subshell", "cd a ("),
+    ("a cd before a subshell holding a single ampersand", "cd a (x & "),
+    ("a cd into a $( )", "cd $("),
+    ("a cd before a backquote", "cd a ` "),
+    ("a cd before a <( )", "cd a <(x) "),
+    ("a cd before a subshell holding a &>", "cd a (x &>y "),
+):
+    text = bit * (20000 // len(bit))
+    handed[0] = 0
+    sw.cd_target = counting
+    try:
+        got = sw.crude_commands(text, "/s")
+    finally:
+        sw.cd_target = real_cd_target
+    row("#3786 a piece of %d characters that is %s over and over: reading where its cds go costs in step with its length"
+        % (len(text), what),
+        "" if handed[0] <= 200 * len(text)
+        else "cd_target was handed %d characters, %d times the length of the text" % (handed[0], handed[0] // len(text)))
+    was = cut_3473(text, "/s")
+    row("#3786 the same piece: the cut as it was is still the start of the list",
+        "" if kept_first(was, got) else "%d records where the cut gave %d, and they are not its start" % (len(got), len(was)))
+# Past the bound a cd is still read, from the characters just after it, so it still moves its nest:
+# the fortieth cd of one piece puts the push after it in the folder it names.
+text = "cd a (x) " * 40 + "(cd /tmp/far $(true) && git push origin main)" + OPEN
+got = pushes_in(sw._records(text, "/s", 0)[0]) if unreadable(text) else None
+row("#3786 past the bound, a cd with a nest among its words still moves the commands after it in its nest",
+    "" if got is not None and ("/tmp/far", "push", "origin\x1fmain") in got else "git commands read: %r" % (got,))
+
+
 # ---- R1 as a property: the crude reader against the reader itself --------------------------------
 # A nest of substitutions and subshells the reader CAN read, built whole so every opener closes.
 # Each simple command the reader lists in it (one holding no separator, parenthesis or backquote) the

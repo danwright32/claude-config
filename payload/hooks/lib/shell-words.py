@@ -1738,6 +1738,10 @@ def crude_listed(text, cut):
 CRUDE_MORE_EDGE = re.compile(CRUDE_EDGE.pattern + r"|\$\{(?=[ \t])|(?<!&)&+|(?<![\w$./-])coproc(?=[ \t(<>])")
 # The edges that start a nest: a shell of its own, whose cd moves nothing outside it.
 CRUDE_OPENERS = ("$(", "<(", ">(", "=(", "(", "`")
+# How many cds of one piece have their directory read from the whole rest of the piece, and how
+# far past its own stretch a later one is read (crude_nests). Set here, not measured.
+CRUDE_CD_WHOLE = 32
+CRUDE_CD_AHEAD = 256
 
 
 def half_a_redirect(text, at):
@@ -1834,8 +1838,18 @@ def crude_nests(text, cut, nests, piped):
     The nests are counted from the edges alone, so a parenthesis inside a quoted word or the `)` of
     a case pattern inside a subshell miscounts them. That can only add a wrong directory to the
     ones a command is listed in: the first reading's is always among them.
+
+    The cost is held in step with the piece's length. Reading the whole rest of the piece for every
+    cd with a nest among its words cost the square of it: 40,000 characters of `cd a (` took 7
+    seconds where the cut before took none (measured 2026-11-27 by the review of #3786's pull
+    request), and a gate past its time limit refuses. So only the first CRUDE_CD_WHOLE such cds of
+    a piece are read to its end, which is every one of them in a command a person writes. A later
+    one is read from its stretch and the CRUDE_CD_AHEAD characters after it, enough for the
+    directory unless it is longer than that, and then the directory named is a cut one: a folder
+    the command is listed in besides the one it always had, never in its place. The cds waiting
+    for the piece to end are kept by nest, so an ampersand drops its nest's in one step.
     """
-    there, late = {}, []
+    there, late, reads = {}, {}, 0
     for start, end, left, right in cut:
         if (left == "`" and nests[-1][2] == "`") or (left == ")" and len(nests) > 1):
             nests.pop()
@@ -1848,14 +1862,20 @@ def crude_nests(text, cut, nests, piped):
             target = cd_target(part)
             if target is not None and whole:
                 nest[0], nest[1] = moved(nest[0], nest[1], target)
-            elif target is not None and cd_target(text[start:]) is not None:
-                late.append((nest, cd_target(text[start:])))
+            elif target is not None:
+                target = cd_target(text[start:] if reads < CRUDE_CD_WHOLE else text[start:end + CRUDE_CD_AHEAD])
+                reads += 1
+                if target is not None:
+                    # Keyed by the nest itself, which the entry keeps alive, so no other nest
+                    # made later can be handed the same key.
+                    late.setdefault(id(nest), (nest, []))[1].append(target)
         # The & of `|&` is a pipe's, and the cut left it at the start of its piece.
         if right[:1] == "&" and not (piped and end == 0):
             nest[0], nest[1] = nest[3], nest[4]
-            late = [(n, t) for n, t in late if n is not nest]
-    for nest, target in late:
-        nest[0], nest[1] = moved(nest[0], nest[1], target)
+            late.pop(id(nest), None)
+    for nest, targets in late.values():
+        for target in targets:
+            nest[0], nest[1] = moved(nest[0], nest[1], target)
     return there
 
 
