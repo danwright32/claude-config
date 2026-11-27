@@ -30,7 +30,7 @@ Treat it as a floor:
 4. **Priority**: Why now? Why is this more important than other work?
 5. **MVP**: What is the smallest version we could build to validate the idea?
 6. **Success**: How will we measure success? What metrics or KPIs tell us it worked?
-7. **Discovery**: How will users find or learn about this feature?
+7. **Discovery**: How will users find or learn about this feature? Where the project announces to agents, also ask Dan whether this feature is announced (below).
 8. **Opportunity cost**: What happens if we do not build it?
 9. **Alternatives**: Is there a simpler solution? Can we solve it without a new feature?
 10. **Edge cases**: Empty states, large datasets, permissions, errors, concurrent edits, offline, other unusual conditions.
@@ -40,6 +40,38 @@ Treat it as a floor:
 14. **Instrumentation**: What events to track? What dashboards or alerts do we need?
 15. **Assumptions**: What are we assuming? How can we validate it?
 16. **Unknowns**: What questions are still unanswered?
+
+### Item 7, where the project announces to agents: ask whether this feature is announced
+
+Some work apps post a change to their agents in an announcements channel, under the
+`changelog/announce` label, when agents must or can act differently because of it. Whether a
+feature is announced is Dan's decision, made here (his words, 2026-11-25: "it should ask me before
+applying the label. It can be part of the new feature discovery"). The wording of the post is a
+separate approval, asked at pull request time.
+
+Find out whether the project announces: `node ~/.claude/hooks/lib/dev-update-registry.js
+announce-channel <owner/name>` prints a `channel` when its entry in this Mac's dev update registry
+names one. With no channel, do not ask, and say nothing about announcing.
+
+With a channel, ask Dan with ONE AskUserQuestion picker of one question, in the main session:
+
+- the question: `Will "<feature name>" be announced to agents when it ships? The test: agents must or can act differently.`
+- the options: `Announce it` and `Not announcing`
+- the metadata: `{"source": "announce-discovery", "repo": "<owner/name>", "feature": "<feature name>"}`
+
+The question must name the feature in the very words of the metadata's `feature`, between quotation
+marks as above (the closing mark straight after the name), and must hold the
+words `agents must or can act differently`: without both, his answer does not count. Neither does
+an answer he typed words beside, which is a change he wants: read it and ask again. Name the feature
+in the picker exactly as its milestone will be titled (a few words, no punctuation; letter case and
+spacing aside): his answer counts for a milestone only under that one name, and the plan has no
+second place to give another. If the title changes after he answered, he is asked again under the
+new title.
+
+His answer goes into the plan the milestone is made from, as `"announce": "yes"` or
+`"announce": "no"` (`~/.claude/skills/milestone/SKILL.md`, step 2). The milestone helper takes
+either only as his own answer to this picker, and the pull request that finishes a feature he said
+yes to cannot merge under another label unless he declines in a picker.
 
 ## After shared understanding
 

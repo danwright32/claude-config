@@ -40,7 +40,12 @@ fi
 WORK="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 REAL_STORE="${CLAUDE_HOME:-$HOME/.claude}/state/announce-approvals"
-real_before="$(ls -la "$REAL_STORE" 2>/dev/null | cksum)"
+# This Mac's real record as it stood before any case ran, and what a line of this suite's names: a
+# path under its temporary folder, or a repository of the owner its repository is under. The last
+# check holds the suite to it: aaf_record_untouched, in lib/announce-approval-fixture.sh, which says
+# what that check can and cannot see, and whose own cases are in test-announce-approval.sh (#3669).
+OWN_MARKS=("path:$WORK" "repo:acme/")
+real_before="$(aaf_record_mark "$REAL_STORE")"
 STORE="$WORK/store"
 POST='@here
 **Handing a call back**
@@ -373,8 +378,50 @@ else
   check "the hooks block beside this suite can be found, so the registration can be read" "lib/settings-file.sh found no settings file in $DIR/.."
 fi
 
+echo "the picker that asks whether a feature is announced is noted as every picker is: by its ids alone, in silence (#3669, #3789)"
+# helper_decides <feature>: what a hook naming no session and no transcript (the merge helper's
+# payload) is told Dan last answered about announcing that feature of acme/widget: "<answer>".
+helper_decides() {
+  printf '{"session_id": "merge-when-ready", "hook_event_name": "PreToolUse", "tool_name": "Bash"}' \
+    | ANNOUNCE_APPROVALS_DIR="$STORE" aaf_hook_decision "$LIB" acme/widget "$1" \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["answer"], end="")'
+}
+STORE="$WORK/store-deciding"
+T="$WORK/deciding.jsonl"; aaf_new "$T"
+# The form measured on the installed hook: the transcript does not hold the picker's line yet, and
+# the hook's own copy carries no metadata.
+run "$(AAF_PAYLOAD_FORM=nometadata aaf_talk "$T" decide-payload toolu_dlate1 acme/widget "Hand back" "Not announcing")"
+check "#3669 a discovery picker the transcript does not hold yet is silent" "$([[ "$HRC|$HOUT|$HERR" == "0||" ]] && echo ok || echo "$HRC|$HOUT|$HERR")"
+check "#3669 and is noted by its ids alone, saying the transcript did not hold its line" "$(ids_only toolu_dlate1 "$T" false)"
+check "R9 #3669 the note is not his answer: nothing is decided by it" "$([[ "$(helper_decides "Hand back")" == none ]] && [ "$(kinds decided)" = 0 ] && echo ok || helper_decides "Hand back")"
+aaf_talk "$T" decide-late toolu_dlate1 acme/widget "Hand back"
+aaf_talk "$T" decide-answer toolu_dlate1 acme/widget "Hand back" "Not announcing"
+check "R9 still possible #3669: once the transcript holds the picker and his Not announcing, a call naming no session reads it through the hook's note" "$([[ "$(helper_decides "Hand back")" == no ]] && has decided toolu_dlate1 '"answer": "no"' '"session": "s1"' && echo ok || echo "$(helper_decides "Hand back") $(cat "$STORE/record.jsonl")")"
+# A picker the transcript already holds, handed to the hook with its metadata: still by its ids
+# alone. Nothing the hook can tell of this picker (its source, the feature, his answer) is written.
+id="$(aaf_talk "$T" decide-put acme/widget "Hand over")"
+run "$(aaf_talk "$T" decide-payload "$id" acme/widget "Hand over" "Announce it")"
+check "#3669 a discovery picker the transcript holds is silent, and noted by its ids alone" "$([[ "$HRC|$HOUT|$HERR" == "0||" ]] && ids_only "$id" "$T" true || echo "$HRC|$HOUT|$HERR")"
+run "$(aaf_talk "$T" decide-payload toolu_dagent acme/widget "Hand over" "Not announcing" "" "" a9bba4c0ffee)"
+check "#3669 a subagent's discovery picker is not noted, and nothing is said" "$([[ "$HRC|$HOUT|$HERR" == "0||" ]] && [ "$(kinds answered)" = 2 ] && echo ok || echo "$HRC|$HOUT|$HERR $(kinds answered) notes")"
+# A note that cannot be written is the hook's one notice. The hook cannot tell which picker it was,
+# so the notice says what reads his answer in for each kind it may have been.
+# The record's folder is under a FILE, which nothing can make a folder in, whoever runs the suite.
+STORE="$WORK/store-deciding-blocked/inner"
+: > "$WORK/store-deciding-blocked"
+id="$(aaf_talk "$T" decide-put acme/widget "Hand off")"
+run "$(aaf_talk "$T" decide-payload "$id" acme/widget "Hand off" "Not announcing")"
+said="$(told "$HOUT")"
+check "#3669 a note of it that cannot be written is said, to Dan and the session, naming the record" "$([[ "$HRC" == 0 && "$said" == "ANNOUNCE ANSWER: "*"could not be noted"*"$STORE/record.jsonl"* ]] && echo ok || echo "rc=$HRC $said")"
+check "#3669 the notice says what reads his answer about a feature into the record: a Bash call that runs create-milestone.sh, or a merge typed in that session" "$([[ "$said" == *"whether a feature is announced to agents"*"create-milestone.sh"*"merge typed in this session"* ]] && echo ok || echo "$said")"
+check "#3669 and still what reads his approval of a wording in, that he is not asked again, and that nothing is lost for any other picker" "$([[ "$said" == *"only if"*"--add-label changelog/announce"*"does not need to be asked again"*"nothing is lost"* ]] && echo ok || echo "$said")"
+check "#3669 it is the hook's one notice: one JSON object on one line" "$([[ "$said" != NOT-A-NOTICE* && "$(printf '%s' "$HOUT" | grep -c .)" == 1 ]] && echo ok || echo "$HOUT")"
+run "$(aaf_talk "$T" decide-payload "$id" acme/widget "Hand off" "Not announcing" "" "" a9bba4c0ffee)"
+check "#3669 with a record that could take no note, a subagent's discovery picker still says nothing" "$([[ "$HRC|$HOUT|$HERR" == "0||" ]] && echo ok || echo "$HRC|$HOUT|$HERR")"
+STORE="$WORK/store"
+
 echo "the record is this suite's own"
-check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
+check "no case wrote to this Mac's real record" "$(aaf_record_untouched "$REAL_STORE" "$real_before" "${OWN_MARKS[@]}")"
 
 echo "  $pass passed, $fail failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
