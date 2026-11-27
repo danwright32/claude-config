@@ -37,8 +37,8 @@
 # reads as a program. The python3 -c reader is lib/python_c_programs.py, the one the other two
 # scans of inline programs use. There is no skip list.
 #
-# A file it cannot read, a quote that never closes, and a reader that will not load each fail the
-# scan; none of them passes as nothing found.
+# A file it cannot read, a quote that never closes, a reader that will not load, and a line the
+# reader gives no record for each fail the scan; none of them passes as nothing found.
 #
 # This file names no python3 call with -c as text: its fixtures are written with printf, the call as
 # @PY@ and each apostrophe as an octal escape, so no scan of inline programs reads them as programs.
@@ -83,9 +83,12 @@ trap 'chmod -R u+rwX "$TMPROOT" 2>/dev/null; rm -rf "$TMPROOT"' EXIT
 #   UNCLOSED <path>:<line>: ... a program whose quote never closes, which it cannot vouch for
 #   UNREAD <path>: ...          a listed file it could not read
 #   UNPARSED <path>: ...        a file whose code lines could not be read
+#   UNMAPPED <path>:<line>: ... a program starting on a line the reader of code lines gave no
+#                               record for, which it cannot tell is code or text (#3818)
 #   JUDGED <path>:<line>        with --starts, each program judged, at the line it starts on
 #   SKIPPED <path>:<line>       with --starts, each program inside a string or a heredoc's body
-# and last, always, READ files=<n> programs=<n> variables=<n> skipped=<n>. With the reader of code
+# and last, always, READ files=<n> programs=<n> variables=<n> skipped=<n> unmapped=<n>, which the
+# suite prints for the real tree. With the reader of code
 # lines unable to load it prints NOREADER and exits 3 before reading anything.
 cat > "$TMPROOT/scan.py" <<'PY'
 import io, os, re, sys, tokenize
@@ -231,7 +234,20 @@ def is_shell(rel, b):
     return rel.endswith((b".sh", b".bash", b".zsh")) or SHEBANG.match(b) is not None
 
 
-files = programs = variables = skipped = 0
+def record(lines, shown, n, what):
+    """The reader's record of line n as (kind, bare), or None, said as UNMAPPED, when it gave none.
+    A line with no record is not known to be code or text, so the program on it is not judged and
+    the scan is not clean; read as an empty line it passed as text, apostrophe and all (#3818)."""
+    global unmapped
+    got = lines.get(n)
+    if got is None:
+        unmapped += 1
+        print("UNMAPPED %s:%d: lib/shell_code_lines.py gave no record for this line, so whether the %s on it is"
+              " the file's own code is not known, and it was not judged" % (shown, n, what))
+    return got
+
+
+files = programs = variables = skipped = unmapped = 0
 with open(listing, "rb") as f:
     paths = [p for p in f.read().split(b"\n") if p]
 for rel in paths:
@@ -256,7 +272,10 @@ for rel in paths:
         continue
     for m in START.finditer(b):
         n = line_of(b, m.start())
-        kind, bare = lines.get(n, ("code", b""))
+        got = record(lines, shown, n, "python3 -c program")
+        if got is None:
+            continue
+        kind, bare = got
         if kind == "code" and START.search(bare):
             programs += judge(b, shown, m.end(), "python3 -c program")
         elif b[m.end():m.end() + 1] == b"'":
@@ -267,10 +286,13 @@ for rel in paths:
         assign = re.compile(rb"(?m)^[ \t]*(?:(?:export|local|readonly|declare(?:[ \t]+-[A-Za-z]+)*)[ \t]+)?"
                             + re.escape(name) + rb"='")
         for m in assign.finditer(b):
-            kind, bare = lines.get(line_of(b, m.start()), ("code", b""))
+            got = record(lines, shown, line_of(b, m.start()), "program assigned to " + name.decode())
+            if got is None:
+                continue
+            kind, bare = got
             if kind == "code" and name + b"=" in bare:
                 variables += judge(b, shown, m.end() - 1, "python3 program in " + name.decode())
-print("READ files=%d programs=%d variables=%d skipped=%d" % (files, programs, variables, skipped))
+print("READ files=%d programs=%d variables=%d skipped=%d unmapped=%d" % (files, programs, variables, skipped, unmapped))
 PY
 
 LIB="$DIR/lib"
@@ -280,7 +302,7 @@ scan() { EMBEDDED_PY_LIB="$LIB" python3 -I -B "$TMPROOT/scan.py" "$@" 2>&1; }
 verdict() {  # $1 = exit status, $2 = output
   case "$2" in *"READ files="*) ;; *) echo "not clean: the scan never reached its last line"; return ;; esac
   [ "$1" -eq 0 ] || { echo "not clean: the scan exited $1"; return; }
-  if grep -q -E '^(HIT|UNCLOSED|UNREAD|UNPARSED|NOREADER) ' <<< "$2"; then echo "not clean"; else echo "clean"; fi
+  if grep -q -E '^(HIT|UNCLOSED|UNREAD|UNPARSED|UNMAPPED|NOREADER) ' <<< "$2"; then echo "not clean"; else echo "clean"; fi
 }
 # A fixture: printf the format into probe/<name>, @PY@ standing for python3. Apostrophes are written
 # \047 and a backslash \134, so this file holds none of the programs it builds.
@@ -415,6 +437,57 @@ else
   check "the helpers install without lib/shell-words.py" "lib/install-hook-libs.py did not install them, or brought shell-words.py with them"
 fi
 
+# A line the reader of code lines gives no record for is not known to be code or text, so the
+# program on it is reported and the scan is not clean; it is never read as an empty line, which
+# passed it as text and left its apostrophe unjudged (claude-config#3818). The real reader gives
+# every line a record (measured 2026-11-27: none missing in 697 shell files), so the gap is made
+# by a stand in that is the real lib/shell_code_lines.py with one line's record taken out.
+mkdir -p "$TMPROOT/droplib"
+ln -s "$DIR/lib/python_c_programs.py" "$TMPROOT/droplib/python_c_programs.py"
+cat > "$TMPROOT/droplib/shell_code_lines.py" <<'PY'
+# The real lib/shell_code_lines.py, loaded from EMBEDDED_PY_REAL_LIB, giving no record for the line
+# EMBEDDED_PY_DROP_LINE.
+import importlib.util, os
+_spec = importlib.util.spec_from_file_location(
+    "shell_code_lines_real", os.path.join(os.environ["EMBEDDED_PY_REAL_LIB"], "shell_code_lines.py"))
+_real = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_real)
+READER_ERROR = _real.READER_ERROR
+_drop = int(os.environ["EMBEDDED_PY_DROP_LINE"])
+
+
+def read_lines(text):
+    for row in _real.read_lines(text):
+        if row[0] != _drop:
+            yield row
+PY
+mkdir -p "$TMPROOT/dropprobe"
+printf '#!/bin/bash\n@PY@ -c \047\nimport sys\n# the gate\047s own reader\nprint(1)\n\047\n' | sed 's/@PY@/python3/g' > "$TMPROOT/dropprobe/call.sh"
+printf '#!/bin/bash\nREADER_PY=\047\nimport json\n# don\047t trust the payload\nprint(1)\n\047\n' > "$TMPROOT/dropprobe/var.sh"
+printf 'dropprobe/call.sh\ndropprobe/var.sh\n' > "$TMPROOT/drop.list"
+dropscan() {  # $1 = the line the stand in gives no record for
+  EMBEDDED_PY_REAL_LIB="$DIR/lib" EMBEDDED_PY_DROP_LINE="$1" LIB="$TMPROOT/droplib" scan "$TMPROOT" "$TMPROOT/drop.list"
+}
+# The control: with a line that holds no program left out, the stand in reads as the real reader,
+# and both apostrophes are named at their line, so a miss below is the gap and not the stand in.
+ctl_out="$(dropscan 3)"
+case "$ctl_out" in
+  *"HIT dropprobe/call.sh:4:"*"HIT dropprobe/var.sh:4:"*) check "the stand in reader, missing a line that holds no program, still has both apostrophes named" ok ;;
+  *) check "the stand in reader, missing a line that holds no program, still has both apostrophes named" "it said: $ctl_out" ;;
+esac
+drop_out="$(dropscan 2)"; drop_rc=$?
+case "$drop_out" in
+  *"UNMAPPED dropprobe/call.sh:2:"*) check "a python3 -c program on a line the reader has no record for is reported, never passed as text" ok ;;
+  *) check "a python3 -c program on a line the reader has no record for is reported, never passed as text" "it said: $drop_out" ;;
+esac
+case "$drop_out" in
+  *"UNMAPPED dropprobe/var.sh:2:"*) check "a program assigned to a variable on a line the reader has no record for is reported" ok ;;
+  *) check "a program assigned to a variable on a line the reader has no record for is reported" "it said: $drop_out" ;;
+esac
+[ "$(verdict "$drop_rc" "$drop_out")" != clean ] \
+  && check "a scan that met a line with no record is not clean" ok \
+  || check "a scan that met a line with no record is not clean" "the verdict was clean: $drop_out"
+
 # ---------------------------------------------------------------------------
 # The real tree: no program a shell file embeds in single quotes has an apostrophe ending it early.
 # ---------------------------------------------------------------------------
@@ -424,17 +497,25 @@ bash "$DIR/lib/repo-files.sh" "$ROOT" > "$TMPROOT/files.list" 2>/dev/null
   && check "the files to judge were listed" ok \
   || check "the files to judge were listed" "lib/repo-files.sh gave nothing for $ROOT, so nothing below was read"
 tree="$(scan "$ROOT" "$TMPROOT/files.list" --starts)"; tree_rc=$?
-faults="$(printf '%s\n' "$tree" | grep -E '^(HIT|UNCLOSED|UNREAD|UNPARSED|NOREADER) ')"
+faults="$(printf '%s\n' "$tree" | grep -E '^(HIT|UNCLOSED|UNREAD|UNPARSED|UNMAPPED|NOREADER) ')"
 [ "$(verdict "$tree_rc" "$tree")" = clean ] \
   && check "no shell file in the repository has an apostrophe ending a single quoted python3 program early" ok \
   || check "no shell file in the repository has an apostrophe ending a single quoted python3 program early" "${faults:-the scan did not finish: $(printf '%s\n' "$tree" | tail -5)}"
-# A scan that judged a handful of programs is reading the wrong tree (L98). On 2026-11-26 it judged
-# 753 python3 -c programs and 6 variables in 696 shell files, and skipped 117 inside strings or
-# heredoc bodies, all of them in suites.
+# A scan that judged fewer programs than are there is reading less than the tree (L98). On
+# 2026-11-27 it judged 753 python3 -c programs and 5 variables in 697 shell files, and skipped 117
+# inside strings or heredoc bodies, all of them in suites; main as it stood then held 764. The floor
+# is 753, the branch's count on 2026-11-27 before main was merged in. With main merged in the scan
+# judged 789, so today a drop of up to 36 programs does not fail here and shows only in the counts
+# line the suite prints. The floor is left below the count on purpose, because open pull requests
+# that remove a program would otherwise turn main red after both merged. A change that takes the
+# count below 753 lowers the floor in the same change and says why (claude-config#3818).
+JUDGED_FLOOR=753
 nprog="$(printf '%s\n' "$tree" | sed -n 's/^READ files=[0-9]* programs=\([0-9]*\) .*/\1/p')"
-[ "${nprog:-0}" -ge 500 ] \
-  && check "the scan judged the repository's programs" ok \
-  || check "the scan judged the repository's programs" "it judged ${nprog:-no} programs in $ROOT, where 753 were judged on 2026-11-26"
+# Printed on every run, so a drop in how many were judged is seen (claude-config#3818).
+echo "test-embedded-python-quotes: $(printf '%s\n' "$tree" | sed -n 's/^READ //p')"
+[ "${nprog:-0}" -ge "$JUDGED_FLOOR" ] \
+  && check "the scan judged at least the $JUDGED_FLOOR programs it judged on 2026-11-27" ok \
+  || check "the scan judged at least the $JUDGED_FLOOR programs it judged on 2026-11-27" "it judged ${nprog:-no} programs in $ROOT"
 # The file the fault arrived in is among those judged, each of its programs (L400).
 ngate="$(printf '%s\n' "$tree" | grep -c '^JUDGED payload/hooks/payload-write-gate.sh:')"
 [ "$ngate" -ge 4 ] \

@@ -1,6 +1,7 @@
 import type { EngineInterface } from 'claude-code'
 import type { IsItLiveAnnounceDone, IsItLiveAnnouncement } from '../types/index.d.ts'
 import {
+  ARMED_MS,
   type Asked,
   type Claimed,
   type Judged,
@@ -13,6 +14,8 @@ import {
   alreadySettledOf,
   announceLetGoOf,
   announceRow,
+  armedOf,
+  armedUnreadOf,
   askedOf,
   cardUnapprovedOf,
   claimArgv,
@@ -38,6 +41,7 @@ import {
   judgeArgv,
   judgedOf,
   labelsOf,
+  notArmedOf,
   notKeptOf,
   outKey,
   owedKey,
@@ -90,14 +94,51 @@ async function changePinned($: EngineInterface, change: (ids: string[]) => strin
   throw new Error('the list of announcements this session pinned a row for kept changing under it')
 }
 
+// #3847: the rows whose Not announcing is armed (types/index.d.ts says what is kept). Its own copy
+// of the loop once more, for the reason given above.
+const armedRef = { plugin: 'is-it-live', key: 'announceArmed' } as const
+async function changeArmed($: EngineInterface, change: (armed: Record<string, number>) => Record<string, number>): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(armedRef)
+    if ((await $.state.set(armedRef, change(held.value ?? {}), { ifVersion: held.version })).isSet) return
+  }
+  throw new Error('the list of rows whose Not announcing is armed kept changing under it')
+}
+const without = (armed: Record<string, number>, row: string): Record<string, number> => Object.fromEntries(Object.entries(armed).filter(([k]) => k !== row))
+
+// Whether a row's Not announcing is armed now: by the clock, never by whether the timer that puts
+// its label back has run, so a Mac too busy to run it cannot leave a button armed.
+async function isArmed($: EngineInterface, row: string): Promise<boolean> {
+  const until = ((await $.state.get(armedRef)).value ?? {})[row]
+  return until !== undefined && (await $.clock.now()) < until
+}
+
+// Forgets that a row is armed, and answers whether anything was kept for it, in time or not: its
+// label may still read Confirm. A failure is answered as kept, so the caller draws the label again.
+async function disarm($: EngineInterface, row: string): Promise<boolean> {
+  try {
+    let kept = false
+    await changeArmed($, armed => {
+      kept = row in armed
+      return kept ? without(armed, row) : armed
+    })
+    return kept
+  } catch (err) {
+    $.ui.log(`is-it-live: could not forget that Not announcing was armed on ${row}: ${msg(err)}`, { to: 'debug' })
+    return true
+  }
+}
+
 // ---- the row in the band (announce.ts says what it holds) ----
 
 // Pins one announcement's row in this session's band and notes that it did, or answers why it could
-// not. Pinning again replaces the row, so every caller may pin what is already there.
+// not. Pinning again replaces the row, so every caller may pin what is already there. The label of
+// Not announcing is read from whether it is armed, here and nowhere else (#3847): a card, /live or a
+// turn end pinning the row again cannot put Not announcing back over a button a press would settle.
 async function pinAnnouncement($: EngineInterface, a: IsItLiveAnnouncement): Promise<string | undefined> {
   try {
-    await $.modkit.bandRow(announceRow(MOD, a) as never)
     const id = idOf(a.repo, a.pr)
+    await $.modkit.bandRow(announceRow(MOD, a, await isArmed($, rowIdOf(id))) as never)
     await changePinned($, ids => (ids.includes(id) ? ids : [...ids, id]))
     return undefined
   } catch (err) {
@@ -105,14 +146,61 @@ async function pinAnnouncement($: EngineInterface, a: IsItLiveAnnouncement): Pro
   }
 }
 
-// Takes a row down by its id, or answers why it could not. The row is forgotten only once it is down.
+// Takes a row down by its id, or answers why it could not. The row is forgotten only once it is down,
+// and a row that is down is not armed.
 async function takeDown($: EngineInterface, row: string): Promise<string | undefined> {
   try {
     await $.modkit.clearBandRow({ mod: MOD, id: row })
     await changePinned($, ids => ids.filter(id => rowIdOf(id) !== row))
+    await disarm($, row)
     return undefined
   } catch (err) {
     return msg(err)
+  }
+}
+
+// Arms a row's Not announcing (#3847), or answers why it could not: kept in this session's state,
+// then drawn under its Confirm label, then timed. Armed only when all three happened, since a second
+// press confirms the label and nothing else. What could not be finished is undone.
+async function arm($: EngineInterface, a: IsItLiveAnnouncement, row: string): Promise<string | undefined> {
+  try {
+    const until = (await $.clock.now()) + ARMED_MS
+    await changeArmed($, armed => ({ ...armed, [row]: until }))
+    const why = await pinAnnouncement($, a)
+    if (why !== undefined) throw new Error(why)
+    $.clock.after(ARMED_MS, () => void putBack($, row, until))
+    return undefined
+  } catch (err) {
+    await disarm($, row)
+    await drawAtRest($, a, row)
+    return msg(err)
+  }
+}
+
+// Draws a row again once its arming was forgotten, so its label reads Not announcing. One that
+// cannot be drawn keeps the Confirm label over a button that is not armed, whose next press is a
+// first press: the harmless side, noted in the debug log.
+async function drawAtRest($: EngineInterface, a: IsItLiveAnnouncement, row: string): Promise<void> {
+  const why = await pinAnnouncement($, a)
+  if (why !== undefined) $.ui.log(`is-it-live: the row ${row} could not be drawn again with Not announcing: ${why}`, { to: 'debug' })
+}
+
+// The armed time is up, or the session is starting again (`until` absent): the row goes back to Not
+// announcing with nothing settled, or comes down where it was settled meanwhile. A row armed again
+// since holds another time and is left alone. It says nothing: the label is the news.
+async function putBack($: EngineInterface, row: string, until?: number): Promise<void> {
+  try {
+    let ours = false
+    await changeArmed($, armed => {
+      ours = row in armed && (until === undefined || armed[row] === until)
+      return ours ? without(armed, row) : armed
+    })
+    if (!ours) return
+    const found = await announcementOfRow($, row)
+    const why = found && !found.done ? await pinAnnouncement($, found.entry) : await takeDown($, row)
+    if (why !== undefined) $.ui.log(`is-it-live: the row ${row} could not be put back once Not announcing was no longer armed: ${why}`, { to: 'debug' })
+  } catch (err) {
+    $.ui.log(`is-it-live: the row ${row} could not be put back once Not announcing was no longer armed: ${msg(err)}`, { to: 'debug' })
   }
 }
 
@@ -387,6 +475,13 @@ export async function announcementList($: EngineInterface, names: readonly strin
 // project is the session folder's GitHub repository by its remote's name, as mod-kit reads it.
 // Called from register.ts's session.start, the one hook this mod may register on that event.
 export async function announcementsAtStart($: EngineInterface): Promise<void> {
+  // #3847: a session starting again has no button armed, whatever the engine kept of its state:
+  // each armed row goes back to Not announcing before anything else is read.
+  try {
+    for (const row of Object.keys((await $.state.get(armedRef)).value ?? {})) await putBack($, row)
+  } catch (err) {
+    $.ui.log(`is-it-live: could not read which rows had Not announcing armed at this session's start: ${msg(err)}`, { to: 'debug' })
+  }
   try {
     if (!(await announcementsOwed($)).length) return
     const here = await $.session.repo()
@@ -464,9 +559,13 @@ async function announcementOfRow($: EngineInterface, row: string): Promise<{ ent
 /**
  * A press of Copy, Mark sent or Not announcing on an announcement's row, as mod-kit raised it: a
  * click on the button, or /press typed at the prompt. This is the only place `sent` and
- * `not-announcing` are ever written, so nothing a session can call settles an announcement that way.
+ * `not-announcing` are ever written, and the only place Not announcing is armed, so nothing a
+ * session can call settles an announcement that way or makes either of the two presses it takes.
  * Copy copies the approved wording and settles nothing. Every outcome is said to Dan, and a press
  * that could not be recorded leaves the row up for another.
+ *
+ * #3847: Not announcing settles on its second press. The first arms it and records nothing; a press
+ * while it is armed settles it; a press of Copy or Mark sent disarms it and does its own work.
  */
 export async function announcementPressed($: EngineInterface, p: { verb: Pressed; row: string }, surface: unknown): Promise<void> {
   let found: { entry: IsItLiveAnnouncement; done?: IsItLiveAnnounceDone } | undefined
@@ -483,7 +582,30 @@ export async function announcementPressed($: EngineInterface, p: { verb: Pressed
     return
   }
   const a = found.entry
+  if (p.verb === 'none') {
+    // Read before anything is forgotten: whether this press is the second one. What cannot be read
+    // is not a confirmation.
+    let confirming: boolean
+    try {
+      confirming = await isArmed($, p.row)
+    } catch (err) {
+      $.ui.toast(armedUnreadOf(a, msg(err)))
+      return
+    }
+    if (!confirming) {
+      const why = await arm($, a, p.row)
+      // Armed, the sentence stays up for as long as the button is, so it is on screen while it is true.
+      if (why === undefined) $.ui.toast(armedOf(a), { timeoutMs: ARMED_MS })
+      else $.ui.toast(notArmedOf(a, why))
+      return
+    }
+  }
+  // Any press past here ends the arming: Copy and Mark sent disarm it, and a confirming press whose
+  // record cannot be written must be made twice again. The label goes back wherever the row stays
+  // up: after Copy, and after a write that failed.
+  const wasArmed = await disarm($, p.row)
   if (p.verb === 'copy') {
+    if (wasArmed) await drawAtRest($, a, p.row)
     if (!a.text.trim()) {
       $.ui.toast(NO_WORDING)
       return
@@ -514,6 +636,7 @@ export async function announcementPressed($: EngineInterface, p: { verb: Pressed
       owed = undefined
     }
     // Settled all the same means another write settled it, perhaps another way: said as that.
+    if (owed !== false && wasArmed) await drawAtRest($, a, p.row)
     $.ui.toast(owed === false ? alreadySettledOf(await takeDown($, p.row)) : unsettledOf(a, msg(err), owed))
     return
   }

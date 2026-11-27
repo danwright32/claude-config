@@ -20,6 +20,18 @@
 #   own line      the look started through a shell younger than the process list still finds the
 #                 line of parents it descends from, reading the kernel's record where the list has
 #                 no row.
+#   own line cut  the row of the driver's own parent is taken out of the list, so the look cannot
+#                 follow its own line to launchd. A carrier it can still place on the part it did
+#                 read is attached; the reparented one, whose own parents were followed to launchd,
+#                 is handed back as one it could not tell apart (`unplaced`, with `own` saying why),
+#                 never as unread and never as found.
+#
+# Before any real process is started, the look's own logic is run on planted worlds (the review of
+# pull request 3826, 2026-11-27): a process list written out as text, with four spots of the look's
+# text swapped for planted values (which pids carry the id, the look's own pid, its parent, the
+# kernel's record), each swap checked to have happened exactly once. That is the only way to stand
+# the look where the kernel's record of its own line is not trusted, which no real process can be
+# made to do.
 #
 # Processes are told apart by pid and parent pid as ps reads them, never by a command's text. The
 # look reads a process's environment through the kernel as macOS has it, so anywhere else the suite
@@ -104,7 +116,10 @@ def look(ident, listing, through_shell=False):
     return r.stdout.decode('utf-8', 'replace')
 
 
-def judged(raw, left, unread, attached, absent=()):
+def judged(raw, left, unread, attached, absent=(), unplaced=(), own=None):
+    """None when the look's answer is the one expected, else what differs. `unplaced` are the
+    carriers it could not tell apart because its own line failed, and `own` is text its reason for
+    that must hold, or None when its own line must have been followed whole."""
     try:
         o = json.loads(raw)
     except ValueError:
@@ -115,12 +130,61 @@ def judged(raw, left, unread, attached, absent=()):
     def ids(key):
         v = o.get(key)
         return sorted(x.get('pid') for x in v if isinstance(x, dict)) if isinstance(v, list) else 'no list named ' + key
-    got = {'left behind': ids('found'), 'unread': ids('unread'), 'attached': o.get('attached', 'no count named attached')}
-    exp = {'left behind': sorted(left), 'unread': sorted(unread), 'attached': attached}
+    said = o.get('own', 'no field named own')
+    own_as_expected = said is None if own is None else isinstance(said, str) and own in said
+    got = {'left behind': ids('found'), 'unread': ids('unread'), 'could not be told apart': ids('unplaced'), 'attached': o.get('attached', 'no count named attached'), 'own line': 'as expected' if own_as_expected else said}
+    exp = {'left behind': sorted(left), 'unread': sorted(unread), 'could not be told apart': sorted(unplaced), 'attached': attached, 'own line': 'as expected'}
     if got != exp:
-        return 'expected %s, got %s' % (exp, got)
-    stray = [p for p in absent if p in got['left behind'] or p in got['unread']]
+        return 'expected %s (own line: %s), got %s' % (exp, 'followed whole' if own is None else 'a reason holding %r' % own, got)
+    stray = [p for p in absent if p in got['left behind'] or p in got['unread'] or p in got['could not be told apart']]
     return 'pids %s were listed and must not be' % stray if stray else None
+
+
+# The look's own logic on a planted world. Four spots of its text are swapped for planted values,
+# each exactly once, so what is judged is the look's own following of parents.
+SWAPS = [
+    ('want not in env_of(pid)', 'pid not in CARRIERS'),
+    ('me = os.getpid()', 'me = ME'),
+    ('parent[me] = os.getppid()', 'parent[me] = MYPARENT'),
+    ('def kernel_parent(pid):', 'def kernel_parent(pid):\n    return KERNEL.get(pid)\ndef real_kernel_parent(pid):'),
+]
+
+
+def planted(rows, carriers, me, myparent, kernel):
+    src = LOOK
+    for old, new in SWAPS:
+        if src.count(old) != 1:
+            return 'the look no longer holds exactly one %r, so it cannot be stood on a planted world' % old
+        src = src.replace(old, new)
+    head = 'CARRIERS = %r\nME = %r\nMYPARENT = %r\nKERNEL = %r\n' % (sorted(carriers), me, myparent, dict(kernel))
+    r = subprocess.run([sys.executable, '-I', '-c', head + src, 'planted'], input=rows.encode(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return r.stdout.decode('utf-8', 'replace')
+
+
+# The planted world: 1 launchd; 100 Terminal; 110 login; 120 the shell; 200 the session's own
+# process; 300 a connected server (carries the id, attached); 400 a node the session left behind
+# (carries the id, parent launchd). The look is 900, a child of 200, and is not in the list.
+BASE = """
+  100     1 /Applications/Terminal
+  110   100 login
+  120   110 -zsh
+  200   120 claude
+  300   200 node
+  400     1 node
+"""
+NO_LOGIN = BASE.replace('  110   100 login\n', '')
+check('planted, control: with the whole list the one left behind is found and the connected server is attached',
+      judged(planted(BASE, [300, 400], 900, 200, {900: 200}), [400], [], 1))
+check("planted, the look's own line cut above the session's process (the review's T2): the process whose own parents lead to launchd is one it could not tell apart, never unread, and it says its own line failed",
+      judged(planted(NO_LOGIN, [300, 400], 900, 200, {900: 200}), [], [], 1, unplaced=[400], own='process 110'))
+check("planted, the look's own parent not in the list and the kernel's record not trusted (the review's T3): every carrier, the connected server included, is one it could not tell apart",
+      judged(planted(BASE, [300, 400], 900, 850, {}), [], [], 0, unplaced=[300, 400], own='process 850'))
+check("planted, a carrier whose own parent is not in the list, the look's own line whole: that carrier alone is unread, and the look does not say its own line failed",
+      judged(planted(BASE + '  600   500 node\n', [300, 400, 600], 900, 200, {900: 200}), [400], [600], 1))
+check("planted, a carrier whose parents loop back on themselves, the look's own line whole: that carrier alone is unread",
+      judged(planted(BASE + '  700   710 node\n  710   700 node\n', [300, 400, 700], 900, 200, {900: 200}), [400], [700], 1))
+check("planted, both at once: a carrier whose own parents could not be followed stays unread, and only the one the look's own line would have placed is one it could not tell apart",
+      judged(planted(NO_LOGIN + '  600   500 node\n', [300, 400, 600], 900, 200, {900: 200}), [], [600], 1, unplaced=[400], own='process 110'))
 
 
 try:
@@ -165,6 +229,13 @@ try:
     # Started through a shell that did not exist when the list was taken, the look's own parent is
     # not in the list: it reads that parent's parent from the kernel and still finds its line.
     check("the look's own line: started by a process younger than the list, it still finds the line it descends from", judged(look(ID + '-broken', listing, through_shell=True), [], [], 2))
+
+    # The row of this driver's own parent taken out: the look's own line cannot be followed to
+    # launchd. The child still meets the part that was read; the reparented one cannot be told apart.
+    above = str(os.getppid()).encode()
+    cut = b'\n'.join(row for row in listing.split(b'\n') if row.split()[:1] != [above])
+    check("the look's own line cut: with the row of the driver's parent taken out, the reparented carrier is one it could not tell apart, the child is still attached, and it names the parent it could not follow",
+          'the driver has no parent row to take out of the list' if cut == listing else judged(look(ID, cut), [], [], 1, [attached.pid, other.pid], unplaced=[orphan], own=above.decode()))
 
     check('an id no process carries: nothing left behind, nothing unread, nothing attached', judged(look(ID + '-nobody', listing), [], [], 0, [attached.pid, orphan, other.pid]))
 finally:
