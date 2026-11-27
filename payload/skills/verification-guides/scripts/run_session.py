@@ -202,6 +202,19 @@ PIN = threading.Lock()
 # that comes after serve was collected reports these: by then the number is nobody's, and what `ps`
 # shows under it may be a stranger's.
 LEFT = {}
+# The receipt folders whose `recover-by-receipt` the system has told THIS process is gone or emptied
+# (see forbid_recovery). Once that is so it stays so for the life of the process: the file is made
+# in one place, allow_recovery, which a supervisor calls once, before its first child, and which
+# takes the folder out of here before it writes. So an ask that follows a yes need not go to the
+# disk again, and a cut off that finds the disk hanging after its own stop had the system's yes
+# still ends the children it holds (the fifth #3807 review).
+FORBIDDEN = set()
+# What a stop that could not read what was left of serve's group records as its egress verdict in
+# place of a monitor's "clean" (the fifth #3807 review). On main that stop left no ending, and the
+# later `stop` recorded the run as unmeasured, which the merge check refuses.
+EGRESS_UNREAD = ("the stop could not read what was left of serve's process group (%s), so serve's group was not"
+                 " seen to its end, and a reading that found nothing outside the allowed hosts is not taken as a"
+                 " measurement of the whole run")
 
 
 class StopRequested(BaseException):
@@ -463,7 +476,9 @@ def recover_path(rdir):
 def allow_recovery(rdir):
     """Say, beside the receipt, that the run's process groups are still the run's: a `stop` that
     finds this supervisor gone with no ending may end them by the numbers in the receipt. Raises
-    when it cannot be written, and the run then does not start."""
+    when it cannot be written, and the run then does not start. The one place the file is made, so
+    it is also where a removal this process remembers is forgotten (see FORBIDDEN), before the write."""
+    FORBIDDEN.discard(rdir)
     with open(recover_path(rdir), "w", errors="replace") as f:
         f.write(RECOVER_BY_RECEIPT_SAYS)
 
@@ -486,12 +501,17 @@ def forbid_recovery(rdir):
     """Take that back: from here on this supervisor ends its children's groups itself, and their
     numbers can come free at any moment. Its first act in a stop and in a cut off, before any signal
     and before the project's stop command. Never raises, and never waits longer than DISK_WAIT_S and
-    one log line. True ONLY when the system said, in that time, that the file is gone or emptied.
-    False when it refused both or had not answered: the file may still be whole, which is said in
-    the log, and the caller must then end no child (see leave_unended)."""
+    one log line. True ONLY when the system said, in that time, that the file is gone or emptied, or
+    had said so to this process before (see FORBIDDEN): the disk is then not asked again, since the
+    file cannot have come back and a disk that has begun to hang would only fail to say so. False
+    when it refused both or had not answered: the file may still be whole, which is said in the log,
+    and the caller must then end no child (see leave_unended)."""
+    if rdir in FORBIDDEN:
+        return True
     path = recover_path(rdir)
     done, said = within(DISK_WAIT_S, remove_recovery, path)
     if done and said is None:
+        FORBIDDEN.add(rdir)
         return True
     say_within("verification: %s could not be confirmed removed or emptied (%s)"
                % (path, said if done else why_not(said)))
@@ -499,21 +519,38 @@ def forbid_recovery(rdir):
 
 
 def holds_a_child(proc, monitor):
-    """Whether this process has a child whose group it would go on to signal or collect: serve, or
-    its monitor's report stream. A `stop` from another process holds neither."""
-    return proc is not None or getattr(monitor, "proc", None) is not None
+    """Whether this process still holds a child whose group it would go on to signal or collect
+    (see held): serve, or its monitor's report stream. One it was given and has since collected is
+    not held: the stream of a monitor that failed its own start is collected then and kept on the
+    monitor, and a supervisor with nothing else has no number to leave for (the fifth #3807 review).
+    A `stop` from another process holds neither."""
+    return held(proc) or held(getattr(monitor, "proc", None))
 
 
 def leave_unended(rdir, leave=None):
-    """What a supervisor that holds a child does when forbid_recovery said False: it leaves, at
-    once, as if it had been killed outright. Nothing of the run has been signalled or collected by
-    it, so the file being whole is still true, and a later `stop` ends the run by the receipt's
-    numbers. Says so in the log, waiting no longer for that line than for the removal. With the
-    real `leave` this never returns; a stand in's return is passed on as None."""
-    say_within("verification: leaving without ending the run: for all this supervisor can tell %s is still there,"
-               " so it has signalled neither serve's process group nor the report stream's, has collected"
-               " neither, and has recorded no ending. They are left running. `run_session.py stop` ends them by"
-               " the numbers in the receipt, as it does for a supervisor that was killed outright"
+    """What a supervisor that holds a child does when forbid_recovery said False: it leaves, as if
+    it had been killed outright. forbid_recovery says False only to a process the system has never
+    told the file is gone (see FORBIDDEN), and every signal to serve's group or to the report
+    stream of a monitor that started, and every collecting of either, comes after a yes. So this
+    supervisor has signalled and collected neither number in the receipt, has run no stop command
+    and has recorded no ending, and while the file is whole a later `stop` ends the run by the
+    receipt's numbers. (A monitor that fails its own start ends the stream it had begun, and its
+    beat program whenever a heartbeat fails, file or no file: neither number is ever in a receipt,
+    so no `stop` can signal one.) Says so in the log first, which
+    with the flush in leave_now is up to two waits of DISK_WAIT_S. With the real `leave` this never
+    returns, and that leave kills the supervisor's own process group, which ends a ps or a git of
+    its own still running (see leave_now); a stand in's return is passed on as None.
+
+    What the log line cannot promise: a removal that was asked for and not answered in time may
+    still land, in those two waits or after the supervisor is gone. The file is then gone with
+    nothing signalled, a later `stop` signals nothing and exits 8 saying so, and the app is for a
+    person to end. The line says both."""
+    say_within("verification: leaving without ending the run: the system has not told this supervisor that %s is"
+               " gone, so it has signalled neither process group in the receipt, serve's or the report stream's,"
+               " has collected neither, and has recorded no ending. They are left running. While that file is whole"
+               " `run_session.py stop` ends them by the numbers in the receipt, as it does for a supervisor that"
+               " was killed outright. If the removal this supervisor asked for lands after all, `stop` signals"
+               " nothing, exits 8 and says so, and they are then for a person to end"
                % recover_path(rdir))
     (leave or leave_now)()
     return None
@@ -834,7 +871,7 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
     rec = read_receipt(rdir)
     stop_exit, detail, stop_s = project_stop(rdir, rec, detail)
     wt = rec.get("worktree") or os.path.join(rdir, "worktree")
-    serve_exit, survivors = None, []
+    serve_exit, survivors, unread = None, [], None
     if proc is not None:
         signal_own(proc, signal.SIGTERM)
         if not exited(proc, stop_s):
@@ -852,15 +889,19 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
                     signal_own(proc, signal.SIGKILL)
                     wait_gone(proc.pid, stop_s)
                 survivors = LEFT[rdir] = live_members(proc.pid)
-            except v.VerificationError as e:
-                # ps failed, so whether the group is empty cannot be read. That is never read as
-                # empty: the group is killed while serve still pins its number, the ending says
-                # nothing was read, and the stop goes on to record it. Raised from here it would
-                # leave no ending with the file already gone, and a later `stop` signals nothing.
+            except (v.VerificationError, OSError, subprocess.SubprocessError) as e:
+                # ps failed, or could not be started at all (a fork refused at the process limit),
+                # so whether the group is empty cannot be read. That is never read as empty: the
+                # group is killed while serve still pins its number, the ending says nothing was
+                # read, and the stop goes on to record it. Raised from here it would leave no ending
+                # with the file already gone, and a later `stop` signals nothing. The run's egress
+                # is then never recorded as clean (see EGRESS_UNREAD).
                 signal_own(proc, signal.SIGKILL)
                 survivors = LEFT[rdir] = None
+                unread = proc.pid
                 detail = ((detail + "; " if detail else "") + "whether serve's group is empty could not be read, so"
-                          " it was killed unread: %s" % e)
+                          " it was killed unread: %s%s"
+                          % ("" if isinstance(e, v.VerificationError) else type(e).__name__ + ": ", e))
         else:  # a cut off on another thread collected serve first: its ending is the one recorded
             survivors = LEFT.get(rdir)
         serve_exit = collect(proc, COLLECT_S)
@@ -877,6 +918,10 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
     elif rec.get("serve_pgid"):
         survivors = None  # not signalled and not read: nothing here holds that number
     egress_field = finish_egress(rdir, rec, monitor, egress_why or EGRESS_RECOVERED, by_receipt=by_receipt)
+    if unread is not None and egress_field.get("verdict") == "clean":
+        # The monitor is still asked, which is what ends its stream, and what it SAW is kept: a
+        # verdict that is not clean, or one already unmeasured, stands with its own words.
+        egress_field = dict(egress_field, verdict="unmeasured", why=EGRESS_UNREAD % unread, measured_to=None)
     removed = remove_worktree(rec["repo"], wt)
     return record_ending(rdir, stopped_by=reason, stop_detail=detail,
                          serve_exit=serve_exit, stop_command_exit=stop_exit, worktree_removed=removed,
@@ -943,8 +988,11 @@ def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None, leave=None)
                 # and may take a moment longer to go: one still dying is not one that outlived it.
                 wait_gone(proc.pid, COLLECT_S)
                 survivors = live_members(proc.pid)
-            except v.VerificationError as e:  # ps failed: said, and the ending still recorded
-                survivors, detail = None, detail + "; whether serve's group is empty could not be read: %s" % e
+            except (v.VerificationError, OSError, subprocess.SubprocessError) as e:
+                # ps failed or could not be started: said, and the ending still recorded
+                survivors, detail = None, detail + ("; whether serve's group is empty could not be read: %s%s"
+                                                    % ("" if isinstance(e, v.VerificationError)
+                                                       else type(e).__name__ + ": ", e))
             # Seen to go, or killed with no way to see: collecting waits on the exit itself. Seen NOT
             # to go in KILLED_WAIT_S: one look, and no further wait.
             serve_exit = collect(proc, 0 if gone is False else COLLECT_S)
@@ -952,6 +1000,12 @@ def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None, leave=None)
             serve_exit, survivors = proc.returncode, LEFT[rdir]  # the stop had dealt with serve's group
             if survivors:  # they outlived the stop's own SIGKILL, and this cut off sends them nothing more
                 unsent.append("serve's process group (%s)" % proc.pid)
+            elif survivors is None:
+                # The stop's own words for this were a local of the thread that then hung, and were
+                # never written. Without them `stop` would say "stop_detail says why" of a detail
+                # that does not (the fifth #3807 review).
+                detail += ("; the stop had killed serve's process group (%s) without being able to list what was"
+                           " left of it, so whether anything of it is still running was not read" % proc.pid)
         elif proc is not None or rec.get("serve_pgid"):
             serve_exit, survivors = getattr(proc, "returncode", None), None
             unsent.append("serve's process group (%s)" % (proc.pid if proc is not None else rec["serve_pgid"]))
@@ -1205,6 +1259,15 @@ def supervise(rdir, repo_lock_fd, pipe_w, lifeline_fd=None):
         reason, detail = outcome or ("supervisor_error", None)
         do_stop(rdir, reason, proc=proc, detail=detail, monitor=monitor, by_itself=reason == "serve_exited",
                 egress_why="the supervisor stopped (%s) before the egress monitor existed" % reason)
+        if proc is not None:
+            # How serve ended, read off its handle now the stop is over, and said in the log. The
+            # stop collects serve last (see collect), and that is what stores the exit on the handle.
+            # It is asked for only once it is stored: a wait() on a serve nothing has collected
+            # would collect it here, outside collect and whatever the supervisor's file says. One
+            # line, given DISK_WAIT_S and no longer, so a log that hangs does not keep the supervisor.
+            serve_exit = proc.wait() if proc.returncode is not None else None
+            say_within("verification: serve (process %s) %s" % (proc.pid, "was not collected by this supervisor, so"
+                       " how it ended was not read" if serve_exit is None else "ended with %s" % serve_exit))
         finished.set()
     return 0
 

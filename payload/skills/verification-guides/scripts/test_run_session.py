@@ -1429,6 +1429,7 @@ class CutOffTests(RunFixture):
             # A later process: it knows nothing of what a stop inside this one did.
             stack.enter_context(mock.patch.dict(run_session.STOP_COMMAND, clear=True))
             stack.enter_context(mock.patch.dict(run_session.LEFT, clear=True))
+            stack.enter_context(mock.patch.object(run_session, "FORBIDDEN", set()))
             try:
                 run_session.stop(os.path.basename(rdir))
             except v.VerificationError as e:
@@ -2375,6 +2376,8 @@ class CutOffTests(RunFixture):
         rec = self.on_disk(rdir)
         self.assertEqual((rec["stopped_by"], rec["serve_exit"]), ("serve_exited", 0), rec)
         self.assertFalse(self.recoverable(rdir))
+        # And the supervisor read how serve ended off the handle it kept, and said it in its log.
+        self.assertIn("serve (process %s) ended with 0" % rec["serve_pid"], self.said.getvalue())
 
     def test_a_cut_off_after_the_stop_left_survivors_says_their_group_was_not_signalled(self):
         # The stop had dealt with serve's group, found processes that outlived its SIGKILL, collected
@@ -2391,6 +2394,178 @@ class CutOffTests(RunFixture):
         self.assertEqual(rec["serve_survivors"], [4194303])
         self.assertIn("not signalled", rec["stop_detail"])
         self.assertIn("serve's process group (%s)" % serve.pid, rec["stop_detail"])
+
+    # -- what the fifth #3807 review found --
+    #
+    # Every signal below is sent through signal_own to a child this process holds uncollected, or
+    # is recorded by a stand in and not sent.
+
+    def test_a_cut_off_ends_its_children_once_the_removal_was_confirmed_though_the_disk_then_hangs(self):
+        # The stop's first act had the system's yes: the file is gone. The disk then hangs, which is
+        # one way a stop comes to hang, and the cut off's own ask cannot be answered. The file cannot
+        # come back, so nothing but this supervisor can ever end the app: it must kill, not leave.
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        self.assertTrue(run_session.forbid_recovery(rdir))
+        self.assertFalse(self.recoverable(rdir))
+        left = threading.Event()
+        with self.short_disk_wait(), self.removal_never_returns():
+            cut = self.on_a_thread(run_session.cut_off_and_leave, rdir, "caller_gone", "its caller was gone",
+                                   proc=serve, monitor=MonitorHoldingAStream(rdir, stream),
+                                   limit_s=IN_PROCESS_LIMIT_S, leave=left.set)
+            self.assertTrue(left.wait(LEAVES_WITHIN_S), "the cut off never left")
+            cut.join(LEAVES_WITHIN_S)
+            self.assertFalse(cut.is_alive())
+        self.assertEqual(wait_group_empty(serve.pid, 5), [], "the supervisor left the app running with its file"
+                         " gone, so nothing would ever end it")
+        self.assertEqual(wait_group_empty(stream.pid, 5), [], "the supervisor left the report stream running with"
+                         " its file gone")
+        rec = self.on_disk(rdir)
+        self.assertEqual((rec["stopped_by"], rec["egress"]["verdict"], rec["serve_survivors"]),
+                         ("caller_gone", "unmeasured", []), rec)
+        self.assertNotIn("leaving without ending the run", self.said.getvalue())
+
+    def test_the_cut_offs_limit_ends_its_children_once_the_removal_was_confirmed_though_the_disk_then_hangs(self):
+        # The same, with the main thread stuck in its stop for good: the limit's own way out kills.
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        self.assertTrue(run_session.forbid_recovery(rdir))
+        let_go, left = self.stuck_in_its_stop(), threading.Event()
+        with self.short_disk_wait(), self.removal_never_returns():
+            cut = self.on_a_thread(run_session.cut_off_and_leave, rdir, "caller_gone", "its caller was gone",
+                                   proc=serve, monitor=MonitorHoldingAStream(rdir, stream), limit_s=0.05,
+                                   leave=left.set)
+            self.assertTrue(left.wait(LEAVES_WITHIN_S), "the supervisor never left")
+            self.assertEqual(wait_group_empty(serve.pid, 5), [], "the supervisor left the app running with its file"
+                             " gone")
+            self.assertEqual(wait_group_empty(stream.pid, 5), [], "the supervisor left the report stream running")
+            self.assertIsNone(self.on_disk(rdir)["stopped_at"])
+            self.assertNotIn("leaving without ending the run", self.said.getvalue())
+            let_go()  # the cut off itself now runs to its end, so nothing of it outlives the test
+            cut.join(IN_PROCESS_LIMIT_S)
+            self.assertFalse(cut.is_alive())
+
+    def test_a_removal_is_remembered_only_until_the_file_is_made_again(self):
+        # The memory is sound because one thing alone makes the file, and that thing forgets.
+        rdir = self.a_run_on_disk(recoverable=True)
+        self.assertTrue(run_session.forbid_recovery(rdir))
+        run_session.allow_recovery(rdir)
+        self.assertTrue(self.recoverable(rdir))
+        with self.removal_refused():
+            self.assertFalse(run_session.forbid_recovery(rdir), "a removal confirmed before the file was made again"
+                             " was taken for a removal of the new file")
+        self.assertTrue(self.recoverable(rdir))
+
+    def unread_ways(self):
+        """The two ways a stop fails to read what is left of serve's group: a ps that ran and failed,
+        and a ps that could not be started at all, as a fork refused at the process limit is."""
+        def ps_fails(pgid):
+            v.fail("ps-failed", "ps could not list processes: a stand in")
+
+        def ps_cannot_start(pgid):
+            raise OSError(errno.EAGAIN, "a stand in for a fork that was refused")
+
+        return (("ps failed", ps_fails), ("ps could not be started", ps_cannot_start))
+
+    def test_a_stop_whose_ps_cannot_be_started_still_ends_serves_group_and_records_its_ending(self):
+        # Raised out of the stop, that left no ending with the file already gone and serve's group
+        # asked to end and never killed: a later `stop` signals nothing.
+        serve = self.child()  # ignores SIGTERM, so the stop has to kill it
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        monitor = MonitorThatSaysClean()
+        with mock.patch.object(run_session, "live_members", dict(self.unread_ways())["ps could not be started"]):
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=monitor)
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertEqual((rec["stopped_by"], rec["serve_exit"]), ("stop", -signal.SIGKILL), rec)
+        self.assertIsNone(rec["serve_survivors"], "a group that could not be listed was recorded as empty")
+        self.assertIn("could not be read", rec["stop_detail"])
+        self.assertIn("a stand in for a fork that was refused", rec["stop_detail"])
+        self.assertEqual(wait_group_empty(serve.pid), [], "serve's group outlived a stop that could not list it")
+        rec, raised = self.stop_from_another_process(rdir)
+        self.assert_says_serve_unconfirmed(raised, serve.pid)
+
+    def test_a_cut_off_whose_ps_cannot_be_started_still_records_its_ending(self):
+        serve = self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        with mock.patch.object(run_session, "live_members", dict(self.unread_ways())["ps could not be started"]):
+            rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished",
+                                      proc=serve)
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertEqual((rec["stopped_by"], rec["serve_exit"]), ("caller_gone", -signal.SIGKILL), rec)
+        self.assertIsNone(rec["serve_survivors"])
+        self.assertIn("could not be read", rec["stop_detail"])
+        self.assertIn("a stand in for a fork that was refused", rec["stop_detail"])
+
+    def a_stop_that_could_not_read_serves_group_records_no_clean_verdict(self, way):
+        serve = self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        monitor = MonitorThatSaysClean()
+        with mock.patch.object(run_session, "live_members", dict(self.unread_ways())[way]):
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=monitor)
+        self.assertEqual(monitor.asked, 1, "the stop did not go on to settle the monitor")
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+        self.assertIn("could not read what was left of serve's process group (%s)" % serve.pid, rec["egress"]["why"])
+
+    def test_a_stop_whose_ps_failed_never_records_a_clean_egress_verdict(self):
+        # On main a ps that failed in the stop left no ending, and the later `stop` wrote unmeasured,
+        # which the merge check refuses. A stop that now records its ending must not turn that run
+        # into one that reads clean: nothing listed what was left of the app.
+        self.a_stop_that_could_not_read_serves_group_records_no_clean_verdict("ps failed")
+
+    def test_a_stop_whose_ps_could_not_be_started_never_records_a_clean_egress_verdict(self):
+        self.a_stop_that_could_not_read_serves_group_records_no_clean_verdict("ps could not be started")
+
+    def test_a_stop_that_could_not_read_serves_group_keeps_a_verdict_that_is_not_clean(self):
+        # What the monitor saw is never downgraded by what the stop could not read.
+        class MonitorThatSawSomething(MonitorThatSaysClean):
+            def finish(self):
+                return {"verdict": "not-clean", "why": "a stand in that saw a connection", "monitor": "a stand in"}
+
+        serve = self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        with mock.patch.object(run_session, "live_members", self.unread_ways()[0][1]):
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=MonitorThatSawSomething())
+        self.assertEqual((rec["egress"]["verdict"], rec["egress"]["why"]),
+                         ("not-clean", "a stand in that saw a connection"), rec["egress"])
+
+    def test_a_cut_off_after_a_stop_that_killed_serves_group_unread_says_so(self):
+        # The stop could not list serve's group, killed it unread, collected serve and then hung. Its
+        # own words for that were never written, so the cut off's receipt has to carry them.
+        serve = self.child()
+        os.killpg(serve.pid, signal.SIGKILL)  # still this process's own uncollected child
+        serve.wait()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid)
+        self.addCleanup(run_session.LEFT.pop, rdir, None)
+        run_session.LEFT[rdir] = None
+        with self.no_signal_reaches(serve.pid) as asked:
+            rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished", proc=serve)
+        self.assertEqual(asked, [])
+        self.assertIsNone(rec["serve_survivors"])
+        self.assertIn("serve's process group (%s)" % serve.pid, rec["stop_detail"])
+        self.assertIn("without being able to list", rec["stop_detail"])
+        rec, raised = self.stop_from_another_process(rdir)
+        self.assert_says_serve_unconfirmed(raised, serve.pid)
+        self.assertIn("without being able to list", str(raised))
+
+    def test_a_supervisor_whose_only_child_was_already_collected_records_its_ending(self):
+        # The report stream of a monitor that failed its own start is collected then and kept on the
+        # monitor. A supervisor holding nothing else has no number to signal or collect, so nothing
+        # to leave for, whatever its file says.
+        serve, stream = self.child(), self.child()
+        os.killpg(stream.pid, signal.SIGKILL)  # still this process's own uncollected child
+        stream.wait()
+        self.assertTrue(run_session.holds_a_child(serve, None))
+        self.assertTrue(run_session.holds_a_child(None, MonitorHoldingAStream(self.fake, serve)))
+        self.assertFalse(run_session.holds_a_child(stream, None), "a child already collected read as held")
+        self.assertFalse(run_session.holds_a_child(None, MonitorThatSaysClean()))
+        rdir = self.a_run_on_disk(recoverable=True)  # a stream that failed its start is not in the receipt
+        monitor, left = MonitorHoldingAStream(rdir, stream), []
+        with self.removal_refused(), self.no_signal_reaches(stream.pid) as asked:
+            rec = run_session.do_stop(rdir, "stop", monitor=monitor, leave=lambda: left.append(True))
+        self.assertEqual((left, asked), ([], []), "a supervisor with no child left to hold left without an ending")
+        self.assertEqual((rec["stopped_by"], monitor.asked), ("stop", 1), rec)
 
     # -- the rest of what the second #3807 review found --
 
