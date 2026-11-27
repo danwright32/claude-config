@@ -544,12 +544,21 @@ if counts["assignment"] > 10 * N:
 if counts["binds"]:
     wrong.append("what else binds a name was asked %d times of the %d names whose value is not worked out"
                  % (counts["binds"], N))
+# Where the text's commands cannot be read, what a body does to a name is not known, so every
+# name asked about is read both ways. An empty answer there would be "none is left empty",
+# which nothing measured (L11).
+class Unread:
+    sets = False
+got = gate.FunctionValues.both_ways(None, Unread(), {"kept"})
 print("; ".join(wrong) or "ok")
 print("counted assignment=%d binds=%d" % (counts["assignment"], counts["binds"]))
+print("unread %s" % ("ok" if got == {"kept"} else "of the one name asked about, %r came back" % (sorted(got),)))
 PY
 counted="$(python3 -B "$T/counted.py" "$DIR/slack_drafts_only_gate.py" "$FV" 2>&1)"
 check "reading a function's values does not grow with the square of a script's functions" "$(printf '%s\n' "$counted" | head -n 1)"
 echo "  $(printf '%s\n' "$counted" | grep '^counted ' || echo 'no count was printed')"
+unread="$(printf '%s\n' "$counted" | grep '^unread ' || echo 'unread no answer was printed')"
+check "a name in a text whose commands cannot be read is read both ways" "${unread#unread }"
 
 echo
 

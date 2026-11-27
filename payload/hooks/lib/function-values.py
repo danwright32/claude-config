@@ -86,7 +86,9 @@ class Kept:
             most = b if most is None or b > most else most
             self.reach.append(most)
         self.sets = None  # {name: [(start, end, value as written)]}, False where the text is not read
-        self.bare = {}  # {name: [(start, end)]} of each bare `local NAME` in a body, filled with sets
+        # {name: [(start, end)]} of each declaration in a body that gives the name no value (a bare
+        # local, declare or typeset, or the name beside another in one), filled with sets
+        self.bare = {}
         self.both = set()  # the names a declaration read both ways declares (declared), filled with sets
         self.empty = ()  # the names read as empty in the reading under way (empty_reason)
         self.values = {}
@@ -140,9 +142,11 @@ NO_FILE = "/dev/null/empty-word"
 
 
 def body_sets(judge, k):
-    """{name: [(start, end, value as written)]} for each NAME=value or local NAME=value command in
-    a function body of the text being read, in the order written, or False where the text cannot
-    be read. One pass over the text's commands, made the first time a name is asked about."""
+    """{name: [(start, end, value as written)]} for each value a command in a function body of
+    the text being read gives a name, in the order written, or False where the text cannot be
+    read: a NAME=value, a local, declare or typeset NAME=value with no option, and each
+    NAME=value of a declaration of several names. One pass over the text's commands, made the
+    first time a name is asked about, which fills k.bare and k.both as well (declared)."""
     if k.sets is None:
         ctx = judge.shell
         try:
@@ -388,10 +392,11 @@ def both_ways(judge, k, names):
     """Those of names read both ways (module docstring): one a function body of the text gives an
     empty value (`kept=`, `local kept=""`), one a declare or typeset declares there, bare or with
     a value, and one declared in a declaration of several names that gives one of them a value
-    (declared)."""
+    (declared). All of them where the text's commands cannot be read, since what a body does to
+    a name is then not known."""
     sets = body_sets(judge, k)
     if sets is False:
-        return set()
+        return set(names)
     return {n for n in names if n in k.both or any(w in EMPTY for _, _, w in sets.get(n, ()))}
 
 
