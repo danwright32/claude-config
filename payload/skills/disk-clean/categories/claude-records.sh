@@ -63,7 +63,13 @@
 #                                counted with their size in the kind's note rather than as rows, so the
 #                                kind accounts for every home entry named for Claude (#3235: the work
 #                                MacBook held twelve such folders on 2026-11-19, 48 MB, and only some
-#                                were rows)
+#                                were rows); ~/.cache/claude* (this config's suite timings and the
+#                                like) is counted with them
+#   every other entry in ~/.claude besides projects, state and file-history: the installed config,
+#                                Claude Code's settings and its own small folders (uploads, backups,
+#                                telemetry, debug output), never offered and counted in the note
+#                                (#3235: 18 MB of small folders, besides the config, on the personal
+#                                MacBook on 2026-11-26, which no kind sized)
 set -uo pipefail
 HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
 . "$HERE/../scan-lib.sh" || { echo "unmeasured: scan-lib.sh is missing beside the categories folder"; exit 0; }
@@ -369,9 +375,17 @@ do_scan() {
   done
   # Every other home entry named for Claude, which the note counts (the header says what they are).
   : > "$DCS_WORK/rec.home"
-  for e in "$HOME"/.claude-* "$HOME"/.claude.*; do
+  for e in "$HOME"/.claude-* "$HOME"/.claude.* "$HOME"/.cache/claude*; do
     { [ -e "$e" ] || [ -L "$e" ]; } || continue
     grep -qxF -- "$e" "$DCS_WORK/rec.paths" || printf '%s\n' "$e" >> "$DCS_WORK/rec.home"
+  done
+  # Every other entry in ~/.claude, which the note counts too: transcripts are other kinds' and state
+  # and file history are rows or the state note, so those three are left out.
+  : > "$DCS_WORK/rec.code"
+  for e in "$HOME"/.claude/* "$HOME"/.claude/.[!.]* "$HOME"/.claude/..?*; do
+    { [ -e "$e" ] || [ -L "$e" ]; } || continue
+    case "${e##*/}" in projects|state|file-history) continue ;; esac
+    printf '%s\n' "$e" >> "$DCS_WORK/rec.code"
   done
   dcs_measure "$DCS_WORK/rec.paths" | sort -t "$S" -k2,2nr > "$DCS_WORK/rec.sized"
   local p kib size ident
@@ -382,6 +396,7 @@ do_scan() {
   local notes=""
   [ ! -s "$DCS_WORK/rec.rest" ] || notes="$(rec_count "$DCS_WORK/rec.rest" "other entries in ~/.claude/state") state that Claude Code and this config's hooks read as they run, never removed here."
   [ ! -s "$DCS_WORK/rec.home" ] || notes="${notes:+$notes }$(rec_count "$DCS_WORK/rec.home" "other files and folders in the home folder named for Claude Code or this config") the sync's folders and logs, other hooks' records and Claude Code's settings, never removed here."
+  [ ! -s "$DCS_WORK/rec.code" ] || notes="${notes:+$notes }$(rec_count "$DCS_WORK/rec.code" "other files and folders in ~/.claude") the installed config, Claude Code's settings and its own small folders (uploads, backups, telemetry, debug output and the like), never removed here."
   [ -z "$notes" ] || dcs_note "$notes"
 }
 
