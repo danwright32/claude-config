@@ -24,6 +24,35 @@
 #   cs_may_name <command> <case pattern> [<case pattern> ...]
 #     returns 0 when the command may name a word matching any pattern (match case insensitively by
 #     writing each letter as a bracket, *[pP][rR]*), 1 when it cannot
+#
+#   cs_cut <parsed payload>
+#     sets CS_COMMAND to the command, everything before the first unit separator of what
+#     ps_parse_payload printed, the same text ${parsed%%$'\x1f'*} gives; returns 1 when the cut
+#     could not be made, and the caller then reads the command properly
+#
+# The cut is made by read, as ps__read splits its records (lib/push-scope.sh), never by ${x%%y*},
+# for the same reason: on bash 3.2 that pattern removal is quadratic too, measured at 15 s of
+# processor time for a 306 KB command in require-issue-fields.sh, past that hook's 15 s limit, and at
+# 0.05 s by read on 431 KB (review of #3690).
+
+cs_cut() {
+  local rest=""
+  CS_COMMAND=""
+  case "$1" in
+    *$'\x1f'*) ;;
+    # Nothing to cut at: the whole text is the command, as the pattern removal gave it.
+    *) CS_COMMAND="$1"; return 0 ;;
+  esac
+  # The here string ends in a line break of its own, which the last field takes, and IFS holds no
+  # space, tab or line break, so the first field is every byte before the separator, kept as it is.
+  IFS=$'\x1f' read -r -d '' CS_COMMAND rest <<< "$1"
+  # read returns 1 at the end of its input, which is every time here, so it is judged by what it
+  # left: the two fields put back must be the text it was given. A read that could not run (no file
+  # for the here string) leaves both empty, and an empty command is one the screen would answer no to.
+  [ "$CS_COMMAND"$'\x1f'"$rest" = "$1"$'\n' ] && return 0
+  CS_COMMAND=""
+  return 1
+}
 
 cs_may_name() {
   local text pat

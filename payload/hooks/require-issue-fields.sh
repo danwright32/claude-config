@@ -54,15 +54,17 @@ if . "$HERE/lib/push-scope.sh" 2>/dev/null; then
     esac
   # Every command this gate judges runs gh issue or gh pr, so one whose letters spell neither, as the
   # reader reads them, leaves here before python3 starts (claude-config#3690). That start, on every
-  # Bash call, was most of this hook's 0.11 s of processor time and part of what took the gates on a
+  # Bash call, was most of this hook's 0.09 s of processor time and part of what took the gates on a
   # read only call past their limits while the Mac was busy. The python3 half printed nothing for
   # every such command (test-require-issue-fields.sh, #3690). It leaves only while python3 and the
   # gate's files are there: without them the python3 half below says the gate did not run, on every
-  # call, as it did before, rather than only on the calls that name issue or pr.
+  # call, as it did before, rather than only on the calls that name issue or pr. The command is cut
+  # from the parse by cs_cut, never by ${parsed%%...}, which on bash 3.2 took this hook past its limit
+  # on a command of 300 KB (test-require-issue-fields.sh); a cut that fails reads it properly.
   elif command -v python3 >/dev/null 2>&1 && [ -f "$HERE/issue_field_gate.py" ] && [ -f "$HERE/gh_issue_scan.py" ] \
       && [ -f "$HERE/lib/shell-words.py" ] \
-      && . "$HERE/lib/command-screen.sh" 2>/dev/null && declare -F cs_may_name >/dev/null \
-      && ! cs_may_name "${parsed%%$'\x1f'*}" '*[iI][sS][sS][uU][eE]*' '*[pP][rR]*'; then
+      && . "$HERE/lib/command-screen.sh" 2>/dev/null && declare -F cs_may_name cs_cut >/dev/null \
+      && cs_cut "$parsed" && ! cs_may_name "$CS_COMMAND" '*[iI][sS][sS][uU][eE]*' '*[pP][rR]*'; then
     exit 0
   fi
 fi

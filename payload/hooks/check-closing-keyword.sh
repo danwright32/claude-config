@@ -116,7 +116,7 @@ cwd="${parsed#*$'\x1f'}"
 
 # A command whose letters spell neither pr nor commit, as the reader reads them, runs neither gh pr
 # nor git commit, so it leaves here before the reader's python3 starts (claude-config#3690). That
-# start, on every Bash call, was 0.09 s of this hook's processor time and part of what took the gates
+# start, on every Bash call, was 0.05 s of this hook's 0.07 s of processor time and part of what took the gates
 # on a read only call past their limits while the Mac was busy. The answer is the one the reader
 # gave: is_target stayed 0 for every such command (test-check-closing-keyword-hook.sh, #3690). A
 # library that cannot load is no answer, so then the reader runs as before.
