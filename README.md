@@ -2295,7 +2295,10 @@ only where this Mac's dev update registry names an announcements channel for the
 - **The merge gate holds him to a yes (R9).** `hooks/require-changelog-tag.sh` reads the issues a
   pull request closes, each with its milestone's description and open issues, in the one GraphQL
   read the announce path already made. When the pull request does not carry `changelog/announce`
-  and closes the last open issue of a milestone whose line says yes, the merge is denied, saying
+  and closes the last open issue of a milestone whose line says yes, or whose title this Mac's
+  record holds his yes about as his last yes or no whatever the line says (the line is text on
+  GitHub that a command or a hand can drop or alter, and the helper writes it from his answer
+  about whatever feature the plan names; the record is the guarded store), the merge is denied, saying
   either to label it with wording he approved or to ask him with a picker whether it is still
   being announced, and giving that picker's metadata (the same as above, with `"milestone":
   <number>` and the milestone's title as the feature). It is let through when the record holds an

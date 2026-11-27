@@ -1927,12 +1927,16 @@ def read_answers(payload):
     return notes
 
 
-def _last_decided(entries, found, key, fkey, milestone=None):
+def _last_decided(entries, found, key, fkey, milestone=None, answers=None):
     """Dan's last answer about announcing the feature fkey of repository key, as the record's line,
-    or None: with milestone, only an answer in a picker naming that milestone's number."""
+    or None: with milestone, only an answer in a picker naming that milestone's number, and with
+    answers, only a line whose answer is one of them (his last yes or no, passing over an answer
+    that decides nothing)."""
     best = None
     for e in list(entries or []) + list(found):
         if e.get("kind") != "decided" or e.get("repo") != key or _feature_key(e.get("feature")) != fkey:
+            continue
+        if answers is not None and e.get("answer") not in answers:
             continue
         if milestone is not None and (e.get("milestone") != milestone or isinstance(e.get("milestone"), bool)):
             continue
@@ -2090,7 +2094,10 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
     each with its milestone's number, title, description and open issues. A milestone of this
     repository is FINISHED by the pull request when every issue still open in it is one the pull
     request closes, which is also so when none is open. It is owed an announcement when its
-    description says yes (milestone_says), unless the record holds an announcement let through
+    description says yes (milestone_says) OR this Mac's record holds yes as his last yes or no
+    about the milestone's title, whatever the description says (the line is what the helper
+    writes, and a command or a hand can drop or alter it; the record is the guarded store, so a
+    line cannot hide a yes the record holds), unless the record holds an announcement let through
     for it (a `used` line naming the milestone: the pull requests are given back in `announced`,
     because that line says the gate let one through and never that GitHub merged it, so the gate
     asks GitHub), or Dan's last answer in a picker naming that milestone is NOT_ANNOUNCING and is
@@ -2144,10 +2151,11 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
         stone = stones.setdefault(number, {"number": number, "title": title, "says": milestone_says(said),
                                            "count": count, "open": still, "closes": set()})
         stone["closes"].add(issue)
-    # More open issues than the answer lists cannot all be ones this pull request closes.
-    owed = [s for s in stones.values()
-            if s["says"] == "yes" and s["count"] <= len(s["open"]) and s["open"] <= s["closes"]]
-    if not owed:
+    # More open issues than the answer lists cannot all be ones this pull request closes. Every
+    # milestone it finishes is looked up on the record, whatever its line says: the line is text on
+    # GitHub that a command or a hand can drop or alter, and the record is the guarded store.
+    finished = [s for s in stones.values() if s["count"] <= len(s["open"]) and s["open"] <= s["closes"]]
+    if not finished:
         return out
     short = []
     if payload is None:
@@ -2157,10 +2165,17 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
         found, untaken, unlooked, entries, unreadable = _harvest_decisions(
             payload if isinstance(payload, dict) else {}, out["notes"], key, short)
     if entries is None:
-        return unread(unreadable + ", so whether an announcement was let through for the milestone this pull request "
-                      "finishes, or Dan declined one, could not be told")
+        return unread(unreadable + ", so whether Dan said yes to announcing the milestone this pull request finishes, "
+                      "an announcement was let through for it, or he declined one, could not be told")
     why, how, behind = [], [], []
-    for s in sorted(owed, key=lambda s: s["number"]):
+    for s in sorted(finished, key=lambda s: s["number"]):
+        # The milestone says yes when its line does, or when the record holds yes as his last yes
+        # or no about its title, whatever the line says: a line that was dropped, altered, or
+        # written from his answer about another feature cannot hide a yes the record holds. An
+        # answer of his that decides nothing does not take a yes off the record.
+        held = _last_decided(entries, found, key, _feature_key(s["title"]), answers=("yes", "no"))
+        if s["says"] != "yes" and (held is None or held.get("answer") != "yes"):
+            continue
         last = _last_decided(entries, found, key, _feature_key(s["title"]), s["number"])
         # His decline naming the milestone counts only while it is also his last answer about the
         # feature (the milestone's title) in ANY picker. A picker at feature discovery names no
@@ -2186,6 +2201,12 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
             continue
         said = ("it closes the last open issue of the milestone " + json.dumps(s["title"]) + " (number " + str(s["number"])
                 + "), whose description says Dan said yes to announcing it to agents")
+        if s["says"] != "yes":
+            said = ("it closes the last open issue of the milestone " + json.dumps(s["title"]) + " (number "
+                    + str(s["number"]) + "), whose description does not say Dan said yes to announcing it to agents, "
+                    "while this Mac's record holds his `" + (_text(held.get("said")) or ANNOUNCE_IT) + "`"
+                    + (" of " + _day(held.get("answered")) if _day(held.get("answered")) else "")
+                    + " as his last yes or no about announcing it, and the record is what counts")
         if let_through:
             said += (". This Mac's record holds " + _pull_requests(let_through) + " as let through with an announcement "
                      "for that milestone, and GitHub says "

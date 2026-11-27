@@ -3356,7 +3356,12 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   a newer `Announce it` and clear every later merge finishing that milestone. His decline
   clears it only when the call read every noted session: with any left unread and nothing else to
   clear the milestone, the answer is unread, since a newer `Announce it` there would be his last
-  answer (decided by the main session on the stricter side, 2026-11-26). The line has
+  answer (decided by the main session on the stricter side, 2026-11-26). The line alone does not
+  decide whether a milestone says yes: the gate also counts a milestone whose title the record
+  holds his yes about as his last yes or no, so a line that was dropped, altered, or written from
+  his answer about another feature cannot hide a yes the record holds. What it costs: every merge
+  that finishes a milestone in a repository that announces reads the record, and a record that
+  cannot be read refuses that merge as what could not be told. The line has
   one writer and one reader, both in the library, and holds no name: the answer, his option's words
   and the day in US Eastern time, so the helper never writes a work app's name into a description.
   What counts as his yes or no is every rule of an approval that has a meaning without a file, and

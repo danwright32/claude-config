@@ -1754,6 +1754,43 @@ T="$WORK/f-newer-other.jsonl"; new_talk "$T"
 talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
 talk "$T" decide acme/widget "Hand over" "Announce it"
 check "still possible #3669 A: a newer Announce it about another feature leaves his decline standing" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")" "$T")" == "clear|"* ]] && echo ok || echo no)"
+# The milestone's line is text on GitHub that any command or a hand in its page can drop or alter,
+# and the helper writes it from his answer about whatever feature the plan names. The record is the
+# guarded store. So a milestone says yes when its line does OR the record holds yes as his last
+# yes or no about its title, whatever the line says (review of #3669, medium 4 and 5).
+SAYS_NO="Rework the hand back.
+
+Announce to agents: no (Dan answered \"Not announcing\" on 2026-11-20)"
+STORE_USED="$WORK/store-f-record-yes"
+T="$WORK/f-record-yes.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Old thing" "Not announcing"
+talk "$T" decide acme/widget "Hand back" "Announce it"
+r="$(finishes "$STORE_USED" "$(closing "Rework the hand back." "12" "12")" "$T")"
+check "R9 #3669 C a milestone whose line was removed is owed when his last answer about its title is yes, read by the hook that asks" "$([[ "$r" == "owed|"* ]] && echo ok || echo "$r")"
+check "R9 #3669 C and the refusal says the yes is the record's and that the description does not say so" "$([[ "$r" == *"whose description does not say Dan said yes to announcing it to agents, while this Mac's record holds his "'`Announce it`'*"as his last yes or no about announcing it"* && "$r" != *"whose description says Dan said yes"* ]] && echo ok || echo "$r")"
+r="$(finishes "$STORE_USED" "$(closing "Rework the hand back." "12" "12")")"
+check "R9 #3669 C the same of the record alone, once his answer is on it" "$([[ "$r" == "owed|"*"whose description does not say"* ]] && echo ok || echo "$r")"
+r="$(finishes "$STORE_USED" "$(closing "$SAYS_NO" "12" "12")")"
+check "R9 #3669 C a line saying no, written from his decline about another feature, does not hide the record's yes about this one" "$([[ "$r" == "owed|"*"whose description does not say"* ]] && echo ok || echo "$r")"
+r="$(finishes "$STORE_USED" "$(closing "Rework.
+
+Announce to agents: not asked yet" "12" "12")")"
+check "R9 #3669 C nor does a line saying he was not asked" "$([[ "$r" == "owed|"* ]] && echo ok || echo "$r")"
+check "still possible #3669 C: a milestone of another title, whose line does not say yes, finishes under any label beside that record" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_NO" "12" "12" | sed 's/Hand back/Old thing/')")" == "clear|"* ]] && echo ok || echo no)"
+check "R9 #3669 C a line saying yes with nothing on the record is owed, as before" "$([[ "$(finishes "$EMPTY" "$(closing "$SAYS_YES" "12" "12")")" == "owed|"*"whose description says Dan said yes"* ]] && echo ok || echo no)"
+# His decline naming the milestone, after that yes, is his last answer about it: clear, line or no line.
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+check "still possible #3669 C: his later Not announcing naming the milestone clears it, whatever the line says" "$([[ "$(finishes "$STORE_USED" "$(closing "Rework the hand back." "12" "12")" "$T")" == "clear|"* && "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")")" == "clear|"* ]] && echo ok || echo no)"
+# An answer after his yes that decides nothing does not take the yes off the record.
+STORE_USED="$WORK/store-f-record-yes-words"
+T="$WORK/f-record-yes-words.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Announce it"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "typed:maybe, ask me later"
+r="$(finishes "$STORE_USED" "$(closing "Rework the hand back." "12" "12")" "$T")"
+check "R9 #3669 C a later answer that decides nothing leaves his yes standing: owed with the line removed" "$([[ "$r" == "owed|"* ]] && echo ok || echo "$r")"
+# A record that cannot be read cannot say he gave no yes, so a finishing merge is unread whatever the line says.
+mkdir -p "$WORK/store-f-junk-c/record.jsonl"
+check "R9 #3669 C with the record unreadable, a milestone whose line does not say yes is unread, never clear" "$([[ "$(finishes "$WORK/store-f-junk-c" "$(closing "Rework the hand back." "12" "12")")" == "unread|"* ]] && echo ok || echo no)"
 # A decline clears the merge only when the call that leans on it read every noted session (decided by
 # the main session on the stricter side, 2026-11-26). A newer Announce it of his, in a session the
 # call left unread, would be his last answer, so a decline with sessions left unread is unread,
@@ -1762,12 +1799,16 @@ check "still possible #3669 A: a newer Announce it about another feature leaves 
 # finishes_short <store> <GitHub's answer> <transcript> [sessions one call reads back] [late]: the same
 # question asked as a hook asks in session s1, in process, with that many sessions read back in place
 # of the library's own number, and with `late` the call's time already run out when the first noted
-# session comes up: "<state>|<the pull requests given back as announced>|<why> <how>".
+# session comes up: "<state>|<the pull requests given back as announced>|<why> <how>". NO_NODE=1 has
+# the call find no node, so the check of whether he could read a picker cannot run.
 finishes_short() {
-  ANNOUNCE_APPROVALS_DIR="$1" python3 -B -c 'import importlib.util, json, sys, time
+  ANNOUNCE_APPROVALS_DIR="$1" python3 -B -c 'import importlib.util, json, os, shutil, sys, time
 spec = importlib.util.spec_from_file_location("announce_approval", sys.argv[1])
 lib = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(lib)
+if os.environ.get("NO_NODE") == "1":
+    # The check of whether he could read a picker runs under node: with none found it cannot run.
+    shutil.which = lambda *a, **k: None
 if sys.argv[4]:
     lib.NOTED_SESSIONS = int(sys.argv[4])
 if sys.argv[5] == "late":
