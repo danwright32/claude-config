@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
+import { unreadAsk } from './request.ts'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
@@ -431,6 +432,16 @@ const pickerTurnEnded = async ($: EngineInterface): Promise<void> => {
   }
 }
 
+/**
+ * #3321: a picker that came back uncounted because Dan could not have read it whole (request.ts,
+ * unreadAsk) is said in the debug log, so a box that does not show again after it can be traced.
+ * Any other picker that is no answer (dismissed, failed, closed while he was away) says nothing.
+ */
+const sayUnreadAsk = ($: EngineInterface, call: unknown): void => {
+  const why = unreadAsk(call)
+  if (why !== undefined) debug($, `a picker was asked that Dan could not have read whole (${why}), so the answer that came back is not counted as an answer of his and no picked work begins from it`)
+}
+
 /** Says on the waiting answer why work after it could not be told, for the refusal that reads it. */
 const pickerUnread = async ($: EngineInterface, why: string): Promise<void> => {
   for (let i = 0; i < 10; i++) {
@@ -761,7 +772,8 @@ export const register: Register = on => {
     const r = await next(e)
     if (e.agentId !== undefined || e.tool === TOOL) return r
     if (e.tool === 'AskUserQuestion') {
-      if (answered(r)) await $.state.set(pickerRef, {})
+      if (answered(r, e)) await $.state.set(pickerRef, {})
+      else sayUnreadAsk($, e)
       return r
     }
     // Nor is a call Claude Code marked read only: `isReadOnly` is on the result "only when the tool

@@ -2015,6 +2015,36 @@ test("a test that cannot be read is run once for each tool's name in a turn, not
   expect(asksOf(runs, 'Edit')).toBe(2)
 })
 
+// #3321: Dan's answer covers only text he could read. Claude Code's dialog cuts a long question and
+// draws some text as nothing, so a picker whose call fails mod-kit's one check of text a person
+// approves in a picker (askFault, hooks/mod-kit/shown.ts) is no answer here, whatever came back:
+// no picked work begins from it. tools/check-mod-shared-parts.sh holds every mod that reads a
+// picker's answers to that check.
+const TOO_LONG = `Which follow up should be done now? ${'Fix the count, and the total beside it. '.repeat(40)}`
+const UNREAD_PICKERS: [string, Record<string, unknown>, RegExp][] = [
+  ['whose question is longer than the dialog shows whole', { questions: [{ ...PICKER.questions[0], question: TOO_LONG }] }, /The question would not reach Dan as written: it is \d+ UTF-16 code units/],
+  ['with an answer whose description is longer than the dialog shows whole', { questions: [{ ...PICKER.questions[0], options: [{ label: 'Fix the count', description: TOO_LONG }, { label: 'Leave it', description: '' }] }] }, /Field "options" of the question would not reach Dan as written/],
+  ['sent with a field beside its questions that is longer than the dialog shows whole', { note: TOO_LONG }, /Field "note" would not reach Dan as written/],
+]
+for (const [how, more, said] of UNREAD_PICKERS)
+  test(`a picker ${how} is no answer, whatever came back: work after it is not picked work, and the debug log says why (#3843, #3321)`, withCount, async ($, on) => {
+    const { w, logs } = world(on)
+    await start($)
+    await askedAndShown($, 'Run the monthly sync', 'b1')
+    await picks(w, $, 'q1', PICKED, more)
+    await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
+    expect(await requests($)).toBe(1)
+    const again = await box($, MORE, 'b2')
+    expect(again.deny).toMatch(/already shown for this request; it shows again once Dan has asked for something new/)
+    expect(again.deny).not.toMatch(/since his answer/)
+    expect(logs.join('\n')).toMatch(said)
+    expect(logs.join('\n')).toMatch(/so the answer that came back is not counted as an answer of his/)
+    // The control: the same picker as he could read it whole is an answer, and work after it counts.
+    await picks(w, $, 'q2')
+    await does(w, $, 'Edit', 'e2', { file_path: '/repo/a.ts' })
+    expect(await requests($)).toBe(2)
+  })
+
 test('a message Dan types after a picker answer is the request: the answer left waiting opens nothing more (#3843)', withKit, async ($, on) => {
   const { w } = world(on)
   await start($)

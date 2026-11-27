@@ -1,4 +1,5 @@
 import type { GoalBoxPicker } from '../types/index.d.ts'
+import { askFault } from './mod-kit/shown.ts'
 
 // What counts as Dan asking for something, beyond a message he types (claude-config#3843). Pure, so
 // every rule is tested without a session.
@@ -62,6 +63,20 @@ export const workRead = (r: { exitCode: number; stdout: string; stderr: string }
 }
 
 /**
+ * Why a picker's call would not have reached Dan as written, or undefined when it would (#3321). His
+ * answer covers only text he could read, and Claude Code's dialog cuts a long question and draws
+ * some characters and markup as nothing. Judged by mod-kit's one check of text a person approves in
+ * a picker (askFault, the copy at hooks/mod-kit/shown.ts): every text the call hands the dialog, in
+ * whatever field. This mod asks no picker and refuses none, so a picker that fails is only left
+ * uncounted: no picked work begins from it. A call that is no object is judged as one with nothing
+ * in it, which has no fault, and its result then decides as before.
+ */
+export const unreadAsk = (call: unknown): string | undefined => {
+  const unread = askFault(typeof call === 'object' && call !== null ? (call as Record<string, unknown>) : {})
+  return unread === undefined ? undefined : `${unread.what} would not reach Dan as written: ${unread.fault}`
+}
+
+/**
  * Whether an AskUserQuestion call came back with an answer of Dan's, as Claude Code's dialog hands
  * it to a tool.call hook: a result holding `answers` with at least one that is not empty, or a
  * `response` that is not empty, which is what he typed in place of choosing (Claude Code's typings
@@ -70,8 +85,13 @@ export const workRead = (r: { exitCode: number; stdout: string; stderr: string }
  * `response` was read from the typings and not measured in a session. A picker he dismissed (a
  * refusal), one that failed, one that closed by itself while he was away (`afkTimeoutMs`), and any
  * result not in that shape are no answer.
+ *
+ * Nor is any answer to a picker he could not read whole (unreadAsk, #3321): the call is judged
+ * first, and what came back is read only for a call that passes. `call` is the picker's call as this
+ * mod's hook was handed it, which is what it passed down to the dialog.
  */
-export const answered = (r: unknown): boolean => {
+export const answered = (r: unknown, call: unknown): boolean => {
+  if (unreadAsk(call) !== undefined) return false
   const o = r as { deny?: unknown; isError?: unknown; result?: unknown } | null | undefined
   if (!o || typeof o !== 'object' || o.deny !== undefined || o.isError === true) return false
   const out = o.result as { answers?: unknown; response?: unknown; afkTimeoutMs?: unknown } | null | undefined

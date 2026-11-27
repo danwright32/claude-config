@@ -12010,7 +12010,8 @@ since it merged is in is it live's verdicts, which the box reads too, since is i
 carded merge off its record only at a turn end. At most one box per request, and two calls at once
 show one. A request is a message Dan types, or since #3843 an answer he gives in a picker that the
 session then does work after (his answer of 2026-11-27: an answer alone, such as one confirming a
-step, is no request; a reply he types into the picker in place of a choice is an answer). His
+step, is no request; a reply he types into the picker in place of a choice is an answer; an
+answer to a picker he could not have read whole, by mod-kit's `askFault` (#3321), is not). His
 answer waits only until the turn it was given in ends, so work in a later turn he did not start is
 not work he picked. Work is a call of the main conversation that ran, that Claude Code did not mark
 read only (`isReadOnly` on the call's result, set when the tool held its input read only, as its
