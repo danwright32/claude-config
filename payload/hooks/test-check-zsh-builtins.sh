@@ -39,7 +39,10 @@ command -v python3 >/dev/null 2>&1 || { echo "test-check-zsh-builtins: python3 i
 # (shadowed for log, tied_assignment for #2347) made to never fire.
 LOOSE="$WORKDIR/loose"; mkdir -p "$LOOSE/lib"
 cp "$HOOK" "$DIR/zsh_builtin_gate.py" "$LOOSE/"
-python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LOOSE/lib" push-scope.sh shell-words.py || bad "#2147 the hook helpers could not be installed into $LOOSE/lib"
+# lib/unsure-reading.py and lib/db-write-calls.py are loaded by their paths for the judge's second
+# reading (claude-config#3472), so each is named: without them the judge cannot ask, and hands every
+# command to the crude reading, which no loosened predicate reaches.
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LOOSE/lib" push-scope.sh shell-words.py unsure-reading.py db-write-calls.py || bad "#2147 the hook helpers could not be installed into $LOOSE/lib"
 # Both predicates are loosened, each checked to have been found, since one that matched nothing would
 # leave its half of the looser runs proving nothing (L100).
 loosened="$(python3 - "$LOOSE/zsh_builtin_gate.py" <<'PY'

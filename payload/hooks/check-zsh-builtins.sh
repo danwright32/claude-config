@@ -26,6 +26,15 @@
 # toward refusing since it cannot tell which shell runs it; everything else passes. The fix is always
 # one word, so there is no override.
 #
+# A LINE THE READER CANNOT VOUCH FOR (claude-config#3472). The reader took a # for a comment where
+# the shell reads it inside a word, so a log on the rest of that line was never judged. The judge
+# now reads the command a second time, as the reader gives it to a caller that asks which lines it
+# is unsure of: where every shell reads the # inside a word the rest of the line is judged like any
+# other, and a command holding a line the reader names (a # it cannot tell from a comment, a heredoc
+# it cannot find the end of, an operator a backslash and a line break split) is refused as one that
+# could not be checked, saying which line and how to write it. That refusal is for any command that
+# reaches the judge, whatever stands on the line, since nothing can say what the shell runs there.
+#
 # TIED NAMES (claude-config#2347). zsh ties the lowercase path to PATH, and cdpath, fpath, manpath and
 # module_path to CDPATH, FPATH, MANPATH and MODULE_PATH, so a command that assigns path replaces the
 # command search path and every later command fails with "command not found". On 2026-11-06 a loop
@@ -113,11 +122,19 @@ if [ "$have_ps" = 1 ]; then ps_reader_missing python3; else ! command -v python3
 [ -f "$JUDGE" ] || not_judged "$JUDGE, the judge, is missing (reinstall the hooks with claude-sync pull)"
 
 # The judge exits 0 to pass, 3 to refuse log (printing the fix), 5 to refuse a tied name being
-# assigned (printing the name and its uppercase twin), and 4 when it could not read the command
-# (printing why). Anything else is the judge failing, and the crude reading decides.
+# assigned (printing the name and its uppercase twin), 6 to refuse a command holding a line the
+# shared reader cannot vouch for (printing which line, why, and how to write it), and 4 when it
+# could not read the command (printing why). Anything else is the judge failing, and the crude
+# reading decides.
 said="$(printf '%s' "$payload" | python3 "$JUDGE")"
 case $? in
   0) exit 0 ;;
+  6)
+    # A line the reader names is one no reading can vouch for: what the shell runs on it differs
+    # by shell, or cannot be found. So the command was not checked, and is refused saying which
+    # line and how to write it so that it can be read (claude-config#3472).
+    echo "BLOCKED: whether this command runs zsh's log builtin with an argument, or assigns a name zsh ties to an uppercase twin, could not be checked: $said." >&2
+    exit 2 ;;
   3)
     echo "BLOCKED: this command runs log with an argument. $HOW Write the full path instead, $said, or put command in front (command log), which looks only for programs." >&2
     exit 2 ;;
