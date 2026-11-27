@@ -89,7 +89,12 @@ case "$*" in
   *"contents/.claude/verification/guides/clients.md"*) answer guide-clients.md ;;
   *"/files"*) answer files.json ;;
   *"/comments"*) answer comments.json ;;
-  *"/compare/"*) answer compare.json ;;
+  *"/compare/"*)
+    # A compare of two commits a case names has its own answer (#3574); any other gets the one.
+    pair='/compare/([0-9a-f]{40}\.\.\.[0-9a-f]{40})'
+    if [[ "$*" =~ $pair ]] && ls "$FAKE/compare-${BASH_REMATCH[1]}.json"* >/dev/null 2>&1; then
+      answer "compare-${BASH_REMATCH[1]}.json"
+    else answer compare.json; fi ;;
   *"/contents/pr-"*) answer listing.json ;;
   *" repos/acme/widget") answer repo.json ;;
   *) echo "fake gh: no answer for: $*" >&2; exit 1 ;;
@@ -144,6 +149,31 @@ rec = {"schema": "verification-run/1", "area": "invoices", "head_sha": sha, "rec
 body = "## Verification run\n```verification-run\n%s\n```\n" % json.dumps(rec, indent=2)
 w(os.path.join(fake, "comments.json"), json.dumps([{"body": "LGTM"}] + ([] if spec.get("no_record") else [{"body": body}])))
 w(os.path.join(fake, "compare.json"), json.dumps({"status": "ahead", "files": [{"filename": f} for f in spec.get("since", [])]}))
+if spec.get("merged"):
+    # main was merged into the branch after the record, and main changed the file the pull request
+    # changes (#3574). The four versions of the file, and every patch derived from them: "clean"
+    # leaves the pull request's own line as the run saw it, "own" changes it as well.
+    import difflib
+    MB_THEN, MB_NOW = "4" * 40, "5" * 40
+    def entry(old, new):
+        text = "\n".join(list(difflib.unified_diff(old, new, lineterm="", n=3))[2:])
+        marks = [line[0] for line in text.split("\n")]
+        return [{"filename": "src/invoices/list.ts", "status": "modified", "additions": marks.count("+"),
+                 "deletions": marks.count("-"), "patch": text}]
+    def own(rows, value):
+        return ["const row20 = %d;" % value if r == "const row20 = 20;" else r for r in rows]
+    then = ["const row%d = %d;" % (i, i) for i in range(1, 31)]
+    now = ["import a;"] + then
+    at_record, at_head = own(then, 2000), own(now, 2000 if spec["merged"] == "clean" else 2001)
+    w(os.path.join(fake, "compare.json"), json.dumps({
+        "status": "ahead", "total_commits": 2,
+        "commits": [{"sha": MB_NOW, "parents": [{"sha": MB_THEN}]}, {"sha": HEAD, "parents": [{"sha": OLD}, {"sha": MB_NOW}]}],
+        "files": entry(at_record, at_head)}))
+    for a, b, status, mb, old, new in ((BASE, OLD, "diverged", MB_THEN, then, at_record),
+                                       (BASE, HEAD, "ahead", MB_NOW, now, at_head),
+                                       (MB_THEN, MB_NOW, "ahead", MB_THEN, then, now)):
+        w(os.path.join(fake, "compare-%s...%s.json" % (a, b)), json.dumps({
+            "status": status, "merge_base_commit": {"sha": mb}, "files": entry(old, new)}))
 if not spec.get("no_receipt"):
     egress = {"verdict": "unmeasured", "why": "no egress monitor exists"} if spec.get("unmeasured") else {"verdict": "clean", "why": "measured"}
     w(os.path.join(home, "receipts", rid, "receipt.json"), json.dumps({
@@ -327,9 +357,35 @@ setup '{"older": true, "since": ["src/invoices/list.ts"]}'
 out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
 expect_deny "a stale record" "$out" "since then this pull request changed src/invoices/list.ts"
 grep -q "compare/$OLD...$HEAD" "$FAKE/log" && pass || fail "the compare was not asked from the record's commit to the head: $(cat "$FAKE/log")"
+# With no merge since the record the change is the pull request's own, and that one compare is all.
+compares="$(grep -c "/compare/" "$FAKE/log")"
+[ "$compares" = 1 ] && pass || fail "a stale record with no merge since asked GitHub for $compares compares, wanted 1: $(cat "$FAKE/log")"
 setup '{"older": true, "files": ["src/invoices/list.ts", "docs/notes.md"], "since": ["docs/notes.md"]}'
 out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
 expect_allow "a record from an older commit whose later patch leaves the area alone" "$out"
+
+echo "require-verification-run: a merge of main after the run, where main changed a file the pull request changes (claude-config#3574)"
+MB_THEN="4444444444444444444444444444444444444444"
+MB_NOW="5555555555555555555555555555555555555555"
+setup '{"older": true, "merged": "clean"}'
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_allow "#3574 the pull request's own patch is unchanged, so the record still describes the head" "$out"
+# What it costs: three compares more than the one every older record takes, each asked once.
+compares="$(grep -c "/compare/" "$FAKE/log")"
+[ "$compares" = 4 ] && pass || fail "#3574 the merged case asked GitHub for $compares compares, wanted 4: $(cat "$FAKE/log")"
+for pair in "$OLD...$HEAD" "$BASE...$OLD" "$BASE...$HEAD" "$MB_THEN...$MB_NOW"; do
+  [ "$(grep -c "compare/$pair" "$FAKE/log")" = 1 ] && pass || fail "#3574 the compare $pair was not asked exactly once: $(cat "$FAKE/log")"
+done
+setup '{"older": true, "merged": "own"}'
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "#3574 the pull request's own patch changed as well as the merge" "$out" "since then this pull request changed src/invoices/list.ts" "patch to it differs"
+# A compare that cannot be read is never a record that still describes the head.
+for pair in "$BASE...$OLD" "$BASE...$HEAD" "$MB_THEN...$MB_NOW"; do
+  setup '{"older": true, "merged": "clean"}'
+  printf 'gh: Server Error (HTTP 502)\n' > "$FAKE/compare-$pair.json.fail"
+  out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+  expect_deny "#3574 the compare $pair could not be read" "$out" "GitHub could not be read for the changes from ${pair:0:7} to" "HTTP 502" "ALLOW_UNVERIFIED_MERGE=1"
+done
 setup '{"unmeasured": true}'
 out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
 expect_deny "unmeasured egress is never clean" "$out" "egress as unmeasured"

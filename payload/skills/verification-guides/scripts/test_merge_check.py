@@ -6,6 +6,7 @@ must stay distinct messages (L11). The hook that gathers a bundle from GitHub ha
 hooks/test-require-verification-run.sh, which drives the real hook end to end.
 """
 
+import difflib
 import json
 import os
 import subprocess
@@ -110,6 +111,9 @@ class Fixture:
         self.comments = [comment(record())]
         self.guides = {"invoices": GUIDE, "clients": GUIDE.replace("Invoices", "Clients")}
         self.compares = {}
+        # GitHub's compare of any two commits, by (from, to): None for a read that failed, a string
+        # for an answer written as it is (#3574).
+        self.diffs = {}
         self.pin = "required " + HEAD
         # The screenshots reads (#2516): GitHub's answer about the repository, each folder listing
         # of the pr-screenshots branch by commit (None for a failed read), and the override.
@@ -162,6 +166,12 @@ class Fixture:
                 write(os.path.join(self.dir, "guides", area + ".md"), text)
         for sha, cmp in self.compares.items():
             write(os.path.join(self.dir, "compare", sha + ".json"), json.dumps(cmp))
+        for (a, b), cmp in self.diffs.items():
+            if cmp is None:
+                write(os.path.join(self.dir, "compare", "%s...%s.err" % (a, b)), "gh: Server Error (HTTP 502)")
+            else:
+                write(os.path.join(self.dir, "compare", "%s...%s.json" % (a, b)),
+                      cmp if isinstance(cmp, str) else json.dumps(cmp))
         if self.repo == "fail":
             write(os.path.join(self.dir, "repo.err"), "gh: Server Error (HTTP 502)")
         elif self.repo is not None:
@@ -440,13 +450,366 @@ class Judging(unittest.TestCase):
         self.f.save()
         out = mc.verdict(self.f.dir, home=self.f.home)
         self.assertEqual(out["need"], {"guides": [{"area": "invoices", "path": ".claude/verification/guides/invoices.md"}],
-                                       "compares": [OLD], "listings": [], "repo": False})
+                                       "compares": [OLD], "diffs": [], "listings": [], "repo": False})
 
     def test_a_need_left_unanswered_on_the_final_call_is_unreadable_not_a_crash(self):
         self.f.guides = {}
         self.f.save()
         out = mc.verdict(self.f.dir, home=self.f.home, final=True)
         self.assertEqual(kinds(out), ["github-unreadable"])
+
+
+PATH = "src/invoices/list.ts"
+MB_THEN = "4444444444444444444444444444444444444444"   # where the branch left main, as of the record
+MB_NOW = "5555555555555555555555555555555555555555"    # the commit of main the branch merged since
+
+
+def rows(n=40):
+    return ["const row%d = %d;" % (i, i) for i in range(1, n + 1)]
+
+
+def edit(src, *ops):
+    """`src` with each (line, how many to remove, lines to put there) applied, lines counted in src."""
+    out = list(src)
+    for at, remove, add in sorted(ops, reverse=True):
+        out[at - 1:at - 1 + remove] = add
+    return out
+
+
+def patch(old, new):
+    """The patch text GitHub gives for one file: a unified diff's hunks, three lines of context."""
+    return "\n".join(list(difflib.unified_diff(old, new, lineterm="", n=3))[2:])
+
+
+def file_entry(path, old, new):
+    """GitHub's entry for one modified file in a compare or a pull request's files."""
+    text = patch(old, new)
+    marks = [line[0] for line in text.split("\n")]
+    return {"filename": path, "status": "modified", "additions": marks.count("+"), "deletions": marks.count("-"),
+            "patch": text}
+
+
+# The pull request's own change to the file, and what main did to it meanwhile, both in the lines of
+# the file as the branch first found it. Main's two added lines move the pull request's hunks down.
+OWN = ((20, 1, ["const row20 = 2000;"]), (31, 0, ["const extra = 1;"]))
+MAINS = ((6, 0, ["import a;", "import b;"]), (38, 1, ["const row38 = 3800;"]))
+
+
+class MainMerged(unittest.TestCase):
+    """A record made before main was merged into the branch (claude-config#3574).
+
+    Shape of the first measured case: the record's commit, then a merge of main, and main changed a
+    file the pull request also changes. Each fixture is the four versions of that file (main and the
+    branch, at the record and at the head), with every patch derived from them, so no patch here is
+    written to suit the rule under test (L48).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.f = Fixture(self.tmp.name)
+        self.f.comments = [comment(record(sha=OLD, rid=RID_OLD))]
+        self.f.receipt(RID_OLD, OLD)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def merged(self, then, at_record, now, at_head, path=PATH, more=()):
+        """One file as main held it at the record (`then`) and holds it at the head's merge base
+        (`now`), and as the branch held it at the record and holds it at the head. `more` is further
+        (path, then, at_record, now, at_head) files."""
+        files = [(path, then, at_record, now, at_head)] + list(more)
+
+        def entries(pick):
+            return [file_entry(p, *pick(t, r, n, h))
+                    for p, t, r, n, h in files if pick(t, r, n, h)[0] != pick(t, r, n, h)[1]]
+        self.f.files = entries(lambda t, r, n, h: (n, h))
+        self.f.view["changedFiles"] = len(self.f.files)
+        self.f.compares = {OLD: {
+            "status": "ahead", "total_commits": 2,
+            "commits": [{"sha": MB_NOW, "parents": [{"sha": MB_THEN}]},
+                        {"sha": HEAD, "parents": [{"sha": OLD}, {"sha": MB_NOW}]}],
+            "files": entries(lambda t, r, n, h: (r, h))}}
+        self.f.diffs = {
+            (BASE, OLD): {"status": "diverged", "merge_base_commit": {"sha": MB_THEN},
+                          "files": entries(lambda t, r, n, h: (t, r))},
+            (BASE, HEAD): {"status": "ahead", "merge_base_commit": {"sha": MB_NOW},
+                           "files": entries(lambda t, r, n, h: (n, h))},
+            (MB_THEN, MB_NOW): {"status": "ahead", "merge_base_commit": {"sha": MB_THEN},
+                                "files": entries(lambda t, r, n, h: (t, n))},
+        }
+
+    def clean_merge(self):
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *MAINS), edit(rows(), *OWN, *MAINS))
+
+    def stale(self, out, *says):
+        self.assertEqual(kinds(out), ["stale-record"])
+        self.assertEqual((out["passed"], out["decision"]), (False, "refuse"))
+        for needle in says:
+            self.assertIn(needle, out["text"])
+
+    # -- the record still describes the head -------------------------------------------------
+
+    def test_a_merge_of_main_that_changed_a_file_the_pull_request_also_changes_leaves_the_record_standing(self):
+        self.clean_merge()
+        # The premise: main moved the pull request's hunks, so the two patches are not the same text.
+        self.assertNotEqual(self.f.diffs[(BASE, OLD)]["files"][0]["patch"], self.f.files[0]["patch"])
+        out = self.f.judge(final=True)
+        self.assertEqual(out["problems"], [])
+        self.assertEqual((out["passed"], out["decision"]), (True, "allow"))
+
+    def test_main_changing_the_file_below_every_hunk_leaves_the_record_standing(self):
+        mains = ((38, 1, ["const row38 = 3800;"]),)
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *mains), edit(rows(), *OWN, *mains))
+        self.assertEqual(self.f.diffs[(BASE, OLD)]["files"][0]["patch"], self.f.files[0]["patch"])
+        self.assertTrue(self.f.judge(final=True)["passed"])
+
+    def test_the_branch_level_with_the_base_is_judged_the_same(self):
+        # merge-when-ready.sh brings the branch level with the base, so the head's merge base is the
+        # base commit itself.
+        self.clean_merge()
+        self.f.diffs[(BASE, HEAD)]["merge_base_commit"]["sha"] = BASE
+        self.f.diffs[(MB_THEN, BASE)] = self.f.diffs.pop((MB_THEN, MB_NOW))
+        self.assertTrue(self.f.judge(final=True)["passed"])
+
+    # -- the record is still stale: every one of these the old rule refused too --------------
+
+    def test_the_pull_requests_own_commits_since_the_record_are_stale_and_ask_github_nothing_more(self):
+        # Shape of the measured control: commits of the pull request's own since the record, no merge.
+        then = edit(rows(), *OWN)
+        now = edit(rows(), (20, 1, ["const row20 = 2001;"]), OWN[1])
+        self.merged(rows(), then, rows(), now)
+        self.f.compares[OLD]["commits"] = [{"sha": "a" * 40, "parents": [{"sha": OLD}]},
+                                           {"sha": HEAD, "parents": [{"sha": "a" * 40}]}]
+        self.f.diffs = {}
+        out = self.f.judge()   # not final: a verdict here means nothing more was asked of GitHub
+        self.stale(out, "since then this pull request changed " + PATH)
+
+    def test_the_pull_requests_own_patch_changed_as_well_as_the_merge_is_stale(self):
+        own_now = ((20, 1, ["const row20 = 2001;"]), OWN[1])
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *MAINS), edit(rows(), *own_now, *MAINS))
+        self.stale(self.f.judge(final=True), PATH, "patch to it differs")
+
+    def test_a_hunk_the_pull_request_added_since_the_record_is_stale(self):
+        own_now = OWN + ((12, 1, ["const row12 = 1200;"]),)
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *MAINS), edit(rows(), *own_now, *MAINS))
+        self.stale(self.f.judge(final=True), "patch to it differs")
+
+    def test_a_conflict_resolved_by_changing_the_pull_requests_own_lines_is_stale(self):
+        # Main changed the very line the pull request changes, and the merge's resolution wrote a
+        # third line: the pull request's own lines at the head are not the ones the run saw.
+        mains = MAINS + ((20, 1, ["const row20 = 20000;"]),)
+        at_head = edit(rows(), (20, 1, ["const row20 = 2500;"]), OWN[1], *MAINS)
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *mains), at_head)
+        self.stale(self.f.judge(final=True), "patch to it differs")
+
+    def test_a_conflict_resolved_by_keeping_the_pull_requests_line_is_still_stale(self):
+        # The same conflict resolved in the pull request's favour: its line is the same text, but it
+        # now replaces a different line of main than the run saw it replace.
+        mains = MAINS + ((20, 1, ["const row20 = 20000;"]),)
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *mains), edit(rows(), *OWN, *MAINS))
+        self.stale(self.f.judge(final=True), "patch to it differs")
+
+    def test_a_hunk_moved_onto_identical_lines_elsewhere_is_stale(self):
+        # The nearest case to a clean merge that must still be refused. Main dropped two lines from
+        # the top, and the merge put the pull request's added line two rows further down, among
+        # identical rows: its patch is the SAME TEXT, line numbers included, at the record and at
+        # the head. Only main's own change says where the line should have landed.
+        then = ["// one", "// two"] + ["row();"] * 8
+        now = ["row();"] * 8
+        self.merged(then, edit(then, (6, 0, ["extra();"])), now, edit(now, (6, 0, ["extra();"])))
+        self.assertEqual(self.f.diffs[(BASE, OLD)]["files"][0]["patch"], self.f.files[0]["patch"])
+        self.stale(self.f.judge(final=True), "sits on other lines")
+
+    def test_main_changing_a_line_the_pull_requests_hunk_rests_on_is_stale(self):
+        # Kept refused on purpose: main changed a line right beside the pull request's, so the
+        # pull request's lines no longer sit in the surroundings the run saw.
+        mains = MAINS + ((19, 1, ["const row19 = 1900;"]),)
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *mains), edit(rows(), *OWN, *mains))
+        self.stale(self.f.judge(final=True), "patch to it differs")
+
+    def test_a_file_main_did_not_change_is_the_pull_requests_own_change(self):
+        other = "src/invoices/total.ts"
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *MAINS), edit(rows(), *OWN, *MAINS),
+                    more=[(other, rows(9), edit(rows(9), (4, 1, ["const total = 1;"])),
+                           rows(9), edit(rows(9), (4, 1, ["const total = 2;"])))])
+        out = self.f.judge(final=True)
+        self.stale(out, "this pull request changed " + other, "no change to it by the base branch")
+        self.assertNotIn("changed " + PATH, out["text"])
+
+    def test_a_merge_that_took_in_nothing_from_the_base_is_stale(self):
+        # A merge commit since the record, but of some other branch: the merge base did not move.
+        self.clean_merge()
+        self.f.diffs[(BASE, HEAD)]["merge_base_commit"]["sha"] = MB_THEN
+        del self.f.diffs[(MB_THEN, MB_NOW)]
+        self.stale(self.f.judge(), "took in nothing")
+
+    def test_merge_bases_github_does_not_place_one_after_the_other_are_stale(self):
+        self.clean_merge()
+        self.f.diffs[(MB_THEN, MB_NOW)]["status"] = "diverged"
+        self.stale(self.f.judge(final=True), "diverged")
+
+    def test_a_file_with_no_patch_text_is_stale(self):
+        # GitHub gives no patch for a binary file or a very large one.
+        for side in ((BASE, OLD), (BASE, HEAD), (MB_THEN, MB_NOW)):
+            with self.subTest(side=side):
+                self.clean_merge()
+                del self.f.diffs[side]["files"][0]["patch"]
+                self.stale(self.f.judge(final=True), "no patch")
+
+    def test_a_patch_cut_short_is_stale(self):
+        self.clean_merge()
+        entry = self.f.diffs[(BASE, HEAD)]["files"][0]
+        entry["patch"] = "\n".join(entry["patch"].split("\n")[:-2])
+        self.stale(self.f.judge(final=True), "no patch")
+
+    def test_patches_that_stop_after_a_whole_hunk_are_stale(self):
+        # The pull request's second hunk changed since the record, and both patches stop after the
+        # first. Every hunk left is well formed and the same at both, so only GitHub's own count of
+        # the file's lines shows that something is missing.
+        own_now = (OWN[0], (31, 0, ["const extra = 2;"]))
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *MAINS), edit(rows(), *own_now, *MAINS))
+        for side in ((BASE, OLD), (BASE, HEAD)):
+            entry = self.f.diffs[side]["files"][0]
+            entry["patch"] = entry["patch"].split("\n@@ ")[0]
+        self.stale(self.f.judge(final=True), "no patch")
+
+    def test_a_patch_with_no_count_of_its_lines_is_stale(self):
+        self.clean_merge()
+        del self.f.diffs[(MB_THEN, MB_NOW)]["files"][0]["additions"]
+        self.stale(self.f.judge(final=True), "no patch")
+
+    def test_a_renamed_file_is_stale(self):
+        self.clean_merge()
+        for side in ((BASE, OLD), (BASE, HEAD)):
+            self.f.diffs[side]["files"][0].update(status="renamed", previous_filename="src/invoices/old.ts")
+        self.stale(self.f.judge(final=True), "added, removed or renamed")
+
+    def test_a_file_the_pull_request_did_not_change_at_the_record_is_stale(self):
+        self.clean_merge()
+        self.f.diffs[(BASE, OLD)]["files"] = []
+        self.stale(self.f.judge(final=True), "by this pull request at the record")
+
+    # -- what it costs, and what a failed read does ------------------------------------------
+
+    def test_it_asks_for_three_more_compares_and_only_once_a_file_calls_for_them(self):
+        self.clean_merge()
+        answers, self.f.diffs = self.f.diffs, {}
+        out = self.f.judge()
+        self.assertEqual(out["need"]["diffs"], [{"from": BASE, "to": OLD}, {"from": BASE, "to": HEAD}])
+        self.f.diffs = {k: answers[k] for k in ((BASE, OLD), (BASE, HEAD))}
+        out = self.f.judge()
+        self.assertEqual(out["need"], {"guides": [], "compares": [], "listings": [], "repo": False,
+                                       "diffs": [{"from": MB_THEN, "to": MB_NOW}]})
+        self.f.diffs = answers
+        out = self.f.judge()
+        self.assertNotIn("need", out)
+        self.assertTrue(out["passed"])
+
+    def test_a_merge_that_left_the_area_alone_asks_nothing_more(self):
+        self.clean_merge()
+        self.f.files.append({"filename": "docs/notes.md", "status": "modified"})
+        self.f.view["changedFiles"] = 2
+        self.f.compares[OLD]["files"] = [{"filename": "docs/notes.md"}]
+        self.f.diffs = {}
+        out = self.f.judge()
+        self.assertNotIn("need", out)
+        self.assertTrue(out["passed"])
+
+    def test_two_areas_with_one_record_commit_ask_for_each_compare_once(self):
+        self.clean_merge()
+        self.f.files.append({"filename": "src/clients/list.ts", "status": "modified"})
+        self.f.view["changedFiles"] = 2
+        self.f.compares[OLD]["files"].append({"filename": "src/clients/list.ts"})
+        self.f.comments = [comment(record(sha=OLD, rid=RID_OLD), record(area="clients", sha=OLD, rid=RID_OLD))]
+        self.f.diffs = {}
+        self.assertEqual(self.f.judge()["need"]["diffs"], [{"from": BASE, "to": OLD}, {"from": BASE, "to": HEAD}])
+
+    def test_a_compare_github_failed_is_unreadable_never_still_describing(self):
+        for side in ((BASE, OLD), (BASE, HEAD), (MB_THEN, MB_NOW)):
+            with self.subTest(side=side):
+                self.clean_merge()
+                self.f.diffs[side] = None
+                out = self.f.judge(final=True)
+                self.assertEqual(kinds(out), ["github-unreadable"])
+                self.assertEqual((out["passed"], out["decision"]), (False, "refuse"))
+                self.assertIn("HTTP 502", out["text"])
+                os.remove(os.path.join(self.f.dir, "compare", "%s...%s.err" % side))
+
+    def test_a_compare_never_answered_is_unreadable_on_the_final_ask(self):
+        for side in ((BASE, OLD), (BASE, HEAD), (MB_THEN, MB_NOW)):
+            with self.subTest(side=side):
+                self.clean_merge()
+                answer = os.path.join(self.f.dir, "compare", "%s...%s.json" % side)
+                self.f.save()
+                os.remove(answer)
+                out = mc.verdict(self.f.dir, home=self.f.home, final=True)
+                self.assertEqual(kinds(out), ["github-unreadable"])
+                self.assertFalse(out["passed"])
+
+    def test_a_compare_that_is_not_json_is_unreadable(self):
+        self.clean_merge()
+        self.f.diffs[(MB_THEN, MB_NOW)] = "<html>502 Bad Gateway</html>"
+        self.assertEqual(kinds(self.f.judge(final=True)), ["github-unreadable"])
+
+    def test_a_compare_naming_no_merge_base_is_unreadable(self):
+        self.clean_merge()
+        del self.f.diffs[(BASE, HEAD)]["merge_base_commit"]
+        self.assertEqual(kinds(self.f.judge(final=True)), ["github-unreadable"])
+
+    def test_a_pull_request_with_no_base_commit_reported_is_unreadable(self):
+        self.clean_merge()
+        self.f.view["baseRefOid"] = ""
+        self.assertEqual(kinds(self.f.judge(final=True)), ["github-unreadable"])
+
+    def test_no_answer_about_whose_change_it_was_is_never_a_pass(self):
+        # Whatever leaves the question unanswered without saying why, the area is not passed.
+        self.clean_merge()
+        real = mc._Verdict.own_changes
+        mc._Verdict.own_changes = lambda *a: None
+        try:
+            for final in (True, False):
+                with self.subTest(final=final):
+                    out = self.f.judge(final=final)
+                    self.assertEqual(kinds(out), ["github-unreadable"])
+                    self.assertEqual((out["passed"], out["decision"]), (False, "refuse"))
+        finally:
+            mc._Verdict.own_changes = real
+
+    def test_a_commit_list_cut_short_is_asked_about_not_assumed(self):
+        # GitHub lists 250 commits at most: past that a merge may be among those not listed.
+        self.clean_merge()
+        self.f.compares[OLD].update(commits=[], total_commits=300)
+        self.assertTrue(self.f.judge(final=True)["passed"])
+
+
+class Patches(unittest.TestCase):
+    """The patch reader under the #3574 rule: anything it cannot read exactly is not a patch."""
+
+    def test_hunks_are_read_with_their_line_numbers(self):
+        hunks = mc._hunks("@@ -3,4 +3,5 @@ function total() {\n a\n-b\n+c\n+d\n e\n f\n@@ -40 +41 @@\n-x\n+y")
+        self.assertEqual([(h["old"], h["olen"], h["new"], h["nlen"]) for h in hunks], [(3, 4, 3, 5), (40, 1, 41, 1)])
+        self.assertEqual(hunks[0]["body"], [" a", "-b", "+c", "+d", " e", " f"])
+
+    def test_the_no_newline_marker_is_part_of_a_hunk_and_counts_as_no_line(self):
+        hunks = mc._hunks("@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+c")
+        self.assertEqual(len(hunks[0]["body"]), 4)
+
+    def test_what_is_not_a_whole_patch_is_none(self):
+        for bad in (None, "", 7, "a\n b", "@@ -1,3 +1,3 @@\n a\n-b\n+c", "@@ -1,2 +1,2 @@\n a\n-b\n+c\n",
+                    "@@ -1,2 +1,2 @@\n a\n-b\n+c\nstray", "@@ nonsense @@\n a"):
+            with self.subTest(patch=bad):
+                self.assertIsNone(mc._hunks(bad))
+
+    def test_where_a_diff_carries_lines(self):
+        # Lines 3 to 4 replaced by one line, and two lines put in before line 10.
+        blocks = mc._blocks(mc._hunks("@@ -1,6 +1,5 @@\n a\n b\n-c\n-d\n+x\n e\n f\n@@ -7,6 +6,8 @@\n g\n h\n i\n+y\n+z\n j\n k\n l"))
+        self.assertEqual(blocks, [(3, 2, 1), (10, 0, 2)])
+        self.assertEqual(mc._carried(blocks, 1, 2), 0)       # above every change
+        self.assertEqual(mc._carried(blocks, 5, 5), -1)      # below the first, ending where the second goes in
+        self.assertEqual(mc._carried(blocks, 10, 3), 1)      # starting where the second goes in
+        self.assertEqual(mc._carried(blocks, 20, 3), 1)
+        self.assertIsNone(mc._carried(blocks, 4, 3))         # one of its lines was replaced
+        self.assertIsNone(mc._carried(blocks, 8, 4))         # lines were put in between its lines
 
 
 class WarnMode(unittest.TestCase):

@@ -24,16 +24,22 @@ The bundle is a folder the hook writes:
   guides/<area>.md | .absent | .err      each touched area's guide at BASE
   compare/<sha>.json | .err    GitHub's compare of an older record's commit with the head (or with
                                the head a screenshots block was rendered at)
+  compare/<from>...<to>.json | .err      GitHub's compare of two commits the judge named (#3574): the
+                               base commit with an older record's commit and with the head, then the
+                               two merge bases those answers name. Asked only when a file of the
+                               record's area, which the pull request touches, changed since the
+                               record and a merge commit came between
   repo.json | repo.err         gh api repos/<slug>, read only when a screenshots block links images,
                                for whether the repository is public (#2516)
   shots/<commit>.json | .err   the folder of pictures a screenshots block links, listed at that commit
   allow-no-screenshots         present when the merge command carries ALLOW_NO_SCREENSHOTS=1
 
 CLI: merge_check.py verdict <bundle> [--final]
-  Prints {"need": {"guides": [{area, path}], "compares": [sha], "listings": [{commit, folder}],
-  "repo": true or false}} while the bundle lacks something a verdict needs; the hook fetches those
-  (listings into shots/<commit>.json, the repository into repo.json) and asks again with --final,
-  where anything still missing is GitHub unreadable. Otherwise the verdict: {"mode", "passed",
+  Prints {"need": {"guides": [{area, path}], "compares": [sha], "diffs": [{from, to}], "listings":
+  [{commit, folder}], "repo": true or false}} while the bundle lacks something a verdict needs; the
+  hook fetches those (diffs into compare/<from>...<to>.json, listings into shots/<commit>.json, the
+  repository into repo.json) and asks again, since one answer can call for another, and the last time
+  with --final, where anything still missing is GitHub unreadable. Otherwise the verdict: {"mode", "passed",
   "decision" (allow or refuse), "text", "problems" [{kind, area, message}], "touched_areas",
   "head_sha", "say" (hand the text to the session on an allow), "screenshots" {mode, problems,
   note, overridden}}. The bundle may also hold allow-no-screenshots. In mode warn the verdict is also
@@ -55,6 +61,7 @@ screenshots-link-unresolved.
 
 import json
 import os
+import re
 import sys
 
 sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
@@ -67,6 +74,9 @@ import screenshots as shots  # noqa: E402
 PR_FILES_CAP = 3000
 COMPARE_FILES_CAP = 300
 LIST_MAX = 8   # files named in one message before "and N more"
+# A hunk's header in a patch: where it starts and how many lines it spans, old file then new. A
+# count left out is one line.
+HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
 def _read(path):
@@ -105,6 +115,124 @@ def _named(paths):
     return shown + (" and %d more" % (len(paths) - LIST_MAX) if len(paths) > LIST_MAX else "")
 
 
+def _hunks(patch):
+    """A patch as GitHub gives it for one file, as its hunks: where each starts and how many lines it
+    spans in the old file and in the new, and its lines. None for anything that is not a whole patch
+    (no text, a line that belongs to no hunk, a hunk shorter or longer than its header says), so a
+    patch GitHub cut short is never read as a smaller change."""
+    if not isinstance(patch, str) or not patch:
+        return None
+    out = []
+    for line in patch.split("\n"):
+        m = HUNK_RE.match(line)
+        if m:
+            old, olen, new, nlen = (int(g) if g is not None else 1 for g in m.groups())
+            out.append({"old": old, "olen": olen, "new": new, "nlen": nlen, "body": []})
+        elif not out or line[:1] not in (" ", "+", "-", "\\"):
+            return None
+        else:
+            out[-1]["body"].append(line)
+    for h in out:
+        marks = [line[0] for line in h["body"]]
+        if h["olen"] != marks.count(" ") + marks.count("-") or h["nlen"] != marks.count(" ") + marks.count("+"):
+            return None
+    return out
+
+
+def _whole(entry):
+    """The hunks of GitHub's entry for one file, or None unless its patch is there whole: readable by
+    _hunks, and adding and removing as many lines as GitHub counts for the file, so a patch that
+    stops after a whole hunk is caught too."""
+    hunks = _hunks(entry.get("patch"))
+    if hunks is None:
+        return None
+    marks = [line[0] for h in hunks for line in h["body"]]
+    counted = [n if isinstance(n, int) and not isinstance(n, bool) else None
+               for n in (entry.get("additions"), entry.get("deletions"))]
+    return hunks if [marks.count("+"), marks.count("-")] == counted else None
+
+
+def _blocks(hunks):
+    """Each run of changed lines in a patch: (the old file's line it starts at, how many old lines it
+    removes, how many lines it puts there). A run that removes nothing goes in before that line."""
+    out = []
+    for h in hunks:
+        at, run = h["old"] if h["olen"] else h["old"] + 1, None
+        for line in h["body"]:
+            mark = line[0]
+            if mark == " ":
+                at, run = at + 1, None
+            elif mark in "+-":
+                if run is None:
+                    run = [at, 0, 0]
+                    out.append(run)
+                run[1 if mark == "-" else 2] += 1
+                at += mark == "-"
+    return [tuple(run) for run in out]
+
+
+def _carried(blocks, first, count):
+    """How far a change (its _blocks) moves the old file's lines first to first + count - 1, when it
+    carries them over whole: None when it removes one of them or puts lines in between them."""
+    last, moved = first + count - 1, 0
+    for at, removed, added in blocks:
+        if removed and at + removed - 1 < first or not removed and at <= first:
+            moved += added - removed
+        elif at <= last:
+            return None
+    return moved
+
+
+def _entry(cmp, path):
+    """GitHub's entry for one file in a compare, or None when it lists none."""
+    files = cmp.get("files") if isinstance(cmp.get("files"), list) else []
+    return next((e for e in files if isinstance(e, dict) and e.get("filename") == path), None)
+
+
+def _merge_base(cmp):
+    """The commit a compare measured its changes from, or None when GitHub named none."""
+    mb = cmp.get("merge_base_commit")
+    sha = str(mb.get("sha") or "").lower() if isinstance(mb, dict) else ""
+    return sha if v.SHA_RE.match(sha) else None
+
+
+def _why_own(then, now, base):
+    """Why a file changed since a record is the pull request's own change, or None when the base
+    branch alone changed it (claude-config#3574).
+
+    `then` and `now` are GitHub's entries for the file in the pull request's patch at the record's
+    commit and at the head, each measured from where the branch last took in the base branch, and
+    `base` its entry in the base branch's change between those two commits. The base alone changed
+    it when the pull request's patch has the same hunks at both, line for line with the lines around
+    them, and each hunk sits exactly where the base's change carries the lines it rests on. The head's
+    file is then the base's file with the hunks the run saw, on the same lines of it.
+
+    Comparing the two patches as text is not enough either way. Line numbers move whenever the base
+    adds a line above, and a hunk put back two rows down among identical lines, when the base dropped
+    two lines above, has the same text and the same numbers. Only the base's own change says where
+    each hunk belongs.
+    """
+    if then is None:
+        return "GitHub lists no change to it by this pull request at the record"
+    if now is None:
+        return "GitHub lists no change to it by this pull request at the head"
+    if base is None:
+        return "GitHub lists no change to it by the base branch since the record, so the change is this pull request's own"
+    if any(e.get("status") != "modified" or e.get("previous_filename") for e in (then, now, base)):
+        return "it was added, removed or renamed, which is not compared line by line"
+    a, b, moved = _whole(then), _whole(now), _whole(base)
+    if a is None or b is None or moved is None:
+        return "GitHub gave no patch text for it that can be read whole (a binary or very large file)"
+    if [h["body"] for h in a] != [h["body"] for h in b]:
+        return "this pull request's patch to it differs from its patch at the record"
+    blocks = _blocks(moved)
+    for x, y in zip(a, b):
+        by = _carried(blocks, x["old"], x["olen"]) if x["olen"] else None
+        if by is None or (y["old"] - x["old"], y["new"] - x["new"]) != (by, by):
+            return "this pull request's patch to it sits on other lines than the base branch's change carries it to"
+    return None
+
+
 def _choose(entries, area, head):
     """The record that speaks for an area, and how it was found: head, older, malformed or none.
 
@@ -131,7 +259,7 @@ class _Verdict:
     def __init__(self, bundle, home):
         self.bundle, self.home = bundle, home
         self.problems = []
-        self.need = {"guides": [], "compares": [], "listings": [], "repo": False}
+        self.need = {"guides": [], "compares": [], "diffs": [], "listings": [], "repo": False}
         self.shots = None
         view_text = _read(os.path.join(bundle, "view.json"))
         try:
@@ -208,7 +336,10 @@ class _Verdict:
 
         for name in touched:
             if name in chosen:
-                self.judge_area(areas, name, guides[name], chosen[name], pr_files)
+                self.judge_area(areas, name, guides[name], chosen[name], pr_files, final)
+        if not final and any(self.need.values()):
+            # An older record's area changed since, after a merge: GitHub is asked whose change it was.
+            return {"need": self.need}
         return self.finish(mode, touched)
 
     def have(self, parts):
@@ -271,7 +402,7 @@ class _Verdict:
                 gpath, self.where, "; ".join(m for _, m in e.problems[:3])))
             return None
 
-    def judge_area(self, areas, name, guide, choice, pr_files):
+    def judge_area(self, areas, name, guide, choice, pr_files, final):
         entry, how = choice
         if how == "none":
             self.add("no-record", name, "no verification-run record for it is in this pull request's comments. Run the"
@@ -284,7 +415,7 @@ class _Verdict:
             return
         rec = entry["record"]
         at = "the record at %s (receipt %s)" % (rec["head_sha"][:7], rec["receipt_id"])
-        if how == "older" and not self.still_describes(areas, name, rec, pr_files):
+        if how == "older" and not self.still_describes(areas, name, rec, pr_files, final):
             return
         if not rec["passed"]:
             bad = [c for c in rec["checks"] + rec["done_when"] if c["result"] == "fail"]
@@ -310,8 +441,9 @@ class _Verdict:
                          at, ", ".join(i for i, _ in then) or "none", ", ".join(i for i, _ in now) or "none"))
         self.judge_receipt(name, rec, at)
 
-    def still_describes(self, areas, name, rec, pr_files):
-        """For a record at an older commit: does it still describe the area at the head? Says why not."""
+    def still_describes(self, areas, name, rec, pr_files, final):
+        """For a record at an older commit: does it still describe the area at the head? Says why not,
+        or asks in self.need for what GitHub has yet to answer."""
         sha = rec["head_sha"]
         err = _read(self.path("compare", sha + ".err"))
         if err is not None:
@@ -338,16 +470,106 @@ class _Verdict:
                      " changed since, so whether this area changed cannot be told. Run it again at %s" % (
                          sha[:7], COMPARE_FILES_CAP, self.head[:7]))
             return False
-        # The pull request's OWN patch: a base change merged into the branch shows in the compare but
-        # not in the pull request's files, and was verified when it merged into the base.
+        # The pull request's OWN patch: a base change merged into the branch was verified when it
+        # merged into the base. In a file the pull request does not touch, a change since the record
+        # can only be the base's. In a file it does touch, the change is the base's, the pull
+        # request's own, or both, and own_changes says which (#3574).
         since = [p for p in _paths(files) if p in pr_files]
         b = v.bucket(areas, since)
         mine = [f["path"] for f in b["files"] if f["bucket"] == "area:" + name]
-        if mine:
+        said = len(self.problems)
+        own = self.own_changes(name, sha, cmp, mine, final) if mine else []
+        if own is None:
+            # Not told is never a record that still describes the head: unless GitHub is being asked
+            # for more, or a reason was given, say so here, so no path through own_changes can leave
+            # this area with nothing against it.
+            if len(self.problems) == said and (final or not self.need["diffs"]):
+                self.add("github-unreadable", name, "whether the changes since its newest record at %s are this pull"
+                         " request's own could not be told" % sha[:7])
+            return False
+        if own:
+            whys = ["%s: %s" % pw for pw in own if pw[1]]
             self.add("stale-record", name, "its newest record is at %s, and since then this pull request changed %s"
-                     " in this area, so it says nothing about %s. Run it again there" % (sha[:7], _named(mine), self.head[:7]))
+                     " in this area, so it says nothing about %s. Run it again there%s" % (
+                         sha[:7], _named([p for p, _ in own]), self.head[:7],
+                         " (a merge into the branch came since, and a record outlives one only where each such"
+                         " file's change is the base branch's alone. %s%s)" % (
+                             "; ".join(whys[:LIST_MAX]),
+                             "; and %d more" % (len(whys) - LIST_MAX) if len(whys) > LIST_MAX else "") if whys else ""))
             return False
         return True
+
+    def own_changes(self, name, sha, cmp, paths, final):
+        """Of `paths` (files of this area that the pull request touches and that changed since the
+        record at `sha`): those the pull request itself changed, as (path, why), why None when no
+        merge came between. None when GitHub has more to answer first (asked for in self.need) or
+        could not be read (said), which is never a record that still describes the head.
+
+        With no merge commit since the record every such change is the pull request's own, and
+        nothing more is asked. After a merge, three more answers say whose change each file was:
+        GitHub's compare of the base commit with the record's commit and with the head (the pull
+        request's patch at each, and where the branch last took in the base branch), and its compare
+        of those two merge bases (the base branch's own change). _why_own holds the rule.
+        """
+        commits = cmp.get("commits") if isinstance(cmp.get("commits"), list) else []
+        total = cmp.get("total_commits")
+        merged = any(isinstance(c, dict) and isinstance(c.get("parents"), list) and len(c["parents"]) > 1 for c in commits)
+        cut = isinstance(total, int) and not isinstance(total, bool) and total > len(commits)
+        if not merged and not cut:
+            return [(p, None) for p in paths]
+        base = str(self.view.get("baseRefOid") or "").lower()
+        if not v.SHA_RE.match(base):
+            self.add("github-unreadable", name, "GitHub did not report this pull request's base commit, so whether the"
+                     " changes since its newest record at %s are its own cannot be told" % sha[:7])
+            return None
+        then = self.diff(name, base, sha, final)
+        now = self.diff(name, base, self.head, final)
+        if then is None or now is None:
+            return None
+        was, at = _merge_base(then), _merge_base(now)
+        if was is None or at is None:
+            self.add("github-unreadable", name, "GitHub's compare of %s with %s named no merge base, so whether the"
+                     " changes since its newest record are its own cannot be told" % (
+                         base[:7], (sha if was is None else self.head)[:7]))
+            return None
+        branch = self.view.get("baseRefName") or "the base branch"
+        if was == at:
+            return [(p, "the branch took in nothing from %s since the record" % branch) for p in paths]
+        moved = self.diff(name, was, at, final)
+        if moved is None:
+            return None
+        if moved.get("status") != "ahead":
+            return [(p, "GitHub compares %s at %s with %s as %s, not as later" % (
+                branch, was[:7], at[:7], moved.get("status") or "unknown")) for p in paths]
+        whys = [(p, _why_own(_entry(then, p), _entry(now, p), _entry(moved, p))) for p in paths]
+        return [(p, why) for p, why in whys if why]
+
+    def diff(self, name, a, b, final):
+        """GitHub's compare of commit `a` with commit `b`, as the bundle holds it. None when it is not
+        there yet (asked for in self.need, or said unreadable on the final ask) or could not be read
+        (said)."""
+        key = "%s...%s" % (a, b)
+        what = "the changes from %s to %s, which say whether the changes since its newest record are its own" % (a[:7], b[:7])
+        err = _read(self.path("compare", key + ".err"))
+        if err is not None:
+            self.add("github-unreadable", name, "GitHub could not be read for %s: %s" % (what, err.strip()))
+            return None
+        raw = _read(self.path("compare", key + ".json"))
+        if raw is None:
+            if final:
+                self.add("github-unreadable", name, "no answer from GitHub was recorded for %s" % what)
+            elif {"from": a, "to": b} not in self.need["diffs"]:
+                self.need["diffs"].append({"from": a, "to": b})
+            return None
+        try:
+            cmp = json.loads(raw)
+        except ValueError as e:
+            self.add("github-unreadable", name, "GitHub's compare of %s with %s was not JSON: %s" % (a[:7], b[:7], e))
+            return None
+        if not isinstance(cmp, dict):
+            self.add("github-unreadable", name, "GitHub's compare of %s with %s was not a compare" % (a[:7], b[:7]))
+            return None
+        return cmp
 
     def judge_receipt(self, name, rec, at):
         this = v.machine_name()

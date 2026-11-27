@@ -19,8 +19,9 @@
 # new file no area owns needs an owner merged first.
 #
 # WHAT PASSES. Every changed file lands in exactly one bucket, and each touched area's newest record
-# at the head (or at an earlier commit whose later patch, in this pull request's own files, leaves the
-# area untouched) passes every check and done when item. Its receipt is on this machine, shows serve
+# at the head (or at an earlier commit since which this pull request's own patch leaves the area
+# untouched: a change the base branch alone made to a file, merged into the branch since, is not the
+# pull request's, #3574) passes every check and done when item. Its receipt is on this machine, shows serve
 # stopped, a clean egress verdict, a build stamp equal to the record's commit, and a successful drive
 # call for the area. The merge is pinned to the head judged (--match-head-commit), read by the same
 # lib/merge-target.sh reading block-red-merge.sh uses; a repository's own merge tool pins for itself
@@ -301,7 +302,15 @@ judge_failed(){
 }
 
 judge || judge_failed
-if [ "$(printf '%s' "$verdict" | jq -r 'has("need")' 2>/dev/null)" = "true" ]; then
+# The judge asks for what it lacks and is asked again once it is fetched. One round is the rule. An
+# older record whose area changed since, after a merge into the branch, takes two more (#3574): the
+# pull request's patch at the record's commit and at the head, then the base branch's own change
+# between the two commits those name. The last round's answer is final: what is still missing then
+# is GitHub unreadable, never a pass.
+NEED_ROUNDS=3
+round=0
+while [ "$(printf '%s' "$verdict" | jq -r 'has("need")' 2>/dev/null)" = "true" ]; do
+  round=$((round + 1))
   mkdir -p "$WORK/guides" "$WORK/compare"
   # Split by parameter expansion, never `IFS=$'\t' read`, which collapses an empty field.
   loop_input="$(printf '%s' "$verdict" | jq -r '.need.guides[]? | "\(.area)\t\(.path)"')" || true
@@ -326,6 +335,18 @@ LOOP_INPUT
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
+  # GitHub's compare of any two commits the judge names (#3574). Each is a commit GitHub itself
+  # reported or a record's own, and only 40 hex characters reach a GitHub path.
+  loop_input="$(printf '%s' "$verdict" | jq -r '.need.diffs[]? | "\(.from)\t\(.to)"')" || true
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    from="${line%%$'\t'*}"; to="${line#*$'\t'}"
+    [[ "$from" =~ ^[0-9a-f]{40}$ && "$to" =~ ^[0-9a-f]{40}$ ]] || continue
+    vr_get "$WORK/compare/$from...$to.json" "the changes from $from to $to" "repos/$api_slug/compare/$from...$to"
+    keep_or_fail "$WORK/compare/$from...$to.json" "$?"
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   # The screenshots check's reads (#2516), asked only when a pictures block makes them matter:
   # whether the repository is public, and each folder of pictures on the pr-screenshots branch at
   # the commit the block links.
@@ -346,8 +367,12 @@ LOOP_INPUT
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
-  judge --final || judge_failed
-fi
+  if [ "$round" -ge "$NEED_ROUNDS" ]; then
+    judge --final || judge_failed
+    break
+  fi
+  judge || judge_failed
+done
 
 decision=$(printf '%s' "$verdict" | jq -r '.decision // ""' 2>/dev/null)
 text=$(printf '%s' "$verdict" | jq -r '.text // ""' 2>/dev/null)
