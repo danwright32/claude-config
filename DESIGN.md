@@ -648,9 +648,13 @@ Rejected along the way:
 - **One notification for every outcome of the check (until #3759).** A mod not listed, a mod refused
   and a validation the bound stopped all set one flag, so on 2026-11-26 a validation that was merely
   slow at a load average of about 60 was shown to Dan as "a mod is not loading on this Mac". A time out
-  measures `claude`, not the mod, so it is said as could not check and notifies only after
-  `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` in a row for the same mod (the number and its measurement are in
-  the table of limits), counted in `.mod-check-timeouts`; the other two still notify at once. Waiting
+  measures `claude`, not the mod, so it is said as could not check and notifies after
+  `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` syncs in a row for the same mod (the number and its measurement
+  are in the table of limits), counted in `.mod-check-timeouts` once per sync, by a tag naming the
+  sync, since one send can check twice. One sync posts at most one notification about time outs,
+  naming every mod due (six timed out in one sync on 2026-11-26). The only other notifications are for
+  a record that cannot be read: once when a time out meets it, and once, not on every sync, while it
+  cannot be set aside. The other two outcomes still notify at once. Waiting
   longer under load, or skipping the check, was left alone: the 30 second bound is a limit, and
   changing it is Dan's decision.
 - **Treating an absent `payload/mods` as an empty one.** git cannot record an empty folder, so a
@@ -2246,7 +2250,16 @@ the file as `{hooks: ...}`, deleting the key from the repository with no word ei
 
 So the pull names every such key, in its output and the sync log on each pull and in a notification
 once per set of keys (`.hooks-file-keys-told`), and the send writes its merged block into the object
-it read, so whatever else the file holds stays exactly as it was.
+it read, so every other key stays in the file. It is not byte for byte the same: the send reads the
+whole file with this Mac's home path put back, then writes it afresh through jq and puts the
+placeholder back, so in any key a value holding this Mac's literal home path becomes
+`__CLAUDE_HOME__`, as in the hooks block, and the spacing is jq's. A commit holding only that
+rewrite can be dropped as already published, since to this Mac it is the same content (seen in
+`tests/test-sync-hooks-file-other-keys.sh`), so it reaches the repository with a send that carries a
+change of its own. What a pull writes to a Mac's
+`settings.json` does not change: it still reads only `.hooks`. A file holding JSON `null` holds no
+key and no hooks, and both of the send's readings take it as empty, so the send writes its block over
+it, as it did before #3741.
 
 Rejected along the way:
 

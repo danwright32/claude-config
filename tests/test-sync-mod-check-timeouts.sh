@@ -137,6 +137,19 @@ for i in 1 2 3; do pull LATE=alpha-mod; pull LATE=beta-mod; done
 check "time outs that move between mods are not one run" "[ \"\$(notes)\" = 1 ]"
 pull
 
+# Two mods whose checks time out in the same sync are each counted, and the sync that takes them to
+# five posts ONE notification naming both, never one per mod (L36): on 2026-11-26 six mods timed out
+# in one sync.
+: > "$NL"
+for i in 1 2 3 4; do pull LATE="alpha-mod beta-mod"; done
+check "two mods timing out in one sync are each counted" "grep -q '^alpha-mod	4	' '$RECORD' && grep -q '^beta-mod	4	' '$RECORD'"
+check "and four such syncs notify nobody" "[ \"\$(notes)\" = 0 ]"
+pull LATE="alpha-mod beta-mod"
+check "the fifth posts one notification, naming both mods" "[ \"\$(notes)\" = 1 ] && grep -q 'alpha-mod' '$NL' && grep -q 'beta-mod' '$NL'"
+check "and that notification never says not loading" "! grep -q -i 'not loading' '$NL'"
+[ "$(notes)" = 1 ] || { echo "    it posted:"; sed 's/^/      /' "$NL"; }
+pull
+
 # A mod Claude Code does not list notifies at once, as before ...
 : > "$NL"
 pull LISTED=beta-mod
@@ -178,6 +191,24 @@ pull LATE=alpha-mod
 check "a record whose count is not a number is unreadable, not zero" "grep -q 'could not be read' '$OUT' && [ \"\$(notes)\" = 1 ]"
 pull
 
+# Failure path: a record that cannot be read and cannot be set aside either, because an earlier one
+# is already kept aside, is said in the output of every sync but notified ONCE, even on syncs where
+# every check finished (L36). A sync that reads the record again ends that, so the next time it
+# cannot be read is news again.
+: > "$NL"
+printf 'this is not a record\n' > "$RECORD"; printf 'an earlier unreadable record\n' > "$RECORD.unreadable"
+pull; pull; pull
+check "a record that cannot be read or set aside notifies once, not on every sync" "[ \"\$(notes)\" = 1 ] && grep -q 'could not be read' '$NL'"
+check "and every sync still says so in its output" "grep -q 'could not be set aside' '$OUT'"
+[ "$(notes)" = 1 ] || { echo "    it posted:"; sed 's/^/      /' "$NL"; }
+status > "$WORK/status.3"
+check "and status says the next sync cannot set it aside either" "grep -q 'is already there' '$WORK/status.3' && ! grep -q 'starts a new one' '$WORK/status.3'"
+rm -f "$RECORD" "$RECORD.unreadable"; pull
+printf 'this is not a record\n' > "$RECORD"; printf 'an earlier unreadable record\n' > "$RECORD.unreadable"
+pull
+check "once a sync has read the record again, it becoming unreadable again notifies again" "[ \"\$(notes)\" = 2 ]"
+rm -f "$RECORD" "$RECORD.unreadable"; pull
+
 # Failure path: the number of time outs that notify is refused when it cannot be read.
 HOME="$H" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$C" SYNC_REPO="$R" SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY=soon bash "$SCRIPT" status > "$WORK/status.bad" 2>&1; rc_bad=$?
 check "an unreadable SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY is refused" "[ '$rc_bad' -eq 2 ] && grep -q 'SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY=.soon. is not a positive whole number' '$WORK/status.bad'"
@@ -185,6 +216,38 @@ check "an unreadable SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY is refused" "[ '$rc_bad' 
 : > "$NL"
 pull LATE=beta-mod SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY=1
 check "SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY=1 notifies on the first time out" "[ \"\$(notes)\" = 1 ] && grep -q 'beta-mod' '$NL'"
+
+# One send that checks the mods twice is still one sync. A send that changes the mod names checks
+# them itself, and when the shared repo has moved on, the apply its reconcile runs checks them again,
+# so a count kept per check added two for one sync. Real runs against a bare repository standing in
+# for GitHub, one clone per Mac, each with a throwaway home.
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+SB="$WORK/send-shared.git"; git init -q --bare -b main "$SB"
+SA="$WORK/send-repoA"; SO="$WORK/send-repoO"
+git clone -q "$SB" "$SA" 2>/dev/null; git clone -q "$SB" "$SO" 2>/dev/null
+SHA="$WORK/send-homeA"; SHO="$WORK/send-homeO"
+for h in "$SHA" "$SHO"; do
+  for m in alpha-mod beta-mod; do
+    mkdir -p "$h/mods/$m/.claude-plugin"; printf '{ "name": "%s" }\n' "$m" > "$h/mods/$m/.claude-plugin/plugin.json"
+  done
+  echo '{"hooks":{}}' > "$h/settings.json"; printf '# rules\n' > "$h/CLAUDE.md"
+done
+gitrun(){ # gitrun <command> <home> <repo> <output file> [VAR=value ...]
+  local cmd="$1" home="$2" repo="$3" out="$4"; shift 4
+  env "$@" HOME="$H" SYNC_NO_NOTIFY=1 SYNC_CLAUDE_BIN="$FAKE" CLAUDE_HOME="$home" SYNC_REPO="$repo" bash "$SCRIPT" "$cmd" > "$out" 2>&1 < /dev/null
+}
+gitrun send "$SHA" "$SA" "$WORK/send.1"
+gitrun pull "$SHO" "$SO" "$WORK/send.2"
+printf 'an edit on the other Mac\n' >> "$SHO/CLAUDE.md"
+gitrun send "$SHO" "$SO" "$WORK/send.3"
+mkdir -p "$SHA/mods/gamma-mod/.claude-plugin"; printf '{ "name": "gamma-mod" }\n' > "$SHA/mods/gamma-mod/.claude-plugin/plugin.json"
+gitrun send "$SHA" "$SA" "$WORK/send.4" LATE=alpha-mod LISTED="alpha-mod beta-mod gamma-mod"
+check "fixture: that send checked the mods twice, for the new name and in its reconcile's apply" "[ \"\$(grep -c 'could not check mod alpha-mod' '$WORK/send.4')\" -ge 2 ]"
+check "one send that checks the mods twice counts one sync, not two" "grep -q '^alpha-mod	1	' '$SA/.mod-check-timeouts'"
+if ! grep -q '^alpha-mod	1	' "$SA/.mod-check-timeouts" 2>/dev/null; then
+  echo "    the record after that send:"; sed 's/^/      /' "$SA/.mod-check-timeouts" 2>/dev/null
+  show "the send" "$WORK/send.4"
+fi
 
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"

@@ -22,8 +22,10 @@ back.
   keeps it, and the first pull that finds the script registers it (#1913). Any other top level key
   somebody puts in this file is applied on neither Mac: the pull says so, naming it, in its output
   and the log and once in a notification per set of keys, and the send writes the hooks block into
-  the file it read, so the key stays in the repository rather than being deleted (#3741). A setting
-  both Macs share goes in `settings.shared.json` instead
+  the file it read, so the key stays in the repository rather than being deleted (#3741). The send
+  writes the whole file afresh, so in such a key this Mac's home path becomes `__CLAUDE_HOME__`, as
+  in the hooks block, and its spacing follows jq's layout. A setting both Macs share goes in
+  `settings.shared.json` instead
 - `payload/settings.shared.json`: the few other `settings.json` settings both Macs share, today
   `ultracode` (off since 2026-10-06), the effort level per model, as
   `modelSettings.<full model name>.effortLevel` (`high` for `claude-opus-5-5`, and for
@@ -8839,12 +8841,19 @@ answered in under half a second when measured), because the check runs under the
 A validation stopped that way says nothing about the mod, only that `claude` was too slow, so it is
 said as "could not check mod <name>", never as a mod that is not loading (#3759). A mod Claude Code
 does not list, or that validation refuses, still notifies at once ("a mod is not loading on this
-Mac"). A time out notifies only once the same mod's check has timed out on
+Mac"). A run of time outs notifies once the same mod's check has timed out on
 `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` syncs in a row (5 by default; the longest real run measured in
 this Mac's sync log was 4, under load), and once per run of them, so a check that can never finish is
-still heard. `claude-sync status` lists every mod the last syncs could not check, with how many in a
-row and since when. The count is kept in `.mod-check-timeouts` in the clone; a record that cannot be
-read is said so by the pull and by status, never counted as none, and a time out it meets notifies.
+still heard. The count goes up once per sync, however many times that sync checks the mods (a send
+that changes the mod names checks them, and the apply its reconcile runs checks them again). One sync
+posts at most one notification about time outs, naming every mod it covers. `claude-sync status`
+lists every mod the last syncs could not check, with how many in a row and since when. The count is
+kept in `.mod-check-timeouts` in the clone. A record that cannot be read is said so by the pull and
+by status, and never counted as none. Two more notifications come from that: when the pull can set
+the record aside, a time out it meets in that same sync notifies, since nothing can say it is the
+first; when it cannot (an earlier `.mod-check-timeouts.unreadable` is still there), it notifies once,
+and not again until a sync has read the record again. While it stays that way nothing is counted, so
+no later time out notifies; status says so on every run.
 
 Deleting a mod deletes it on the other Mac. Deleting the whole `~/.claude/mods` folder does not: a
 Mac with no mods folder cannot be told apart from one that never had mods yet, and reading that as a
@@ -12216,8 +12225,9 @@ side. Losing it costs one repeated notification
 </td><td>
 
 every mod check that gave every mod an outcome: one line per mod whose `claude plugin validate` did
-not answer in time, with how many syncs in a row, since when, and whether that was notified; removed
-when every check finished (#3759)
+not answer in time, with how many syncs in a row, since when, whether that was notified, and which
+sync last counted it (so one sync that checks twice counts once); removed when every check finished
+(#3759)
 
 </td><td>
 
@@ -12228,8 +12238,11 @@ run of them; and `claude-sync status`, which lists each mod it names
 
 absent means every mod's last check finished. Unreadable is never read as none: the pull and status
 say so, the pull keeps it as `.mod-check-timeouts.unreadable` and starts a new one from that sync,
-and a time out it meets notifies, since nothing can say it is the first. Lost, a run of time outs
-starts counting again, so a check that never finishes is heard that many syncs later
+and a time out it meets notifies, since nothing can say it is the first. When an earlier
+`.unreadable` is already there, the pull cannot set it aside: it leaves both, counts nothing, says so
+on every sync, and notifies once (`.mod-check-timeouts.stuck-told` records that, and the first sync
+that reads the record again removes it). Lost, a run of time outs starts counting again, so a check
+that never finishes is heard that many syncs later
 
 </td></tr>
 <tr><td>

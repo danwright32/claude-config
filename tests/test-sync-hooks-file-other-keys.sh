@@ -120,7 +120,7 @@ cp "$WORK/b-settings.json" "$HB/settings.json"
 run sync "$HB" "$RB" "$WORK/b2"
 fetch "$RB"
 check "the send publishes this Mac's new gate" "grep -q 'hooks/mine.sh' <<< \"\$(shared_file '$RB')\""
-check "and keeps the permissions block in the shared file, unchanged" \
+check "and keeps the permissions block in the shared file, with the same value" \
   "[ \"\$(shared_file '$RB' | jq -c '.permissions')\" = '$PERMS' ]"
 if ! shared_file "$RB" | jq -e '.permissions' >/dev/null 2>&1; then
   echo "    the shared file after the send:"; shared_file "$RB" | sed -n '1,20p' | sed 's/^/      /'
@@ -163,6 +163,23 @@ _told="$(wc -l < "$NL")"
 npull "$WORK/n5"
 check "failure path: a pull that could not read the file keeps what was told, so nothing is notified twice" "[ \"\$(wc -l < '$NL')\" = '$_told' ]"
 
+# What a pull writes to settings.json does not depend on the other keys. Two pulls from the same
+# starting state, one from a file holding other keys (one of them a value holding this Mac's own
+# home path), one from the same file with the hooks block alone, write settings.json byte for byte
+# the same.
+XR="$WORK/extra-repo"; XH="$WORK/extra-home"; mkdir -p "$XR/payload/hooks" "$XH/hooks"
+cp "$HA/hooks/keep.sh" "$XR/payload/hooks/keep.sh"
+echo '{}' > "$XH/settings.json"
+cp -R "$XR" "$WORK/extra-repo.fresh"; cp -R "$XH" "$WORK/extra-home.fresh"
+jq --arg h "$XH" '. + {note: ($h + "/hooks/notes.txt")}' "$WORK/c-good.json" > "$XR/payload/settings.hooks.json"
+CLAUDE_HOME="$XH" SYNC_REPO="$XR" SYNC_NO_GIT=1 bash "$SCRIPT" pull > "$WORK/x1" 2>&1 < /dev/null
+cp "$XH/settings.json" "$WORK/settings-from-extra-keys.json"
+rm -rf "$XR" "$XH"; cp -R "$WORK/extra-repo.fresh" "$XR"; cp -R "$WORK/extra-home.fresh" "$XH"
+jq '{hooks}' "$WORK/c-good.json" > "$XR/payload/settings.hooks.json"
+CLAUDE_HOME="$XH" SYNC_REPO="$XR" SYNC_NO_GIT=1 bash "$SCRIPT" pull > "$WORK/x2" 2>&1 < /dev/null
+check "fixture: both pulls registered the hook" "grep -q 'hooks/keep.sh' '$WORK/settings-from-extra-keys.json' && grep -q 'hooks/keep.sh' '$XH/settings.json'"
+check "a pull writes the same settings.json whether or not the file holds other keys" "cmp -s '$WORK/settings-from-extra-keys.json' '$XH/settings.json'"
+
 # Failure path: a shared file that cannot be parsed is held exactly as it was by the send, and the
 # pull does not claim to have found a key in it (it says the file could not be read instead).
 fetch "$RA"
@@ -186,6 +203,47 @@ git -C "$RA" push -q origin HEAD 2>/dev/null
 run sync "$HB" "$RB" "$WORK/b4"
 fetch "$RB"
 check "failure path: a send leaves a shared file whose top level is a list as it was" "shared_file '$RB' | cmp -s - '$WORK/array.json'"
+
+# A shared file holding JSON null holds no key and no hooks. The send's first reading takes it as an
+# empty hooks block, so the send writes this Mac's block over it, as it did before #3741; it is never
+# held back with words saying a second reading failed.
+fetch "$RA"
+printf 'null\n' > "$RA/payload/settings.hooks.json"
+git -C "$RA" commit -qm "a hooks file holding null" -- payload/settings.hooks.json
+git -C "$RA" push -q origin HEAD 2>/dev/null
+# A sync stages its send before it takes in the shared repo, so it is the second sync whose send
+# reads the null file.
+run sync "$HB" "$RB" "$WORK/b5a"
+run sync "$HB" "$RB" "$WORK/b5"
+fetch "$RB"
+check "a shared file holding null is written over with this Mac's hooks block, as before" "shared_file '$RB' | jq -e 'type == \"object\" and has(\"hooks\")'"
+check "and the send never says the file could not be read a second time" "! grep -q 'a second time' '$WORK/b5'"
+check "and never holds the hooks block back over it" "! grep -q 'hooks block was NOT published' '$WORK/b5'"
+if ! shared_file "$RB" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  echo "    the shared file after the send:"; shared_file "$RB" | sed -n '1,10p' | sed 's/^/      /'
+  echo "    the send said:"; sed -n '1,20p' "$WORK/b5" | cut -c1-300 | sed 's/^/      /'
+fi
+
+# Every other key passes through the send's own reading and writing: a value holding this Mac's own
+# home path is written back with the placeholder that stands for it, as the hooks block always was.
+fetch "$RA"
+jq --arg h "$HB" '. + {note: ($h + "/hooks/notes.txt")}' "$RA/payload/settings.hooks.json" > "$WORK/with-note.json"
+cp "$WORK/with-note.json" "$RA/payload/settings.hooks.json"
+git -C "$RA" commit -qm "a key holding the other Mac's home path" -- payload/settings.hooks.json
+git -C "$RA" push -q origin HEAD 2>/dev/null
+# With a hook change of its own to send: a commit whose only change is that rewrite is dropped,
+# because the shared repo already holds what this Mac runs.
+run sync "$HB" "$RB" "$WORK/b6a"
+script "$HB" third.sh
+jq --arg c "$HB/hooks/third.sh" '.hooks.PreToolUse[0].hooks += [{type: "command", command: $c}]' "$HB/settings.json" > "$WORK/b-settings3.json"
+cp "$WORK/b-settings3.json" "$HB/settings.json"
+run sync "$HB" "$RB" "$WORK/b6"
+fetch "$RB"
+check "a send writes this Mac's own home path in another key as the placeholder" "shared_file '$RB' | jq -e '.note == \"__CLAUDE_HOME__/hooks/notes.txt\"'"
+if ! shared_file "$RB" | jq -e '.note == "__CLAUDE_HOME__/hooks/notes.txt"' >/dev/null 2>&1; then
+  echo "    the shared file after the send:"; shared_file "$RB" | sed -n '1,12p' | sed 's/^/      /'
+  echo "    the sends said:"; cat "$WORK/b6a" "$WORK/b6" | sed -n '1,30p' | cut -c1-300 | sed 's/^/      /'
+fi
 
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
