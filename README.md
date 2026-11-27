@@ -12010,13 +12010,22 @@ since it merged is in is it live's verdicts, which the box reads too, since is i
 carded merge off its record only at a turn end. At most one box per request, and two calls at once
 show one. A request is a message Dan types, or since #3843 an answer he gives in a picker that the
 session then does work after (his answer of 2026-11-27: an answer alone, such as one confirming a
-step, is no request). Work is a call of the main conversation that ran and whose tool the end of
-turn review's own test counts as able to change something (`is_mutating` in
+step, is no request; a reply he types into the picker in place of a choice is an answer; an
+answer to a picker he could not have read whole, by mod-kit's `askFault` (#3321), is not). His
+answer waits only until the turn it was given in ends, so work in a later turn he did not start is
+not work he picked. Work is a call of the main conversation that ran, that Claude Code did not mark
+read only (`isReadOnly` on the call's result, set when the tool held its input read only, as its
+typings say Bash does for `ls`; a result without the mark is never taken as read only), and whose
+tool the end of turn review's own test counts as able to change something (`is_mutating` in
 `hooks/turn-worked.py`, run from that file by the mod, so there is one list of such tools;
-`tests/test-goal-box-work-test.sh` holds the mod's command to the real file). The box's own tool,
+`tests/test-goal-box-work-test.sh` holds the mod's command to the real file; a run that could not
+be read is not made again for the same tool's name in that turn). The box's own tool,
 a call that was refused or came back as an error (how a settings hook's refusal reaches a mod)
 and a subagent's call are not work; a picker dismissed, failed or closed while he was away is no
-answer; a message he types drops an answer still waiting. A test that
+answer; one that came back any other way with no answer the mod reads is not counted either, and
+the debug log then names the keys its result held, never a word of his, so a change in what
+Claude Code hands the mod for a picker shows at the first one; a message he types drops an answer
+still waiting. A test that
 cannot be run is said in the refusal, never read as no work. The refusal of a second box says
 which of these it is and when a later call is right. The box also waits for the turn's end of turn
 review (#3843, Dan's answers of 2026-11-27: hold it "until the review is answered", and, of how the
