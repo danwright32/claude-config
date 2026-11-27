@@ -605,8 +605,12 @@ const typedStep = (commands: readonly string[]) => {
 // call of the steps tool after it, is sent back once to pin the step or to say in one line that
 // nothing from it is his. Judged on the refusal in the session's own record (hooks/turn.ts), never
 // on what the reply says. It begins with REFUSED_MARK, so the turn holding it is never blocked again.
+// Kept to about 40 words (Dan, 2026-11-27: "Merge with a shorter hold"): a hold is printed to him as
+// well as to Claude, and of the 79 turns it would have held on the work MacBook in 30 days, 70 left
+// him nothing. It was 127 words. How a step is written and that pinning replaces the card are the
+// steps tool's own description to say, and it does.
 const refusedStep = (calls: number) =>
-  `${REFUSED_MARK}${calls > 1 ? ` (${calls} calls)` : ''}, and no step went on the steps card after it. The refusal is final: never run it again or reach the same end another way. If what the refused call was for is now Dan's to do, put that step on the card with the ${TOOL} tool: its direct link or a location Dan can find, its actions one per item, and any value to paste. Pinning replaces the card, so pin it with the card's unfinished steps and this one. Then say in one line that it is on the card. If nothing from the refusal is his to do, say exactly this in one line instead: "Nothing from the refusal is yours to do."`
+  `${REFUSED_MARK}${calls > 1 ? ` (${calls} calls)` : ''}. A refusal is final. If it left Dan something to do, put that on the steps card (${TOOL}). If not, say exactly: "Nothing from the refusal is yours to do."`
 
 // A step another mod hands the card (#1107), answered by the hooks on the noun's events below, which
 // have the whole engine; the noun's own methods answer only when those hooks failed, and say so.

@@ -11471,8 +11471,11 @@ the last message alone is judged, never twice in one chain of turn ends (`stop_h
 the permission check refused in the turn (#3842) is judged whatever the reply says: it is read from
 the session record's own `toolDenialKind` (`automode-blocked` alone, never no verdict, a hook's or a
 rule's refusal, or a prompt Dan declined), and with no call of the `steps` tool after it the turn is
-blocked once, telling Claude to pin what the refusal left for Dan or to say in one line that nothing
-from it is his ("Nothing from the refusal is yours to do."). A subagent's refusal is in its own
+blocked once, in about 40 words since Dan reads them too, telling Claude to put what the refusal left
+for Dan on the steps card or to say in one line that nothing from it is his ("Nothing from the
+refusal is yours to do."). Three things answer it: a step the main conversation pins after the
+refusal, that line, and the line that answers every ask of this check, "None of these steps are
+yours to do now." A subagent's refusal is in its own
 record and holds nothing, and a turn that could not be read names no refusal. A page
 published with the Artifact tool is judged as it is published, read from the file it came from
 (#1811, `hooks/page.ts`): two list items, numbered or bulleted, that each begin with a thing to do

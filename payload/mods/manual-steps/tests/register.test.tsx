@@ -6,7 +6,7 @@ import type { ModKitBandRow, ModKitPane } from '../.claude-plugin/types/mod-kit/
 import { DROPPED_AFTER_MS } from '../hooks/card.ts'
 import { PAGE_MARK } from '../hooks/page.ts'
 import { ASKED_PANE, FOLLOW_MS, UNASKED_PANE } from '../hooks/place.ts'
-import { PROSE_MARK } from '../hooks/turn.ts'
+import { PROSE_MARK, REFUSED_MARK } from '../hooks/turn.ts'
 import { STEPS_DESCRIPTION, VERDICT_DESCRIPTION, VERDICT_INPUT } from '../hooks/register.tsx'
 import type { StepsCard } from '../types/index.d.ts'
 
@@ -2302,7 +2302,7 @@ test('a turn in which the permission check refused a call, with nothing pinned a
   expect(r.block).toMatch(/^The permission check refused a call of yours in this turn/)
   expect(r.block).toMatch(/mcp__manual-steps__steps\b/)
   expect(r.block).toContain('"Nothing from the refusal is yours to do."')
-  expect(r.block).toMatch(/never run it again/i)
+  expect(r.block).toMatch(/refusal is final/i)
   // No phrase of the prose check is in the reply, so that block is not given beside it.
   expect(r.block).not.toMatch(/leaves Dan a step in prose/)
 })
@@ -2311,6 +2311,29 @@ test('the hold says how many calls were refused when there were several (#3842)'
   world(on, { turn: [prompt(), refusedCall(), refusedCall(), wrote(ROW_REPLY)].join('\n') })
   await start($)
   expect((await turnStop($, ROW_REPLY)).block).toMatch(/in this turn \(2 calls\)/)
+})
+
+// Dan, 2026-11-27, with both Macs' counts in front of him: "Merge with a shorter hold". A hold is
+// printed to him as well as to Claude, and most holds leave him nothing (70 of the 79 turns read
+// on the work MacBook), so its words are cut from 127 to about 40. It still says what happened and
+// both ways out, and still begins with the mark that stops a second hold in the turn.
+const wordsIn = (text: string | undefined) => (text ?? '').trim().split(/\s+/).filter(Boolean).length
+
+test('the hold for a refused call alone is at most 45 words, and still says what happened and both ways out (#3842)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  const one = (await turnStop($, ROW_REPLY)).block
+  expect(wordsIn(one)).toBeLessThanOrEqual(45)
+  expect(one?.startsWith(`${REFUSED_MARK}.`)).toBe(true)
+  expect(one).toMatch(/refusal is final/i)
+  expect(one).toMatch(/steps card/)
+  expect(one).toMatch(/mcp__manual-steps__steps\b/)
+  expect(one).toContain('"Nothing from the refusal is yours to do."')
+  // Several calls refused: the count is the only thing added.
+  w.turn = [prompt(), refusedCall(), refusedCall(), refusedCall(), wrote(ROW_REPLY)].join('\n')
+  const three = (await turnStop($, ROW_REPLY)).block
+  expect(three?.startsWith(`${REFUSED_MARK} (3 calls).`)).toBe(true)
+  expect(wordsIn(three)).toBe(wordsIn(one) + 2)
 })
 
 test('a step pinned after the refusal answers it, and one pinned before it does not (#3842)', withKit, async ($, on) => {

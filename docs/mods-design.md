@@ -2558,9 +2558,21 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   two days. Read one by one, 2 of the 16 left Dan a step no card held and said so in prose, 1 more
   probably did, 9 left him nothing and would be answered by the one line, and 4 could not be told
   from the turn. A hold costs Dan more than Claude's one line, since a Stop hook's block is printed
-  to him as well: 644 characters for a refusal alone, and 1,836 when a typed command, a prose step
-  and two refusals are asked about together (measured in the review of pull request 3854,
-  2026-11-27).
+  to him as well. As first built the hold for a refusal alone was 127 words (644 characters), and
+  1,836 characters when a typed command, a prose step and two refusals were asked about together
+  (measured in the review of pull request 3854, 2026-11-27).
+  The work MacBook's count, 2026-11-27, at `d768c69e67` over 16,643 session records of 30 days,
+  24,148 turns: a refused call in 102 turns, 23 answered by a call of the `steps` tool by the
+  turn's end and 79 not, so between 78 and 102 held. The 79 were read one by one there, each given
+  one label from a fixed list: 7 left Dan a step, and in all 7 the reply said so in prose with no
+  card; 70 left him nothing (in 56 the session did it another allowed way, in 14 it gave it up or
+  it was not needed); 2 could not be told. 118 refused calls carried the kind, 25 of them calls of
+  an MCP tool, and the cross check found 118 results by the sentence with none unread, so a
+  refused MCP call is read like any other. Dan's decision on those figures, 2026-11-27: "Merge
+  with a shorter hold". The check stays, since it catches every one of the 7, and the hold's words
+  for a refusal alone were cut to 41 (229 characters): what happened, that a refusal is final, and
+  both ways out. How a step is written, and that pinning replaces the card, are left to the
+  `steps` tool's own description, which says both.
   The kind is a field Claude Code does not document, and the reader finds it by its exact text, so
   a release that renamed or respaced it would stop the hold with nothing said. The count's last
   line therefore finds refused calls a second way, by the "denied" sentence their result begins
@@ -2584,7 +2596,14 @@ not settled by either and are waiting on Dan; until he decides, the build does t
 
   The three not read were all said on the work MacBook in the replies of 2026-11-27, which this
   count cannot see. The turn a call is refused in is held for the refusal whatever its words, and
-  those replies also said "One step left for you", which is read.
+  those replies also said "One step left for you", which is read. Counted on the work MacBook the
+  same day (16,650 session records, 24,159 turns, at the commit that reads all five): each of the
+  three was said in 1 turn, all three in that one session, so Dan's decision was "Leave all three
+  out" (2026-11-27). The two that are read, counted there at `d768c69e67`: "step left for you"
+  said in 12 turns and newly held in 1, "the one only you can do" said in 10 and newly held in 2,
+  and all 3 were steps for Dan. "the one thing only you can do" also fires when the thing is a
+  decision, which the older phrases leave out; every turn it caught on either Mac was a step (2 on
+  each), and Dan's decision was "Leave it as it is" (2026-11-27).
 
   "Set" did not join the words that begin a numbered step (Dan, 2026-11-27): it also leads
   Claude's own plans, and the same list decides what a page of steps is.
