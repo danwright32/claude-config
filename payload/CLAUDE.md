@@ -112,8 +112,8 @@ These come from a 2026-07-06 audit of roughly 850 historical GitHub issues acros
 ## Hand-offs to Dan (manual steps)
 
 Dan does not write code or live in the terminal. When a step genuinely requires him:
-- A slash command only Dan can type is a manual step like any other (`/plan-council`, `/reload-plugins`, `/compact`): it goes on the steps card as a step of its own, the command as its value, in the turn that hands it over, never only in the reply. A card of other steps closes once those are done, and the command in the reply is forgotten (Dan, 2026-11-25, #3652).
 - FIRST check whether it is already done (query the system, look at the state). Do not ask him to redo something he already did.
+- A slash command only Dan can type is a manual step like any other (`/plan-council`, `/reload-plugins`, `/compact`): it goes on the steps card as a step of its own, the command as its value, in the turn that hands it over, never only in the reply. A card of other steps closes once those are done, and the command in the reply is forgotten (Dan, 2026-11-25, #3652).
 - Give numbered steps with exactly ONE copy-paste command per code block. Nothing goes inside a block that should not be copied verbatim, no placeholders he has to notice and edit inline.
 - For a manual file edit: put the find text in one code block and the replacement text in a second block, so he can cmd+F (his spec, 2026-06-25).
 - **Dan cannot see files delivered into the chat.** A file card rendered in the conversation is invisible to him (his words, 2026-09-07: "i need you to open them. I cant see it in this chat"), so anything he has to LOOK at (a screenshot, a rendering, a report) must be OPENED on his screen, not just sent or named by path. Open it with the app NAMED: `open -a "Google Chrome" <file>` for an HTML page, `open -a Preview <file>` for a screenshot or a PDF. Never a bare `open`, which goes to the Island browser. Tell him focus is about to move, in the same message.
