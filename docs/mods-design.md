@@ -2463,14 +2463,30 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   card closed, and the command was forgotten. Two things let it through: no phrase knew "start
   `/plan-council`", and any unfinished step on the card answered the prose check whatever that step
   was. So `hooks/typed.ts` recognises a command handed over to type (an imperative to type, run,
-  start, paste, enter, use, invoke, launch or kick off it, all counted in the measurement below,
-  leading its sentence, its line or the words after a label's colon; "to do X,
-  type"; "until you run", "needs you to type", "remember to type"; "your next move is"; a fenced
-  block whose first line is the command), and the turn's end is held unless an unfinished step on
-  the card shown names the command. The prose check keeps its own rule, any unfinished step, since
-  arbitrary prose cannot be matched to a step. Not counted: a command in an offer or a condition
-  (if, could, want me, later, a question), one Claude runs or ran (I, we, will in its sentence),
-  "you can type", one quoted, and a path. Measured on 2026-11-25 over this Mac's 122 interactive
+  start, paste, invoke, launch or kick off it, leading its sentence, its line, the words after a
+  label's colon or a clause after "so", with "just", "when you're ready" or "after those two"
+  before it; "to do X, type"; "until you run", "you have to type", "you should now run", "needs
+  you to type", "remember to type"; "your next move is" and "your next move:"; "is yours:" then a
+  marked command; "open a new session and run"; a fenced block whose first line is the command),
+  and the turn's end is held unless an unfinished step on the card shown names the command. The
+  prose check keeps its own rule, any unfinished step, since arbitrary prose cannot be matched to
+  a step. One step gets one ask: where the only phrase the prose check finds is in the words that
+  hand the command over, the command's ask is the only one given, and a phrase anywhere else in
+  the turn keeps its own. Not counted: a command in an offer or a condition (if, could, want me,
+  later, a question), judged on the command's own clause, so an aside in brackets and what follows
+  "then" do not count against it; a standing rule ("on anything other people will read",
+  "always"); one Claude runs or ran (I, we, will before it in its sentence, except after "so",
+  after a label that speaks to Dan, and where "you" names him); "you can type"; one quoted on its
+  line or in a block quote; file text inside a code block; a list the line above it calls the
+  session's own plan or examples; a command called an example or named as a skill; a sentence
+  that speaks of a web address (endpoint, route, URL, redirect, domain); a block introduced as
+  already typed; and a path. "use" and "enter" are not among the verbs: the independent review of
+  pull request 3677 found them holding a skill ("use the `/db-apply` skill"), a folder and a web
+  address, and no turn held in the count of 2026-11-27 below depended on them. A one word route with nothing said of it
+  ("Start `/login`.") cannot be told from a command and is still held, once, and the ask lets the
+  session answer in one line. The review's two lists, seventeen hand overs that passed and eleven
+  replies held that handed nothing over, are cases in `tests/typed.test.ts`, held together so a
+  fix for one cannot bring the other back. Measured on 2026-11-25 over this Mac's 122 interactive
   sessions of the 30 days before (2,914 turns; the 7,221 headless and SDK sessions are never held):
   43 turns handed Dan a command, 20 had it in a card call already, and 23 would be held. All 23
   hand him a command only he can type (13 `/reload-plugins`, 5 `/compact`, 3 `/goal`, 1
@@ -2480,6 +2496,21 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   offer ("you can also type"), a description ("it now tells you to run"), Claude's own run or a
   later step ("once it installs I'll ask you to run"); the one missed hand over put the command
   after a colon with no verb ("To run when convenient: `/reload-plugins`").
+  Counted again on 2026-11-27, after the review's fixes, over the personal MacBook's 127
+  interactive sessions of the 30 days before (3,015 turns, each counted once though a resumed
+  session's file repeats them; 7,483 headless and SDK sessions passed over): 44 turns handed Dan
+  a command and 37 would be held, 34 with no card shown and 3 beside a card of other unfinished
+  steps, which is the case of the issue. Read one by one, all 37 hand him a command only he can
+  type (27 `/reload-plugins`, 6 `/compact`, 2 `/goal`, 1 `/plan-lite`, 1 `/winddown`), and none
+  is a rule quoted, a route, a path, an example or the session's own plan. The prose check as it
+  stands holds 2 of the 37, so 35 are turns sent back that were not before, a little over one a
+  day. The recogniser as
+  first built holds the same 37 turns, so on this Mac the review's fixes move nothing: none of
+  its wordings, missed or wrongly held, was said in those 30 days. The 37 is higher than the 23
+  of the first count because that count took a command as on the card whenever the session's
+  last steps call named it, finished or not; this one follows each card through its steps calls
+  and verdicts and asks for an unfinished step. By the first count's rule the same 30 days give
+  25.
 - **A call the permission check refused is answered by a step pinned after it, or by one line**
   (#3842). On 2026-11-27 the permission check refused a call that set a row of Dan's to do list.
   The session rightly did not send it again, then told him in eight replies that the row was his
@@ -3547,13 +3578,13 @@ and the band question is removed rather than kept beside it (L29). Three defects
   line once its markdown is drawn, in bold, in a list or in a quote, is refused in the question
   and in the entry (`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits
   of the lessons file were ever approved For good, both adding a whole lesson entry, which is the
-  route now closed. Left as they were at the time, and built since under #3343, which closed on
-  2026-11-27: a write that touches no entry (a section heading, an entry taken out whole, text
-  above the first section), whose For good question is now held to the entries and headings it
-  takes out or moves (pull request 3367), and a checkout's `payload/LESSONS.md`, which the lesson
-  picker does not cover and whose merge is now held until Dan has answered for the entries it
-  changes (pull request 3580). A shell command that writes the lessons file was raised there with
-  them and has been built as well, below.
+  route now closed. Left as they were by this change: a write that touches no entry (a section
+  heading, an entry taken out whole, text above the first section) and a checkout's
+  `payload/LESSONS.md`, which the lesson picker does not cover. Both went to #3343 with a shell
+  command that writes the lessons file. That command was built first, below, and #3343 closed on
+  2026-11-27 with a guard on the merge (pull request 3580): a pull request that adds, changes,
+  removes or moves an entry in a checkout's lessons file is held until Dan has answered for it.
+  A section heading and text above the first section are not asked about there either.
   Not built, and Dan's to decide (#3320's open questions): deriving the SHORT line from the rule
   by a fixed rule, so that nothing is free to differ; and reading the 737 SHORT lines already in
   the file against their rules once, since none was ever shown.
