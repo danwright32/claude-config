@@ -70,7 +70,9 @@ plain_name() { local LC_ALL=C; [[ $1 =~ ^[A-Za-z0-9_.-]+$ ]]; }
 tool=""
 named=""
 case "$payload" in
-  *'"tool_name"'*'"tool_name"'*) ;;   # two such keys: which is the call's is python3's to say
+  # Two such keys: which is the call's is python3's to say, further down. The note sits on a line of
+  # its own because test-gate-payload-reader.sh reads a code line that names the reader as a use of it.
+  *'"tool_name"'*'"tool_name"'*) ;;
   *)
     if payload_match "$payload" '"tool_name"[[:space:]]*:[[:space:]]*"([^"\]*)"'; then tool="${BASH_REMATCH[1]}"; fi ;;
 esac
