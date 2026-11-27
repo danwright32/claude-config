@@ -9,6 +9,18 @@
 # the identical call once more, that a second refusal stops it and is recorded for him, and that a
 # refusal that IS a verdict stays final exactly as before.
 #
+# claude-config#3822 adds two refusals that mean the same thing, a guard that could not review the
+# call. Both are worded by Claude Code, and this repository only quotes them: a PreToolUse hook
+# stopped at its registered timeout ("timed out; blocking because onFailure is"), and one mod's
+# call to another mod left unanswered for 10 seconds ("did not answer within 10000ms"), which the
+# refusing mod carries inside its own sentence. Counted on 2026-11-27 over every session record
+# the personal MacBook held (32 days): 235 of the first and 31 of the second, 111 and 17 of them on
+# 2026-11-26, when that Mac ran at a load of 100 to 350. Dan decided on 2026-11-26 (his picker
+# answer: "2.2 Timed out gets one resend") that they get the same one unchanged resend. The words
+# are narrow on purpose: this repository's own guards print look-alikes ("Dan did not answer", a
+# merge gate's "GitHub did not answer within this hook's read budget") when they give a verdict or
+# ask Dan, and section 2 holds the rule to quoting nothing found in those.
+#
 # The rule has ONE home (L83): one bullet of the global CLAUDE.md, the only rule file every kind of
 # session loads (a main session, an overnight worker, a headless run and a dispatched agent alike).
 # Everything else that says a refusal by the check is final points at that bullet by name, because
@@ -19,7 +31,9 @@
 #      words a session is shown; the one identical resend; what a second refusal means and where it
 #      is recorded; and that every other refusal stays final. It carries Dan's decision and date.
 #   2. the words the home quotes are words Claude Code really writes, held against the refusal a
-#      session received on 2026-11-19 (L48), and the rule asks nothing that message forbids.
+#      session received on 2026-11-19 (L48), and the rule asks nothing that message forbids. The
+#      words for a hook out of time and an unanswered guard are held against refusals recorded on
+#      2026-11-26, and nothing the rule quotes is found in a look-alike this repository prints.
 #   3. the rules every dispatched agent reads point at the home and keep their own rule: the
 #      exception they add names the home and the issue, and its own sentence on a second refusal
 #      sends it under item 6 of the report.
@@ -78,6 +92,13 @@ MARK_TWO='"This is not a judgment that the action is unsafe"'
 says "quotes the words that mark a refusal with no verdict" "$MARK_ONE"
 says "quotes the refusal saying it is not a judgement of safety" "$MARK_TWO"
 says "names auto mode's safety check as the one whose refusal this is" "auto mode's safety check"
+# The two refusals of a guard out of time (claude-config#3822), each by the words Claude Code
+# writes for it. The first stops short of the setting's value, which Claude Code prints inside
+# quotation marks of its own.
+MARK_TIMED='"timed out; blocking because onFailure is"'
+MARK_UNANSWERED='"did not answer within 10000ms"'
+says "quotes the words that mark a hook stopped at its timeout" "$MARK_TIMED"
+says "quotes the words that mark a guard another mod did not answer" "$MARK_UNANSWERED"
 # Part two: the identical call, once.
 says "allows the call once more" 'once more'
 says "requires the call unchanged" 'exactly as it was'
@@ -93,10 +114,15 @@ says "keeps a verdict final" 'stays final'
 says "keeps a verdict from being retried" 'never retried'
 says "keeps a verdict from being done another way" 'never done another way'
 says "keeps a verdict from being done by another agent or the orchestrator" 'another agent or the orchestrator'
+# A hook's or a guard's refusal in any other words is outside the rule (claude-config#3822).
+says "gives a hook's or a guard's refusal in other words no resend" 'this rule gives it no resend'
 # Dan's decision, quoted with its date and issue, the way the neighbouring rules carry his.
 says "carries the date of Dan's decision" '2026-11-19'
 says "carries the issue" 'claude-config#3224'
 says "quotes Dan's answer" '"One unchanged resend"'
+says "carries the date of Dan's decision on a guard out of time" '2026-11-26'
+says "carries the issue of that decision" 'claude-config#3822'
+says "quotes Dan's answer on a guard out of time" '"2.2 Timed out gets one resend"'
 says "declares itself the one home" 'one home'
 
 # ---- 2. the quoted words are the ones Claude Code writes ----
@@ -130,6 +156,67 @@ in_rewritten "Claude Code's message for a rewritten call asks for the input it q
 says "allows the input the refusal quotes, where a hook rewrote the call" 'the input the refusal quotes'
 check "the rule allows no second resend" \
   "$(grep -q -i -E 'twice more|two more|a second resend|up to (two|three|2|3)' <<< "$home_line" && echo "the rule allows more than one resend" || echo ok)"
+
+# The two refusals of a guard out of time (claude-config#3822), each copied whole and unshaped from
+# the record of a session on the personal MacBook on 2026-11-26, Claude Code 2.1.332 (L48). Both are
+# worded by Claude Code and by nothing in this repository. The first is all a session is shown when
+# Claude Code stops a PreToolUse hook at its registered timeout: the hook's own output is discarded
+# (scanners-before-push.sh, "THE HARD STOP OVER THE WHOLE RUN"). In the second, the words inside the
+# brackets are Claude Code failing the collision guard's call to another mod after 10 seconds
+# (docs/mods-design.md, standing rule 4), and the sentence around them is the guard's own
+# (mods/collision-guard/hooks/register.ts).
+REAL_TIMED_OUT='PreToolUse:Bash hook error: [command hook 48]: timed out; blocking because onFailure is "block"'
+REAL_UNANSWERED='Blocked: the collision guard could not check this call against the other sessions ($.sessions.list: session-registry did not answer within 10000ms), so it did not run. Try it again; if it fails the same way, tell Dan.'
+in_text "the mark of a hook stopped at its timeout is in the refusal Claude Code writes" "$MARK_TIMED" "$REAL_TIMED_OUT"
+in_text "the mark of an unanswered guard is in the refusal a session is shown" "$MARK_UNANSWERED" "$REAL_UNANSWERED"
+
+# The marks are narrow on purpose. This repository's own guards print look-alike words when THEY
+# refuse, and such a refusal is that guard's verdict or a question for Dan: a resend after "Dan did
+# not answer" would put the same dialog in front of him again. So nothing the rule quotes may be
+# found in one of them, which is what fails if a mark is ever shortened to "did not answer" or
+# "timed out".
+quotations() { # quotations <line>   prints each text the line holds between two double quotes
+  local rest="$1" inside
+  while [[ "$rest" == *'"'*'"'* ]]; do
+    rest="${rest#*\"}"; inside="${rest%%\"*}"; rest="${rest#*\"}"
+    [ -n "$inside" ] && printf '%s\n' "$inside"
+  done
+}
+quoted_in() { # quoted_in <rule line> <refusal>   prints the first quotation of the rule found in the refusal
+  local quoted q
+  quoted="$(quotations "$1")"
+  while IFS= read -r q; do
+    [ -n "$q" ] || continue
+    if grep -q -F -- "$q" <<< "$2"; then printf '%s\n' "$q"; return 0; fi
+  done <<QUOTED
+$quoted
+QUOTED
+  return 0
+}
+# Each look-alike is read from the code that prints it, never typed here (L48), and a look-alike
+# that is no longer there fails by name, where an empty one would pass by matching nothing (L100).
+lookalike() { # lookalike <description> <fixed text of it> <file that prints it>
+  local line hit
+  line="$(grep -m 1 -F -- "$2" "$3" 2>/dev/null)"
+  check "the look-alike refusal $1 is where this suite reads it" \
+    "$([ -n "$line" ] && echo ok || echo "no '$2' in $3, so the look-alike was not read")"
+  hit="$(quoted_in "$home_line" "$line")"
+  check "the rule quotes nothing found in the look-alike refusal $1" \
+    "$([ -z "$hit" ] && echo ok || echo "the rule's \"$hit\" is also in a refusal that is not a guard out of time: $2")"
+}
+lookalike "of a dialog Dan did not answer" 'Dan did not answer: the dialog closed by itself' "$DIR/../mods/area-check/hooks/register.ts"
+lookalike "of a merge gate that could not read GitHub" "GitHub did not answer within this hook's read budget" "$DIR/check-closing-merge.sh"
+lookalike "of the design round guard's own words for a check out of time" 'could not check this call because it timed out' "$DIR/../mods/design-round-guard/hooks/rules.ts"
+# Seen to fail (L1): a rule quoting the bare words is caught, and the narrow words are passed.
+DIALOG='Dan did not answer: the dialog closed by itself while he was away, so nothing is recorded.'
+check "the look-alike check catches a rule that quotes the bare words did not answer" \
+  "$([ "$(quoted_in 'A guard that "did not answer" gets one resend.' "$DIALOG")" = 'did not answer' ] && echo ok || echo "a rule quoting the bare words passed")"
+check "the look-alike check catches a rule that quotes the bare words timed out" \
+  "$([ "$(quoted_in 'A hook that "timed out" gets one resend.' 'could not check this call because it timed out (why)')" = 'timed out' ] && echo ok || echo "a rule quoting the bare words passed")"
+check "the look-alike check passes a rule that quotes the narrow words" \
+  "$([ -z "$(quoted_in 'A guard that "did not answer within 10000ms" gets one resend.' "$DIALOG")" ] && echo ok || echo "the narrow words were reported")"
+check "the look-alike check reads every quotation on the line, not only the first" \
+  "$([ "$(quotations 'One "first mark" and "second mark" here.' | tr '\n' '|')" = 'first mark|second mark|' ] && echo ok || echo "the quotations were read as: $(quotations 'One "first mark" and "second mark" here.' | tr '\n' '|')")"
 
 # ---- 3. the agent rules point at the home and keep their own rule ----
 pointer="$(grep -m 1 -F -- "$RULE_NAME" "$RULES" 2>/dev/null)"
@@ -173,6 +260,24 @@ check "the check of the second refusal passes a sentence that names item 6" \
 # The agent rules restate none of the home: the marks and the count live in one place.
 check "the agent rules do not restate what a second refusal is recorded with" \
   "$(grep -q -F -- 'issue-spool.sh note . "<what was refused' <<< "$exception" && echo "the exception restates the home's recording step" || echo ok)"
+# claude-config#3822: the exception says which three refusals the home covers, so an agent knows to
+# look there, and leaves the words that mark each of them to the home. The exception's own lead in
+# is the text from "The third:" up to the rule's name.
+lead="${pointer%%"$RULE_NAME"*}"
+[ "$lead" = "$pointer" ] && lead=""
+lead="${lead##*The third:}"
+check "the agent rules' exception names a refusal with no verdict" \
+  "$(grep -q -F -- 'gave no verdict' <<< "$lead" && echo ok || echo "the exception's lead in does not say gave no verdict")"
+check "the agent rules' exception names a hook stopped at its timeout" \
+  "$(grep -q -F -- 'stopped at its timeout' <<< "$lead" && echo ok || echo "the exception's lead in does not name a hook stopped at its timeout")"
+check "the agent rules' exception names a guard another mod did not answer" \
+  "$(grep -q -F -- 'no answer from another mod' <<< "$lead" && echo ok || echo "the exception's lead in does not name a guard that got no answer from another mod")"
+check "the agent rules carry the issue that added the two refusals" \
+  "$(grep -q -F -- '#3822' <<< "$exception" && echo ok || echo "the exception naming the rule does not carry #3822")"
+check "the agent rules leave the words that mark a hook out of time to the home" \
+  "$(grep -q -F -- 'blocking because onFailure' "$RULES" 2>/dev/null && echo "the agent rules restate the home's words for a hook stopped at its timeout" || echo ok)"
+check "the agent rules leave the words that mark an unanswered guard to the home" \
+  "$(grep -q -F -- 'did not answer within' "$RULES" 2>/dev/null && echo "the agent rules restate the home's words for an unanswered guard" || echo ok)"
 
 # ---- 4. no other document states the absolute form bare ----
 # A line that puts the check beside "is final" or "never retried", either way round, in one
