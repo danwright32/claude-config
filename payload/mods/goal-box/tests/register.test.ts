@@ -256,6 +256,12 @@ type World = {
   withdrawn: string[]
   /** Each file written, by path: its last text. */
   written: Record<string, string>
+  /**
+   * Why asking for this session's id is refused, or '' when it answers. While set, every ask is
+   * refused but the one that comes straight after HOME is read, which is where the reasons file is
+   * written, so the reasons stay readable in a test.
+   */
+  idFails?: string
 }
 // manual steps' four reasons for not showing a step it was handed (addStep, word for word).
 const NOT_SHOWN = {
@@ -367,9 +373,17 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (w.agentsFail) return { deny: w.agentsFail } as never
     return { value: w.agents.map(a => (a === null ? a : { description: 'a task', type: 'general-purpose', ...a })) } as never
   })
-  on('session.id', () => ({ value: 's1' }) as never)
+  let afterHome = false
+  on('session.id', () => {
+    const answers = !w.idFails || afterHome
+    afterHome = false
+    return (answers ? { value: 's1' } : { deny: w.idFails }) as never
+  })
   on('session.cwd', () => ({ value: w.here }) as never)
-  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? `${'/Users'}/dan` : undefined }) as never)
+  on('env.get', ($, e) => {
+    afterHome = (e as unknown as { name: string }).name === 'HOME'
+    return ({ value: afterHome ? `${'/Users'}/dan` : undefined }) as never
+  })
   on('fs.exists', ($, e) => {
     const at = w.disk[e.path]
     return (typeof at === 'string' ? { deny: at } : { value: at === true }) as never
@@ -1146,6 +1160,19 @@ test('an undone step that does not say which session pinned it withholds the clo
   await workedAndQuiet($, clock)
   expect(w.pinned).toEqual([])
   expect(reasonsOf(w)?.reasons.join(' | ')).toMatch(/"Pinned before" is not done, and the card does not say which session pinned it/)
+})
+
+// The steps reading asks for this session's id to tell its own steps from other sessions'. When
+// that ask is refused the list is handed no id, never this session's guessed, and an undone step
+// on the card then holds it as unread.
+test("this session's id refused while its card holds an undone step withholds the close card, saying whose step it is could not be read (#3770)", withAll, async ($, on) => {
+  const { w, clock } = world(on, { stepsCard: { heading: 'h', steps: [{ title: 'Mine', url: 'https://b.example', pinnedBy: 's1' }] } })
+  await start($)
+  await says($, 'Add the goal box')
+  w.idFails = 'the session id could not be read'
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons.join(' | ')).toMatch(/"Mine" is not done, and this session's id was not handed over, so whose step it is could not be read/)
 })
 
 test('a reading that cannot be taken withholds the card as unread: no stop recorded, a list missing, a noun that throws, a goal unreadable (#3770)', withAll, async ($, on) => {
