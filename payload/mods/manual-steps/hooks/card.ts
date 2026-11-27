@@ -374,7 +374,8 @@ export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() })
   // While any unfinished step is Dan's to do, the heading says it waits on him (#863), on the card's
   // own line rather than a row of its own beside the card, so the band and the pane state it once.
   // Every one sent, it waits on Claude, and each step line says so.
-  const isDans = card.steps.some(s => !s.finished && !s.isSent)
+  // A step with no Done (#3770) is not one he is asked to report back on, so it says nothing of waiting.
+  const isDans = card.steps.some(s => !s.finished && !s.isSent && !s.isNoDone)
   const lines: CardLine[] = [[{ text: card.heading, color: AMBER }, ...(isDans ? [{ text: '  waiting on you', dim: true }] : [])]]
   card.steps.forEach((s, i) => {
     // #1263: between this step and the one before it, finished or not.
@@ -385,7 +386,8 @@ export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() })
       return
     }
     // #1239: every unfinished step is open, so Dan can work ahead while Claude has yet to read a Done.
-    lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: `  ${sentWords(s)}`, dim: true }] : [{ text: '  ' }, { button: buttonId('done', i), label: 'Done', instead: typeDone(i) }])])
+    // #3770: a step with no Done is drawn with its title alone.
+    lines.push([{ text: label, bold: true }, ...(s.isNoDone ? [] : s.isSent ? [{ text: `  ${sentWords(s)}`, dim: true }] : [{ text: '  ' }, { button: buttonId('done', i), label: 'Done', instead: typeDone(i) }])])
     // Under the title, where its text starts.
     const indent = String(i + 1).length + 2
     // Each led by its label, bold and drawn whole, so a long link cut at the edge or a long location
