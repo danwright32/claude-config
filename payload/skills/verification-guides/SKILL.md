@@ -128,7 +128,9 @@ groups by the numbers in the receipt only if the supervisor was killed outright 
 end them itself, which the file `recover-by-receipt` beside the receipt says for as long as it is
 there. Once the supervisor has removed that file, `stop` signals nothing, because those numbers may
 by then be another program's: `stop_detail` names the groups it did not signal, and anything left
-of the run under them may still be running.
+of the run under them may still be running. Where one of those groups was serve's, `stop` exits 8
+with `serve-unconfirmed`, as it does for a run that was cut off with serve's group not signalled
+or not read: nothing has checked that the app is gone or its port free, so look before the next run.
 
 The receipt's `egress` is the verdict of the egress monitor, [scripts/egress.py](scripts/egress.py),
 which the run's supervisor starts before serve and settles after serve's whole process group is
