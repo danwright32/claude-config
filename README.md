@@ -5440,8 +5440,9 @@ after the call or in another function, is read with that one value, and a refusa
 says the check could not be made, since the function may not have run. Each is a further reading,
 made only where the ones before it found nothing, so it can only refuse more. Not read: a name
 several functions set to different values, a name anything else in the text binds (an assignment
-at the top level, a `read`, a `for`, a `local` with an option; a bare `local kept` in a function
-is no second value and is not counted), and a function
+at the top level, a `read`, a `for`, a `local`, `declare` or `typeset` with an option; a bare
+`local kept`, `declare kept` or `typeset kept` in a function is no second value and is not
+counted, nor is a value that is none, as in `local kept=""`), and a function
 called after a cd, whose relative path is read against the directory the reader follows. A quiet
 script run through a variable in a function is refused wherever the same script named by a
 literal path there is: one that finds its own folder from `BASH_SOURCE` and sources a file beside
@@ -5461,15 +5462,28 @@ the marker (a `<<-` lets its leading tabs go and nothing else), with the whole w
 as the marker, and after the body of a heredoc opened earlier on the line. It ended the body at a
 marker with a blank beside it and at the first letters of a longer marker, and the lines the shell
 went on feeding python3 were read as shell commands. It gives every line it gave before, and more
-where the shells feed more, each added line once however many places the command stands at. More
+where the shells feed more, for every place the command's text stands at. It finds that text
+wherever it stands, in a comment or a quoted text as well as where the shell runs it, and cannot
+tell which is which. So where the text stands at two places whose bodies run into one another
+past the place a body always ended (`# bash <<'E'` above the real `bash <<'E'`, whose body holds
+a line that is the marker with a blank beside it), the call is refused as a check the gate could
+not make: handing each place its lines whole reads the text once for each place, which ran a
+script of 300 such heredocs out of the gate's time, and handing a later place fewer let a script
+that posts through a variable pass (both found by the reviews of that change on 2026-11-27). The
+refusal says to write the command's text once. Not read, as on main: a text in which the command
+stands once more, later, with no marker line after it (`echo "ran: bash <<'E'"` below the
+heredoc), where the whole text is handed back and not taken for a body. More
 lines are not always a stricter reading: a line added at the end can weaken how the gate reads
 the lines before it (a quote left open has a shell's body read by the crude cut, which follows no
 variable; a later `sys.path` line is applied to an import that ran before it). So where any body
 grew and nothing was found, the gate judges the call once more with every body as it was before
-(`loose()` in that file, `main()` in the gate), on what is left of the same 11 seconds (the
-gate's own budget, set and not measured), and refuses where either reading gives a reason.
-Reading a body further can then never allow a command the shorter reading refused (found by the
-review of that change on 2026-11-27, which built five commands main refused and it allowed). Where it cannot tell where they end the body, the call is refused as a
+(`loose()` in that file, `both_readings()` in the gate), on what is left of the same 11 seconds
+(the gate's own budget, set and not measured), and refuses where either reading gives a reason,
+or where the time runs out. Reading a body further can then never allow a command the shorter
+reading refused (found by the review of that change on 2026-11-27, which built five commands main
+refused and it allowed). The second judgement is a whole judgement again, by a Judge of its own
+that is handed nothing the first kept on itself or on its classes, so a call with one such
+heredoc takes about twice as long as it did. Where it cannot tell where they end the body, the call is refused as a
 check the gate could not make: a marker that a backslash joins to the line before (which the
 shared reader refuses too, but not in a text it gives up on before it reaches that heredoc), more
 than one `<<` in the command, a marker whose first letters it reads and whose rest it does not, an
@@ -5481,7 +5495,8 @@ outside single quotes (inside them every shell takes the marker as written, and 
 with a character outside quotes that is not a letter, a digit or one of `_ . , : / @ % + = ^ -`,
 and one whose quote never closes. The refusal says how to write the marker so that it is read.
 
-A marker that reading never took for an opener at all is not refused: one written with a
+A marker that reading never took for an opener at all is not refused for what it is (it gets the
+one refusal above, for the same command at two places whose bodies hold the same lines): one written with a
 backslash (`<<\EOF`), in quotes with a character that is no letter, digit or underscore, or bare
 and starting with such a character (`<<.E`, and `<<!`, an old way to write one, or `<<~E`). `cat
 <<'E\'` with a quiet body is an ordinary command, and `test-slack-drafts-comment-start.sh` pins

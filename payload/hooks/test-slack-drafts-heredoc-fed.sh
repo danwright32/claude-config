@@ -326,6 +326,89 @@ a11|python3 <<'E'|E@SP@|E
 a13|python3 <<'E'F|E|EF
 PATHS
 
+echo "slack drafts only: one command text at two places whose bodies run into one another is refused as a check not made (second review of claude-config#3497)"
+
+# fed() finds the command's text wherever it stands in the call: in a comment, in a quoted text
+# and in another heredoc's body as well as where the shell runs it, and it cannot tell which is
+# which. At 5019457df1 every place was handed every line the shells would feed it, which for 300
+# places was the square of the text. At 010c05a1b0 a line past where a body always ended was
+# handed on once, by the first place to reach it: with the text in a comment above the real
+# command, the real one was handed its body cut where main cut it, the joined text ended in a
+# quote left open or an if with no fi, and a script that posts through a variable passed where
+# 5019457df1 refused it (the second review's probes g01, g02, g14 and g13, 2026-11-27; bash 3.2
+# and zsh run the command after the assignment in each, measured there with texts that only
+# print). Handing every place its lines whole and reading each line about once cannot both be
+# had: of two places whose added lines are the same lines, one is handed them a second time or
+# one is handed fewer than the shells feed it. So the gate refuses as a check it could not make,
+# and says why. Each case is the text above the real command, and then the real command's body.
+TWICE="the same command stands at more than one place"
+ONE_QUOTE="bash <<'E'${NL}kept=posts.sh${NL}echo \"open${NL} E${NL}\" ; bash \"\$kept\"${NL}E"
+ONE_IF="bash <<'E'${NL}kept=posts.sh${NL}if true; then${NL} E${NL}fi${NL}bash \"\$kept\"${NL}E"
+for one in "$ONE_QUOTE" "$ONE_IF"; do
+  # The control that pins the cause: at one place the body is read whole, and the post is found.
+  run_bash "$one" "$FED"
+  refused "the control: at one place, a shell fed a script that posts through a variable after a line the heredoc does not end at is refused: $(shown "$one")"
+  says "the control: as the post it is: $(shown "$one")" "$POSTS"
+  run_bash "${one//posts.sh/quiet.sh}" "$FED"
+  allowed "the control: at one place, the same text running a quiet script passes: $(shown "$one")"
+  # And a comment that names another program is no second place of this command.
+  run_bash "# python3 <<'E'${NL}$one" "$FED"
+  refused "the control: under a comment that names another program, the same text is refused: $(shown "$one")"
+  says "the control: under a comment that names another program, as the post it is: $(shown "$one")" "$POSTS"
+done
+while IFS='|' read -r probe above body; do
+  [ -n "$probe" ] || continue
+  above="${above//@NL@/$NL}"
+  case "$body" in quote) one="$ONE_QUOTE" ;; *) one="$ONE_IF" ;; esac
+  text="$above${NL}$one"
+  run_bash "$text" "$FED"
+  refused "$probe: a shell fed a script that posts through a variable, with the command's text once more above it, is refused: $(shown "$above")"
+  says "$probe: as a check it could not make" "$COULD_NOT"
+  says "$probe: saying the command stands at two places" "$TWICE"
+  printf '%s\n' "$text" > "$FED/script.sh"
+  run_bash "bash script.sh" "$FED"
+  refused "$probe: and the same lines in a script that is run are refused: $(shown "$above")"
+  # The same text with the quote closed, or the if ended: refused all the same, since the
+  # refusal is for the two places and not for what the body holds.
+  closed="${text//echo \"open/echo \"shut\"}"; closed="${closed//\" ; bash/true ; bash}"
+  closed="${closed//if true; then/if true; then true; fi}"; closed="${closed//${NL}fi${NL}/${NL}true${NL}}"
+  run_bash "$closed" "$FED"
+  refused "$probe: the same text with nothing left open is refused: $(shown "$above")"
+  says "$probe: with nothing left open, as a check it could not make" "$COULD_NOT"
+  # The quiet twin is refused too, falsely: the gate does not read either place's lines.
+  run_bash "${text//posts.sh/quiet.sh}" "$FED"
+  refused "$probe: the quiet twin is refused as well, as a check not made: $(shown "$above")"
+  says "$probe: the quiet twin, as a check it could not make" "$COULD_NOT"
+done <<'ABOVE'
+g01|# bash <<'E'|quote
+g02|echo "next: bash <<'E'"|quote
+g14|cat <<'USAGE'@NL@feed it so:@NL@  bash <<'E'@NL@USAGE|quote
+g13|# bash <<'E'|if
+ABOVE
+# What is not refused that way: two places whose bodies do not run into one another. With each
+# body ended by its marker alone on a line nothing is added, and the reading is main's.
+run_bash "# bash <<'E'${NL}bash <<'E'${NL}kept=quiet.sh${NL}bash \"\$kept\"${NL}E" "$FED"
+allowed "a quiet twin that passes: the command's text in a comment above a heredoc that ends at its marker"
+run_bash "# bash <<'E'${NL}bash <<'E'${NL}kept=posts.sh${NL}bash \"\$kept\"${NL}E" "$FED"
+refused "and the same with a script that posts is refused"
+says "and the same with a script that posts, as the post it is" "$POSTS"
+# And two real places, each with a body that grew and its own end: each is handed its lines whole.
+APART="bash <<'E'${NL}echo one${NL} E${NL}echo two${NL}E${NL}bash <<'E'${NL}kept=@F@.sh${NL} E${NL}bash \"\$kept\"${NL}E"
+run_bash "${APART//@F@/quiet}" "$FED"
+allowed "a quiet twin that passes: the same command twice, each body ended by its own marker"
+run_bash "${APART//@F@/posts}" "$FED"
+refused "the same command twice, each body ended by its own marker, the second running a script that posts, is refused"
+says "the same command twice, as the post it is" "$POSTS"
+# An opener the loose reading never took (a backslash marker) is held to the same rule.
+run_bash "# python3 <<${BS}E${NL}python3 <<${BS}E${NL}import poster${NL}E" "$FED"
+refused "python3 fed an import of a module that posts by a backslash marker, with the command's text in a comment above, is refused"
+run_bash "# python3 <<${BS}E${NL}python3 <<${BS}E${NL}import quiet${NL}E" "$FED"
+refused "and its quiet twin is refused as well, as a check not made"
+says "the quiet twin of the backslash marker, as a check it could not make" "$COULD_NOT"
+says "the quiet twin of the backslash marker, saying the command stands at two places" "$TWICE"
+run_bash "python3 <<${BS}E${NL}import quiet${NL}E${NL}python3 <<${BS}E${NL}import quiet${NL}E" "$FED"
+allowed "a quiet twin that passes: the same backslash marker command twice, each body ended by its own marker"
+
 # The second judgement runs on what is left of the first one's time, never on a time of its own:
 # two whole budgets would be 22 seconds, past the 15 the hook is given (not measured: the gate
 # sets the one and the hook's settings the other). Counted in the gate's
@@ -351,16 +434,32 @@ else
   check "a command whose body grew is judged twice inside one budget" "allowed in $once steps where the body did not grow and in $twice where it did"
 fi
 echo "  steps: $once for a body that did not grow, $twice for one that did"
+# And a call that runs out of time in the second judgement is refused, never allowed: with one
+# step fewer than the grown command needs, which the first judgement fits in, the gate exits 2
+# and says it ran out of time (the second review's finding 2, 2026-11-27).
+if [ "$once" != none ] && [ "$twice" != none ] && [ $((twice - 1)) -ge "$once" ]; then
+  errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "python3 <<'E'${NL}import quiet${NL}E ${NL}import quiet${NL}E")" "$FED" \
+    | HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET="$((twice - 1))" SLACK_GATE_CACHE_DIR="$T/steps-cache.out.$RANDOM" bash "$HOOK" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+  refused "a quiet command whose second judgement runs out of steps is refused, not allowed"
+  says "saying it ran out of time, and that this is no finding that it posts" "ran out of time judging this call"
+else
+  check "a quiet command whose second judgement runs out of steps is refused, not allowed" "no step budget between the two was found: $once and $twice"
+fi
 
 # The two readings themselves, asked of the gate's own code: the short one is what Judge.fed gave
-# on main, line for line; the longer one gives every line of the short one and, past them, no
-# line of the text twice; the gate is told when the two differ; and the work the longer one does
-# is counted, which no load can move (L290). 300 `python3 <<EOF`, each with its EOF indented so
-# that it ends nothing, are 300 bodies that all run to the end of the text: handed on whole they
-# were 135,000 lines for a text of 900, and a script main judged in 1.47 seconds ran out of the
-# gate's 11 at 5019457df1 (the review's probe d_hd_300, measured 2026-11-27).
+# on main, line for line; the longer one gives every line of the short one and every place every
+# line the shells feed it, or refuses; the gate is told when the two differ; and the work the
+# longer one does is counted, which no load can move (L290). 300 `python3 <<EOF`, each with its
+# EOF indented so that it ends nothing, are 300 bodies that all run to the end of the text: handed
+# on whole they were 135,000 lines for a text of 900, and a script main judged in 1.47 seconds ran
+# out of the gate's 11 at 5019457df1 (the review's probe d_hd_300, measured 2026-11-27). Such a
+# text is refused now, after about one read of each line, and so is the shape the second review
+# found (the command's text once more above the real one); heredocs that each end at their own
+# marker are handed each of their lines once.
 cat > "$T/readings.py" <<'PY'
-import bisect, collections, importlib.util, random, re, sys
+import bisect, collections, importlib.util, io, json, os, random, re, sys
 
 spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
 gate = importlib.util.module_from_spec(spec)
@@ -369,17 +468,18 @@ lib, lines_of = gate.HeredocFed, gate.lines_of
 
 
 class Unsure(Exception):
-    pass
+    def __init__(self, kind):
+        self.kind = kind
 
 
 def unsure(at, kind):
-    return Unsure()
+    return Unsure(kind)
 
 
-def cost(n):
-    """(the lines read to find where the heredocs of n such commands end, the lines handed on,
-    the lines of the text)."""
-    whole = "\n".join("python3 <<EOF\nimport quiet\n  EOF" for _ in range(n)) + "\n"
+def cost(key, piece, n):
+    """(the lines read to find where the heredocs of n such pieces end, the lines handed on or the
+    kind of refusal raised, the lines of the text)."""
+    whole = "\n".join(piece for _ in range(n)) + "\n"
     read, plain = [0], lib.end
 
     def counted(lines, k, *rest):
@@ -389,20 +489,40 @@ def cost(n):
         return got
     lib.end = counted
     try:
-        body = lib.fed("python3 <<EOF", whole, lines_of, unsure)[0]
+        handed = lib.fed(key, whole, lines_of, unsure)[0].count("\n") + 1
+    except Unsure as e:
+        handed = e.kind
     finally:
         lib.end = plain
-    return read[0], body.count("\n") + 1, whole.count("\n")
+    return read[0], handed, whole.count("\n")
 
 
-small, large = cost(200), cost(400)
-if large[0] > 3 * small[0]:
+# Heredocs that never end, 200 and 400 of them, and the second review's shape, the command's text
+# in a comment above the real one: refused, each after no more than about one read of each line.
+NEVER = ("python3 <<EOF", "python3 <<EOF\nimport quiet\n  EOF")
+SHAPE = ("bash <<'E'", "# bash <<'E'\nbash <<'E'\nkept=quiet.sh\necho \"open\n E\n\" ; bash \"$kept\"\nE")
+cheap = []
+for name, (key, piece) in (("never ending", NEVER), ("in a comment above", SHAPE)):
+    small, large = cost(key, piece, 200), cost(key, piece, 400)
+    if large[1] != "places" or small[1] != "places":
+        print("FAIL 400 heredocs %s were not refused as one command at several places whose bodies run "
+              "into one another: fed() gave %r for 400 and %r for 200" % (name, large[1], small[1]))
+    if large[0] > 2 * large[2] or large[0] > 3 * max(small[0], 1):
+        print("FAIL refusing 400 heredocs %s read %d lines of a text of %d, and refusing 200 read %d of %d: "
+              "it grows with the square of the commands" % (name, large[0], large[2], small[0], small[2]))
+    cheap.append("%s read=%d of %d" % (name, large[0], large[2]))
+print("cheap " + ", ".join(cheap))
+# Heredocs whose bodies each grew and each end at their own marker: every place is handed its
+# three lines, and each line of the text is read about once.
+APART = ("python3 <<EOF", "python3 <<EOF\nimport quiet\n  EOF\nimport quiet\nEOF")
+small, large = cost(*APART, 200), cost(*APART, 400)
+if large[0] > 3 * small[0] or large[0] > 2 * large[2]:
     print("FAIL finding where 400 heredocs end read %d lines of a text of %d, and where 200 end %d of %d: "
           "it grows with the square of the commands" % (large[0], large[2], small[0], small[2]))
-if large[1] > 3 * small[1] or large[1] > 3 * large[2]:
-    print("FAIL 400 heredocs were handed %d lines of a text of %d, and 200 were handed %d of %d: a line "
-          "past where a body always ended is handed on more than once" % (large[1], large[2], small[1], small[2]))
-print("counted read=%d handed=%d of %d lines, for 400 heredocs" % large)
+if large[1] != 3 * 400 or small[1] != 3 * 200:
+    print("FAIL 400 heredocs, each with a body of 3 lines, were handed %r lines of a text of %d, and 200 were "
+          "handed %r of %d" % (large[1], large[2], small[1], small[2]))
+print("counted read=%d handed=%s of %d lines, for 400 heredocs each ended by its own marker" % large)
 
 
 def before(text, whole):
@@ -445,7 +565,30 @@ OPENERS = ["python3 <<E", "python3 <<'E'", "python3 <<-E", 'python3 <<E"F"', "py
            "bash <<'E'", "python3 - <<E-1", "cat <<A | python3 <<E"]
 PIECES = ["E", " E", "E ", "\tE", "EF", "E-1", "!", "A", "import quiet", "x = 1 \\", "echo $HOME", "",
           "python3 <<E", "python3 <<'E'", "python3 <<\\E"]
-asked = longer = refused = 0
+def every_place_whole(key, whole):
+    """What fed() gives where it hands every place the command stands at every line the shells
+    feed it, worked out here one place at a time with a reader of its own for each, so nothing one
+    place was handed is held against the next: the body it always gave and then the lines up to
+    where the shells end the heredoc, or, for an opener the loose reading never took, the lines
+    holding the command and then each body. None where one place's end cannot be told."""
+    lines, starts, _, ats = lib.places(key, whole, lines_of)
+    m = lib.LOOSE.search(key)
+    strict = lib.word(key, key.index("<<"), not m)
+    if not strict:
+        return None
+    bodies = []
+    for i, at in ats:
+        got = lib.Reader(lines, starts).body_at(i, at, strict)
+        if isinstance(got, str):
+            if m:
+                return None
+            continue
+        was = lib.loose_end(lines, i, m.group(2)) if m else got[0]
+        bodies.append("\n".join(lines[i + 1 if m else got[0]:max(was, got[1])]))
+    return "\n".join(bodies if m else [lines[i] for i, _ in ats] + bodies)
+
+
+asked = longer = refused = twice = whole_held = 0
 for _ in range(4000):
     opener = rng.choice(OPENERS)
     key = opener.split("| ")[-1]
@@ -460,10 +603,21 @@ for _ in range(4000):
         break
     try:
         got = lib.fed(key, whole, lines_of, unsure)
-    except Unsure:
+    except Unsure as e:
         refused += 1
+        twice += e.kind == "places"
         continue
     longer += got != want
+    # No place is handed fewer lines than the shells feed it: where fed() answers and the text is
+    # not main's whole text handed back for a body that never ended, what it gives is every place's
+    # lines whole (the second review of #3497: a later place was handed its body cut short).
+    if got != (whole, False) and key.count("<<") == 1:
+        full = every_place_whole(key, whole)
+        if full is not None:
+            whole_held += 1
+            if got[0] != full:
+                print("FAIL the longer reading gave %r where every place's lines whole are %r: %s" % (got[0], full, where))
+                break
     if got[1] != want[1]:
         print("FAIL the longer reading %s a body where main %s: %s"
               % ("gave" if got[1] else "gave no", "gave one" if want[1] else "gave none", where))
@@ -476,7 +630,7 @@ for _ in range(4000):
         print("FAIL the longer reading gave %d lines where main gave %d of a text of %d: %s"
               % (got[0].count("\n") + 1, want[0].count("\n") + 1, whole.count("\n") + 1, where))
         break
-print("held asked=%d longer=%d refused=%d" % (asked, longer, refused))
+print("held asked=%d longer=%d refused=%d twice=%d whole=%d" % (asked, longer, refused, twice, whole_held))
 
 # What the gate is told. A body that grew sets "grew", one that did not sets nothing, and with
 # "short" set Judge.fed gives what main gave.
@@ -499,26 +653,88 @@ got = gate.Judge.fed("python3 <<'E'", grown)
 if got != before("python3 <<'E'", grown):
     print("FAIL with the short reading asked for, Judge.fed gave %r where main gave %r"
           % (got, before("python3 <<'E'", grown)))
+
+# Two Judges run in one process where a body grew, and a dict, list or set kept on the Judge's
+# classes outlives a Judge: eight memos were shared by the two that way (the second review's
+# finding 5, 2026-11-27). Every one that is empty before the first judgement is emptied again
+# before the second, so nothing worked out under the longer reading is handed to the shorter one,
+# whichever memo is added next. Asked of the gate itself: the first judgement leaves some of them
+# filled (or this shows nothing), and the second begins with all of them empty.
+both, held_on = getattr(gate, "both_readings", None), getattr(gate, "class_held", None)
+if both is None or held_on is None:
+    print("FAIL the gate has no both_readings or no class_held, so what the first judgement leaves on the "
+          "Judge's classes is handed to the second as it is")
+    sys.exit(0)
+with open(os.path.join(sys.argv[2], "memo.sh"), "w") as f:
+    f.write("run() {\n  local t\n  t=quiet.sh\n  bash \"$t\"\n}\nrun\necho hi | { cat; }\n"
+            "python3 <<'E'\nimport quiet\nE \nimport quiet\nE\n")
+empty = [v for v in held_on() if not v]
+if len(empty) < 8:
+    print("FAIL only %d empty dicts, lists and sets were found on the Judge's classes, fewer than the "
+          "eight memos the review counted there" % len(empty))
+seen, plain = [], gate.Judge.judged
+
+
+def watched(self, cmd, cwd):
+    seen.append(sum(len(v) for v in empty))
+    try:
+        return plain(self, cmd, cwd)
+    finally:
+        seen.append(sum(len(v) for v in empty))
+
+
+gate.Judge.judged = watched
+gate.Judge.fed.cache_clear()
+flags.update(short=False, grew=False)
+try:
+    reason = both(gate.load_reader(), "bash memo.sh", sys.argv[2], [])
+finally:
+    gate.Judge.judged = plain
+if reason or len(seen) != 4:
+    print("FAIL a quiet script whose heredoc body grew was not judged twice and allowed: reason %r, "
+          "entries on the Judge's classes at each start and end %r" % (reason, seen))
+elif not seen[1]:
+    print("FAIL the first judgement left nothing on the Judge's classes, so emptying them is not shown: %r" % (seen,))
+elif seen[2]:
+    print("FAIL the second judgement began with %d entries the first left on the Judge's classes: %r" % (seen[2], seen))
+else:
+    print("emptied left_by_first=%d at_second_start=%d containers=%d" % (seen[1], seen[2], len(empty)))
+if flags["short"] or flags["grew"]:
+    print("FAIL after both judgements the gate still says a body grew or asks for the short reading: %r" % (flags,))
 PY
-rows="$(python3 -B "$T/readings.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
-counted=""; held=""
+rows="$(python3 -B "$T/readings.py" "$DIR/slack_drafts_only_gate.py" "$FED" 2>&1)"
+counted=""; held=""; cheap=""; emptied=""
 while IFS= read -r row; do
   case "$row" in
     "counted "*) counted="$row" ;;
     "held "*) held="$row" ;;
+    "cheap "*) cheap="$row" ;;
+    "emptied "*) emptied="$row" ;;
     "") ;;
     *) check "the gate's two readings of a heredoc" "$row" ;;
   esac
 done <<EOF
 $rows
 EOF
-if [ -n "$counted" ]; then check "the work of reading 400 heredocs that never end was counted" ok
-else check "the work of reading 400 heredocs that never end was counted" "no count was printed: ${rows:0:300}"; fi
+if [ -n "$counted" ]; then check "the work of reading 400 heredocs that each end at their own marker was counted" ok
+else check "the work of reading 400 heredocs that each end at their own marker was counted" "no count was printed: ${rows:0:300}"; fi
+if [ -n "$cheap" ]; then check "the work of refusing 400 heredocs whose bodies run into one another was counted" ok
+else check "the work of refusing 400 heredocs whose bodies run into one another was counted" "no count was printed: ${rows:0:300}"; fi
 longer="${held#*longer=}"; longer="${longer%% *}"
 if [ "${longer:-0}" -ge 200 ] 2>/dev/null; then check "the two readings were held against each other where they differ ($held)" ok
 else check "the two readings were held against each other where they differ" "only '${longer:-none}' texts had a longer body: '$held'"; fi
+places="${held#*twice=}"; places="${places%% *}"; whole="${held#*whole=}"; whole="${whole%% *}"
+if [ "${places:-0}" -ge 50 ] 2>/dev/null && [ "${whole:-0}" -ge 200 ] 2>/dev/null; then
+  check "every place was held to its lines whole, and texts with one command at two places were among them ($held)" ok
+else
+  check "every place was held to its lines whole, and texts with one command at two places were among them" "'${places:-none}' texts were refused for two places and '${whole:-none}' were held whole: '$held'"
+fi
+if [ -n "$emptied" ]; then check "the second judgement begins with nothing the first left on the Judge's classes ($emptied)" ok
+else check "the second judgement begins with nothing the first left on the Judge's classes" "no count was printed: ${rows:0:300}"; fi
 echo "  $counted"
+echo "  $cheap"
 echo "  $held"
+echo "  $emptied"
 
 echo "slack drafts only: fed() ends a heredoc where the shells of this machine end it (claude-config#3497)"
 

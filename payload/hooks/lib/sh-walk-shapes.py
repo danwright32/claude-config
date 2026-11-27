@@ -526,8 +526,11 @@ def make(sh_special, sh_param, unknown_dir=None):
             fd, ft, fp = feeder
             return self.sh_printed(fd, ft, None if base is None else base + fp["start"], whole)
 
-        # What the two readings below hold, one Judge a process. Each depends on its key alone, and
-        # none of held_input, held_feed, held_calls and sh_pipe_into changes what it is given.
+        # What the two readings below hold, kept on the class, so every Judge of a process shares
+        # them. Each depends on its key alone, and none of held_input, held_feed, held_calls and
+        # sh_pipe_into changes what it is given. Two Judges run where a heredoc's body grew, and
+        # the gate empties both between the two (both_readings in slack_drafts_only_gate.py,
+        # claude-config#3497).
         first_words = {}  # {a command's text: held_first_word's answer}
         held_texts = {}  # {(a text, the directory it is read from): held_parsed's answer}
 
@@ -779,7 +782,9 @@ def make(sh_special, sh_param, unknown_dir=None):
                 self.reshaping -= 1
 
         reshaping = 0  # how many of these readings are inside one another
-        reads_memo = {}  # the read commands of each text, for read_feed (one Judge runs in a process)
+        # The read commands of each text, for read_feed. Kept on the class and emptied between the
+        # two Judges of a call whose heredoc body grew (both_readings, claude-config#3497).
+        reads_memo = {}
 
         def inner_line(self, s, d, depth, strict=False, cwd_known=True):
             """line() for a text one of these readings puts together, read as typed or as a script

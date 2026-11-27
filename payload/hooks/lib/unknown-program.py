@@ -131,7 +131,10 @@ def make(judged_by_name, sh_redirect):
     class UnknownProgram:
         behind = 0  # how many of these readings are inside one another
         suffix = None  # the words the reading around this one is judging as a command (judge_as_run)
-        starts_memo = {}  # {a word: whether it can start a command the gate reads}, one Judge a process
+        # These five are kept on the class, so every Judge of a process shares them. Two Judges
+        # run where a heredoc's body grew, and the gate empties each of these between the two
+        # (both_readings in slack_drafts_only_gate.py, claude-config#3497).
+        starts_memo = {}  # {a word: whether it can start a command the gate reads}
         funcs_memo = {}  # {a text: the names of the functions it defines}
         bodies_memo = {}  # {(a text, its folder): function_bodies's answer}
         # {(a text, its folder, a function's name, whether only words count): function_acts's answer}

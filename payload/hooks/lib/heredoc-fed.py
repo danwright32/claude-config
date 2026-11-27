@@ -22,18 +22,25 @@ text whose earlier heredoc leaves a substitution open before it reaches a later 
 then judged the text by fed() alone (the issue's comment, measured at the gate 2026-11-23).
 
 fed() here gives every line the loose reading gave and, where bash 3.2 and zsh end the heredoc
-later than it did, the lines up to there as well, each of those once however many places the
-command stands at (Given). More to read is not always a stricter reading, so the loose reading
-is kept as it was (loose) and the gate judges a call by both where they differ. Where
+later than it did, the lines up to there as well, for every place the command's text stands at.
+More to read is not always a stricter reading, so the loose reading is kept as it was (loose)
+and the gate judges a call by both where they differ. Where
 it cannot tell where they end it, it raises what the caller hands it as `unsure`, which the gate
 refuses as a check it could not make: a marker a backslash joins to the line before, a line that
 is the marker only once joined, a marker the loose reading took the first letters of and word()
 does not read, more than one << in the command, an opener line that ends in a backslash, an
 earlier heredoc on that line that cannot be read or never ends, or a body whose marker is not
 quoted that never ends and holds a $ or a backquote, which the shells expand there (one whose
-marker is quoted is fed as written, and handed on).
+marker is quoted is fed as written, and handed on). And where the command's text stands at two
+places whose bodies run into one another past a loose end, when it cannot tell which of the two
+the shell runs (Given).
 
-An opener the loose reading never took (<<\\E, <<'E\\', <<"E F", <<!, <<~E) is not refused. fed() gave the
+Not read by it, and so as on main: a text in which the command stands once more, later, with no
+line after it that the loose reading ends a body at (`bash <<'E'`, its body, and then `echo "ran:
+bash <<'E'"`). The loose reading hands back the whole text there and says it is no body, and so
+does fed(), before it reads any place (second review of #3497, 2026-11-27).
+
+An opener the loose reading never took (<<\\E, <<'E\\', <<"E F", <<!, <<~E) is not refused for what it is. fed() gave the
 command's own line for it and no body, so `python3 <<\\E` importing a module that posts passed. It
 now gives that line and then the body, where word() reads the marker and the end is certain, and
 goes on saying it is no body: an interpreter's imports and a send route's name are read there,
@@ -168,7 +175,7 @@ def loose(text, whole, lines_of):
     later sys.path line is applied to an import that ran before it), and five commands main
     refused passed that way (review of #3497, 2026-11-27). So the gate judges a call with what
     fed() gives and, where that differs from this anywhere, once more with this, and refuses
-    where either gives a reason (main() in slack_drafts_only_gate.py). Nothing fed() adds can
+    where either gives a reason (both_readings in slack_drafts_only_gate.py). Nothing fed() adds can
     then allow a command the reading before it refused."""
     lines, starts, key, ats = places(text, whole, lines_of)
     if not ats:
@@ -186,35 +193,47 @@ def loose(text, whole, lines_of):
 
 
 class Given:
-    """The lines of a text fed() has handed on so far, as spans that neither meet nor overlap, in
-    order. The same command written at several places can open heredocs whose bodies run into one
-    another: 300 `python3 <<EOF`, each followed by an indented EOF that ends nothing, are 300
-    bodies that all run to the end of the text. Joined whole they were 135,000 lines for a text of
-    900, every one of which the gate then read once for each of the 300 commands, and a script
-    main judged in 1.47 seconds ran out of the gate's time (review of #3497, 2026-11-27). A line
-    past the place a body always ended is handed on once, by the first place that reaches it."""
+    """The lines fed() has handed the places of one command text past where the loose reading
+    ended their bodies (for an opener the loose reading never took, their whole bodies), as spans
+    that do not overlap, in order: what it needs to tell that two places' bodies run into one
+    another.
+
+    fed() finds the command's text wherever it stands in the call, in a comment, a quoted text or
+    another heredoc's body as well as where the shell runs it, and cannot tell which is which. So
+    one text can stand at several places whose bodies, read to where the shells end them, hold
+    the same lines. 300 `python3 <<EOF`, each followed by an indented EOF that ends nothing, are
+    300 bodies that all run to the end of the text: joined whole they were 135,000 lines for a
+    text of 900, every one of which the gate then read once for each of the 300 commands, and a
+    script main judged in 1.47 seconds ran out of the gate's time (review of #3497, 2026-11-27).
+    Handing such a line on once, by the first place to reach it, kept that cost down and cut the
+    later place's body short: with the command's text in a comment above the real command, the
+    real one was handed its body cut where main cut it, the joined text ended in a quote left
+    open, and a script that posts through a variable passed (second review of #3497, 2026-11-27).
+
+    Every place whole is the square, and any place cut short is a body the shells feed and the
+    gate does not read. So where a place's body holds a line that a place before it was handed
+    past its loose end, fed() raises its refusal (kind "places"), after reading each line of the
+    text about once. Where no two places meet that way, every place is handed every line the
+    shells feed it. Bodies that overlap only up to their loose ends are handed on as they always
+    were: that is the reading main gives, and the usual text has it (the command named in a
+    comment above a heredoc that ends at its marker)."""
 
     def __init__(self):
         self.firsts, self.stops = [], []
 
-    def rest(self, a, b):
-        """The parts of lines a up to b that no call before this one was handed, as (first, stop)
-        in order. All of a up to b counts as handed on from here."""
+    def meets(self, a, b):
+        """Whether any of lines a up to b is in a span added before."""
         if a >= b:
-            return []
-        i = bisect.bisect_left(self.stops, a)
-        j, at, out = i, a, []
-        while j < len(self.firsts) and self.firsts[j] <= b:
-            if self.firsts[j] > at:
-                out.append((at, self.firsts[j]))
-            at = max(at, self.stops[j])
-            j += 1
-        if at < b:
-            out.append((at, b))
-        first = min(a, self.firsts[i]) if i < j else a
-        stop = max(b, self.stops[j - 1]) if i < j else b
-        self.firsts[i:j], self.stops[i:j] = [first], [stop]
-        return out
+            return False
+        i = bisect.bisect_right(self.stops, a)  # the first span that stops past a
+        return i < len(self.firsts) and self.firsts[i] < b
+
+    def add(self, a, b):
+        """Lines a up to b, which meet no span added before, count as handed on from here."""
+        if a < b:
+            i = bisect.bisect_left(self.firsts, a)
+            self.firsts.insert(i, a)
+            self.stops.insert(i, b)
 
 
 class Reader:
@@ -279,7 +298,8 @@ def fed(text, whole, lines_of, unsure):
     raised for a heredoc opened at offset at of whole whose end cannot be told. kind is "marker"
     where the opener is the doubt (more than one << in the command, a marker word() does not
     read, an opener line that goes on over the next, an earlier heredoc on that line that cannot
-    be read or never ends) and "" where the body is (Reader.body_at)."""
+    be read or never ends), "" where the body is (Reader.body_at), and "places" where the text
+    stands at two places whose bodies run into one another (Given), named at the later one."""
     lines, starts, key, ats = places(text, whole, lines_of)
     if not ats:
         return whole, False
@@ -295,14 +315,19 @@ def fed(text, whole, lines_of, unsure):
         # body, so what a pipe from such a heredoc carries stays not worked out, and refused, as
         # it was. Where the marker is read and its end is certain the body follows those lines,
         # so that a caller searching what it is handed (an interpreter's imports, a send route's
-        # name) reads what the shells feed. Never a refusal here: raising for every such opener
-        # refused cat <<'E\' with a quiet body, which test-slack-drafts-comment-start.sh pins.
+        # name) reads what the shells feed. No refusal here for the opener itself: raising for
+        # every such opener refused cat <<'E\' with a quiet body, which
+        # test-slack-drafts-comment-start.sh pins. One refusal only, the one a plain marker gets
+        # too: two places whose bodies hold the same lines.
         held = [lines[i] for i, _ in ats]
         strict = word(key, opens[0], True) if len(opens) == 1 else None
         for i, at in ats if strict else ():
             got = reader.body_at(i, at, strict)
             if not isinstance(got, str):
-                held.append("\n".join(ln for a, b in given.rest(*got) for ln in lines[a:b]))
+                if given.meets(*got):
+                    raise unsure(at + opens[0], "places")  # the one refusal here (Given)
+                given.add(*got)
+                held.append("\n".join(lines[got[0]:got[1]]))
         return "\n".join(held), False
     # The shells' reading of the opener, None where the only << is the tail of a here string's <<<,
     # which the loose reading alone goes on answering for.
@@ -322,11 +347,11 @@ def fed(text, whole, lines_of, unsure):
             if isinstance(got, str):
                 raise unsure(at + opens[0], got)
             last = max(was, got[1])
-        # The body it always gave, whole, and then the lines the shells go on feeding it that no
-        # place before this one was handed (Given).
-        given.rest(i + 1, was)
-        body = list(lines[i + 1:was])
-        for a, b in given.rest(was, last):
-            body.extend(lines[a:b])
-        bodies.append("\n".join(body))
+        # The body it always gave and then the lines the shells go on feeding it, all of them, or
+        # the refusal where a place before this one was handed lines past its own loose end that
+        # this place's body holds too (Given).
+        if given.meets(i + 1, last):
+            raise unsure(at + opens[0], "places")
+        given.add(was, last)
+        bodies.append("\n".join(lines[i + 1:last]))
     return "\n".join(bodies), True
