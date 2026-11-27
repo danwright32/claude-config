@@ -3522,9 +3522,12 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
     which is a second reader that drifts from the first on the next rule added (L370).
   - A wording file is judged as the block it becomes, read by the block's own reader
     (`extractAnnouncement`), so line endings, spaces at the ends of lines and blank lines round
-    the wording count for what they count for at the merge. Every rule reads one line at a time
-    and no blank line breaks one, so for lines ended as a file or GitHub ends them the verdict
-    depends only on the normalised wording the hash is of. A bare carriage return was the
+    the wording count for what they count for at the merge. Every rule of the BLOCK reads one
+    line at a time and no blank line breaks one, so for lines ended as a file or GitHub ends
+    them the block's verdict depends only on the normalised wording the hash is of. The rules
+    about a FILE alone, below, are the other kind on purpose: a long run of blank lines, a
+    heading and a byte order mark each refuse a file for something the hash of its wording
+    cannot show. A bare carriage return was the
     exception (the review of this change, M1): the hash reads it as a line's end and the block's
     reader does not, so a line start it hid (a block quote, a table, a nested list) was judged by
     nothing, while the record held one hash for that wording and for the same lines ended

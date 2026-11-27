@@ -2106,7 +2106,7 @@ while the file's change time is still the one noted. What each state of a note r
 |---|---|
 | its ids alone, or another repository or file than the picker names | is judged by the file as it stands, as with no note |
 | a hash, no `why` | counts, by the hash noted, when the change time noted is before his answer |
-| a `why`, no `unjudged` (refused wording, a file that could not be read or hashed, any note written before the field) | approves nothing, for good, in the words of the `why` |
+| a `why`, no `unjudged` (refused wording, a file that could not be read when noted, held no wording, was too large, held a long run of blank lines or changed while it was hashed, and any note written before the field) | approves nothing, for good, in the words of the `why` |
 | a `why` and `"unjudged": true`, the file unchanged since the note | has the file judged now: taken, it counts; refused, it approves nothing in the gate's words; still not judged, it approves nothing for that call and the next call judges again |
 | a `why` and `"unjudged": true`, the file changed since or unreadable | approves nothing, and the refusal says to open the file and ask him again |
 | no change time, or one at or after his answer | approves nothing |
