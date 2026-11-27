@@ -198,7 +198,11 @@ def read_records(root, shape):
     posts = {}    # (place, ts) -> (name, member id, body)
     done = set()  # read call ids whose result was taken
     files = 0
-    for folder, _dirs, names in os.walk(root):
+
+    def unread(_error):  # a folder os.walk could not list is counted and said, never passed over
+        shape["folders that could not be read"] += 1
+
+    for folder, _dirs, names in os.walk(root, onerror=unread):
         for name in sorted(names):
             if not name.endswith(".jsonl"):
                 continue
@@ -372,8 +376,6 @@ def print_shapes(shape):
     print("How the Slack read results in these records are laid out (counts and field names only)")
     for key in sorted(shape):
         print("  %s: %d" % (key, shape[key]))
-    if not shape:
-        print("  no draft call and no thread or channel read was found")
 
 
 def main():
@@ -408,7 +410,15 @@ def main():
     pairs, left = pair_up(drafts, saved, posts, args.author)
     unreadable = shape["in a layout this cannot read"]
     print("Slack drafts compared with what was sent")
-    print("record files read: %d (could not be opened: %d)" % (files, shape["record files that could not be opened"]))
+    blind = shape["folders that could not be read"]
+    print("record files read: %d (could not be opened: %d; folders that could not be read: %d)" % (
+        files, shape["record files that could not be opened"], blind))
+    if blind and not files:
+        print("draft-edit-diff: no record file under %s could be reached, so nothing was measured." % args.records,
+              file=sys.stderr)
+        return 3
+    if blind:
+        print("Records in a folder that could not be read are in none of the counts below.")
     print("draft calls: %d (saved: %d)" % (len(drafts), n_saved))
     print("read results: %d (with messages: %d, marked as an error: %d)" % (
         shape["read results"], shape["read results with messages"], shape["read results marked as an error"]))

@@ -87,6 +87,20 @@ check "no author: says what to pass" "--author" "$out"
 out="$(python3 -B "$TOOL" --records "$WORK/nowhere" --author "$ME" 2>&1)"; rc=$?
 check_eq "no records folder: refused, never a clean zero" "3" "$rc"
 check "no records folder: said" "could not be read" "$out"
+if [ "$(id -u)" != 0 ]; then
+  # A folder it cannot list: said and counted beside what it did read, and a failure when it is all there was.
+  mkdir -p "$WORK/shut/closed" "$WORK/partly/closed" "$WORK/partly/project"
+  python3 -B "$BUILD" "$WORK/partly/project" basics
+  chmod 000 "$WORK/shut/closed" "$WORK/partly/closed"
+  out="$(run shut)"; rc=$?
+  check_eq "a records folder whose only folder is shut: refused, never a clean zero" "3" "$rc"
+  check "and said as nothing measured" "nothing was measured" "$out"
+  out="$(run partly)"; rc=$?
+  check_eq "a shut folder beside readable records: measured" "0" "$rc"
+  check "and the shut folder is counted" "folders that could not be read: 1" "$out"
+  check "and said to be in none of the counts" "in none of the counts below" "$out"
+  chmod 755 "$WORK/shut/closed" "$WORK/partly/closed"
+fi
 mkdir -p "$WORK/empty"
 out="$(run empty)"; rc=$?
 check_eq "records with no draft in them: measured, and zero" "0" "$rc"
@@ -99,7 +113,7 @@ check "and said as nothing measured" "Nothing was measured" "$out"
 check_not "and none of its text is printed" "lock gates" "$out"
 out="$(run unknown --shapes)"
 check "shapes: says how many results it could not read" "in a layout this cannot read: 1" "$out"
-check "shapes: names the result's own fields" "messages" "$out"
+check "shapes: names the result's own fields" "result field messages: 1" "$out"
 check_not "shapes: prints no message text" "lock gates" "$out"
 out="$(run basics --shapes)"
 check "shapes: counts each heading it knows" "thread parent headings: 5" "$out"
@@ -113,8 +127,8 @@ static="$(python3 -B - "$TOOL" <<'PY'
 import ast, sys
 sys.stdout.reconfigure(errors="replace")
 ALLOWED = {"argparse", "collections", "datetime", "difflib", "html", "json", "os.path", "re", "sys"}
-WRITES = {"write", "writelines", "write_text", "write_bytes", "touch", "unlink", "rmdir", "rename", "replace_file",
-          "symlink_to", "hardlink_to", "link_to", "chmod", "mkdir", "makedirs", "remove", "truncate", "fdopen"}
+OS_MAY = {"path", "walk"}  # all it may use os for: every other use of the name is a finding
+WRITES = {"write", "writelines", "dump", "FileType"}  # what the modules above could write through
 try:
     with open(sys.argv[1], "rb") as f:
         tree = ast.parse(f.read().decode("utf-8", "replace"))
@@ -122,7 +136,15 @@ except (OSError, SyntaxError) as e:
     print("unreadable: %s" % e)
     sys.exit(0)
 bad = []
-for node in ast.walk(tree):
+nodes = list(ast.walk(tree))
+os_read = {id(n.value) for n in nodes if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+           and n.value.id == "os" and n.attr in OS_MAY}
+opened = {id(n.func) for n in nodes if isinstance(n, ast.Call)}
+for node in nodes:
+    if isinstance(node, ast.Name) and node.id == "os" and id(node) not in os_read:
+        bad.append("uses os for more than os.path and os.walk")
+    if isinstance(node, ast.Name) and node.id == "open" and id(node) not in opened:
+        bad.append("hands open on where its mode cannot be read")
     if isinstance(node, ast.Import):
         bad += ["imports " + a.name for a in node.names if a.name not in ALLOWED]
     elif isinstance(node, ast.ImportFrom):
@@ -138,7 +160,38 @@ for node in ast.walk(tree):
 print("clean" if not bad else "; ".join(sorted(set(bad))))
 PY
 )"
-check_eq "its source imports nothing that can send or write, opens files only to read, and names no writing call" "clean" "$static"
+check_eq "its source imports only what is listed, uses os only for os.path and os.walk, and opens files only to read" "clean" "$static"
+
+# The hand reading above knows only what it lists (L96), so the claim rests on the Slack drafts gate's
+# own judgement, the one a session's command meets: handed a record that names Slack's posting
+# address, the reader is let through, and a copy of it that can write a file or start a program is
+# refused. The address is written in two pieces here, so this suite's own text does not name it.
+GATE="$DIR/slack-drafts-only-gate.sh"
+if [ ! -f "$GATE" ]; then
+  fail=$((fail + 1)); echo "FAIL: there is no slack-drafts-only-gate.sh beside this suite, so nothing judged whether the reader can act"
+else
+  export SLACK_GATE_CACHE_DIR="$WORK/gate-cache"
+  mkdir -p "$WORK/gate/writes" "$WORK/gate/runs"
+  printf '{"type":"user","message":"a record naming %s.%s"}\n' chat postMessage > "$WORK/gate/record.jsonl"
+  cp "$TOOL" "$WORK/gate/writes/draft-edit-diff.py"
+  printf '\n\ndef keep(text):\n    with open("kept.txt", "w") as f:\n        f.write(text)\n' >> "$WORK/gate/writes/draft-edit-diff.py"
+  cp "$TOOL" "$WORK/gate/runs/draft-edit-diff.py"
+  printf '\n\ndef start(text):\n    return os.system(text)\n' >> "$WORK/gate/runs/draft-edit-diff.py"
+  judged(){ # judged <script>: the gate's exit code for running it over the record
+    python3 -c '
+import json, sys
+sys.stdout.reconfigure(errors="replace")
+print(json.dumps({"session_id": "f6017250-8f33-47ac-bbb2-b82a7c319d0d", "transcript_path": "/tmp/transcript.jsonl",
+                  "cwd": sys.argv[2], "permission_mode": "auto", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                  "tool_input": {"command": sys.argv[1], "description": "d"}, "tool_use_id": "toolu_01X4Qw7JnfYswF7UVX94Z4Sy"}))
+' "python3 $1 --records $WORK/gate/record.jsonl --author x" "$WORK/gate" | bash "$GATE" >/dev/null 2>"$WORK/gate/err"
+    echo $?
+  }
+  check_eq "the Slack drafts gate lets the reader run over a record naming the posting address" "0" "$(judged "$TOOL")"
+  check_eq "and refuses a copy of it that can write a file" "2" "$(judged "$WORK/gate/writes/draft-edit-diff.py")"
+  check "saying that is why" "can write a file" "$(cat "$WORK/gate/err" 2>/dev/null)"
+  check_eq "and refuses a copy of it that can start a program" "2" "$(judged "$WORK/gate/runs/draft-edit-diff.py")"
+fi
 
 echo
 echo "passed: $pass, failed: $fail"

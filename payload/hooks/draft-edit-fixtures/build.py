@@ -123,7 +123,7 @@ def basics(folder):
         (2000, OTHER, "Is the ferry timetable out?"),
         (2100, ME, "Not yet, the printer is late.")])
     r.draft(3000, "C0FIXTURE04", 3000, "The buoy inspection is booked for the spring tide.")
-    # Four: a draft that was never saved, in two ways, then one that was.
+    # Four: a draft that was never saved, in two ways, so the post after them has no draft before it.
     r.draft(4000, "C0FIXTURE05", 4000, "Unsaved wording about the slipway.", saved=False)
     r.draft(4010, "C0FIXTURE05", 4000, "Second unsaved wording about the slipway.",
             answer=json.dumps({"ok": False, "error": "attached_draft_exists"}))
