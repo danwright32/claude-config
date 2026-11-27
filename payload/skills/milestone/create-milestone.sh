@@ -212,6 +212,8 @@ announce="$(jq -r 'if has("announce") then (.announce | if type == "string" then
 # when the picker named the feature exactly as the milestone is titled, letter case and spacing
 # aside, because the merge gate looks his answers up by the title. So the plan's title is the one
 # name the library is asked about, and a plan that still names the feature a second way is refused.
+# The title it must equal is the MILESTONE's own on GitHub, which announce_title_holds checks below
+# once the milestone the plan resolves to is known.
 announce_feature_given="$(jq -r 'has("announce_feature")' "$plan")"
 announces=0
 announce_line=""
@@ -232,6 +234,26 @@ announce_line_for() {
   line_json="$(python3 -B "$HOOKS_LIB/announce-approval.py" milestone-line --repo "$repo" --feature "$title" --title "$ms_title" --answer "$announce" --description-file "$held" </dev/null 2>/dev/null)"
   rm -f "$held"
   [[ "$(printf '%s' "$line_json" | jq -r '.ok // false' 2>/dev/null)" == true ]]
+}
+# announce_title_holds <the milestone's own title>: one name only, held to the milestone's OWN
+# title. The plan's title is checked against the record before anything is written; the milestone it
+# resolves to can be titled differently (the comment above), and the merge gate looks Dan's answers
+# up under the milestone's title. So the library is asked again under that title, and a plan whose
+# title is not its milestone's own by the record's key stops here with exit 12. Called twice: on the
+# title the plan WOULD resolve to, before any label is made, and on the one it did resolve to.
+announce_title_holds() {
+  local ms_title="$1"
+  announce_line_for "$description" "$ms_title" && return 0
+  if [[ -z "$line_json" ]]; then
+    echo "ANNOUNCE-UNREAD hooks/lib/announce-approval.py, which python3 runs and which holds Dan's answers about announcing a feature, gave no answer, so the plan's \"announce\": \"$announce\" could not be checked against the milestone \"$ms_title\". Reinstall the hooks with claude-sync pull." >&2
+  else
+    echo "ANNOUNCE-NOT-HIS-ANSWER $(printf '%s' "$line_json" | jq -r '.why // ""')" >&2
+    if [[ "$ms_title" != "$title" ]]; then
+      echo "The plan is titled \"$title\" and its milestone on GitHub is \"$ms_title\". The merge gate looks his answers up under the milestone's own title, so title the plan exactly as the milestone is titled, letter case and spacing aside, and ask him again with a picker that names the feature that way." >&2
+    fi
+  fi
+  echo "ABORTED: no issues were filed, and the milestone's description was not changed." >&2
+  exit 12
 }
 if ! command -v node >/dev/null 2>&1; then
   echo "ANNOUNCE-UNREAD whether $repo announces to agents could not be told: node is not on PATH, and it reads this Mac's dev update registry. Install node, then run this again." >&2
@@ -423,6 +445,16 @@ if [[ -z "$dry" && -n "$missing_labels" ]]; then
     echo "ABORTED: no issues were filed, and nothing was created, because the milestone could not be resolved."
     exit "$pre_rc"
   fi
+  # The same holds for the refusal of a plan whose title is not its milestone's own
+  # (claude-config#3669): the classification names the milestone the plan would resolve to, so that
+  # title is checked here, before any label exists. A classification that names no title leaves the
+  # check to the one after the real resolution.
+  if [[ "$announces" -eq 1 ]]; then
+    pre_title="$(printf '%s\n' "$pre_out" | sed -n 's/^MILESTONE-TITLE //p' | awk 'NR <= 1')"
+    if [[ -n "$pre_title" ]]; then
+      announce_title_holds "$pre_title"
+    fi
+  fi
 fi
 
 # --- create the labels the repo is missing ----------------------------------
@@ -494,23 +526,10 @@ fi
 # gate reads it from there, and a line that is not in it stops the plan here, with nothing filed:
 # written is not kept (L3). Re-running reuses the milestone.
 if [[ "$announces" -eq 1 ]]; then
-  # One name only is held to the milestone's OWN title. The plan's title was checked against the
-  # record before anything was written; the milestone it resolved to can be titled differently (the
-  # comment above), and the merge gate looks Dan's answers up under the milestone's title. So the
-  # library is asked again under that title, in a dry run too, and a plan whose title is not its
-  # milestone's own by the record's key stops here, with no issue filed and no description changed.
-  if ! announce_line_for "$description" "$ms_ref"; then
-    if [[ -z "$line_json" ]]; then
-      echo "ANNOUNCE-UNREAD hooks/lib/announce-approval.py, which python3 runs and which holds Dan's answers about announcing a feature, gave no answer, so the plan's \"announce\": \"$announce\" could not be checked against the milestone \"$ms_ref\". Reinstall the hooks with claude-sync pull." >&2
-    else
-      echo "ANNOUNCE-NOT-HIS-ANSWER $(printf '%s' "$line_json" | jq -r '.why // ""')" >&2
-      if [[ "$ms_ref" != "$title" ]]; then
-        echo "The plan is titled \"$title\" and its milestone on GitHub is \"$ms_ref\". The merge gate looks his answers up under the milestone's own title, so title the plan exactly as the milestone is titled, letter case and spacing aside, and ask him again with a picker that names the feature that way." >&2
-      fi
-    fi
-    echo "ABORTED: no issues were filed, and the milestone's description was not changed." >&2
-    exit 12
-  fi
+  # One name only is held to the title of the milestone the plan DID resolve to, in a dry run too
+  # (announce_title_holds, above). The check before the labels reads the title the plan would
+  # resolve to and runs only when a label is missing, so this one is the check every plan passes.
+  announce_title_holds "$ms_ref"
   if [[ -n "$dry" ]]; then
     echo "WOULD-WRITE-ANNOUNCE-LINE $announce_line"
   else
