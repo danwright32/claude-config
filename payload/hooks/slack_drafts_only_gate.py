@@ -1930,6 +1930,10 @@ def comment_why(line):
 FunctionValues = load_lib("function_values", "function-values.py")
 FunctionValues.UNKNOWN_DIR = SH_UNKNOWN_DIR
 HeredocFed = load_lib("heredoc_fed", "heredoc-fed.py")
+# Which reading Judge.fed gives for this run: "short" is every body as it was before that change
+# and nothing more, and "grew" whether the reading it gives otherwise has differed from that for
+# any command so far. main() sets the first once the second is set and the call was not refused.
+FED = {"short": False, "grew": False}
 
 
 def heredoc_why(line, one_line=False, opener=""):
@@ -2174,6 +2178,24 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
     def unwatch(self):
         if self.clock is time.monotonic and hasattr(signal, "setitimer"):
             signal.setitimer(signal.ITIMER_REAL, 0)
+
+    def judged(self, cmd, cwd):
+        """The reason the call's command is refused, or None, for main(): line() under the budget's
+        timer, with what the reader raises for a text it will not vouch for turned into the
+        refusal it stands for. Raises OutOfTime where the budget passed, whatever the walk went
+        on to answer."""
+        self.watch()
+        try:
+            reason = self.line(cmd, cwd, 0, cmd)
+        except NulPath:
+            reason = self.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
+        except UnsureComment as e:
+            reason = self.unfollow(heredoc_why(e.line, e.one_line, e.opener) if e.heredoc else comment_why(e.line))
+        finally:
+            self.unwatch()
+        if self.overran:
+            raise self.overran  # interrupted, and the walk answered all the same (Judge.interrupt)
+        return reason
 
     @staticmethod
     def sized(path):
@@ -8007,8 +8029,19 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         gave, and the lines after them up to where bash 3.2 and zsh end the heredoc, where that is
         later. Where it cannot tell where they end it, it raises UnsureComment, which main()
         refuses as a check it could not make, and which is never kept here.
+
+        Where that differs from what this always gave it says so (FED["grew"]), and main() then
+        judges the call once more with FED["short"] set, when this gives what it always gave and
+        nothing else: a longer body can be read more weakly than the short one (loose() in
+        lib/heredoc-fed.py, review of #3497).
         """
-        return HeredocFed.fed(text, whole, lines_of, lambda at, kind: UnsureComment(whole, at, kind))
+        short = HeredocFed.loose(text, whole, lines_of)
+        if FED["short"]:
+            return short
+        got = HeredocFed.fed(text, whole, lines_of, lambda at, kind: UnsureComment(whole, at, kind))
+        if got != short:
+            FED["grew"] = True
+        return got
 
     @staticmethod
     def glued_option(w, any_option=False):
@@ -8295,17 +8328,19 @@ def main():
         recorder = kept.record([globals(), vars(sw)] + [vars(m) for m in LIBS if m is not _cache])
     judge = Judge(sw)
     try:
-        judge.watch()
-        try:
-            reason = judge.line(cmd, cwd, 0, cmd)
-        except NulPath:
-            reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
-        except UnsureComment as e:
-            reason = judge.unfollow(heredoc_why(e.line, e.one_line, e.opener) if e.heredoc else comment_why(e.line))
-        finally:
-            judge.unwatch()
-        if judge.overran:
-            raise judge.overran  # interrupted, and the walk answered all the same (Judge.interrupt)
+        reason = judge.judged(cmd, cwd)
+        if not reason and FED["grew"]:
+            # A heredoc's body was read further than it was before claude-config#3497, and nothing
+            # was found. The lines added can weaken how the lines before them are read, so the
+            # call is judged once more with every body as it was before, by a Judge of its own
+            # that holds nothing the first worked out, on what is left of the first one's time.
+            # Refused where either reading gives a reason, so reading a body further can never
+            # allow a command the shorter reading refused (review of #3497).
+            FED["short"] = True
+            Judge.fed.cache_clear()
+            first, judge = judge, Judge(sw)
+            judge.clock, judge.started = first.clock, first.started
+            reason = judge.judged(cmd, cwd)
     except OutOfTime as e:
         # A verdict of its own, refused like any other, so the wrapper can say what to do instead
         # for a merge (claude-config#2576).

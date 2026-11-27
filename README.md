@@ -5456,7 +5456,14 @@ the marker (a `<<-` lets its leading tabs go and nothing else), with the whole w
 as the marker, and after the body of a heredoc opened earlier on the line. It ended the body at a
 marker with a blank beside it and at the first letters of a longer marker, and the lines the shell
 went on feeding python3 were read as shell commands. It gives every line it gave before, and more
-where the shells feed more. Where it cannot tell where they end the body, the call is refused as a
+where the shells feed more, each added line once however many places the command stands at. More
+lines are not always a stricter reading: a line added at the end can weaken how the gate reads
+the lines before it (a quote left open has a shell's body read by the crude cut, which follows no
+variable; a later `sys.path` line is applied to an import that ran before it). So where any body
+grew and nothing was found, the gate judges the call once more with every body as it was before
+(`loose()` in that file, `main()` in the gate), on what is left of the same 11 seconds, and
+refuses where either reading gives a reason. Reading a body further can then never allow a
+command the shorter reading refused. Where it cannot tell where they end the body, the call is refused as a
 check the gate could not make: a marker that a backslash joins to the line before (which the
 shared reader refuses too, but not in a text it gives up on before it reaches that heredoc), more
 than one `<<` in the command, a marker whose first letters it reads and whose rest it does not, an
@@ -5469,7 +5476,8 @@ with a character outside quotes that is not a letter, a digit or one of `_ . , :
 and one whose quote never closes. The refusal says how to write the marker so that it is read.
 
 A marker that reading never took for an opener at all is not refused: one written with a
-backslash (`<<\EOF`), or in quotes with a character that is no letter, digit or underscore. `cat
+backslash (`<<\EOF`), in quotes with a character that is no letter, digit or underscore, or bare
+and starting with such a character (`<<.E`, and `<<!`, an old way to write one, or `<<~E`). `cat
 <<'E\'` with a quiet body is an ordinary command, and `test-slack-drafts-comment-start.sh` pins
 it. `fed()` gave the command's own line for such a heredoc and no body, so `python3 <<\EOF`
 importing a module that posts passed, and so did `bash <<\EOF` fed a line naming a send route. It
@@ -5478,8 +5486,9 @@ on saying it is no body. An interpreter's imports and a send route's name are re
 a pipe from such a heredoc carries stays not worked out and refused, as before. Not read: the
 lines of a shell fed that way as commands (`bash <<\EOF` whose body runs a script that posts),
 what code fed to python3 that way runs beyond its imports, and a body whose marker holds a dollar
-sign or a backquote outside single quotes (`python3 <<"E$"` importing a module that posts passes,
-as it does on main).
+sign or a backquote outside single quotes, or starts with a bare character that is no letter,
+digit or underscore and none of `. , : / @ % + = ^ - ! ~` (`python3 <<"E$"` and `python3 <<*`
+importing a module that posts pass, as they do on main).
 
 Since claude-config#2844 it also reads what a runner or a compiler runs without the command naming
 it as a script (`payload/hooks/lib/program-runs.py`): the script or module `python3 -m` runpy, pdb,

@@ -175,8 +175,16 @@ python3 <<\E|E
 python3 - <<\EOF|EOF
 python3 <<'E.\'|E.\
 python3 <<"E F"|E F
+python3 <<!|!
+python3 <<~E|~E
+python3 - <<!EOF|!EOF
 python3 <<\EOF|E
 MARKED
+# The three rows with a ! or a ~ are a bare marker that starts with a character the loose reading
+# took for no opener, an old and real way to write one (`cat <<!`). Both shells take each as the
+# marker (the last section holds that), and at 5019457df1 the gate read neither, so python3 fed an
+# import of a module that posts that way passed, as it does on main (the review's probes h01 and
+# h08, 2026-11-27).
 
 # The first build of this change refused every such opener as one the gate does not read, and so
 # refused a program that is no shell and no interpreter, fed a quiet body: the control
@@ -265,6 +273,252 @@ for open in 'E$' "E$BS\$"; do
   says "saying where a dollar sign is not read: $open" "the end marker holds a dollar sign or a backquote outside single quotes"
 done
 
+echo "slack drafts only: a body read further is judged as it was before as well (review of claude-config#3497)"
+
+# The lines fed() adds past the place it always ended a body can weaken how the gate reads the
+# lines before them: a shell's body with a quote left open is read by the crude cut, which follows
+# no variable, and a later sys.path line is applied to an import that ran before it. Each command
+# here was refused on main at 969bb0fce0 and passed at 5019457df1, the first build of this change
+# (the review's probes a02, a03, a05, a11 and a13, 2026-11-27), and each posts in a real shell: the
+# fed program runs the early lines before it reaches the added ones (measured there in bash 3.2
+# and zsh with texts that only print). The gate now judges the call twice where a body grew, once
+# with every body as it always was, and refuses where either reading gives a reason.
+mkdir -p "$FED/elsewhere"
+printf '%s\n' 'x = 1' > "$FED/elsewhere/poster.py"
+printf '%s\n' 'x = 1' > "$FED/elsewhere/quiet.py"
+OPEN_QUOTE='echo "unclosed'
+while IFS='|' read -r probe opener loose strict; do
+  [ -n "$probe" ] || continue
+  loose="${loose//@SP@/ }"; opener="${opener//@BAR@/|}"
+  text="$opener${NL}kept=posts.sh${NL}bash \"\$kept\"${NL}$loose${NL}$OPEN_QUOTE${NL}$strict"
+  run_bash "$text" "$FED"
+  refused "$probe: a shell fed a script that posts through a variable, then a line the heredoc does not end at and a quote left open, is refused: $opener"
+  says "$probe: as the post it is" "$POSTS"
+  says "$probe: naming the script the variable holds" "the script posts.sh runs a command that posts"
+  printf '%s\n' "$text" > "$FED/script.sh"
+  run_bash "bash script.sh" "$FED"
+  refused "$probe: and the same lines in a script that is run are refused: $opener"
+  # The control that pins the cause (the review's a02b): with nothing left open the longer body
+  # is readable, and was refused at 5019457df1 too.
+  run_bash "${text//$OPEN_QUOTE/echo fine}" "$FED"
+  refused "$probe: the control: the same text with no quote left open is refused: $opener"
+  run_bash "${text//posts.sh/quiet.sh}" "$FED"
+  allowed "$probe: the same text running a quiet script through the variable passes: $opener"
+done <<'OPEN'
+a02|bash <<'E'|@SP@E|E
+a03|cat <<'E' @BAR@ bash|@SP@E|E
+a05|bash <<'E'F|E|EF
+OPEN
+while IFS='|' read -r probe opener loose strict; do
+  [ -n "$probe" ] || continue
+  loose="${loose//@SP@/ }"
+  text="$opener${NL}import poster${NL}$loose${NL}import sys${NL}sys.path.insert(0, 'elsewhere')${NL}$strict"
+  run_bash "$text" "$FED"
+  refused "$probe: python3 fed an import of a module that posts, then a line the heredoc does not end at and a sys.path line naming a folder with a quiet module of that name, is refused: $opener"
+  says "$probe: as the post it is" "$POSTS"
+  printf '%s\n' "$text" > "$FED/script.sh"
+  run_bash "bash script.sh" "$FED"
+  refused "$probe: and the same lines in a script that is run are refused: $opener"
+  run_bash "${text//import poster/import quiet}" "$FED"
+  allowed "$probe: the same text importing a quiet module passes: $opener"
+done <<'PATHS'
+a11|python3 <<'E'|E@SP@|E
+a13|python3 <<'E'F|E|EF
+PATHS
+
+# The second judgement runs on what is left of the first one's time, never on a time of its own:
+# two whole budgets would be 22 seconds, past the 15 the hook is given. Counted in the gate's
+# steps, which no load can move (SLACK_GATE_TICK_BUDGET under a test run): the fewest steps a
+# quiet command whose body grew is allowed in must be more than the fewest for the same command
+# with a body that did not grow by at least half of it, and no more than twice that and a few.
+fewest() { # fewest <command>: the smallest step budget, up to 60, the gate allows the command in
+  local b rc p
+  p="$(payload Bash "$(bash_input "$1")" "$FED")"
+  b=1
+  while [ "$b" -le 60 ]; do
+    printf '%s' "$p" | HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET="$b" SLACK_GATE_CACHE_DIR="$T/steps-cache.$b.$RANDOM" bash "$HOOK" >/dev/null 2>&1; rc=$?
+    if [ "$rc" -eq 0 ]; then printf '%s' "$b"; return; fi
+    b=$((b + 1))
+  done
+  printf 'none'
+}
+once="$(fewest "python3 <<'E'${NL}import quiet${NL}import quiet${NL}E")"
+twice="$(fewest "python3 <<'E'${NL}import quiet${NL}E ${NL}import quiet${NL}E")"
+if [ "$once" != none ] && [ "$twice" != none ] && [ "$twice" -ge $((once + (once + 1) / 2)) ] && [ "$twice" -le $((2 * once + 8)) ]; then
+  check "a command whose body grew is judged twice inside one budget ($once steps for a body that did not grow, $twice for one that did)" ok
+else
+  check "a command whose body grew is judged twice inside one budget" "allowed in $once steps where the body did not grow and in $twice where it did"
+fi
+echo "  steps: $once for a body that did not grow, $twice for one that did"
+
+# The two readings themselves, asked of the gate's own code: the short one is what Judge.fed gave
+# on main, line for line; the longer one gives every line of the short one and, past them, no
+# line of the text twice; the gate is told when the two differ; and the work the longer one does
+# is counted, which no load can move (L290). 300 `python3 <<EOF`, each with its EOF indented so
+# that it ends nothing, are 300 bodies that all run to the end of the text: handed on whole they
+# were 135,000 lines for a text of 900, and a script main judged in 1.47 seconds ran out of the
+# gate's 11 at 5019457df1 (the review's probe d_hd_300).
+cat > "$T/readings.py" <<'PY'
+import bisect, collections, importlib.util, random, re, sys
+
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+lib, lines_of = gate.HeredocFed, gate.lines_of
+
+
+class Unsure(Exception):
+    pass
+
+
+def unsure(at, kind):
+    return Unsure()
+
+
+def cost(n):
+    """(the lines read to find where the heredocs of n such commands end, the lines handed on,
+    the lines of the text)."""
+    whole = "\n".join("python3 <<EOF\nimport quiet\n  EOF" for _ in range(n)) + "\n"
+    read, plain = [0], lib.end
+
+    def counted(lines, k, *rest):
+        got = plain(lines, k, *rest)
+        reached = got[1] if isinstance(got, tuple) else len(lines) if got is None else got
+        read[0] += reached - k + 1
+        return got
+    lib.end = counted
+    try:
+        body = lib.fed("python3 <<EOF", whole, lines_of, unsure)[0]
+    finally:
+        lib.end = plain
+    return read[0], body.count("\n") + 1, whole.count("\n")
+
+
+small, large = cost(200), cost(400)
+if large[0] > 3 * small[0]:
+    print("FAIL finding where 400 heredocs end read %d lines of a text of %d, and where 200 end %d of %d: "
+          "it grows with the square of the commands" % (large[0], large[2], small[0], small[2]))
+if large[1] > 3 * small[1] or large[1] > 3 * large[2]:
+    print("FAIL 400 heredocs were handed %d lines of a text of %d, and 200 were handed %d of %d: a line "
+          "past where a body always ended is handed on more than once" % (large[1], large[2], small[1], small[2]))
+print("counted read=%d handed=%d of %d lines, for 400 heredocs" % large)
+
+
+def before(text, whole):
+    """Judge.fed as it stood on main at 969bb0fce0, copied line for line but for its name."""
+    lines, starts = lines_of(whole)
+    key = text.strip()
+    ats, at = [], whole.find(key) if key and "\n" not in key else -1
+    while at >= 0:
+        i = bisect.bisect_right(starts, at) - 1
+        ats.append(i)
+        at = whole.find(key, starts[i + 1]) if i + 1 < len(starts) else -1
+    if not ats:
+        return whole, False
+    m = re.search(r"<<-?\s*(['\"]?)([A-Za-z0-9_]+)\1", text)
+    if not m:
+        return "\n".join(lines[i] for i in ats), False
+    bodies = []
+    for at in ats:
+        body = []
+        for ln in lines[at + 1:]:
+            if ln.strip() == m.group(2):
+                break
+            body.append(ln)
+        else:
+            return whole, False  # a body never closed: read it all
+        bodies.append("\n".join(body))
+    return "\n".join(bodies), True
+
+
+loose, flags = getattr(lib, "loose", None), getattr(gate, "FED", None)
+if loose is None or flags is None:
+    print("FAIL the gate keeps no reading of a heredoc as it was before (loose in lib/heredoc-fed.py: %s, "
+          "FED in the gate: %s), so a body read further is judged by the longer reading alone"
+          % ("there" if loose else "missing", "there" if flags else "missing"))
+    sys.exit(0)
+
+# Texts put together from the lines that matter here, the same ones on every run.
+rng = random.Random(3497)
+OPENERS = ["python3 <<E", "python3 <<'E'", "python3 <<-E", 'python3 <<E"F"', "python3 <<\\E", "python3 <<!",
+           "bash <<'E'", "python3 - <<E-1", "cat <<A | python3 <<E"]
+PIECES = ["E", " E", "E ", "\tE", "EF", "E-1", "!", "A", "import quiet", "x = 1 \\", "echo $HOME", "",
+          "python3 <<E", "python3 <<'E'", "python3 <<\\E"]
+asked = longer = refused = 0
+for _ in range(4000):
+    opener = rng.choice(OPENERS)
+    key = opener.split("| ")[-1]
+    whole = "\n".join([rng.choice(PIECES) for _ in range(rng.randrange(3))] + [opener]
+                      + [rng.choice(PIECES) for _ in range(rng.randrange(10))])
+    where = repr(whole)
+    want = before(key, whole)
+    short = loose(key, whole, lines_of)
+    asked += 1
+    if short != want:
+        print("FAIL the short reading gave %r where main gave %r: %s" % (short, want, where))
+        break
+    try:
+        got = lib.fed(key, whole, lines_of, unsure)
+    except Unsure:
+        refused += 1
+        continue
+    longer += got != want
+    if got[1] != want[1]:
+        print("FAIL the longer reading %s a body where main %s: %s"
+              % ("gave" if got[1] else "gave no", "gave one" if want[1] else "gave none", where))
+        break
+    lost = collections.Counter(l for l in want[0].split("\n") if l) - collections.Counter(l for l in got[0].split("\n") if l)
+    if lost:
+        print("FAIL the longer reading left out %r, which main gave: %s" % (sorted(lost), where))
+        break
+    if got[0].count("\n") > want[0].count("\n") + whole.count("\n") + whole.count(key) + 1:
+        print("FAIL the longer reading gave %d lines where main gave %d of a text of %d: %s"
+              % (got[0].count("\n") + 1, want[0].count("\n") + 1, whole.count("\n") + 1, where))
+        break
+print("held asked=%d longer=%d refused=%d" % (asked, longer, refused))
+
+# What the gate is told. A body that grew sets "grew", one that did not sets nothing, and with
+# "short" set Judge.fed gives what main gave.
+grown = "python3 <<'E'\nimport poster\nE \nimport sys\nE"
+same = "python3 <<'E'\nimport poster\nE\nimport sys"
+gate.Judge.fed.cache_clear()
+flags.update(short=False, grew=False)
+gate.Judge.fed("python3 <<'E'", same)
+if flags["grew"]:
+    print("FAIL a body the shells end where it always ended was said to have grown")
+got = gate.Judge.fed("python3 <<'E'", grown)
+if not flags["grew"] or got == before("python3 <<'E'", grown):
+    print("FAIL a body the shells feed two more lines of was not said to have grown: %r" % (got,))
+gate.Judge.fed("python3 <<'E'", grown)
+if not flags["grew"]:
+    print("FAIL asked a second time, the gate forgot that the body grew")
+flags["short"] = True
+gate.Judge.fed.cache_clear()
+got = gate.Judge.fed("python3 <<'E'", grown)
+if got != before("python3 <<'E'", grown):
+    print("FAIL with the short reading asked for, Judge.fed gave %r where main gave %r"
+          % (got, before("python3 <<'E'", grown)))
+PY
+rows="$(python3 -B "$T/readings.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
+counted=""; held=""
+while IFS= read -r row; do
+  case "$row" in
+    "counted "*) counted="$row" ;;
+    "held "*) held="$row" ;;
+    "") ;;
+    *) check "the gate's two readings of a heredoc" "$row" ;;
+  esac
+done <<EOF
+$rows
+EOF
+if [ -n "$counted" ]; then check "the work of reading 400 heredocs that never end was counted" ok
+else check "the work of reading 400 heredocs that never end was counted" "no count was printed: ${rows:0:300}"; fi
+longer="${held#*longer=}"; longer="${longer%% *}"
+if [ "${longer:-0}" -ge 200 ] 2>/dev/null; then check "the two readings were held against each other where they differ ($held)" ok
+else check "the two readings were held against each other where they differ" "only '${longer:-none}' texts had a longer body: '$held'"; fi
+echo "  $counted"
+echo "  $held"
+
 echo "slack drafts only: fed() ends a heredoc where the shells of this machine end it (claude-config#3497)"
 
 # fed() against the shells themselves (L58): each text is run in every shell found here, with cat
@@ -314,6 +568,11 @@ ROWS = [
     ("cat <<'E" + BS + "'", ["cat <<'E" + BS + "'", "a", "E", "b", "E" + BS], "lines"),
     ('cat <<"E F"', ['cat <<"E F"', "a", "E", "b", "E F"], "lines"),
     ("cat <<-" + BS + "E", ["cat <<-" + BS + "E", "a", " E", "b", TAB + "E"], "lines"),
+    ("cat <<!", ["cat <<!", "a", "!"], "lines"),
+    ("cat <<!", ["cat <<!", "a", " !", "b", "!"], "lines"),
+    ("cat <<~E", ["cat <<~E", "a", "E", "b", "~E"], "lines"),
+    ("cat <<!EOF", ["cat <<!EOF", "a", "EOF", "b", "!EOF"], "lines"),
+    ("cat <<-~E", ["cat <<-~E", "a", " ~E", "b", TAB + "~E"], "lines"),
     ("cat <<E", ["cat <<E", "a" + BS, "E", "b", "E"], "refuse"),
     ("cat <<E", ["cat <<E", "a" + BS, "E", "b"], "refuse"),
     ("cat <<E", ["cat <<E", BS, "E", "b", "E"], "refuse"),
