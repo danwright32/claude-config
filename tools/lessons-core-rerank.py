@@ -48,8 +48,8 @@ counts do not trade places every month.
 Refuses rather than guessing, each with its own exit code so the job can tell them apart (L11):
   1  REFUSED: a lesson with no tag in either pass (or no tags file) that is this Mac's own, no age, a tag outside diff, design and operate,
      a core list naming no lesson, no seats file or a seat outside the core, or two Macs that
-     counted over different windows (L711);
-  2  UNMEASURED: a Mac whose counts are missing, carry no time stamp, name another Mac, are dated in
+     counted over different windows (L711), or an --uncovered below 1;
+  2  UNMEASURED: a Mac whose counts are missing, cannot be read, carry no time stamp, name another Mac, are dated in
      the future, or are older than --stale-days. Never read as zero (L90, L530). And, with --host, a
      lesson in the OTHER Mac's band not tagged yet: that Mac's daily job tags it (#566);
   3  INACTIVE: there is no core list, so the core is not in use and there is nothing to re-rank.
