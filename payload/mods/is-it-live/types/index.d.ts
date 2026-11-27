@@ -97,6 +97,13 @@ declare module 'claude-code' {
        * turn end or /live.
        */
       announcePinned: string[]
+      /**
+       * #3847: the rows whose Not announcing has had its first press, each with the time by this
+       * session's clock at which that stops counting. A second press before then settles the
+       * announcement; one at or after it is a first press again. Session state and never the store,
+       * so no other session's row is armed by it and a session starting again forgets it.
+       */
+      announceArmed: Record<string, number>
     }
   }
 }
