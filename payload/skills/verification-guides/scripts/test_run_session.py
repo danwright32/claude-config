@@ -225,6 +225,10 @@ class RunFixture(unittest.TestCase):
         # end, and when it dies, killed with its whole suite included, each run's supervisor sees the
         # pipe end and stops its run. tearDown's stop never runs in a suite killed outright.
         self.tie = os.pipe() if self.lifeline else None
+        # What a stop run inside this process was told about its file is this process's to remember
+        # for as long as it lives, and every test here is one process: no test starts with another's
+        # (the sixth #3807 review). Until this, only each test's own new folder kept them apart.
+        run_session.FORBIDDEN.clear()
 
     lifeline = True
 
@@ -2448,7 +2452,8 @@ class CutOffTests(RunFixture):
             self.assertFalse(cut.is_alive())
 
     def test_a_removal_is_remembered_only_until_the_file_is_made_again(self):
-        # The memory is sound because one thing alone makes the file, and that thing forgets.
+        # The memory is sound because one thing alone makes the file, and that thing forgets. And
+        # because of WHEN a supervisor calls it, which the sixth review's test of the order holds.
         rdir = self.a_run_on_disk(recoverable=True)
         self.assertTrue(run_session.forbid_recovery(rdir))
         run_session.allow_recovery(rdir)
@@ -2625,6 +2630,51 @@ class CutOffTests(RunFixture):
         self.assertEqual((rec["egress"]["verdict"], rec["egress"].get("measured_to")), ("unmeasured", None),
                          rec["egress"])
         self.assertIn("could not read what was left of serve's process group (%s)" % serve.pid, rec["egress"]["why"])
+
+    def test_the_file_is_made_before_the_one_other_thread_that_can_take_it_back_is_started(self):
+        # A removal confirmed between allow_recovery's forgetting and its write would be remembered
+        # with the file whole, and the next ask would then say yes without the disk. The lifeline's
+        # thread is the one other thread of a supervisor that asks for the removal, so the file is
+        # whole before that thread is started. Seen at the start itself, on the main thread.
+        rdir = self.a_run_on_disk(serve_command="exit 0")
+        test, seen = self, []
+
+        def lifeline(*args):
+            pass  # a stand in that watches nothing: the real one signals this process when its pipe ends
+
+        class Thread(threading.Thread):
+            def __init__(inner, *args, target=None, **kwargs):
+                inner.the_lifelines = target is lifeline
+                super().__init__(*args, target=target, **kwargs)
+
+            def start(inner):
+                if inner.the_lifelines:
+                    seen.append(test.recoverable(rdir))
+                super().start()
+
+        r, w = os.pipe()
+        self.addCleanup(os.close, r)
+        tie = os.pipe()
+        for fd in tie:
+            self.addCleanup(os.close, fd)
+        for s in run_session.STOP_SIGNALS:
+            self.addCleanup(signal.signal, s, signal.getsignal(s))
+        with mock.patch.object(run_session.egress, "Monitor", MonitorThatCannotStart), \
+                mock.patch.object(run_session, "watch_lifeline", lifeline), \
+                mock.patch.object(threading, "Thread", Thread):
+            code = run_session.supervise(rdir, -1, w, lifeline_fd=tie[0])
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, [True], "the lifeline's thread was started before the file was whole")
+        self.assertEqual(self.on_disk(rdir)["stopped_by"], "serve_exited")
+
+    def test_every_test_starts_with_no_removal_remembered(self):
+        # The memory lasts as long as the process, and every test here is one process. What keeps
+        # one test's yes from the next must not be that their folders happen to differ.
+        run_session.FORBIDDEN.add(os.path.join(self.home, "a folder an earlier test was told is gone"))
+        another = RunFixture("setUp")
+        another.setUp()
+        self.addCleanup(another.tearDown)
+        self.assertEqual(run_session.FORBIDDEN, set(), "a test would start with what another was told")
 
     # -- the rest of what the second #3807 review found --
 

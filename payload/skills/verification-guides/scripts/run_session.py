@@ -44,7 +44,8 @@ said in the receipt's stop_detail and left.
 `stop`, finding the supervisor gone with no ending recorded, is the exception: it has no child to
 hold, so a number it signals from the receipt is pinned by nothing. It signals one only for a
 supervisor that never began to end its children itself (the third #3807 review). The supervisor
-keeps a file beside the receipt, `recover-by-receipt`, from before it starts its first child, and
+keeps a file beside the receipt, `recover-by-receipt`, from before it starts its first child (and
+before it starts the thread that watches a lifeline, the sixth #3807 review), and
 removes it as its first act when it begins to end its children, in a stop and in a cut off alike:
 before the project's stop command, which is often what ends the app, and before any signal.
 Removing a file works on a disk with no room left, where nothing new can be written. While the
@@ -72,6 +73,9 @@ removal that lands after the wait is over leaves the file gone with nothing sign
 `stop` then signals nothing and exits 8, and the app is for a person to end. Once the system HAS
 said yes the supervisor remembers it and does not ask again (the fifth #3807 review), so a disk
 that begins to hang after a stop's first act does not stop a cut off from killing what it holds.
+The kill is all that is promised then. A cut off reads the receipt before it kills, so where that
+read hangs the kill comes from the limit's way out, and no ending is recorded: a later `stop`
+records the run as `recovered`, signals nothing and exits 8 (the sixth #3807 review).
 
 The supervisor starts in a session of its own because the run must outlive `start`: `start`
 returns once serve is ready, and `drive` and `stop` come later from other processes, so in real use
@@ -214,8 +218,11 @@ PIN = threading.Lock()
 LEFT = {}
 # The receipt folders whose `recover-by-receipt` the system has told THIS process is gone or emptied
 # (see forbid_recovery). Once that is so it stays so for the life of the process: the file is made
-# in one place, allow_recovery, which a supervisor calls once, before its first child, and which
-# takes the folder out of here before it writes. So an ask that follows a yes need not go to the
+# in one place, allow_recovery, which a supervisor calls once, before its first child and before
+# it starts the lifeline's thread, the one other thread that asks for a removal, and which takes
+# the folder out of here before it writes. No removal can then be confirmed between that
+# forgetting and the write, so the file is never whole while its folder is in here (the sixth
+# #3807 review). So an ask that follows a yes need not go to the
 # disk again, and a cut off that finds the disk hanging after its own stop had the system's yes
 # still ends the children it holds (the fifth #3807 review).
 FORBIDDEN = set()
@@ -490,11 +497,18 @@ def requested_reason(rdir, unrecorded="stop"):
 #
 # A YES IS REMEMBERED (the fifth #3807 review). The removal is asked for once per process: when the
 # system has said the file is gone or emptied, forbid_recovery keeps the receipt folder in
-# FORBIDDEN and answers from there afterwards. The file cannot come back, since allow_recovery is
-# the one thing that makes it and it forgets the folder first. So a cut off that follows a stop in
-# the same supervisor does not go back to a disk that may by then be hanging: it kills the
-# children it holds, through signal_own, as the stop's own yes entitles it to. Before this, that
-# cut off left with the app running and the file gone, and nothing could ever end the app.
+# FORBIDDEN and answers from there afterwards. The file cannot come back while it is remembered as
+# gone: allow_recovery is the one thing that makes it, it forgets the folder first, and a
+# supervisor calls it before any other thread that asks for the removal exists. (Until the sixth
+# #3807 review the lifeline's thread was started first, and a removal confirmed on it between the
+# forgetting and the write would have been remembered with the file whole.) So a cut off that
+# follows a stop in the same supervisor does not go back to a disk that may by then be hanging: it
+# kills the children it holds, through signal_own, as the stop's own yes entitles it to. Before
+# this, that cut off left with the app running and the file gone, and nothing could ever end the
+# app. Whether an ending is then recorded is for the disk to say. cut_off reads the receipt before
+# it kills, so on a disk still hanging it gets no further than that read: the kill comes from the
+# limit's way out (`out` in cut_off_and_leave), stop_s and CUT_OFF_ROOM_S later, and nothing is
+# written (the sixth #3807 review).
 
 
 def recover_path(rdir):
@@ -505,7 +519,10 @@ def allow_recovery(rdir):
     """Say, beside the receipt, that the run's process groups are still the run's: a `stop` that
     finds this supervisor gone with no ending may end them by the numbers in the receipt. Raises
     when it cannot be written, and the run then does not start. The one place the file is made, so
-    it is also where a removal this process remembers is forgotten (see FORBIDDEN), before the write."""
+    it is also where a removal this process remembers is forgotten (see FORBIDDEN), before the write.
+    Called only while no other thread that can ask for the removal exists: one confirmed between
+    the forgetting and the write would be remembered with the file whole. supervise calls it before
+    it starts the lifeline's thread, and a test holds that order (the sixth #3807 review)."""
     FORBIDDEN.discard(rdir)
     with open(recover_path(rdir), "w", errors="replace") as f:
         f.write(RECOVER_BY_RECEIPT_SAYS)
@@ -945,7 +962,8 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
                 # ps failed, or could not be started at all (a fork refused at the process limit),
                 # so whether the group is empty cannot be read. That is never read as empty: the
                 # group is killed while serve still pins its number, the ending says nothing was
-                # read, and the stop goes on to record it. Raised from here it would leave no ending
+                # read, and the stop goes on to record it, the git that removes the worktree being
+                # caught the same way (see worktree_gone). Raised from here it would leave no ending
                 # with the file already gone, and a later `stop` signals nothing. The run's egress
                 # is then never recorded as clean (see EGRESS_UNREAD).
                 signal_own(proc, signal.SIGKILL)
@@ -1020,7 +1038,8 @@ def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None, leave=None)
     so, and that anything left of it may still be running, and says the same of a group the stop
     had already dealt with and left survivors in, and of one the stop had killed without being able
     to list it. Serve is collected last, once its group has been signalled and waited for. It runs
-    the project's stop command if the stop had not, and removes the worktree. Before its first
+    the project's stop command if the stop had not, and removes the worktree, or says in the detail
+    that git could not be run to remove it (see worktree_gone). Before its first
     signal it takes back the leave a later `stop` had to recover the run by the receipt's numbers
     (see forbid_recovery), so a cut off that then cannot record its ending leaves no number to be
     signalled. A cut off that follows a stop in this process has that already, from the stop's own
@@ -1120,7 +1139,8 @@ def cut_off_and_leave(rdir, reason, why, proc=None, monitor=None, limit_s=None, 
     the run has been signalled by it then, it leaves that way, and while the file is whole a later
     `stop` ends them by number (see leave_unended). A removal the supervisor's own stop had
     confirmed is remembered, so a disk that hangs afterwards does not turn this into that case (the
-    fifth #3807 review).
+    fifth #3807 review). On such a disk it is `out` below that kills, at the limit, and no ending is
+    recorded: cut_off itself is still waiting on its first read of the receipt (the sixth).
 
     NOTHING ON THE WAY OUT WAITS ON A FILE WITHOUT A LIMIT (the fourth #3807 review). The limit is
     set after one read given DISK_WAIT_S (stop_s, the default when the read has not answered), and
@@ -1270,6 +1290,17 @@ def supervise(rdir, repo_lock_fd, pipe_w, lifeline_fd=None):
             with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
                 doc = json.load(f)
             rec = read_receipt(rdir)
+            # Before the first child there is: from here until this supervisor begins to end its
+            # children itself, a `stop` that finds it gone may end them by the receipt's numbers.
+            # And BEFORE THE LIFELINE'S THREAD IS STARTED (the sixth #3807 review): that thread is
+            # the one other thread of a supervisor that ever asks for the file's removal, in a cut
+            # off, and allow_recovery forgets a remembered removal and then writes. A removal
+            # confirmed between the two would be remembered with the file whole. Made here, the
+            # file is whole before any thread that could confirm one exists, so no window is left:
+            # this thread asks for nothing while it is inside allow_recovery, and a stop signal
+            # that lands there is only noted (the gate above). The price is that a write which
+            # hangs here is watched by no lifeline, as the two reads just above already were.
+            allow_recovery(rdir)
             if lifeline_fd is not None:
                 # Long enough that only a stop that hung is cut off, never one that is merely slow.
                 limit = stop_longest_s(doc["timeouts"]) * time_scale("VERIFICATION_STOP_LIMIT_SCALE")
@@ -1282,10 +1313,6 @@ def supervise(rdir, repo_lock_fd, pipe_w, lifeline_fd=None):
             # The egress monitor starts BEFORE serve, so it covers serve's whole life, and is proved live
             # by its canary first. One that cannot start leaves serve running unwrapped and the verdict
             # unmeasured with its reason: a run is never refused for it, and never called clean.
-            #
-            # Before the first child there is: from here until this supervisor begins to end its
-            # children itself, a `stop` that finds it gone may end them by the receipt's numbers.
-            allow_recovery(rdir)
             monitor = egress.Monitor(rdir, rec["receipt_id"], doc["egress"]["allow"], doc["timeouts"]["egress_s"])
             unavailable = monitor.start()
             wrap = None if unavailable else [monitor.sandbox, "-f", monitor.profile]
