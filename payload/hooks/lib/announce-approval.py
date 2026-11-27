@@ -154,7 +154,10 @@ outcome for, and judges each from what the transcript holds:
     repository: settled the same way, since what it asked can never be read. One that named a
     repository was an announcement's picker, so the call that settles it says once that an
     answer of his there is lost (_gone_said); left unsettled, its session was read back and
-    said on every call for ever.
+    said on every call for ever. One by its ids alone may be a picker about anything, so its
+    settling is said to one caller only: the merge gate's question, when his decline is all
+    that would clear a milestone, does not clear on the call that settles such notes
+    (_gone_unnamed_said), since a newer answer of his may have been among them.
 THE WORDING HE ANSWERED ABOUT is taken from the note only when the note holds a hash, for the same
 repository and file as the transcript's picker: then the hash and the file's change time noted,
 which must be before his answer, are the ones judged, so a write to the file afterwards neither
@@ -1152,6 +1155,19 @@ def _gone_said(transcript_path, left):
             "not read again")
 
 
+def _gone_unnamed_said(transcript_path, left):
+    """What a call that must not lean on Dan's last answer says, once, of a noted session whose
+    transcript is gone and whose unjudged notes (left) are all by their ids alone. Such a note may
+    be of a picker about anything, and a picker asking whether a feature is announced is always
+    noted that way, so a newer answer of his about it may have been among them."""
+    count = len(left)
+    return ("a session the record notes " + (str(count) + " pickers" if count != 1 else "1 picker") + " of by "
+            + ("their" if count != 1 else "its") + " ids alone, whose transcript was " + transcript_path
+            + ", can never be read: that transcript is gone, and a newer answer of his about announcing this may "
+            "have been in it. This is said once: a call that can write the record settles them as deciding nothing, "
+            "and they are not read again")
+
+
 def _gone(transcript_path):
     """Whether a noted session's transcript is not there any more. One that is there and cannot be
     read is not gone: that may pass, and is said by whoever tries to read it."""
@@ -1925,8 +1941,11 @@ def _harvest_decisions(payload, notes, key=None, short=None, spent=None):
     or misplaced, this session's own included when the record notes a picker of it nothing has
     judged), for a caller that must not lean on his last answer then (finishes). A call that names
     no transcript of its own tried none. A noted session whose transcript is gone can never be
-    read: its notes are settled here, and where one named a repository the call that settles it
-    says so once and counts it among these, so no later call does. spent, when given, is the
+    read: its notes are settled here, and the call that settles them counts it among these, so
+    his decline does not clear on that call and does on the next. Where a note named a repository
+    the call also says so to every caller, once; where every note is by its ids alone (the kind
+    a discovery picker's always is, so the kind that can have held a newer answer of his) it is
+    said only here, to the caller that must not lean on his last answer. spent, when given, is the
     seconds an earlier question of the same merge already used of CHECK_SECONDS: this one reads
     back only in what is left of them (finishes)."""
     deadline = time.monotonic() + (CHECK_SECONDS if spent is None else max(0.0, CHECK_SECONDS - spent))
@@ -1960,8 +1979,13 @@ def _harvest_decisions(payload, notes, key=None, short=None, spent=None):
             # that says it the answer there is as unknown as in a session tried and not read.
             said = _gone_said(transcript, left)
             read.append(([_settled_other(session, p, _gone_why(transcript)) for p in sorted(left)], [], said))
-            if said:
-                tried.append(said)
+            # Notes by their ids alone are settled with nothing said to a caller asking about
+            # anything else, since they may be pickers about anything. But a discovery picker's
+            # note is always by its ids alone, so this is the kind that can have held a newer
+            # ANNOUNCE_IT of his: for a caller that must not lean on his last answer (short), the
+            # call that settles them knows as little as one that tried a session and could not
+            # read it. It says so there, once; the notes are settled, so the next call does not.
+            tried.append(said or _gone_unnamed_said(transcript, left))
             continue
         # A picker a forked session carries under two session ids is judged once in one call.
         more, less, why = decisions(session, transcript, deadline, done | seen, set(left))

@@ -2081,6 +2081,41 @@ r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T")"
 check "R9 #3669 E the call that finds a repository's noted session gone settles its note and says so, and his decline does not clear on that call" "$([[ "$r" == "unread||"*'`Not announcing`'*"f-behind-other-2.jsonl, can never be read"* && "$r" != *"could not be read back"* ]] && settled_as "$BEHIND2" 'transcript is gone' && [ "$(kinds settled)" = "$((settled_before + 1))" ] && echo ok || echo "$r")"
 r="$(UNMERGED=5 finishes_short "$STORE_USED" "$YES12" "$T")"
 check "still possible #3669 E: it is said once and read no more, and his decline clears the next call" "$([[ "$r" == "clear||"* ]] && [ "$(kinds settled)" = "$((settled_before + 1))" ] && echo ok || echo "$r")"
+# The same for a gone session whose notes are by their ids alone (second review of #3669, low 6). A
+# discovery picker's note is always by its ids alone, so this is the kind that CAN have held a newer
+# Announce it of his about the feature, and it was the kind settled with nothing said while his
+# decline cleared on that very call. On the call that settles such notes his decline does not
+# clear: unread, said once. The next call clears.
+STORE_USED="$WORK/store-l-gone"
+T="$WORK/l-gone.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
+check "still possible #3669 L: his decline, read into the record, clears it (the control for the next case)" "$([[ "$r" == "clear||"* ]] && [ "$(kinds decided)" = 1 ] && echo ok || echo "$r")"
+aaf_new "$WORK/l-gone-other.jsonl"
+LGONE="$(talk "$WORK/l-gone-other.jsonl" decide-put acme/widget "Hand back" "" lgone)"
+AAF_PAYLOAD_FORM=nometadata note "$WORK/l-gone-other.jsonl" decide-payload "$LGONE" acme/widget "Hand back" "Announce it" "" lgone >/dev/null
+talk "$WORK/l-gone-other.jsonl" decide-answer "$LGONE" acme/widget "Hand back" "Announce it" "" lgone
+noted_line="$(grep '"kind": "answered"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$LGONE\"")"
+check "#3669 L (the fixture) that session's picker is noted by its ids alone, naming no repository" "$([[ -n "$noted_line" && "$noted_line" != *'"repo"'* ]] && echo ok || echo "$noted_line")"
+rm -f "$WORK/l-gone-other.jsonl"
+# A call that reads the record only reads no session back, so it settles nothing and holds nothing back.
+check "still possible #3669 L: the question that reads the record only settles nothing and his decline on the record clears it" "$([[ "$(finishes "$STORE_USED" "$YES12")" == "clear|"* ]] && ! settled_as "$LGONE" 'transcript is gone' && echo ok || echo no)"
+r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
+check "R9 #3669 L the call that finds a session gone whose notes are by their ids alone settles them, and his decline does not clear on that call" "$([[ "$r" == "unread||"*'`Not announcing`'*'"Hand back" (number 28)'*"l-gone-other.jsonl, can never be read"*"This is said once"* && "$r" != *"could not be read back"* ]] && settled_as "$LGONE" 'transcript is gone' && echo ok || echo "${r:0:400}")"
+r="$(finishes_short "$STORE_USED" "$YES12" "$T")"
+check "still possible #3669 L: it is said once and read no more, and his decline clears the next call" "$([[ "$r" == "clear||"* ]] && echo ok || echo "${r:0:400}")"
+# Nothing but a decline is held back: a milestone that does not say yes finishes on the very call
+# that settles such a session, with nothing said.
+STORE_USED="$WORK/store-l-gone-plain"
+T="$WORK/l-gone-plain.jsonl"; new_talk "$T"
+aaf_new "$WORK/l-gone-plain-other.jsonl"
+LGONE="$(talk "$WORK/l-gone-plain-other.jsonl" decide-put acme/widget "Hand over" "" lplain)"
+AAF_PAYLOAD_FORM=nometadata note "$WORK/l-gone-plain-other.jsonl" decide-payload "$LGONE" acme/widget "Hand over" "Announce it" "" lplain >/dev/null
+rm -f "$WORK/l-gone-plain-other.jsonl"
+r="$(finishes_short "$STORE_USED" "$(closing "Rework the hand back." "12" "12")" "$T")"
+check "still possible #3669 L: a milestone that leans on no decline finishes on the call that settles such a session, with nothing said" "$([[ "$r" == "clear|| " ]] && settled_as "$LGONE" 'transcript is gone' && echo ok || echo "${r:0:400}")"
+# The cases below go on with the record and the session of the cases above these.
+STORE_USED="$WORK/store-f-behind"; T="$WORK/f-behind.jsonl"
 # The gate asks twice when GitHub says a pull request let through did not merge as an announcement,
 # and each question read the noted sessions back with a whole call's time of its own (review of
 # #3669, low 10; the time is the library's CHECK_SECONDS, a setting and not a measurement). The two

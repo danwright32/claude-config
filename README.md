@@ -2056,8 +2056,11 @@ no repository and file, or the session sent it with its answer filled in), once 
 One the transcript does not hold yet is left and looked for again, and one
 whose transcript is gone is settled, since what it asked can never be read: one noted by its ids
 alone with nothing said, and one whose note names a repository with one sentence, said once by the
-call that settles it, that an answer of his there is lost. On that call a decline of his does not
-clear a finishing merge (#3669, below); on every later call it does.
+call that settles it, that an answer of his there is lost. On the call that settles either kind a
+decline of his does not clear a finishing merge (#3669, below), and there the settling of notes by
+their ids alone is said too, once: a picker asking whether a feature is announced is always noted
+by its ids alone, so a newer answer of his may have been among them. On every later call the
+decline clears.
 The picker that asks whether a feature is announced at all (#3669, below) is the record's other
 source, with a judge of its own: the judge of wording gives it no line and leaves it for that one.
 One call reads back at most fifty sessions (Dan, 2026-11-26, by picker: "Raise it to 50

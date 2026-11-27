@@ -3364,7 +3364,10 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   answer (decided by the main session on the stricter side, 2026-11-26). Left unread is one class:
   a session past the fifty or out of time, a noted session the call tried and could not read, and
   a newer answer of his about the feature whose picker could not be checked yet and so has no
-  line. A call that names no transcript tried none, or every merge by the merge helper would be
+  line. So is a noted session whose transcript is gone, on the one call that settles its notes,
+  whether they named a repository or were by their ids alone: the second kind is the one a
+  discovery picker's note always is, so it is the one that can have held his newer answer, and it
+  had been settled with nothing said while his decline cleared on that very call. A call that names no transcript tried none, or every merge by the merge helper would be
   refused once a decline is on the record. The line alone does not
   decide whether a milestone says yes: the gate also counts a milestone whose title the record
   holds his yes about as his last yes or no, so a line that was dropped, altered, or written from
