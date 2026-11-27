@@ -3,7 +3,7 @@
 A session that reruns a failed check and sees it pass merges, and nothing recorded that the check
 failed first, so a flaky job was never counted (L293). This records one line per rerun: the
 repository and the run (or the job, for `--job`). It posts nothing and alerts nobody; the end of
-turn review reads the run's final result later (issue-spool.sh resolve-reruns), because a hook that
+turn review reads the run's final result later (lib/rerun-resolve.sh), because a hook that
 fires when the rerun is requested cannot know how the rerun ended.
 
 The command is read by the shared reader (gh_issue_scan.scan_gh_in_context, the walk the issue and
