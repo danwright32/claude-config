@@ -2608,6 +2608,24 @@ class CutOffTests(RunFixture):
                                       proc=serve)
         self.assert_ended_with_the_worktree_left(rec, rdir, "caller_gone", serve)
 
+    def test_a_stop_that_finds_serve_already_collected_never_records_a_clean_egress_verdict(self):
+        # A cut off on the lifeline's thread collected serve and then failed before its own ending,
+        # and the stuck stop got to its own. That stop signalled nothing and read nothing of serve's
+        # group, so what it records is survivors None, and None never stands beside "clean".
+        serve = self.child()
+        os.killpg(serve.pid, signal.SIGKILL)  # still this process's own uncollected child
+        serve.wait()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid)
+        monitor = MonitorThatSaysClean()
+        with self.no_signal_reaches(serve.pid) as asked:
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=monitor)
+        self.assertEqual(asked, [])
+        self.assertEqual(monitor.asked, 1, "the stop did not go on to settle the monitor")
+        self.assertIsNone(rec["serve_survivors"])
+        self.assertEqual((rec["egress"]["verdict"], rec["egress"].get("measured_to")), ("unmeasured", None),
+                         rec["egress"])
+        self.assertIn("could not read what was left of serve's process group (%s)" % serve.pid, rec["egress"]["why"])
+
     # -- the rest of what the second #3807 review found --
 
     def gone_caller(self):

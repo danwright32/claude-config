@@ -221,7 +221,9 @@ LEFT = {}
 FORBIDDEN = set()
 # What a stop that could not read what was left of serve's group records as its egress verdict in
 # place of a monitor's "clean" (the fifth #3807 review). On main that stop left no ending, and the
-# later `stop` recorded the run as unmeasured, which the merge check refuses.
+# later `stop` recorded the run as unmeasured, which the merge check refuses. A stop records it
+# whenever it is about to record serve_survivors as None, whatever made it None: a ps that failed
+# or could not be started, or serve found already collected by a cut off (the sixth #3807 review).
 EGRESS_UNREAD = ("the stop could not read what was left of serve's process group (%s), so serve's group was not"
                  " seen to its end, and a reading that found nothing outside the allowed hosts is not taken as a"
                  " measurement of the whole run")
@@ -907,7 +909,9 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
     A stop that cannot read what is left of serve's group, because ps failed or could not be
     started, kills the group while serve still pins it, records serve_survivors as None with the
     reason in the detail, and never records a monitor's "clean": the egress verdict is then
-    unmeasured (see EGRESS_UNREAD), as it was on main, where that stop left no ending at all.
+    unmeasured (see EGRESS_UNREAD), as it was on main, where that stop left no ending at all. The
+    rule is wider than ps: serve_survivors None, for any reason, is never recorded beside "clean",
+    and the check is made on the value the receipt is about to hold (the sixth #3807 review).
 
     `stop`, finding the supervisor gone with no ending, has no child to hold. While recovery_allowed
     it passes by_receipt, and it alone then signals the group numbers the receipt recorded, which
@@ -919,7 +923,7 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
     rec = read_receipt(rdir)
     stop_exit, detail, stop_s = project_stop(rdir, rec, detail)
     wt = rec.get("worktree") or os.path.join(rdir, "worktree")
-    serve_exit, survivors, unread = None, [], None
+    serve_exit, survivors = None, []
     if proc is not None:
         signal_own(proc, signal.SIGTERM)
         if not exited(proc, stop_s):
@@ -946,11 +950,14 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
                 # is then never recorded as clean (see EGRESS_UNREAD).
                 signal_own(proc, signal.SIGKILL)
                 survivors = LEFT[rdir] = None
-                unread = proc.pid
                 detail = ((detail + "; " if detail else "") + "whether serve's group is empty could not be read, so"
                           " it was killed unread: %s%s"
                           % ("" if isinstance(e, v.VerificationError) else type(e).__name__ + ": ", e))
-        else:  # a cut off on another thread collected serve first: its ending is the one recorded
+        else:
+            # A cut off on another thread collected serve first, and its ending is the one recorded
+            # when it wrote one. When it did not, this stop's is, with what an earlier stop in this
+            # process left in LEFT or else None: this stop holds nothing that pins the number, so
+            # it read nothing of the group (and the check below then keeps "clean" out).
             survivors = LEFT.get(rdir)
         serve_exit = collect(proc, COLLECT_S)
         if by_itself:
@@ -966,10 +973,14 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
     elif rec.get("serve_pgid"):
         survivors = None  # not signalled and not read: nothing here holds that number
     egress_field = finish_egress(rdir, rec, monitor, egress_why or EGRESS_RECOVERED, by_receipt=by_receipt)
-    if unread is not None and egress_field.get("verdict") == "clean":
-        # The monitor is still asked, which is what ends its stream, and what it SAW is kept: a
-        # verdict that is not clean, or one already unmeasured, stands with its own words.
-        egress_field = dict(egress_field, verdict="unmeasured", why=EGRESS_UNREAD % unread, measured_to=None)
+    if survivors is None and egress_field.get("verdict") == "clean":
+        # Tested on the very value the receipt is about to hold, so None never stands beside
+        # "clean" whatever made it None (the sixth #3807 review): a ps that failed or could not be
+        # started, or serve found already collected by a cut off with nothing in LEFT. The monitor
+        # is still asked, which is what ends its stream, and what it SAW is kept: a verdict that
+        # is not clean, or one already unmeasured, stands with its own words.
+        egress_field = dict(egress_field, verdict="unmeasured", measured_to=None,
+                            why=EGRESS_UNREAD % (proc.pid if proc is not None else rec.get("serve_pgid")))
     removed, detail = worktree_gone(rec["repo"], wt, detail)
     return record_ending(rdir, stopped_by=reason, stop_detail=detail,
                          serve_exit=serve_exit, stop_command_exit=stop_exit, worktree_removed=removed,
