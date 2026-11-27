@@ -480,11 +480,17 @@ check "counts that do not say whether the ledger was read are not listed from ei
 # A counts file that exists and cannot be opened is unmeasured, named, never a traceback.
 review_counts
 chmod 000 "$REPO/lesson-counts/mac-b.tsv"
-out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL")"; rc=$?
-chmod 644 "$REPO/lesson-counts/mac-b.tsv"
-check_rc "a counts file that cannot be read is unmeasured" 2 "$rc"
-check "naming it" "UNMEASURED: mac-b: its counts file cannot be read" "$out"
-check_not "never a traceback" "Traceback" "$out"
+if [ -r "$REPO/lesson-counts/mac-b.tsv" ]; then
+  # Run as root, a mode of 000 still reads, so this case cannot be set up here (L411): said, never a red.
+  chmod 644 "$REPO/lesson-counts/mac-b.tsv"
+  echo "UNMEASURED: a counts file that cannot be read: this user reads a file of mode 000 (root?), so the case was not set up"
+else
+  out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL")"; rc=$?
+  chmod 644 "$REPO/lesson-counts/mac-b.tsv"
+  check_rc "a counts file that cannot be read is unmeasured" 2 "$rc"
+  check "naming it" "UNMEASURED: mac-b: its counts file cannot be read" "$out"
+  check_not "never a traceback" "Traceback" "$out"
+fi
 # The healthy day says so in words.
 counts mac-a "2026-10-05T09:00:00Z" $'L3\t30\t40\t9'
 counts mac-b "2026-10-01T11:00:00Z" $'L10\t0\t0\t4'
