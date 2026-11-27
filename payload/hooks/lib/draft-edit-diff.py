@@ -64,8 +64,20 @@ part most likely to differ. So a read result with no message this can find is CO
 run in which no read result could be read exits 4 and says nothing was measured, and --shapes prints
 what the results are made of so the layout can be checked on a Mac that holds them (L98, L177).
 
+WHERE THE TEXT SITS is part of that layout, and matching headings say nothing about it. The text of
+a message is read as the lines under its Message TS line. The connector's own account of a read says
+its default answer "includes reactions + thread info", and where those lines go was not measured. So:
+  * a message with no text under its Message TS line is counted, and is no post: never a pair;
+  * a pair whose post ends in a line shaped like a label (a word or three and a colon, as From and
+    Time are written) is set aside and counted, since that line may be the connector's and not his;
+  * the run exits 4 and says nothing was measured when most messages have no text there, or hold a
+    line above the Message TS line that is neither From nor Time, or end in such a label line;
+  * --shapes counts the lines of text under and above the Message TS lines, and names a label line
+    only when its name is in KNOWN_LABELS, a fixed list. Any other is counted by its length alone.
+None of this was measured against a real read. It makes a layout that differs fail aloud.
+
 Exit codes: 0 measured; 2 a wrong argument; 3 the records folder could not be read; 4 read results
-were there and none could be read.
+were there and none could be read, or the text of most messages is not where this looks for it.
 """
 import argparse
 import collections
@@ -103,6 +115,22 @@ REPLY_HEAD = re.compile(r"^--- Reply \d+ of \d+ ---\s*$")
 OTHER_HEAD = re.compile(r"^(?:=== .* ===|--- .* ---)\s*$")
 FROM_LINE = re.compile(r"^From: (.+?)(?: \(([A-Z0-9]+)\))?\s*$")
 TS_LINE = re.compile(r"^Message TS: (\d+\.\d+)\s*$")
+TIME_LINE = re.compile(r"^Time: ")
+# A line shaped as the connector writes its own: one to three words, the first capitalised, and a colon.
+LABEL_LINE = re.compile(r"^([A-Z][A-Za-z]{0,20}(?: [A-Za-z]{1,20}){0,2}):(?: |$)")
+# The only labels --shapes prints by name. A fixed list of plain structural words, none of them
+# measured: it is here so that a first run on a Mac that holds read results can say which of them
+# the connector writes, without printing a word of anybody's message.
+KNOWN_LABELS = ("From", "Time", "Message TS", "Thread TS", "Reactions", "Reaction", "Files", "File",
+                "Attachments", "Attachment", "Replies", "Reply count", "Latest reply", "Thread", "Edited",
+                "Channel", "Type", "Subtype", "User", "Bot", "Link", "Permalink", "Pinned")
+# What is counted about where the TEXT of a message sits. These are the names --shapes prints.
+FOUND = "messages found (a heading with an author and a Message TS line)"
+TEXT_LINES = "lines of text under a Message TS line"
+NO_TEXT = "messages with no text under the Message TS line"
+ABOVE = "messages with a line above the Message TS line that is neither From nor Time"
+ABOVE_LINES = "lines above a Message TS line that are neither From nor Time"
+LABELLED = "messages whose last line is shaped like a label"
 ASK = re.compile(r"\?$|\b(?:can you|could you|would you|will you|do you|are you able|please|let me know|any chance)\b")
 FIGURE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
@@ -144,28 +172,58 @@ def unwrap(text):
     return "\n".join(strings), sorted(str(k) for k in parsed)
 
 
+def label_seen(line, where, shape):
+    """Counts a line shaped like a label for --shapes: by name when the name is one of KNOWN_LABELS,
+    and by its length alone when it is not, since it can then be the start of somebody's message."""
+    m = LABEL_LINE.match(line)
+    if not m:
+        return
+    name = m.group(1)
+    if name in KNOWN_LABELS:
+        shape["label lines %s a Message TS line, %s" % (where, name)] += 1
+    else:
+        shape["label lines %s a Message TS line, not a known name, of %d characters" % (where, len(name))] += 1
+
+
 def posts_in(text, shape):
-    """Each message in a read result as (ts, name, member id, body). shape counts what was seen."""
+    """Each message WITH TEXT in a read result as (ts, name, member id, body, labelled), where
+    labelled says its last line is shaped like a label. shape counts what was seen, including the
+    messages found with no text under their Message TS line, which are no post here: unread."""
     posts = []
     cur = None
 
     def close():
-        if cur is not None and cur["ts"] and (cur["name"] or cur["uid"]):
-            posts.append((cur["ts"], cur["name"], cur["uid"], "\n".join(cur["body"]).strip()))
-        elif cur is not None:
+        if cur is None:
+            return
+        if not (cur["ts"] and (cur["name"] or cur["uid"])):
             shape["headings with no author or no Message TS under them"] += 1
+            return
+        lines = [x for x in cur["body"] if x.strip()]
+        shape[FOUND] += 1
+        shape[TEXT_LINES] += len(lines)
+        if cur["above"]:
+            shape[ABOVE] += 1
+        if not lines:
+            shape[NO_TEXT] += 1
+            return
+        for x in lines:
+            label_seen(x, "under", shape)
+        labelled = bool(LABEL_LINE.match(lines[-1]))
+        if labelled:
+            shape[LABELLED] += 1
+        posts.append((cur["ts"], cur["name"], cur["uid"], "\n".join(cur["body"]).strip(), labelled))
 
     for line in text.split("\n"):
         m = CHANNEL_HEAD.match(line)
         if m:
             close()
             shape["channel message headings"] += 1
-            cur = {"name": m.group(1), "uid": m.group(2), "ts": "", "body": []}
+            cur = {"name": m.group(1), "uid": m.group(2), "ts": "", "body": [], "above": 0}
             continue
         if PARENT_HEAD.match(line) or REPLY_HEAD.match(line):
             close()
             shape["thread parent headings" if PARENT_HEAD.match(line) else "thread reply headings"] += 1
-            cur = {"name": "", "uid": "", "ts": "", "body": []}
+            cur = {"name": "", "uid": "", "ts": "", "body": [], "above": 0}
             continue
         if OTHER_HEAD.match(line):
             close()
@@ -184,6 +242,13 @@ def posts_in(text, shape):
             if m:
                 shape["Message TS lines"] += 1
                 cur["ts"] = m.group(1)
+            elif TIME_LINE.match(line):
+                shape["Time lines"] += 1
+            elif line.strip():
+                # A line this does not know, where only From and Time are expected: the text may sit here.
+                cur["above"] += 1
+                shape[ABOVE_LINES] += 1
+                label_seen(line, "above", shape)
             continue
         cur["body"].append(line)
     close()
@@ -283,12 +348,13 @@ def take_result(item, drafts, saved, reads, posts, done, shape):
         shape["result field " + field] += 1
     found = posts_in(inner, shape)
     if not found:
+        # No message with text: no heading this knows, or every message's text is somewhere else.
         shape["in a layout this cannot read"] += 1
         return
     shape["read results with messages"] += 1
-    for ts, name, uid, body in found:
+    for ts, name, uid, body, labelled in found:
         place = (channel, "") if tool == CHANNEL_TOOL or ts == parent else (channel, parent)
-        posts[(place, ts)] = (name, uid, body)
+        posts[(place, ts)] = (name, uid, body, labelled)
 
 
 def sentences(text):
@@ -337,18 +403,23 @@ def pair_up(drafts, saved, posts, author):
         if saved.get(call) and d["at"] is not None:
             by_place[d["place"]].append((d["at"], call, d["text"]))
     mine = collections.defaultdict(list)
-    for (place, ts), (name, uid, body) in posts.items():
+    for (place, ts), (name, uid, body, labelled) in posts.items():
         if uid.lower() == want or name.strip().lower() == want:
-            mine[place].append((float(ts), body))
-    pairs, used, no_draft = [], set(), 0
+            mine[place].append((float(ts), body, labelled))
+    pairs, used, no_draft, doubtful = [], set(), 0, 0
     for place, sent in mine.items():
         ds = sorted(by_place.get(place, []))
-        for at, body in sorted(sent):
+        for at, body, labelled in sorted(sent):
             before = [d for d in ds if d[0] < at]
             if not before or before[-1][1] in used:
                 no_draft += 1
                 continue
             used.add(before[-1][1])
+            if labelled:
+                # Its last line may be the connector's and not his, so the pair is set aside and counted:
+                # compared, a post sent word for word would read as edited (L648).
+                doubtful += 1
+                continue
             pairs.append((place, at, before[-1][2], body))
     replaced = unread = 0
     for place, ds in by_place.items():
@@ -361,7 +432,8 @@ def pair_up(drafts, saved, posts, author):
                 replaced += 1
             else:
                 unread += 1
-    return sorted(pairs, key=lambda p: p[1]), {"unread": unread, "replaced": replaced, "no_draft": no_draft}
+    return sorted(pairs, key=lambda p: p[1]), {"unread": unread, "replaced": replaced, "no_draft": no_draft,
+                                               "doubtful": doubtful}
 
 
 def cut(text):
@@ -399,6 +471,8 @@ def main():
               file=sys.stderr)
         return 3
     shape = collections.Counter()
+    for key in (FOUND, TEXT_LINES, NO_TEXT, ABOVE, ABOVE_LINES, LABELLED):
+        shape[key] = 0  # printed by --shapes at zero too: where the text sits is what a first run checks
     files, drafts, saved, posts = read_records(args.records, shape)
     n_saved = sum(1 for call in drafts if saved.get(call))
     shape["draft calls"] = len(drafts)
@@ -425,9 +499,27 @@ def main():
     if unreadable:
         print("read results in a layout this cannot read: %d. Their messages are in none of the counts below; "
               "run this with --shapes to see what they are made of." % unreadable)
+    found, wordless = shape[FOUND], shape[NO_TEXT]
+    print("messages found in them: %d (no text under the Message TS line: %d; a line above it that is neither "
+          "From nor Time: %d; last line shaped like a label: %d)" % (found, wordless, shape[ABOVE], shape[LABELLED]))
     if shape["read results"] and not shape["read results with messages"] and unreadable:
         print("Nothing was measured: thread or channel reads are in the records and not one could be read, so "
               "a count of pairs here would be a count of this program's blind spot.")
+        return 4
+    # The headings can all match while the TEXT sits where this does not look (review M1). Each of the
+    # three is a failure when it is true of most messages, never a count: a post read with no text, or
+    # with a line of the connector's own in it, is compared as an edit Dan never made.
+    misplaced = ""
+    if 2 * wordless > found:
+        misplaced = "most of the messages found have no text under their Message TS line"
+    elif 2 * shape[ABOVE] > found:
+        misplaced = "most of the messages found hold a line above their Message TS line that is neither From nor Time"
+    elif 2 * shape[LABELLED] > found - wordless:
+        misplaced = ("most of the messages found end in a line shaped like a label (a word or three and a colon), "
+                     "which is how the connector writes its own lines")
+    if misplaced:
+        print("Nothing was measured: %s, so the text of a message is not where this looks for it. Run this with "
+              "--shapes to see how the lines are laid out." % misplaced)
         return 4
     if not n_saved:
         print("No saved draft is in these records, so there is nothing to compare on this Mac. Every count "
@@ -436,6 +528,8 @@ def main():
     print("pairs: %d in %s" % (len(pairs), plural(len(threads), "thread")))
     print("left out: drafts with no post read back after them: %d; drafts replaced by a later draft: %d; "
           "posts with no draft before them: %d" % (left["unread"], left["replaced"], left["no_draft"]))
+    print("also left out: pairs whose post ends in a line shaped like a label: %d (that line may be the "
+          "connector's and not his)" % left["doubtful"])
     tally = collections.defaultdict(list)
     for pair in pairs:
         for kind in kinds_of(pair[2], pair[3]):

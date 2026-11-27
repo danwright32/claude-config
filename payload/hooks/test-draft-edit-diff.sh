@@ -26,7 +26,8 @@ check_eq(){ if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 
 
 ME=U0FIXTUREA
 fixture(){ mkdir -p "$WORK/$1/project" && python3 -B "$BUILD" "$WORK/$1/project" "$1"; }
-run(){ local which="$1"; shift; python3 -B "$TOOL" --records "$WORK/$which" --author "$ME" "$@" 2>&1; }
+# HOME is a folder of this suite's, so the reader finds no decisions of Dan's own to leave a kind out by.
+run(){ local which="$1"; shift; HOME="$WORK/user" python3 -B "$TOOL" --records "$WORK/$which" --author "$ME" "$@" 2>&1; }
 for f in basics recurring lopsided few unknown; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
 
 # --- pairing -------------------------------------------------------------------------------------
@@ -119,6 +120,50 @@ check_not "shapes: prints no message text" "lock gates" "$out"
 out="$(run basics --shapes)"
 check "shapes: counts each heading it knows" "thread parent headings: 5" "$out"
 check_not "shapes: prints no message text for a layout it can read" "harbour" "$out"
+
+# --- where the TEXT of a message sits (review M1) ------------------------------------------------------
+# Every heading, From line and Message TS line below is one the reader knows. Only the place of the
+# text differs, and each of these twelve drafts was posted word for word, so any edit counted is false.
+for f in wordforword body_first trailing split some_trailing some_wordless; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
+out="$(run wordforword)"; rc=$?
+check_eq "word for word, in the layout this knows: measured" "0" "$rc"
+check "word for word: twelve of twelve are sent as drafted" "sent as drafted: 12 of 12 pairs" "$out"
+check "word for word: every message found has its text" "messages found in them: 15 (no text under the Message TS line: 0;" "$out"
+out="$(run body_first)"; rc=$?
+check_eq "body first: text above the Message TS line is a failure, never a count" "4" "$rc"
+check "body first: said as nothing measured" "Nothing was measured" "$out"
+check "body first: with how many messages had no text" "no text under the Message TS line: 15" "$out"
+check_not "body first: no kind is called recurring from text it did not read" "recurring" "$out"
+check_not "body first: and no pair is counted" "pairs:" "$out"
+check_not "body first: no example is shown either" "Example for" "$(run body_first --examples)"
+out="$(run body_first --shapes)"
+check "shapes: counts the lines of text under a Message TS line" "lines of text under a Message TS line: 0" "$out"
+check "shapes: counts the lines above it that are neither From nor Time" "lines above a Message TS line that are neither From nor Time: 15" "$out"
+check "shapes: counts the messages with no text" "messages with no text under the Message TS line: 15" "$out"
+check_not "shapes: prints none of that text" "Gauge" "$out"
+out="$(run wordforword --shapes)"
+check "shapes: in the layout this knows, one line of text under each Message TS line" "lines of text under a Message TS line: 15" "$out"
+check "shapes: and none above it" "lines above a Message TS line that are neither From nor Time: 0" "$out"
+out="$(run trailing)"; rc=$?
+check_eq "trailing: a line of the connector's own under every text is a failure, never twelve edits" "4" "$rc"
+check "trailing: said as nothing measured" "Nothing was measured" "$out"
+check "trailing: with how many messages end that way" "last line shaped like a label: 15" "$out"
+check_not "trailing: and no pair is counted" "pairs:" "$out"
+out="$(run trailing --shapes)"
+check "shapes: a label from the fixed list is named, with its count" "label lines under a Message TS line, Reactions: 15" "$out"
+check_not "shapes: and what follows the label is not printed" "thumbsup" "$out"
+out="$(run split)"; rc=$?
+check_eq "split: text above the line and a label under it is a failure" "4" "$rc"
+check "split: said as nothing measured" "Nothing was measured" "$out"
+out="$(run some_trailing)"; rc=$?
+check_eq "some trailing: a label under a few messages is measured" "0" "$rc"
+check "some trailing: those pairs are set aside and counted" "pairs whose post ends in a line shaped like a label: 3" "$out"
+check "some trailing: and the rest are read as they were sent" "sent as drafted: 9 of 9 pairs" "$out"
+out="$(run some_wordless)"; rc=$?
+check_eq "some wordless: a few posts with no words are measured" "0" "$rc"
+check "some wordless: they are counted" "no text under the Message TS line: 3" "$out"
+check "some wordless: and are no post at all, so none is a post with no draft before it" "posts with no draft before them: 0" "$out"
+check "some wordless: the twelve are still read as sent" "sent as drafted: 12 of 12 pairs" "$out"
 
 # --- it writes nothing, and holds no way to -----------------------------------------------------------
 before="$(cd "$WORK" && find . -type f -exec cksum {} + | sort)"

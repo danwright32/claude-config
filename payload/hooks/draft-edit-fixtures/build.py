@@ -7,6 +7,10 @@ real message, person, channel or workspace is in this file (L48, L155). What the
 said in ../lib/draft-edit-diff.py, under WHAT THE SHAPE RESTS ON.
 
 It writes its records under the folder it is handed and nowhere else, and reads nothing.
+
+The layouts other than the first ("body_first", "trailing", "split") are not ones the connector was
+seen to write. They move only the TEXT of a message, to places it could sit, so the suite can show
+the reader fails aloud there instead of counting edits nobody made.
 """
 import datetime
 import json
@@ -95,7 +99,18 @@ def thread_text(posts, layout):
             if i == 1:
                 out.append("=== THREAD REPLIES (%d total) ===\n" % (len(posts) - 1))
             out.append("--- Reply %d of %d ---" % (i, len(posts) - 1))
-        out.append("From: %s (%s)\nTime: 2026-11-02 10:00:00 EST\nMessage TS: %s\n%s\n" % (who[0], who[1], ts(seconds), text))
+        head = "From: %s (%s)\nTime: 2026-11-02 10:00:00 EST\n" % (who[0], who[1])
+        marked = layout in ("trailing", "split") or (layout == "some_trailing" and i % 5 == 2)
+        if text == "":                       # a post that holds a file and no words
+            out.append(head + "Message TS: %s\n" % ts(seconds))
+        elif layout == "body_first":         # the text sits above the Message TS line
+            out.append(head + "%s\nMessage TS: %s\n" % (text, ts(seconds)))
+        elif layout == "split":              # the text above it, and a line of the connector's own under it
+            out.append(head + "%s\nMessage TS: %s\nReactions: thumbsup (2)\n" % (text, ts(seconds)))
+        elif marked:                         # the known layout, with a line of the connector's own under the text
+            out.append(head + "Message TS: %s\n%s\nReactions: thumbsup (2)\n" % (ts(seconds), text))
+        else:
+            out.append(head + "Message TS: %s\n%s\n" % (ts(seconds), text))
     return "\n".join(out)
 
 
@@ -167,6 +182,32 @@ def many(folder, per_thread):
     r.write(folder, "session-many.jsonl")
 
 
+WORD_FOR_WORD = "Gauge %d read 41 at dawn, 57 at noon and 63 at dusk. Can you confirm the dusk reading?"
+
+
+def word_for_word(folder, layout, wordless=0):
+    """Twelve drafts in three threads, each posted WORD FOR WORD as drafted: the truth is twelve sent
+    as drafted, whatever the layout. wordless adds that many posts with no words to each thread."""
+    r = Records()
+    at = 10000
+    for t in range(3):
+        parent = at
+        channel = "C0FIXTURE%02d" % (40 + t)
+        posts = [(parent, OTHER, "Thread %d about the tide gauge." % t)]
+        for k in range(4):
+            at += 100
+            r.draft(at, channel, parent, WORD_FOR_WORD % k)
+            at += 100
+            posts.append((at, ME, WORD_FOR_WORD % k))
+        for _ in range(wordless):
+            at += 100
+            posts.append((at, ME, ""))
+        at += 100
+        r.thread(at, channel, parent, posts, layout)
+        at += 1000
+    r.write(folder, "session-%s.jsonl" % layout)
+
+
 def unknown(folder):
     r = Records()
     r.draft(100, "C0FIXTURE30", 0, "The lock gates close at nine.")
@@ -188,6 +229,10 @@ def main():
         many(folder, [3, 3, 3])
     elif which == "unknown":
         unknown(folder)
+    elif which in ("wordforword", "body_first", "trailing", "split", "some_trailing"):
+        word_for_word(folder, "thread" if which == "wordforword" else which)
+    elif which == "some_wordless":
+        word_for_word(folder, "thread", wordless=1)
     else:
         sys.exit("build.py: no fixture called " + which)
 
