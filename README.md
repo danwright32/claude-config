@@ -3628,19 +3628,37 @@ Each of the four in the second group reads the command twice. First as it always
 that reading finds is refused in the words it always was. Then through `lib/unsure-reading.py`,
 the door to the reading that asks: where every shell reads the `#` inside a word the rest of the
 line is judged like any other command, and a line the reader names is refused, saying which line,
-why (a sentence true of that kind of line and of no other), and how to write the command so that
-it can be read. Refusing by either reading is what keeps a gate from refusing less than it did:
-where a `#` read as text opens a heredoc that holds a command as its text, only the first reading
-finds that command. The refusal for a named line is for any command that reaches the gate's judge,
-whatever stands on the line, since nothing can say what the shell runs there: a command naming
-`log` or a tied name as a word for the zsh check, one holding `screencapture` or running a script
-file for the screenshot check, one naming a record for the review's check, and one naming a
-worktree add or move for the temp worktree gate.
+which kind of line it is, and how to write the command so that it can be read. Refusing by either
+reading is what keeps a gate from refusing less than it did: where a `#` read as text opens a
+heredoc that holds a command as its text, only the first reading finds that command as a command.
+By the second reading alone the zsh check, the screenshot check and the temp worktree gate would
+pass it, and the review's check would refuse it in other words (a name in a heredoc the shell
+expands).
+
+The refusal for a named line is for any command that reaches the gate's judge, whatever stands on
+the line, since nothing can say what the shell runs there. What reaches each judge is decided on
+the whole tool call, its description included, and is wider than the gates' names suggest. The zsh
+check: `log`, `path`, `cdpath`, `fpath`, `manpath` or `module_path` as a word. The screenshot
+check: `screencapture`, or `./`, or a name ending `.sh`, `.bash`, `.zsh`, `.ksh` or `.command`, or
+`bash`, `sh`, `zsh`, `dash`, `ksh` or `source` followed by a space. The review's check: a command
+naming a record. The temp worktree gate: a command naming a worktree add or move. So a commit
+message that quotes ``./setup.sh # once`` between backquotes inside double quotes, and holds the
+word path, is refused by the zsh check and by the screenshot check, though it names neither `log`
+nor `screencapture`.
 
 The rule has one home. `lib/db-write-calls.py` decides whether a reading is sure
 (`asked_reading()`) and holds the sentence for each kind of line (`UNSURE`); `lib/unsure-reading.py`
-calls it and copies none of it, and adds the one sentence that library lacks, for a split operator,
-which the reader's own `split_operator()` tells from the other kinds. Beside a library folder with
+calls it and copies none of it, and adds the words for two kinds. One that library has no sentence
+for, a split operator, which the reader's own `split_operator()` tells from the other kinds. And
+one its sentences are untrue of, a `#` between backquotes that close on its line (backquotes
+written as text in a double quoted message, the commonest named line): that library says a
+backslash or a closing parenthesis stands before the `#` and to write it inside quotes, where it
+stands after a space and already is. The door tells that kind by three things, a backquote before
+the `#`, another after it on its line, and the reader's own `word_starts()` answering that a word
+starts there, and says to write a backslash before each backquote or to use single quotes. The
+reader has no function that says why it named a line, so this rests on how it reads today: a `#`
+at the start of a word is named only between such backquotes. The sentences that library holds
+for the other kinds are shown as they are. Beside a library folder with
 no door, no `lib/db-write-calls.py`, or a reader that cannot be asked, each gate still refuses what
 it always did, and a command it can then read only once goes to what the gate already does with a
 command it cannot read: the crude reading for the zsh and screenshot checks, and a refusal for the

@@ -16,7 +16,9 @@
 # What must hold for each gate:
 #   - the command it refuses, behind each of the 18 shapes, is refused: in the gate's own words
 #     where every shell reads the # inside a word (the reader reads on), and as a command the gate
-#     could not check, in a sentence true of the mark, where the reader names the line;
+#     could not check, in the sentence for the mark, where the reader names the line;
+#   - a # between backquotes that close on its line, the commonest named line, is refused in a
+#     sentence of its own, and written as that sentence says the command is read and passes;
 #   - the same command in plain sight is refused in the words it always was (the control);
 #   - a command the gate has nothing against, behind the same shape, passes (the quiet twin),
 #     except behind a line the reader names, which the gate cannot check whatever stands there;
@@ -140,6 +142,7 @@ GATES = (
 # after, in these words, whatever stands behind them.
 PROCESS = ("Refused: this command names those records beside a process substitution",)
 INSIDE = ("Refused: this command holds a name of those records inside something that runs it",)
+UNSPLIT = ("Refused: this command holds a name of those records in text that cannot be read",)
 # Two more shapes a gate refuses by the reading it always made, in its own words, whatever stands
 # behind them (each seen against the unchanged gate): a heredoc fed to sh, and for the records
 # check a name in a heredoc the shell expands.
@@ -182,8 +185,10 @@ SAYS = {
     "dollar": "whose end marker holds a dollar quote",
     "one line": "opens a heredoc in a text with no line break",
     "split operator": "holds an operator that a backslash and a line break split",
+    "backquotes": "holds a # with a backquote before it and another after it on its line",
 }
 HOW = {
+    "backquotes": "write a backslash before each of them or put the text in single quotes",
     "comment": "Write that # inside quotes, or put the comment on a line of its own",
     "close": "End the heredoc with its marker alone on a line that follows no backslash",
     "joined": "Write the << and its whole end marker on one line",
@@ -193,6 +198,9 @@ HOW = {
     "split operator": "Write the operator's two characters together on one line",
 }
 ISSUE = "claude-config#3472"
+# What the refusal for a # between backquotes said before it had a sentence of its own, neither of
+# them true of that # (it stands after a space, and is already inside double quotes).
+UNTRUE_OF_BACKQUOTES = ("a backslash or a closing parenthesis stands right before it", "Write that # inside quotes")
 
 
 def behind(hidden):
@@ -292,6 +300,42 @@ for g in GATES:
             refused(g, "(the cost) a command it has nothing against behind %s is refused, since the heredoc could not be read" % shape,
                     command, unchecked(g, mark))
 
+    # ---- 2b. a # between backquotes ---------------------------------------------------------------
+    # The commonest way to meet a named line: backquotes written as text in a double quoted message,
+    # with a # after a space between them. The reader reads a comment from the # to the end of the
+    # line, bash ends the backquotes at the next backquote, and the reader names the line. The
+    # refusal said a backslash or a closing parenthesis stood before the #, and to write the # inside
+    # quotes: neither was true of a # that stands after a space, inside double quotes.
+    reach = "git worktree add .claude/worktrees/wt-3472 -b fix/x" if g.key == "tree" else g.quiet
+    others = tuple(SAYS[m] for m in SAYS if m != "backquotes") + UNTRUE_OF_BACKQUOTES
+    # The reading the gate always made reaches the end of this text (line 2 closes what line 1 left
+    # open), so the command after it is judged, and passes, by that reading.
+    ticks = 'echo "run `date # now` here"\n: `"\n' + reach + "\n"
+    if g.key == "records":
+        # The records check refuses this text by the reading it always made (it cannot split the two
+        # lines into words), so its words for this mark are not seen through this gate.
+        refused(g, "(as before) a command it has nothing against after a line holding a # between backquotes is refused in the words it always was",
+                ticks, UNSPLIT, (ISSUE,))
+    else:
+        refused(g, "(the cost) a command it has nothing against after a line holding a # between backquotes is refused, in the words for that mark",
+                ticks, unchecked(g, "backquotes"), others)
+    # Written as the refusal says, the same text is read and the command passes.
+    allowed(g, "(the advice) with a backslash before each backquote, the same command passes",
+            'echo "run \\`date # now\\` here"\n' + reach + "\n")
+    allowed(g, "(the advice) with the text in single quotes, the same command passes",
+            "echo 'run `date # now` here'\n" + reach + "\n")
+    allowed(g, "(the advice) with the comment on a line of its own between backquotes that run a command, the same command passes",
+            "x=`date\n# now\n`\n" + reach + "\n")
+    if g.key in ("zsh", "shot"):
+        # On one line the reading gives up, and the gate's crude reading has nothing against the text.
+        said = "git log # all" if g.key == "zsh" else "./setup.sh # once"
+        refused(g, "(the cost) a message that quotes a line with a # between backquotes is refused, in the words for that mark",
+                'gh pr comment 5 --body "run `' + said + '` here"', unchecked(g, "backquotes"), others)
+        allowed(g, "(the advice) the same message with a backslash before each backquote passes",
+                'gh pr comment 5 --body "run \\`' + said + '\\` here"')
+        allowed(g, "(the advice) the same message in single quotes passes",
+                "gh pr comment 5 --body 'run `" + said + "` here'")
+
     # ---- 3. what hides nothing passes as it did ---------------------------------------------------
     allowed(g, "(control) its command in a real comment passes", "echo a # c; " + g.hidden + "\necho done\n")
     allowed(g, "(control) its command as the text of a quoted heredoc fed to cat passes", "cat <<'E'\n" + g.hidden + "\nE\necho done\n")
@@ -302,7 +346,10 @@ for g in GATES:
     # ---- 4. what the reading it always made refuses, it still refuses -----------------------------
     # Every shell reads this # inside its word, so the << after it opens a heredoc and the command
     # is its text: the asked reading finds no command. The reading the gate always made takes the #
-    # for a comment and finds one. Refusing by either keeps the gate from refusing less than it did.
+    # for a comment and finds one. Refusing by either keeps the gate from refusing less than it did:
+    # three of the four would pass this command by the asked reading alone, and the records check
+    # would refuse it in other words (a name in a heredoc the shell expands), which this case
+    # rejects as well, since it asks for the words the gate always used.
     refused(g, "(control) its command on the line after a # that the shells read as text opening a heredoc is still refused",
             "echo a\\ # <<E\n" + g.hidden + "\nE\n", g.own, (ISSUE,))
 
@@ -388,7 +435,53 @@ fact("a # the reader cannot tell from a comment comes back from the door as that
 got, fault = door.asked(sw, lambda: sw.every_command("echo a\\ # c; printf done\n"))
 fact("a # every shell reads inside a word comes back as the reading that reads on, and no fault",
      fault is None and any(r[1].strip() == "printf done" for r in got or ()), (got, fault))
+MESSAGE = 'gh pr comment 5 --body "run `git log # all` here"'
+got, fault = door.asked(sw, lambda: sw.every_command(MESSAGE))
+fact("a # between backquotes comes back from the door as that fault, naming its line, with how to write it and none of the words untrue of it",
+     got is None and getattr(fault, "kind", None) == "backquotes" and SAYS["backquotes"] in str(fault)
+     and "`" + MESSAGE + "`" in str(fault) and HOW["backquotes"] in door.told(fault) and ISSUE in door.told(fault)
+     and not any(w in door.told(fault) for w in UNTRUE_OF_BACKQUOTES), (got, getattr(fault, "kind", None), fault))
+# The same sentence is not given to a # the reader names for another reason, backquotes on its line
+# or not: after a ) the reader cannot place, and after a backslash where the reading then gives up.
+got, fault = door.asked(sw, lambda: sw.every_command("echo `date`; x=(a b)# see `date`\nprintf done\n"))
+fact("(control) a # right after an array's ) keeps the words for a # the reader cannot tell from a comment, backquotes on its line or not",
+     got is None and getattr(fault, "kind", None) == "comment" and SAYS["backquotes"] not in str(fault), (got, fault))
+got, fault = door.asked(sw, lambda: sw.every_command('echo `date` a\\ # `x "y\n'))
+fact("(control) a # after an escaped space, past which the text cannot be read, keeps its own words, backquotes on its line or not",
+     got is None and getattr(fault, "kind", None) == "unread" and SAYS["backquotes"] not in str(fault)
+     and UNTRUE_OF_BACKQUOTES[0] in str(fault), (got, fault))
+got, fault = door.asked(sw, lambda: sw.every_command("echo `echo a # c\n`\nprintf done\n"))
+fact("(control) a comment between backquotes that close on a later line is read, and no fault",
+     fault is None and any(r[1].strip() == "printf done" for r in got or ()), (got, fault))
 fact("the reader reads as it did after the door asked", sw.commands is reads_as, sw.commands)
+
+
+# A reader that names split operators and cannot be asked. The rule library checks that a reader
+# can be asked before it reads through it; the door's own wrapper took `unsure`, so beside such a
+# reader that check passed and the reader then failed with a TypeError where the answer is that it
+# cannot be asked.
+def not_asked():
+    reader = types.ModuleType("stand_in_reader_not_asked")
+
+    def commands(s, cwd=""):
+        return [("", s)]
+
+    reader.commands = commands
+    reader.every_command = lambda s, cwd="": [(d, t, "", "", 0) for d, t in reader.commands(s, cwd)]
+    reader.split_operator = lambda s, at: ""
+    return reader
+
+
+reader = not_asked()
+plain = reader.commands
+label = "beside a reader that has split_operator() and cannot be asked, the door answers that it cannot be asked, and hands back no reading"
+try:
+    got, fault = door.asked(reader, lambda: reader.every_command(TEXT))
+    fact(label, got is None and fault is not None and getattr(fault, "kind", None) is None
+         and "cannot say which lines it is unsure of" in str(fault), (got, fault))
+except Exception as e:
+    fact(label, False, repr(e))
+fact("that reader reads as it did after the door asked", reader.commands is plain, reader.commands)
 try:
     lone = load("lone_door", os.path.join(NORULE, "lib", "unsure-reading.py"))
     lone_sw = load("lone_sw", os.path.join(NORULE, "lib", "shell-words.py"))
@@ -404,7 +497,7 @@ for verdict, label in rows + facts:
     print("%s\t%s" % (verdict, label))
 print("ran\t%d" % (len(rows) + len(facts)))
 
-# Through the gates, with the reader beside this suite, once it names such an operator.
+# Through the gates, with the reader beside this suite, which names such an operator.
 if callable(getattr(sw, "split_operator", None)):
     extra = len(rows)
     for g in GATES:
@@ -430,10 +523,11 @@ while IFS=$'\t' read -r verdict label; do
   if [ -n "$label" ]; then check "#3472 $label" "$verdict"; elif [ -n "$verdict" ]; then check "#3472 the cases program said something that is not a case" "${verdict:0:300}"; fi
 done <<< "$rows"
 # A program that stopped early checks nothing and would read as a pass (L288).
-WANT_RAN=303
+WANT_RAN=331
 [ "$ran" = "$WANT_RAN" ] && check "#3472 all $WANT_RAN cases ran" ok || check "#3472 all $WANT_RAN cases ran" "ran: ${ran:-none}; ${rows: -300}"
-# The reader names an operator that a backslash and a line break split only once pull request 3797
-# is merged. Until then no gate can be handed one, and that is said, never counted as a pass (L411).
+# The reader names an operator that a backslash and a line break split since claude-config#3504.
+# Beside a reader from before it no gate can be handed one, and that is said, never counted as a
+# pass (L411).
 case "$split" in
   4) check "#3472 the four split operator cases ran through the gates" ok ;;
   unmeasured) echo "SUITE-PART-UNMEASURED whether each gate refuses a command behind an operator that a backslash and a line break split, because lib/shell-words.py beside this suite has no split_operator() (it arrives with claude-config#3504)" ;;

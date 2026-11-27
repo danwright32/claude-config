@@ -15,10 +15,13 @@ copies neither. asked() below calls that function, so every gate that asks decid
 code and says the same words as the database write check, the first gate that asked. That library
 is loaded from beside this file and no other part of it is used.
 
-What this file adds is the one mark that library has no sentence for: an operator split by a
-backslash and a line break, which it would call "a line the shared reader is unsure of". The
-reader's own split_operator() says whether a mark is one, and SPLIT is the sentence for it. A
-reader with no split_operator() names no such mark, and then nothing here is used.
+What this file adds is the words for two marks. One that library has no sentence for: an operator
+split by a backslash and a line break, which it would call "a line the shared reader is unsure
+of". The reader's own split_operator() says whether a mark is one, and SPLIT is the sentence for
+it. And one its sentences are untrue of: a # between backquotes that close on its line, the
+commonest named line there is (backquotes written as text in a double quoted message). BETWEEN is
+the sentence for it, and _between_backquotes() says how it is told. The decision is that
+library's for both: only the words change.
 
     asked(sw, read)  -> (what read() gave, None), or (None, the fault); raises what read() raises
     second(sw, read) -> the same, and never raises: a second reading that cannot be made is a fault
@@ -48,6 +51,19 @@ SPLIT = ("the command holds an operator that a backslash and a line break split,
          "operator, and zsh and ksh do so in some places and not in others, so the shells do not agree "
          "on what runs there, and it could not be read",
          "Write the operator's two characters together on one line")
+# What is said of a # between backquotes, and how to write the command so that the reader names
+# nothing there. That library's two sentences for a # say a closing parenthesis or a backslash
+# stands before it, and to write it inside quotes, and neither is true of the commonest such line:
+# backquotes written as text in a double quoted message, with a # after a space between them. The
+# facts here are the reader's own: it reads a comment where a word starts (word_starts()), and
+# bash ends backquotes at the next backquote whether or not a comment stands before it
+# (test-shell-words-comment-start.sh, measured for claude-config#3464). The %s is the line.
+BETWEEN = ("the command holds a # with a backquote before it and another after it on its line, in the line "
+           "%s: the shared reader reads a comment from that # to the end of the line, and bash ends "
+           "backquotes at the next backquote whether or not a comment stands before it, so what runs after "
+           "that backquote could not be read",
+           "Where those backquotes are text and run nothing, write a backslash before each of them or put "
+           "the text in single quotes; where they run a command, put the comment on a line of its own")
 # How much of the line a sentence shows, as lib/db-write-calls.py's LINE_SHOWN.
 LINE_SHOWN = 120
 
@@ -65,6 +81,17 @@ class Split(str):
         what, fix = SPLIT
         self = str.__new__(cls, what % ("`" + operator + "`", "`" + line + "`"))
         self.kind, self.fix = "split operator", fix
+        return self
+
+
+class Between(str):
+    """The fault for a # between backquotes: BETWEEN's sentence, with .kind and .fix as
+    lib/db-write-calls.py's Unsure has them."""
+
+    def __new__(cls, line):
+        what, fix = BETWEEN
+        self = str.__new__(cls, what % ("`" + line + "`"))
+        self.kind, self.fix = "backquotes", fix
         return self
 
 
@@ -94,23 +121,66 @@ def _line(s, at):
     return s[start:len(s) if end < 0 else end].strip()[:LINE_SHOWN]
 
 
+def _can_be_asked(lib, sw):
+    """Whether lib/db-write-calls.py's own check (asking()) finds a reader that can be asked. The
+    check is that library's and is not copied here: its block is entered and left with nothing
+    read. A library with no asking() to enter is answered no, and so is a check that fails."""
+    asking = getattr(lib, "asking", None)
+    if not callable(asking):
+        return False
+    try:
+        with asking(sw):
+            return True
+    except Exception:  # noqa: BLE001  asked_reading() then meets the same reader and gives its own answer
+        return False
+
+
+def _between_backquotes(sw, s, at):
+    """Whether the # the reader named at s[at] is one BETWEEN's sentence is true of. Three things,
+    each read from the text or asked of the reader: a backquote stands before the #; another
+    stands after it on its line; and the reader's own word_starts() answers that a word starts
+    there, so the reader reads a comment from it, and neither a closing parenthesis it cannot place
+    nor a backslash stands before it (it answers None and False for those, and they keep that
+    library's sentences). The reader has no function that says why it named a mark. As it reads
+    today (commands(), its comment_end()), a # at the start of a word is named only between
+    backquotes that close on its line, so the three together are that mark and no other."""
+    starts = getattr(sw, "word_starts", None)
+    if not callable(starts) or not s.startswith("#", at):
+        return False
+    end = s.find("\n", at)
+    if "`" not in s[:at] or "`" not in s[at:len(s) if end < 0 else end]:
+        return False
+    try:
+        return starts(s, at) is True
+    except Exception:  # noqa: BLE001  a mark the reader's rule cannot be asked about keeps the other sentence
+        return False
+
+
 def asked(sw, read):
     """lib/db-write-calls.py's asked_reading(sw, read): (what read() gives, None) when read() is run
     by the reading sw gives a caller that asks and no reading named a line; (None, the fault) when
-    one did, the fault being the sentence true of the mark the reader named it with (.kind which
+    one did, the fault being the sentence for the mark the reader named it with (.kind which
     mark, .fix how to write the command so that nothing is named); (None, words with no .kind)
     when the reader cannot be asked at all. Any other failure of read() is raised, and so is
     CannotLoad.
 
-    The one difference: a mark that library knows only as "a line" is said to be an operator split
-    by a backslash and a line break (Split) when the reader's own split_operator() says a mark it
-    named in these readings is one. The decision is that library's either way; only the words
-    change."""
+    Two differences, both in the words alone: a mark that library knows only as "a line" is said
+    to be an operator split by a backslash and a line break (Split) when the reader's own
+    split_operator() says a mark it named in these readings is one; and a # that library calls a
+    comment it cannot tell, or one it could not read past, is said to stand between backquotes
+    (Between) when it does (_between_backquotes()). The decision is that library's either way.
+
+    A reader that cannot be asked is answered as that library answers it, (None, words with no
+    .kind), whether or not it has a split_operator()."""
     lib = calls()
     plain = sw.commands
-    split = getattr(sw, "split_operator", None)
-    found = []
-    if callable(split):
+    splitter = getattr(sw, "split_operator", None)
+    marks, split = [], []
+    # The wrapper below takes `unsure` whatever the reader takes, so it is put in front of the
+    # reader only where that library's own check finds a reader that can be asked. In front of one
+    # that cannot, the check passed, and the reader then failed on a word it does not take where
+    # the answer is that it cannot be asked.
+    if _can_be_asked(lib, sw):
         # Every reading asked_reading() has the reader make comes through here, so the text each
         # mark stands in is known: the fault it hands back holds the line and not the place.
         def commands(*args, unsure=None, **more):
@@ -122,20 +192,27 @@ def asked(sw, read):
                 s = args[0] if args else more.get("s", "")
                 if isinstance(s, str):
                     for mark in unsure:
+                        marks.append((s, mark[0]))
                         try:
-                            operator = split(s, mark[0])
+                            operator = splitter(s, mark[0]) if callable(splitter) else ""
                         except Exception:  # noqa: BLE001  a mark this cannot place keeps the general sentence
                             operator = ""
                         if operator:
-                            found.append((operator, _line(s, mark[0])))
+                            split.append((operator, _line(s, mark[0])))
 
         sw.commands = commands
     try:
         got, fault = lib.asked_reading(sw, read)
     finally:
         sw.commands = plain
-    if fault is not None and getattr(fault, "kind", None) == "line" and found:
-        fault = Split(*found[0])
+    kind = getattr(fault, "kind", None)
+    if kind == "line" and split:
+        fault = Split(*split[0])
+    elif kind in ("comment", "unread"):
+        # The mark the fault is about: the first one given whose line the fault quotes.
+        about = [(s, at) for s, at in marks if "`" + _line(s, at) + "`" in fault][:1]
+        if about and _between_backquotes(sw, *about[0]):
+            fault = Between(_line(*about[0]))
     return got, fault
 
 
