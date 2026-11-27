@@ -6942,10 +6942,21 @@ answer to a question about the part that was read lets the rest run with it. The
 line, in a sentence true of the mark the reader named it with (`UNSURE` in
 `lib/db-write-calls.py`), and how to write the command so that it can be read. A refusal is printed
 whatever state `lib/hook-notice.sh` is in beside the hook, since a hook that prints nothing passes
-the command: when the library is missing, is a copy with no `_hn_decision_json` (the private builder
-a refusal is made with), or that builder prints anything but one whole refusal, the hook writes the
-refusal itself, without the characters that need escaping, and says which of the three it found.
-A refusal written that way is the decision alone: a notice the library would have put beside it
+the command: when the library is missing, is a copy with no `hook_deny_json` (the library's name for
+a refusal, added for #3618 and used here since #3793), or that function prints anything other than
+exactly one JSON object holding a PreToolUse refusal (its event, its decision and at most a reason,
+all texts) with at most the library's notice, a text, beside it, the hook writes the refusal
+itself, without the characters that need escaping, and says which it found. So a refusal cut
+short, two objects, a raw line break in the reason, an ask holding a deny elsewhere, a refusal for
+another event, and a whole refusal beside any other key (`continue`, `suppressOutput` or a top
+level `decision` written as a text, which Claude Code's validation refuses, letting the call go
+ahead) are all replaced. The hook reads the object with Python's JSON reader and never learns the
+name of a key beside the refusal, since only the library may write the notice field's name
+(#1906): for a refusal with one key beside it, it asks the library's `hook_decision_verdict`, and
+passes the refusal on only when that function is there, returned 0 and said nothing. Beside a
+library with no such function, the hook writes the refusal itself and says so. What is still
+trusted is that function's own answer, which `test-hook-notice.sh` holds to each wrong text.
+A refusal written by the hook is the decision alone: a notice the library would have put beside it
 (the one about pre-allowed Salesforce writes) is said inside the refusal's reason, since only the
 library builds a notice (#1906).
 `read-only-query-allow.sh` approves no such command either. A reader that cannot be asked at all is
