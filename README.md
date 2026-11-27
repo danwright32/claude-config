@@ -907,8 +907,10 @@ second time, in each folder the shell may run it in. Which changes a shell undoe
 `popd`, so the gate keeps the list of folders those leave. Two things cannot be read from a
 command and are followed both ways: a shell set to keep every `cd` on that list (zsh `autopushd`),
 and the last command of a pipeline, which zsh runs in the session's shell and bash in one of its
-own. The first reading stays beside the second, so nothing refused before is let through by this.
-A command the shared reader cannot vouch for is judged in every folder a `cd` in it names. The
+own. The first reading stays beside the second, and is finished before the second starts: what
+this change adds is read last, so the first reading names every destination it named before, and
+a command is refused when any reading of it names one at risk. Nothing refused before is let
+through by this. A command the shared reader cannot vouch for is judged in every folder a `cd` in it names. The
 second reading cuts where the shell cuts, so a command after a single `&` is judged as a command
 of its own, which the first reading never did.
 

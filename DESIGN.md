@@ -2583,7 +2583,17 @@ Three choices. The new reading is added and the old one kept: replacing the fold
 believes with the folder the shell uses would also let through commands the loop refuses today in
 a folder the shell never enters, and a change to this gate may add refusals and never remove one
 (the two above excepted, by Dan's choice). So each command is judged where the loop believed and
-where the shell may be. Second, what the reading gives is every folder the shell MAY be in. A
+where the shell may be. The loop keeps notes as it reads (which paths a script has already
+placed, which command strings it has already read), and a segment read later sees the notes of
+the ones before it. So everything this change adds (the second reading of the command, the same
+for each command string, and each segment put together for an `xargs`) is held back and read
+only after the whole list as it was, strings found on the way included: the old reading runs in
+the order and with the notes it always had, names every destination it named before, and what is
+read after it can only name more. The step that refuses asks each destination by itself and
+stops at the first one at risk, so a command is refused when any reading names one. A case in
+the suite holds it: after `pushd` into the checkout and its `popd`, the old reading still judges
+a remove in the checkout and the new one judges it where the session is, and the command is
+refused. Second, what the reading gives is every folder the shell MAY be in. A
 shell set to keep every `cd` on its list goes back on a `popd` that a plain shell refuses, and the
 last command of a pipeline runs in the session's shell in zsh and in a shell of its own in bash;
 neither can be read from the command, so both are followed, up to 16 ways. Third, a command the
