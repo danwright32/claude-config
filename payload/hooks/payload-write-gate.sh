@@ -840,6 +840,67 @@ except Exception:
 # segment is not blamed on a write in the next, and a cd moves where the rest resolve.
 WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync", "truncate",
            "ln", "link", "ditto", "unlink", "rmdir")
+
+# WHAT A COMMAND WRITES, ASKED IN ONE PLACE (claude-config#3775). The three functions below were
+# the body of the loop that judges a typed command. They are functions so that a command an inline
+# script runs from a list of words is asked the same questions by the same code, never by patterns
+# kept beside it: two reviews in a row each found a typed form such patterns did not mirror.
+def past_launchers(words):
+    """The command name and the arguments of a command, past the launchers that run the command
+    after them: sudo, env, nohup, timeout, xargs and the rest (lib/shell-words.py RUNNERS,
+    claude-config#1478), so sudo cp x payload/y is the copy it runs."""
+    try:
+        past = _sw.command_rest(" ".join(words))[0].split() or words
+    except Exception:
+        past = words
+    return past[0].lstrip("(").rsplit("/", 1)[-1], past[1:]
+
+def git_writes(found, base):
+    """Each path a git command rewrites, with the directory it resolves in. found is what
+    git_command read: the subcommand, the options before it and the words after it."""
+    gbase, (sub, front, rest) = base, found
+    # Past the options git itself takes to the subcommand: -C names the directory the paths
+    # resolve against, and the others that take a value are not the subcommand.
+    i = 0
+    while i < len(front):
+        if front[i] == "-C" and i + 1 < len(front):
+            gbase = move(front[i + 1], gbase)
+        i += 2 if front[i] in GIT_VALUED else 1
+    if sub not in GIT_WRITERS:
+        return []
+    # checkout and restore name a branch or commit before the -- separator, and only the paths
+    # after it are rewritten; a bare git checkout main switches branches and names no path.
+    if sub == "restore":
+        # --staged alone rewrites the index, never the file; -s/--source names a commit.
+        if ("--staged" in rest or "-S" in rest) and not ("--worktree" in rest or "-W" in rest):
+            rest = []
+        kept, skip = [], False
+        for w in rest:
+            if skip:
+                skip = False
+            elif w in ("-s", "--source"):
+                skip = True
+            elif w != "--":
+                kept.append(w)
+        rest = kept
+    elif sub == "checkout" and "--" in rest:
+        rest = rest[rest.index("--") + 1:]
+    elif sub == "checkout":
+        rest = []
+    return [(w, gbase) for w in rest if not w.startswith("-")]
+
+def plain_writes(head, args):
+    """The words a command that is not git writes to. A flag is never a path, so none is given."""
+    if head == "sed" and any(w == "-i" or w.startswith("-i") for w in args):
+        return [w for w in args if not w.startswith("-")]
+    if head in ("perl", "ruby") and any(re.match(r"^-[A-Za-z]*i", w) for w in args):
+        return [w for w in args if not w.startswith("-")]
+    if head == "dd":
+        return [w[3:] for w in args if w.startswith("of=")]
+    if head in WRITERS:
+        return [w for w in args if not w.startswith("-")]
+    return []
+
 base = cwd
 CD_TO = object()  # marks a segment that is a directory the commands after it run in
 segments = re.split(r"&&|\|\||;|\||\n", shell_text)
@@ -896,39 +957,8 @@ LINK_CALLS = (r"\.(?:sym|hard)?link(?:Sync|_to)?\(",
               r"(?:^|[\s;&|(])(?:perl|ruby|php)\b[^\n]*?(?<![A-Za-z0-9_.])(?:sym)?link\s+[\"\x27$@]",
               r"[\[(,]\s*[\"\x27]ln[\"\x27]\s*[,\])]")
 WRITE_CALLS += LINK_CALLS
-# A script that runs a command that writes from a list of words, as subprocess is given one
-# (claude-config#3689): the first word of the list is the command, so a script holding one and
-# naming a payload path is one that may write there, as a script running ln from a list is above.
-#
-# WHICH COMMANDS WRITE IS ASKED OF THE NAMES A COMMAND TYPED DIRECTLY IS JUDGED BY, never of a
-# second list kept here (claude-config#3775). This line named its own commands and left out patch,
-# and it had no form at all for the three that write only with a flag or a word: sed, perl and ruby
-# editing in place, and dd with an of= word. On 2026-11-26, on stand in files, each of those five
-# run from a list beside a quoted payload path was let through with exit 0, where the same words
-# typed are refused. So the names are WRITERS, and the flag and the word are the ones the reading
-# of a typed sed, perl, ruby and dd asks for further down.
-#
-# THIS IS STILL NARROWER THAN THE READING OF THE SAME WORDS TYPED, and claims no more than the
-# above. It is a search of the script text for a list that STARTS with one of those commands. A
-# list that runs git to write (checkout, restore, rm, mv, which GIT_WRITERS names for a typed
-# command), and a list whose command comes after a launcher word (sudo, env, nohup, timeout), are
-# not counted here, and go through as they did before this route existed. Handing a list to the
-# typed reading itself, in place of patterns kept beside it, is the question put in the pull
-# request of claude-config#3775.
-LIST_HEAD = r"[\[(]\s*[\"\x27](?:[^\"\x27\s]*/)?(?:%s)[\"\x27]\s*,"
-# The words of the list after its first, each a quoted word or a name, up to the opening quote of
-# the word asked about. Stepped over a word at a time, so a bracket inside a quoted sed expression
-# does not end the list early.
-LIST_WORDS = r"(?:\s*(?:[A-Za-z]{0,2}\"[^\"]*\"|[A-Za-z]{0,2}\x27[^\x27]*\x27|[^,\"\x27\[\]()\s]+)\s*,)*?\s*[\"\x27]"
-DD_LIST = LIST_HEAD % "dd" + LIST_WORDS + r"of="
-WRITE_CALLS += (LIST_HEAD % "|".join(re.escape(w) for w in WRITERS),
-                LIST_HEAD % "sed" + LIST_WORDS + r"-i",
-                LIST_HEAD % "perl|ruby" + LIST_WORDS + r"-[A-Za-z]*i",
-                DD_LIST)
-# Where a dd run from a list writes: the rest of its of= word, as for a dd typed directly. A quoted
-# of=payload/x names no payload folder to SCRIPT_PATH, which reads the whole word as the path.
-DD_LIST_OF = r"[\"\x27]of=([^\"\x27\s]+)[\"\x27]"
-RUNS_DD_LIST = re.search(DD_LIST, shell_text) is not None
+# A script that runs a command from a list of words, as subprocess is given one, is read further
+# down (word_lists, claude-config#3689 and #3775): no pattern for it is kept in this list.
 # A script that runs ln as one string (os.system, subprocess, perl and ruby system, with or
 # without brackets): the words of that string are what ln is given, so each is judged as a
 # destination below, as the arguments of ln itself are. Only after a call that runs a command,
@@ -1066,6 +1096,87 @@ def program_is_value(text):
         return True
     return False
 
+# A COMMAND AN INLINE SCRIPT RUNS FROM A LIST OF WORDS IS A COMMAND TOO (claude-config#3775).
+#
+# subprocess given a list, node spawnSync given a program and a list, perl and ruby system given
+# several words: each runs its first word with the rest as arguments. 3747 judged a list by a
+# pattern of its own, a list that STARTS with one of a set of commands, and on 2026-11-26, on stand
+# in files, 19 forms the typed reading refuses went through with exit 0 from a list beside a payload
+# path: patch, an in place sed, perl and ruby, a dd writing to of=, git checkout, restore, rm and mv,
+# and a remove or a move after sudo, env, nohup and timeout.
+#
+# So a list is no longer judged by a pattern. Its words are put together as the command they are
+# and handed to the reading a command string gets (string_segments, above), which is the loop that
+# judges a typed command. And whether the list writes at all, which decides whether a payload path
+# quoted elsewhere in the script is taken for where it writes (WRITE_SCRIPT), is asked of the same
+# three functions that loop asks. One judge, so nothing here can fall behind it.
+#
+# Two things are this route alone, because a list has no typed form to share them with. Finding the
+# list: an opening bracket, a quoted first word and a comma, the test 3747 had, so every list it
+# counted is still counted. And a word that is a value the script fills in: it is read as one only
+# the shell knows (HOLE), as a value in a command string is. Only a list that writes is handed on
+# and counted toward STRINGS_MAX, so a script full of calls that take quoted words costs nothing.
+import shlex
+LIST_OPEN = re.compile(r"[\[(]\s*(?=[rbuRBUfF]{0,2}[\"\x27])")
+LIST_STRING = re.compile(r"([rbuRBUfF]{0,2})([\"\x27])((?:\\.|(?!\2)[^\\\n]){0,400}?)\2")
+LIST_VALUE = re.compile(r"[^,\"\x27\[\](){}\s]+")
+LIST_GAP = re.compile(r"\s*")
+LIST_WORDS_MAX = 64
+
+def word_lists(text):
+    """(the text of the list, the command its words make) for each list of words in text."""
+    out = []
+    for m in LIST_OPEN.finditer(text):
+        i, words, promised = m.end(), [], False
+        while len(words) < LIST_WORDS_MAX:
+            s = LIST_STRING.match(text, i)
+            v = None if s else LIST_VALUE.match(text, i)
+            if s:
+                word = re.sub(r"\\([\"\x27\\])", r"\1", s.group(3))
+                holed = re.sub(r"\{[^{}\n]*\}", HOLE, word) if "f" in s.group(1).lower() else word
+                word, i = (shlex.quote(word) if holed == word else holed), s.end()
+            elif v:
+                word, i = HOLE, v.end()
+            else:
+                break
+            promised = False
+            j = LIST_GAP.match(text, i).end()
+            if text[j:j + 1] != ",":
+                # The end of the list, or a word with more joined to it (a value, a call): what is
+                # joined is one only the script knows, and the reading of the list stops there.
+                words.append(word if text[j:j + 1] in ("]", ")", "") else word + HOLE)
+                i = j
+                break
+            # A comma promises a word. A list opened straight after one, as node is given a program
+            # and then its arguments, goes on with the same command.
+            words.append(word)
+            promised = True
+            i = LIST_GAP.match(text, j + 1).end()
+            if text[i:i + 1] == "[":
+                i = LIST_GAP.match(text, i + 1).end()
+        if promised:
+            words.append(HOLE)
+        if len(words) > 1:
+            out.append((text[m.start():i], " ".join(words)))
+    return out
+
+def list_writes(command):
+    """Whether the command a list of words makes writes to any of its words: asked of the functions
+    the loop that judges a typed command asks, on the words that loop would see."""
+    words = command.split()
+    found = git_command(words)
+    if found:
+        return bool(git_writes(found, cwd))
+    return bool(plain_writes(*past_launchers(words)))
+
+# A script holding a list that writes, and naming a payload path, is one that may write there, as
+# a script holding any other writing call is. A reading of the lists that fails is taken for one
+# that found a write, the reading that sees more writes, never fewer (L42).
+try:
+    WRITE_SCRIPT = WRITE_SCRIPT or any(list_writes(c) for _, c in word_lists(shell_text))
+except Exception:
+    WRITE_SCRIPT = True
+
 strings_read = [0]
 strings_ran = set()
 def read_strings(text, bases, cut):
@@ -1092,10 +1203,15 @@ def read_strings(text, bases, cut):
                     and RUN_STRING.match(text, m.start()) is None):
                 for b in bases:
                     untold("a command string an inline script hands to a shell: " + m.group(0)[:80], UNTOLD_LONG, b)
-    for prefix, body, tail, whole, called in found:
-        if bool(re.search(SEP, body)) != cut:
+    # What to read: each string as its readings, and each list of words that writes as the command
+    # its words make. Where a separator falls is asked of the text as it stands in the command, so
+    # a list written over several lines is read whole, from the whole command.
+    todo = [(body, told(prefix, body, tail), whole, called) for prefix, body, tail, whole, called in found]
+    todo += [(raw, [command], raw, False) for raw, command in word_lists(text) if list_writes(command)]
+    for stands, readings, whole, called in todo:
+        if bool(re.search(SEP, stands)) != cut:
             continue
-        for s in told(prefix, body, tail):
+        for s in readings:
             for b in bases:
                 if (s, b) in strings_ran:
                     continue
@@ -1118,7 +1234,6 @@ except Exception:
     untold("a command string an inline script hands to a shell", UNTOLD_STRING, cwd)
 
 placed = set()
-placed_of = set()
 # The list grows as it is read: a command string found in a segment is added to its end, with the
 # directory it runs in before it, and read in its turn (claude-config#3689, STRINGS_MAX).
 for seg in segments:
@@ -1136,9 +1251,6 @@ for seg in segments:
     for m in (re.finditer(MAYBE_PATH, seg) if WRITE_SCRIPT else ()):
         if m.group(1) not in placed:
             add_maybe(m.group(1), base)
-    for m in (re.finditer(DD_LIST_OF, seg) if RUNS_DD_LIST else ()):
-        add(m.group(1), base)
-        placed_of.add(m.group(1))
     for m in re.finditer(LN_STRING, seg):
         for w in m.group(1).split()[1:]:
             if not w.startswith("-"):
@@ -1160,69 +1272,20 @@ for seg in segments:
         k += 1
     if k >= len(words):
         continue
-    # Past the launchers that run the command after them, sudo, env, nohup, timeout, xargs and the rest
-    # (lib/shell-words.py RUNNERS, claude-config#1478), so sudo cp x payload/y is the copy it runs.
-    try:
-        past = _sw.command_rest(" ".join(words[k:]))[0].split() or words[k:]
-    except Exception:
-        past = words[k:]
-    head = past[0].lstrip("(").rsplit("/", 1)[-1]
-    args = past[1:]
+    # What the command writes is asked of past_launchers, git_writes and plain_writes, above, which
+    # a command an inline script runs from a list of words is asked too (claude-config#3775).
+    head, args = past_launchers(words[k:])
     found = git_command(words[k:])
     if found:
-        # Past the options git itself takes to the subcommand: -C names the directory the paths
-        # resolve against, and the others that take a value are not the subcommand.
-        gbase, (sub, front, rest) = base, found
-        i = 0
-        while i < len(front):
-            if front[i] == "-C" and i + 1 < len(front):
-                gbase = move(front[i + 1], gbase)
-            i += 2 if front[i] in GIT_VALUED else 1
-        if sub in GIT_WRITERS:
-            # checkout and restore name a branch or commit before the -- separator, and only the paths
-            # after it are rewritten; a bare git checkout main switches branches and names no path.
-            if sub == "restore":
-                # --staged alone rewrites the index, never the file; -s/--source names a commit.
-                if ("--staged" in rest or "-S" in rest) and not ("--worktree" in rest or "-W" in rest):
-                    rest = []
-                kept, skip = [], False
-                for w in rest:
-                    if skip:
-                        skip = False
-                    elif w in ("-s", "--source"):
-                        skip = True
-                    elif w != "--":
-                        kept.append(w)
-                rest = kept
-            elif sub == "checkout" and "--" in rest:
-                rest = rest[rest.index("--") + 1:]
-            elif sub == "checkout":
-                rest = []
-            for w in rest:
-                if not w.startswith("-"):
-                    add(w, gbase)
+        for w, gbase in git_writes(found, base):
+            add(w, gbase)
         continue
     if head in ("cd", "pushd"):
         dest = next((w for w in args if w == "-" or not w.startswith("-")), "~")
         base = move(dest, base)
         continue
-    # A flag is never a path, so none is resolved against where the command runs.
-    if head == "sed" and any(w == "-i" or w.startswith("-i") for w in args):
-        for w in args:
-            if not w.startswith("-"):
-                add(w, base)
-    elif head in ("perl", "ruby") and any(re.match(r"^-[A-Za-z]*i", w) for w in args):
-        for w in args:
-            if not w.startswith("-"):
-                add(w, base)
-    elif head == "dd":
-        for w in args:
-            if w.startswith("of="):
-                add(w[3:], base)
-    elif head in WRITERS:
-        for w in args:
-            if not w.startswith("-"):
-                add(w, base)
+    for w in plain_writes(head, args):
+        add(w, base)
 
 # Read over the whole command too, for a script path the cut into segments split (a quoted path
 # holding a ; or |): one no segment placed is judged where the session is, as it always was,
@@ -1232,9 +1295,6 @@ for m in (re.finditer(SCRIPT_PATH, shell_text) if WRITE_SCRIPT else ()):
         add(m.group(1), cwd)
 for m in re.finditer(OPENED_PATH, shell_text):
     if m.group(1) not in placed:
-        add(m.group(1), cwd)
-for m in (re.finditer(DD_LIST_OF, shell_text) if RUNS_DD_LIST else ()):
-    if m.group(1) not in placed_of:
         add(m.group(1), cwd)
 
 # A LINK MADE BY A SCRIPT FILE THE COMMAND RUNS (claude-config#3689).

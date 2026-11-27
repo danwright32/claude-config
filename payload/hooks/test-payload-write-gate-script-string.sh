@@ -165,10 +165,8 @@ runbash "python3 -c \"import subprocess; subprocess.run(['cp', '/etc/hosts', 'pa
 refused "#3689 a copy given to subprocess as a list of words"
 runbash "python3 -c \"import subprocess; subprocess.run(['rm', '$FIX/links/sym.sh'])\"" "$FIX/elsewhere"
 refused "#3689 a list of words removing a link that leads into payload"
-# A list of words that starts with a writing command counts as a write (claude-config#3775): the
-# list route named its own commands, so patch, an in place sed, perl or ruby, and a dd writing to
-# of= went through. Not held here, because the gate does not do it: a list that runs git to write,
-# or whose command follows a launcher word, which the gate reads only when typed.
+# A list of words is a command (claude-config#3775): the list route named its own commands, so
+# patch, an in place sed, perl or ruby, and a dd writing to of= went through.
 runbash "python3 -c \"import subprocess; subprocess.run(['patch', 'payload/hooks/x.sh', '$FIX/elsewhere/a.txt'])\"" "$FIX/dev"
 refused "#3775 a patch given as a list of words"
 runbash "python3 -c \"import subprocess; subprocess.run(['/usr/bin/patch', 'payload/hooks/x.sh', '$FIX/elsewhere/a.txt'])\"" "$FIX/dev"
@@ -189,6 +187,45 @@ runbash "python3 -c \"import subprocess; subprocess.run(['perl', '-ne', 'print',
 allowed "#3775 control: so is a perl that only prints"
 runbash "python3 -c \"import subprocess; subprocess.run(['dd', 'if=payload/hooks/x.sh', 'of=$FIX/elsewhere/out.bin'])\"" "$FIX/dev"
 allowed "#3775 control: so is a dd that reads a payload file and writes outside any checkout"
+# A list of words is read by the reading a typed command gets (claude-config#3775): git writing,
+# and a command behind a launcher word, were let through from a list where the same words typed
+# are refused.
+runbash "python3 -c \"import subprocess; subprocess.run(['git', 'checkout', '--', 'payload/hooks/x.sh'])\"" "$FIX/dev"
+refused "#3775 a list of words running git checkout on a payload file"
+runbash "python3 -c \"import subprocess; subprocess.run(['git', 'restore', 'payload/hooks/x.sh'])\"" "$FIX/dev"
+refused "#3775 a list of words running git restore on a payload file"
+runbash "python3 -c \"import subprocess; subprocess.run(['git', 'rm', 'payload/hooks/x.sh'])\"" "$FIX/dev"
+refused "#3775 a list of words running git rm on a payload file"
+runbash "python3 -c \"import subprocess; subprocess.run(['git', 'mv', 'payload/hooks/x.sh', 'payload/hooks/y.sh'])\"" "$FIX/dev"
+refused "#3775 a list of words running git mv on a payload file"
+runbash "python3 -c \"import subprocess; subprocess.run(['git', '-C', 'payload', 'checkout', '--', 'hooks/x.sh'])\"" "$FIX/dev"
+refused "#3775 a list of words running git checkout from the payload folder, by -C"
+runbash "python3 -c \"import subprocess; p = 'payload/hooks/x.sh'; subprocess.run(['git', 'checkout', '--', p])\"" "$FIX/dev"
+refused "#3775 a list of words running git checkout on a payload path held in a value"
+runbash "node -e \"require('child_process').spawnSync('git', ['checkout', '--', 'payload/hooks/x.sh'])\"" "$FIX/dev"
+refused "#3775 node spawnSync given git and a list of words"
+runbash "python3 -c \"import subprocess; subprocess.run(['sudo', 'rm', 'payload/hooks/x.sh'])\"" "$FIX/dev"
+refused "#3775 a list of words whose remove follows sudo"
+runbash "python3 -c \"import subprocess; subprocess.run(['env', 'LANG=C', 'rm', 'payload/hooks/x.sh'])\"" "$FIX/dev"
+refused "#3775 a list of words whose remove follows env and a setting"
+runbash "python3 -c \"import subprocess; subprocess.run(['nohup', 'mv', '$FIX/elsewhere/a.txt', 'payload/hooks/x.sh'])\"" "$FIX/dev"
+refused "#3775 a list of words whose move follows nohup"
+runbash "python3 -c \"import subprocess; subprocess.run(['timeout', '5', 'rm', 'payload/hooks/x.sh'])\"" "$FIX/dev"
+refused "#3775 a list of words whose remove follows timeout"
+runbash "python3 -c \"import subprocess; subprocess.run(['sudo', 'git', 'checkout', '--', 'payload/hooks/x.sh'])\"" "$FIX/dev"
+refused "#3775 a list of words whose git checkout follows sudo"
+runbash "python3 -c \"import subprocess; subprocess.run(['git', 'status', 'payload/hooks'])\"" "$FIX/dev"
+allowed "#3775 control: a list of words running git status on a payload folder is let through"
+runbash "python3 -c \"import subprocess; subprocess.run(['git', 'log', '--', 'payload/hooks/x.sh'])\"" "$FIX/dev"
+allowed "#3775 control: so is git log on a payload file"
+runbash "python3 -c \"import subprocess; subprocess.run(['git', 'checkout', 'main']); print(open('payload/hooks/x.sh').read())\"" "$FIX/dev"
+allowed "#3775 control: so is a git checkout of a branch beside a read of a payload file"
+runbash "python3 -c \"import subprocess; subprocess.run(['sudo', 'cat', 'payload/hooks/x.sh'])\"" "$FIX/dev"
+allowed "#3775 control: so is a read that follows sudo"
+runbash "python3 -c \"import subprocess; subprocess.run(['env', 'LANG=C', 'ls', 'payload/hooks'])\"" "$FIX/dev"
+allowed "#3775 control: so is a listing that follows env and a setting"
+runbash "python3 -c \"import subprocess, sys; subprocess.run(['cp', sys.argv[1], sys.argv[2]])\" a.txt b.txt" "$FIX/elsewhere"
+allowed "#3775 control: so is a copy between two values in a call that names no payload path"
 runbash "python3 -c \"import os; n = 'new.sh'; os.system(f'cp /etc/hosts payload/hooks/{n}')\"" "$FIX/dev"
 refused "#3689 a string with a value filled in, whose words name payload"
 runbash "python3 -c \"import os; n = 'new.sh'; os.system('cp /etc/hosts payload/hooks/' + n)\"" "$FIX/dev"
