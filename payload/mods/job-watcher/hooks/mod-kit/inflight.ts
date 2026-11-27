@@ -33,7 +33,7 @@ export type InflightKind =
   | 'job'
   /** A /goal still set, whose own check has not found it met. */
   | 'goal'
-  /** A step on the manual steps card Dan has not done. */
+  /** A step this session pinned on the manual steps card that Dan has not done. */
   | 'steps'
   /** A compact the session queued, or the handoff note owed after one. */
   | 'compact'
@@ -80,8 +80,11 @@ export type InflightFacts = {
   jobs?: Reading<unknown>
   /** mod-kit's reading of the session's /goal. */
   goal?: Reading<unknown>
-  /** The manual steps card in $.state, null when none is pinned; `ignore` names a step not to count. */
-  steps?: Reading<{ card: unknown; ignore?: string }>
+  /**
+   * The manual steps card in $.state, null when none is pinned; `ignore` names a step not to count,
+   * and `session` is this session's id, since only a step this session pinned is in flight (#3770).
+   */
+  steps?: Reading<{ card: unknown; ignore?: string; session?: unknown }>
   /** The status bar's compactQueued and compactFollowUp in $.state (absent when it is not loaded). */
   compact?: Reading<{ queued: unknown; followUp: unknown }>
   /** mod-kit's holds in $.state and the time now, ms since the epoch. */
@@ -200,14 +203,23 @@ const judgeGoal: Judge = value => {
   return { unread: 'it is not a goal reading' }
 }
 
+// #3770, reopened: the card a session holds also carries steps other sessions pinned, read in from
+// the store its folder shares with them, and Dan's first real test of the close card was withheld by
+// five of those. His answer, 2026-11-26: "Only that session's own steps". So an undone step is in
+// flight only when the session that pinned it (manual steps' pinnedBy) is this one. A step that does
+// not say who pinned it, or a session id not handed over, cannot be told apart, and is unread: it
+// holds, as every reading that could not be taken does, and is never taken for another session's.
 const judgeSteps: Judge = value => {
-  const { card, ignore } = (isObj(value) ? value : {}) as { card?: unknown; ignore?: unknown }
+  const { card, ignore, session } = (isObj(value) ? value : {}) as { card?: unknown; ignore?: unknown; session?: unknown }
   if (card === null || card === undefined) return []
   if (!isObj(card) || !Array.isArray(card.steps)) return { unread: 'the card is not one' }
-  return card.steps.flatMap(s => {
+  return card.steps.flatMap((s): InflightHold[] => {
     const e = isObj(s) ? s : {}
     if (e.finished || (typeof ignore === 'string' && e.title === ignore)) return []
-    return [{ kind: 'steps' as const, text: `the manual step "${typeof e.title === 'string' ? e.title : ''}" is not done` }]
+    const undone = `the manual step "${typeof e.title === 'string' ? e.title : ''}" is not done`
+    if (typeof session !== 'string' || !session) return [{ kind: 'steps', text: `${undone}, and this session's id was not handed over, so whose step it is could not be read`, unread: true }]
+    if (typeof e.pinnedBy !== 'string' || !e.pinnedBy) return [{ kind: 'steps', text: `${undone}, and the card does not say which session pinned it, so it counts as this session's`, unread: true }]
+    return e.pinnedBy === session ? [{ kind: 'steps', text: undone }] : []
   })
 }
 
