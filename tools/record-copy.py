@@ -2,7 +2,7 @@
 """Run this before any count that reads the session records under ~/.claude/projects (claude-config#3413).
 
 Why: the daily keep rules job (payload/hooks/lib/keep_rules.py, #3235) removes agent records and
-worktree and /private/tmp run records once last written more than its TRANSCRIPT_DAYS ago, and
+worktree and temp folder run records (/private/tmp and the user temp folder) once last written more than its TRANSCRIPT_DAYS ago, and
 Claude Code removes Dan's own after 30 days. A count that says "the last N days" therefore reads
 fewer days than it says once N passes either age, and a recount hours later reads a different set
 (#3230 read 4,545 files and then 4,275, L487). So this says how far back each kind of record really
@@ -14,7 +14,7 @@ imports it rather than copying the rule (L342, L370).
   own    Dan's own sessions: <project>/<session>.jsonl in a project folder that is not a run's
   agent  agent records: <project>/<session>/subagents/**/agent-*.jsonl and agent-*.meta.json
   run    worktree and temporary folder runs: every record in a project folder keyed to a worktree
-         (-claude-worktrees-) or to a run under /private/tmp
+         (-claude-worktrees-) or to a run under /private/tmp or the user temp folder (run_folder)
 A record is in a window of N days when it was last written at most N days before now.
 
 Modes, so the one that writes cannot be mistaken for the one that looks (L206):

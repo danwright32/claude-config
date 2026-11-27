@@ -1619,10 +1619,10 @@ const caller: { name: string; register: Register } = {
   register: on => {
     on('tool.call', async ($, e, next) => {
       const tool = String(e.tool)
-      if (tool !== 'AddStep' && tool !== 'FinishStep') return next(e)
+      if (tool !== 'AddStep' && tool !== 'FinishStep' && tool !== 'WithdrawStep') return next(e)
       const input = (e as unknown as { input: object }).input
       try {
-        const r = tool === 'AddStep' ? await $.manualSteps.add(input as never) : await $.manualSteps.finish(input as never)
+        const r = tool === 'AddStep' ? await $.manualSteps.add(input as never) : tool === 'FinishStep' ? await $.manualSteps.finish(input as never) : await $.manualSteps.withdraw(input as never)
         return { result: r, text: JSON.stringify(r) } as never
       } catch (err) {
         return { deny: `threw: ${String((err as Error)?.message ?? err)}` }
@@ -1710,6 +1710,46 @@ test('the only step taken off takes the card away (#1107)', withCaller, async ($
   expect(await finishStep($)).toEqual({ isFinished: true })
   expect(await band($)).toBeUndefined()
   expect(stored(w.mem)).toBeUndefined()
+})
+
+// #3770: the close this session card, pinned by the goal box through the noun. Its one step is for
+// this session alone (never kept for the next, where the session it names is gone), has no Done
+// (closing the session is the step, and a press would start a turn), and is taken off as withdrawn,
+// never as done, the moment the session works again.
+const CLOSE = { title: 'Close this session if you have nothing more for it', location: 'The Terminal tab showing this session', clicks: ['Type /exit and press Return', 'Or close the tab'], sessionOnly: true, noDone: true }
+const addClose = ($: Engine, s: object = CLOSE) => askNoun($, 'AddStep', { heading: 'Nothing is running or waiting in this session', step: s })
+const withdrawStep = ($: Engine, title = CLOSE.title) => askNoun($, 'WithdrawStep', { title })
+
+test('a session only step is shown with no Done and no "waiting on you", and is never kept for the next session (#3770)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  expect(await addClose($)).toEqual({ isShown: true })
+  const text = await bandText($)
+  expect(text[0]).toBe('Nothing is running or waiting in this session')
+  expect(text[1]).toBe(`1. ${CLOSE.title}`)
+  expect(text.join('\n')).not.toMatch(/done-1|waiting on you/)
+  expect(text.join('\n')).toMatch(/Type \/exit and press Return/)
+  // Nothing written for the next session in this project.
+  expect(stored(w.mem)).toBeUndefined()
+  // Beside a step that is kept, only that one is kept.
+  await addStep($)
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual([MORNING.title])
+})
+
+test('withdraw takes a step off as withdrawn, never as done; the only one takes the card away; one not there withdraws nothing (#3770)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await addClose($)
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  expect(await band($)).toBeUndefined()
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: false })
+  // On a card with another step, it stays drawn as taken off, not done.
+  await hand($, [step()])
+  await addClose($)
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  const text = await bandText($)
+  expect(text.find(t => t.startsWith(`2. ${CLOSE.title}`))).toMatch(/taken off\b.*, not done$/)
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Turn on the WAF rule'])
 })
 
 test('a card carried from an earlier session takes the step but stays held, and says so (#1107)', withCaller, async ($, on) => {
