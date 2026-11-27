@@ -483,7 +483,7 @@ chmod 000 "$REPO/lesson-counts/mac-b.tsv"
 if [ -r "$REPO/lesson-counts/mac-b.tsv" ]; then
   # Run as root, a mode of 000 still reads, so this case cannot be set up here (L411): said, never a red.
   chmod 644 "$REPO/lesson-counts/mac-b.tsv"
-  echo "UNMEASURED: a counts file that cannot be read: this user reads a file of mode 000 (root?), so the case was not set up"
+  echo "SUITE-PART-UNMEASURED this user reads a file of mode 000 (root?), so a counts file that cannot be read was not set up"
 else
   out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL")"; rc=$?
   chmod 644 "$REPO/lesson-counts/mac-b.tsv"
