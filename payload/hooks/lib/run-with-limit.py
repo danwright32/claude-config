@@ -22,7 +22,12 @@ could not be done):
                              MAX_SECONDS, there is no command, or this system gives the runner no
                              way to keep the rule below. Also a fault inside the runner once the
                              command's process exists: its group is then sent KILL, while it is
-                             still pinned. Never the command with no limit.
+                             still pinned. Also when the process that was to become the command
+                             failed before it became it (it does not lead a group of its own once
+                             let go, or a call it makes first failed): that process says the line
+                             and ends with 125 itself, the command never starts, and the runner
+                             hands the code back with no line of its own. Never the command with
+                             no limit.
     ended by the signal      the runner itself was sent a signal it carries over (CARRIED, below):
                              the group is ended the same way first, the line says so, and the
                              runner then ends BY THAT SIGNAL, which a shell reports as 128 plus its
@@ -537,15 +542,18 @@ def become(command, gate_r, gate_w, chld_was):
         os.close(gate_w)
         # The runner makes this same call for this process at the same moment (run, below), and
         # macOS now and then refuses one of two that meet: EPERM. Measured on 2026-11-27 on the
-        # personal MacBook (macOS 26.6.2, python 3.14.4), 13000 children in two runs of a probe
-        # that makes only these two calls: this side was refused 10 times, the parent's 10 times,
-        # never both, and every child led its own group once its parent's call had come back (one
-        # of the ten did not yet when its own came back). So a refusal here is not the end, and
-        # is not the answer either: where this process is gets asked once it is let go, below.
+        # personal MacBook (macOS 26.6.2, python 3.14.4) at loads of 20 to 83, 13000 children in
+        # two runs of a probe that makes only these two calls: this side was refused 10 times,
+        # the parent's 10 times, never both, and every child led its own group once its parent's
+        # call had come back (one of the ten did not yet when its own came back). Why macOS
+        # refuses was not found. So that refusal is not the end, and is not the answer either:
+        # where this process is gets asked once it is let go, below. EPERM alone is passed over.
+        # Any other error from the call is one nothing here has measured, and it is raised.
         try:
             os.setpgid(0, 0)
-        except OSError:
-            pass
+        except OSError as e:
+            if e.errno != errno.EPERM:
+                raise
         # Python ignores these two for itself, and an ignored signal stays ignored in the command.
         for name in ('SIGPIPE', 'SIGXFSZ'):
             if hasattr(signal, name):
@@ -555,14 +563,15 @@ def become(command, gate_r, gate_w, chld_was):
         if chld_was == signal.SIG_IGN:
             signal.signal(signal.SIGCHLD, signal.SIG_IGN)
         if os.read(gate_r, 1) == b'1':
-            # Let go, so the runner's own call has come back and nothing meets one made now. A
-            # process that does not lead a group of its own never becomes the command: the group
-            # is what the limit ends. A refusal here is raised, and this process ends with 125
-            # and says why.
+            # Let go, so the runner's own call has come back and nothing changes this process's
+            # group from here on. A process that does not lead a group of its own never becomes
+            # the command: the group is what the limit ends. It does NOT ask again here. A group
+            # made after the runner let go is one the runner never looked at, and a stop, a limit
+            # or a fault in that span would find no group to end. Both calls refused was seen 0
+            # times in the 13000 children measured above, so no run there would have been lost
+            # to this. This process ends with 125 and says why, and the command never starts.
             if os.getpgrp() != os.getpid():
-                os.setpgid(0, 0)
-                if os.getpgrp() != os.getpid():
-                    raise RuntimeError('it does not lead a process group of its own')
+                raise RuntimeError('it does not lead a process group of its own')
             try:
                 os.execvp(command[0], command)
             except OSError as e:
@@ -744,7 +753,7 @@ def run(argv):
         try:
             os.setpgid(pid, pid)     # the child does the same, and one of two that meet may be refused (become)
         except OSError:
-            pass
+            pass                     # any refusal: the child's own look, once let go, is what decides
         stoppers = [sig for sig in carried() if catch(sig, asked.note, handled)]
         if hasattr(signal, 'SIGTSTP'):
             catch(signal.SIGTSTP, asked.stay, handled)
