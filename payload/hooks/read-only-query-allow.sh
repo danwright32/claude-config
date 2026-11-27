@@ -53,7 +53,10 @@
 #   a comment by a rule the shell does not follow, so a write on the rest of that line was left out
 #   of what was judged and approved with the read in front of it. A command holding a # the reader
 #   cannot tell from a comment, or one the shell reads inside a word with more commands after it
-#   on its line, is left to the usual check.
+#   on its line, or a heredoc the reader cannot find the end of (which needs no #, and which the
+#   reader has named since #3492), is not approved here, and why says which in the words for that
+#   mark (UNSURE in lib/db-write-calls.py). db-write-ask.sh, which runs on the same call, refuses
+#   a command naming a database client that holds such a line.
 #
 # WHAT IT CANNOT SEE: the database's own definitions. A select that reads a view whose definition
 # calls a function that writes, uses an operator or cast the database defined, calls a function on
