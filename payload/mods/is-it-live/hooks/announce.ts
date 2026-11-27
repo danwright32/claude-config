@@ -352,6 +352,24 @@ export const announceLetGoOf = (due: IsItLiveAnnouncement[], rows: boolean): str
 // above the prompt, with Copy, Mark sent and Not announcing. A press reaches this mod only as
 // mod-kit's modkit.press, raised by a click on the button or by /press typed at the prompt: no tool
 // a session can call marks one sent or not being announced.
+//
+// #3847: Not announcing settles only on a second press. One press settled it for every session and
+// for good, three buttons along a row that is on screen for seconds, and Dan ended an announcement
+// he had approved by a slip (2026-11-27). The first press now arms the button: its label becomes
+// "Confirm: not announcing #<pull request>" and nothing is recorded. A second press while it is
+// armed settles it. Mark sent keeps its one press, since recording that he posted it loses nothing.
+
+/**
+ * How long Not announcing stays armed after its first press, in the session's clock. Ten seconds:
+ * long enough to read the sentence the first press is answered with, see the label change and press
+ * again, with room for a busy Mac to redraw the band; short enough that a row he pressed by a slip
+ * and looked away from is back to Not announcing before he next reaches for it. The sentence itself
+ * stays up for the same time, so it is on screen exactly as long as it is true.
+ */
+export const ARMED_MS = 10_000
+
+/** The label Not announcing carries while it is armed, naming the pull request it would settle. */
+export const confirmLabelOf = (a: { pr: number }): string => `Confirm: not announcing #${a.pr}`
 
 /** The band row's id for an announcement, from its id alone, so the session that did not pin it can still name it. */
 export const rowIdOf = (id: string): string => `announce-${id.replace(/[^a-z0-9]+/g, '-')}`
@@ -369,9 +387,11 @@ const buttonOf = (verb: Pressed, row: string): string => `announce-${verb}-${row
  * The row pinned in the band while an announcement is owed and its change is live: its heading in
  * the violet of the message row beside it, where it stands, then the three buttons. The wording
  * itself is not drawn, since Dan approved it already and a whole post would fill the band in every
- * session: Copy copies it, and is left out where no wording was read.
+ * session: Copy copies it, and is left out where no wording was read. `armed` is whether Not
+ * announcing has had its first press (#3847): the same button, in the same place, under the label a
+ * second press confirms.
  */
-export const announceRow = (mod: string, a: IsItLiveAnnouncement): AnnounceRow => {
+export const announceRow = (mod: string, a: IsItLiveAnnouncement, armed = false): AnnounceRow => {
   const id = rowIdOf(idOf(a.repo, a.pr))
   return {
     mod,
@@ -380,7 +400,7 @@ export const announceRow = (mod: string, a: IsItLiveAnnouncement): AnnounceRow =
     lines: [
       [{ text: 'Announcement for agents', color: 'magenta', bold: true }],
       [{ text: `${nameOf(a)}: ${standingOf({ a, out: true })}.` }],
-      [...(a.text.trim() ? [{ button: buttonOf('copy', id), label: 'Copy' }] : []), { button: buttonOf('sent', id), label: 'Mark sent' }, { button: buttonOf('none', id), label: 'Not announcing' }],
+      [...(a.text.trim() ? [{ button: buttonOf('copy', id), label: 'Copy' }] : []), { button: buttonOf('sent', id), label: 'Mark sent' }, { button: buttonOf('none', id), label: armed ? confirmLabelOf(a) : 'Not announcing' }],
     ],
   }
 }
@@ -403,6 +423,24 @@ const stuckOf = (stuck: string): string => `Its row could not be taken down (${s
 /** What Dan is told once a press settled an announcement. */
 export const settledOf = (a: { repo: string; pr: number }, how: 'sent' | 'not-announcing', stuck?: string): string =>
   `${how === 'sent' ? `Marked sent: the announcement for agents for ${nameOf(a)}. It is no longer asked for.` : `Not announcing: the announcement for agents for ${nameOf(a)} is no longer asked for.`}${stuck === undefined ? '' : ` ${stuckOf(stuck)}`}`
+
+/**
+ * What Dan is told once the first press of Not announcing armed it (#3847): that nothing was
+ * recorded, what the second press does, and what happens if there is none.
+ */
+export const armedOf = (a: { repo: string; pr: number }): string =>
+  `Nothing is settled: the announcement for agents for ${nameOf(a)} is still owed. A second press, on ${confirmLabelOf(a)} within ${ARMED_MS / 1000} seconds, ends it for every session and cannot be undone. Left alone, the button goes back to Not announcing.`
+
+/**
+ * A first press of Not announcing that could not arm it, whatever stopped it (the clock, this
+ * session's state, the band or the timer): the sentence claims only that, and `why` names the cause.
+ */
+export const notArmedOf = (a: { repo: string; pr: number }, why: string): string =>
+  `Nothing is settled: the announcement for agents for ${nameOf(a)} is still owed. Not announcing could not be armed (${why}), so its next press is a first press again.`
+
+/** A press of Not announcing where whether it was armed could not be read: it is no confirmation, and nothing was changed. */
+export const armedUnreadOf = (a: { repo: string; pr: number }, why: string): string =>
+  `Nothing is settled: the announcement for agents for ${nameOf(a)} is still owed. Whether Not announcing was armed could not be read (${why}), so this press was not counted.`
 
 /** A press on a row whose announcement was settled since it was pinned, by a draft or in another session. */
 export const alreadySettledOf = (stuck?: string): string => `That announcement for agents is already settled${stuck === undefined ? ', so its row was taken down.' : `. ${stuckOf(stuck)}`}`
