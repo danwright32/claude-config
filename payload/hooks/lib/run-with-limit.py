@@ -50,9 +50,10 @@ ended, and the group it leads has that same number. So the order is fixed:
 The Group class is the one place that signals the command or its group and the one place that
 collects it. It refuses a signal after the collect, and after the system has once said the child
 is no longer this process's own. test-run-with-limit.sh replaces the calls with recorders and fails
-on a signal asked for outside the rule (which the recorder never sends). One other child exists:
-the reader that names the marker folder, which python's subprocess module starts, collects and, on
-a time out, ends by its own process id while it is still uncollected, all before the command.
+on a signal asked for outside the rule (which the recorder never sends). Two other children exist,
+both before the command. The one step 0 starts is never signalled and is collected through the
+same class. The reader that names the marker folder is started by python's subprocess module,
+which collects it and, on a time out, ends it by its own process id while it is still uncollected.
 
 SEEING WHAT IS LEFT WITHOUT ps. `ps` is a setuid program, which macOS refuses to start inside a
 sandbox, so a runner that read it could not run under no-network-run.sh.
@@ -715,8 +716,10 @@ def run(argv):
         # A fault in the runner itself. The command must not run on with no limit, and KILL goes
         # only to a number the still uncollected child pins.
         if group.pinned():
-            group.send(signal.SIGKILL)
-            done = 'so its command\'s process group (id %d) was sent KILL' % pid
+            if group.send(signal.SIGKILL):
+                done = 'so its command\'s process group (id %d) was sent KILL' % pid
+            else:
+                done = 'and its command\'s process group (id %d) held nothing that KILL could be sent to' % pid
         elif group.collected:
             done = 'after its command (process %d) was collected, so nothing was signalled' % pid
         else:

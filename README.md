@@ -3488,7 +3488,7 @@ The command runs as the leader of a process group of its own, on the caller's ow
 prompt, the command is in a background group of the terminal, and a command that reads or sets
 the terminal there (`git commit` opening an editor, `sudo`, `ssh`, anything that asks) is
 suspended by the system until the limit ends it. The runner hands the terminal to nobody; the
-usage says so, and the 124 line says when the command was suspended and not running at its limit.
+usage says so, and what it says with 124 tells when the command was suspended and not running.
 
 | Comes back as | What happened |
 | --- | --- |
@@ -3575,7 +3575,7 @@ What it does not cover:
   command runs on with no limit, and the leftover process check lists its group only once its
   leader has gone.
 - A command that reads the terminal, as said above. With a python3 that has no `os.waitid` (the
-  developer tools' 3.9.6, read on 2026-11-27) the 124 line cannot say the command was suspended.
+  developer tools' 3.9.6, read on 2026-11-27) what it says with 124 cannot tell that.
 - A `python3` that never answers the launcher's question holds the launcher for as long, with
   nothing run. A `python3` built to answer the question and then do something else is not
   caught: this is a time limit and no security boundary.

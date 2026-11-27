@@ -2882,7 +2882,7 @@ stopped counts toward the limit, which is Dan's to say).
 the caller's terminal, and one that reads or sets the terminal is suspended by the system until the
 limit (reproduced by the review with `cat` on a terminal of the probe's own making, 2026-11-27).
 The runner is for agents and gates, which have no terminal, so it says so (the usage, the README)
-and its 124 line says when the command was suspended and not running. Considered: giving the
+and what it says with 124 tells when the command was suspended and not running. Considered: giving the
 terminal's foreground to the command's group and taking it back (rejected: taking it back safely
 means handling the signals a background writer gets, and Ctrl Z would then stop the command and
 leave the runner to notice, which is the job control shell again).
