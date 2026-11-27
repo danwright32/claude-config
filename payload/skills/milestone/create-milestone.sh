@@ -213,8 +213,9 @@ announce="$(jq -r 'if has("announce") then (.announce | if type == "string" then
 # when the picker named the feature exactly as the milestone is titled, letter case and spacing
 # aside, because the merge gate looks his answers up by the title. So the plan's title is the one
 # name the library is asked about, and a plan that still names the feature a second way is refused.
-# The title it must equal is the MILESTONE's own on GitHub, which announce_title_holds checks below
-# once the milestone the plan resolves to is known.
+# The title it must equal is the MILESTONE's own on GitHub, which announce_title_holds checks below:
+# on the title the plan would resolve to before any label is made (when a label is missing and the
+# run is not a dry run), and on the title it did resolve to, in every run.
 announce_feature_given="$(jq -r 'has("announce_feature")' "$plan")"
 announces=0
 announce_line=""
@@ -225,7 +226,8 @@ abort_announce() {
 # announce_line_for <description> [<the milestone's own title>]: asks the library for the line and
 # the description carrying it. Sets line_json; the library reads the record only, and its standard
 # input is not read. The feature asked about is always the plan's title. The title it is held to is
-# the plan's until the milestone is resolved, and the milestone's own after that, because
+# the plan's where no second argument is given (the first question, before any milestone is
+# known), and otherwise the milestone's own, which announce_title_holds passes, because
 # ensure-milestone.sh reuses a milestone whose title is the plan's once everything but letters and
 # digits is dropped, while the record keeps spaces and punctuation in a feature's name.
 announce_line_for() {
