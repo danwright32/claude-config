@@ -5,6 +5,8 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L871. A quota that refuses everything at its cap warns of nothing, so read each such meter on a schedule and alert at a share of the cap.
+- L870. A launchd service with no ProcessType is throttled as a background daemon, so set it on any service whose speed matters and read the spawn type back.
 - L846. npm 11 skips install scripts missing from allowScripts and only warns; commit the list and prove a clean install by building, not tests.
 - L826. A request timeout cleared when headers arrive leaves the body read unbounded; keep the timer running until the body is fully read.
 - L825. In Next.js delete a cookie with Max-Age=0 AND a past Expires, checked in a browser: Next drops a zero Max-Age.

@@ -81,9 +81,58 @@ declare module 'claude-code' {
        * landed step it carried until #2849 is no longer kept.
        */
       unrelated: Record<string, never>
+      /**
+       * #3667: the announcements for agents this session's own card found out and told the session
+       * to draft, by their id (`owner/name#pr`, the repository in lowercase). The turn end of this
+       * session is refused once for each still owed; a session that only lists one holds nothing.
+       */
+      announceAsked: string[]
+      /** #3667: the announcement holds already refused in this chain of turn ends, and those let go and said, as `refused`. */
+      announceRefused: { keys: string[]; told: string[] }
+      /** #3667: the one line about announcements still owed that this session's first prompt carries, until it has. */
+      announceLine: string
+      /**
+       * #3667: the announcements whose row this session pinned in its band, by their id, so the row
+       * of one settled since (by a draft, a press, or another session) is taken down at the next
+       * turn end or /live.
+       */
+      announcePinned: string[]
     }
   }
 }
+
+/**
+ * #3667: an announcement for agents that a merged pull request owes, kept in the store under a key
+ * of its own (`announce:<owner/name>#<pr>`, the repository in lowercase), one key per pull request
+ * and never inside the list of cards, which keeps the newest 50. `channel` and `text` are the merge
+ * gate's own answer (hooks/lib/changelog-entry.js, `announcement`): the post exactly as written,
+ * `normalized` the one form it is compared by, and `hash` the one hash of it. `why` is there when
+ * that answer was `unknown`: the change is labelled as one to announce and something could not be
+ * told on this Mac, so it is kept as owed with the reason and cannot be drafted from here. It is
+ * also there when the wording kept is not known to be the wording the pull request merged on
+ * (changed after Dan approved it, or his approval could not be read): the entry then cannot be
+ * drafted until a later card reads the pull request again.
+ */
+export type IsItLiveAnnouncement = {
+  repo: string
+  pr: number
+  channel: string
+  text: string
+  normalized: string
+  hash: string
+  why?: string
+  /** When it was first kept, ms since the epoch. */
+  at: number
+}
+
+/**
+ * #3667: how an announcement stopped being owed, under a key of its own
+ * (`announce-done:<owner/name>#<pr>`) written once and never taken back: a Slack draft of the
+ * approved wording was saved (`drafted`, with the id Slack gave it), Dan marked it sent (`sent`), or
+ * Dan said it is not being announced (`not-announcing`). The last two are written only by a press
+ * of its row's Mark sent or Not announcing in the band, and every reader takes all three as settled.
+ */
+export type IsItLiveAnnounceDone = { how: 'drafted' | 'sent' | 'not-announcing'; at: number; draftId?: string }
 
 /**
  * A Slack thread a session started from (#2436): its channel and its parent message's time, the

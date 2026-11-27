@@ -2451,51 +2451,6 @@ of about 35 ms either way in the cases where both arms run the same code. The le
 asking from inside the two readers that already run would add no process, at the price of the
 same code in two inline scripts or a library the gate must refuse without.
 
-**A command string an inline script hands to a shell, a pattern, and a script file's links
-(#3689).** Three routes were let through, each staged on stand in files first. The words of
-`os.system('cp x payload/y')` sit in a quoted string with spaces in it, which the match for a
-quoted payload path never read; #3537 read such a string for `ln` alone. `rm pay*/hooks/x.sh`
-names no payload folder and the shell writes it out as one. And `bash mk.sh` or `python3 mk.py`
-made a link that nothing read, since only an inline script was.
-
-The string is read by the readers a typed command already has and no third. It is found after a
-call that runs a command (the names #3537 chose, plus php's and AppleScript's), cut into commands
-by `lib/shell-words.py`, and each is judged by the gate's own loop over segments, which grows as
-strings are found, so a `cd` inside the string, a shell it runs and a string inside a string are
-all read as typed. The shared reader could not do the first step alone: it reads shell, and which
-quoted text a python or perl call hands to a shell is not shell. Nothing read before is skipped,
-so no verdict can turn from refused to allowed, and the two suites that existed pass with the same
-counts. A value the script fills in (an f string, a `+`, a `%`) is read as a shell variable would
-be, so a path holding one is judged as a typed path holding `$X` is. Where the program itself is a
-value, nothing can be told, and that is refused in words that say so, narrowed as an unreadable
-call always was: only when the call names a `payload/` path or runs inside a payload folder, so a
-script in another project that runs a value is not refused for a config it never touches.
-
-A pattern is written out in the real path step, as the files it matches at that moment and each
-word of a list in braces, and each is judged as that file typed directly is, a file with more
-than one name included. At most 512 are read. More than that, or a `**`, is refused as untold
-only where the pattern's fixed part is in a checkout at risk, since a refusal for every large
-pattern anywhere on the disk would be one nobody keeps.
-
-A script file is read as it is on disk when the gate runs, which was the open question: read it,
-or refuse what was not read. Both, on the safe side. A shell script is read by the reading
-`lib/shell-words.py` already has for the other gates (#2301), one it runs included; one too large
-for that reader, up to 4 MB, is searched for its link commands as text; a python, perl, ruby,
-node or php script is searched for the calls that make a link. Only a link, and only one whose
-path can be placed: this repository's suites make links in temporary folders named by a variable,
-in at least eleven files, and judging each as the payload write it may be would refuse running
-them from a session with no hold. A script file that cannot be read (not there, named by a value,
-too large) is refused in its own words when the call names a `payload/` path besides the script,
-and only for a script the command itself runs. One the command writes from its own heredoc is
-read from that text.
-
-Measured 2026-11-26 on the personal MacBook at a load of about 8 to 10, two rounds of 15 samples
-an arm: a command with no interpreter went from a median of 127 to 128 ms to 133 to 134 ms; a
-copy typed directly from 197 to about 210 ms (the real path step now loads two more modules); an
-inline script running a copy from about 130 ms to 208 to 237 ms, because its string now has
-destinations and so pays for the real path step as the typed copy always did; a command running a
-script file was the same within noise.
-
 The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
 `LESSONS.md` and its index, which carry the other Mac's real additions.
@@ -3165,13 +3120,41 @@ nothing under the payload to read, 85 to 149 ms for one edited hook and one new 
 seconds for a replay of the 2026-11-22 send (refused, naming 100 files), against 1.0 seconds for the
 whole tree walk the send does not run. The replay took 6.5 to 12.4 seconds before the output went to
 a file. What was left was the check reading megabyte lines in the shell, and #3479 took that out:
-the check now puts each matching line to its rules in one awk pass and reports a long line as 300
-bytes of it. Measured on 2026-11-23 on the same 126 files, eight rounds at a load average near 175,
+the check now puts each matching line to its rules in one awk pass and reports a long line as at
+most 300 bytes of it, cut at whole characters (#3538). Measured on 2026-11-23 on the same 126 files, eight rounds at a load average near 175,
 the check alone took 3.8 to 4.3 seconds before and 0.4 to 0.8 after, its report fell from 11.5 MB
 to 70 KB, and it refused the same 100 files for the same 110 lines. Replayed over the
 newest 300 of main's sync commits, the check would have held 2: the incident, and one on 2026-10-04
 carrying a mod's test file from before the check read mods. It could judge every one, and held
 nothing that passes main's run.
+
+Three more things the check does since #3586. None excuses a line it used to report. The first
+two report more lines than before; the third reports the same lines and changes only how they are
+shown:
+
+- **A name that starts with a letter outside ASCII is a name.** The account name in a home path
+  had to start with an ASCII letter or digit, so that an elided example (the root, then dots or a
+  word in angle brackets) is not taken for a machine's path, and a home whose name starts with an
+  accented or a fullwidth letter passed. It may now also start with any byte from 128 up. The line
+  between the two was drawn from the repository: on 2026-11-26, 91 of its lines wrote a home root
+  followed by something that is not a name, 96 times, and what followed the slash was an ASCII
+  mark every time (a dot 70 times, an opening angle bracket 19, five other marks 7) and never a
+  byte from 128 up. A mark outside ASCII standing where a name would, such as an ellipsis
+  character, is reported as a name; written with dots it is not.
+- **The marker does not count on a line holding a byte that is not valid text.** The marker used
+  to be a grep between the search and the judge, in the caller's locale, and the grep macOS ships
+  saw it on such a line under C and often not under a UTF-8 locale, so the verdict turned on the
+  locale and a reported line was followed by advice to add the marker it carried. The judge now
+  looks for the marker itself, under C. A marked line of valid text is excused as before. A marked
+  line holding such a byte is judged like an unmarked one and reported in a group of its own,
+  which says the marker was seen, which byte it is and what was found. That is the stricter of
+  the two answers; excusing a marked line whatever it holds is the other, and is Dan's to choose.
+- **A control character in a reported line is shown, not obeyed.** Each is written as a backslash
+  and its octal value and counted in a note, like a byte that is not valid text: every byte below
+  32 but the tab, the delete character, and the 32 control characters just above ASCII. A carriage
+  return printed as it is drew the rest of the line over the file name and line number, which a
+  file with CRLF line ends did on every line reported from it, and an escape sequence could clear
+  them.
 
 `tests/test-claude-sync.sh` (the section "a send carrying a file that fails the home path check
 is held whole") and `hooks/test-check-home-paths.sh` (the `--files0-from` cases) hold it.
@@ -3306,8 +3289,59 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   open is said in the README: a transcript forged inside that folder, and the library reached
   without its name. Both are writes to files on a Mac the session can write.
 
-`hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh` and the #3666 section of
-`hooks/test-changelog-tag.sh` hold it.
+- **His answer is noted when he gives it, and read from the transcript afterwards (#3742, the
+  builder's).** A second review found that an approval given in the session was not found when the
+  merge went through `lib/merge-when-ready.sh`, whose payload names no transcript. The issue's
+  design was a hook after the picker that reads his answer into the record. Measured before it was
+  built: when a PostToolUse hook runs, the transcript holds the call's `tool_use` and not yet its
+  result, which Claude Code writes after those hooks (2026-11-26, read through the offset
+  `context-size-notice.sh` keeps of a session's own transcript). So the hook cannot read his answer
+  from the transcript at that moment. Ruled out: taking the answer from the payload the hook is
+  handed, which would make one run of the hook by hand, with a payload saying Approve for a picker
+  he answered Not yet, an approval with no transcript forged; and a child process left running to
+  wait for the transcript, whose race with the next command nothing would report. Chosen:
+  `announce-answer-note.sh` writes a note (which picker, in which session, the file's hash and
+  change time then) that approves nothing, and whichever hook next asks the library reads that
+  session's transcript back and judges the picker by the same rules as one of its own session. The
+  note's hash and change time replace the file as it stands, which also ends an approval being
+  lost to a write of the file before the first hook read it. A run of the hook by hand can only
+  write a note, and a note over a file changed after his answer is refused by its change time.
+  What the hook is handed was never printed (it runs only once installed), and the question
+  tool's schema has the dialog write his answers into the call's input, so the hook's copy of the
+  picker is not what decides anything: the picker is read from the transcript by its id, the
+  library is asked about every picker rather than those whose copy names the source, and a picker
+  neither copy says the source of draws a line to Dan and the session instead of silence. Ruled
+  out: a first test on the payload's text, which would have dropped every real picker without a
+  word if the dialog strips the metadata from the hook's copy.
+
+- **Every picker is noted by its ids alone, in silence, and judged later (#3789).** The hook above
+  was built on one reading, that the transcript holds a call's `tool_use` when its PostToolUse hook
+  runs, and on a guess about the hook's copy of the picker. Installed, it met the other case on
+  2026-11-26: for two pickers, one sent with metadata naming a source, no transcript line held the
+  picker's id when the hook ran and the hook's copy carried no metadata, and the transcript read
+  afterwards held both. So the hook could tell nothing, said its "could not be told" notice after
+  every picker in every session, and noted none, an approval picker included. The two readings
+  disagree and only an installed hook sees the real moment, so the fix does not depend on which is
+  true: every note now carries `held`, whether the transcript held the picker's line then, and the
+  first real pickers after an install answer it. A long transcript is ruled out as the cause in the
+  suite: one of the measured size (20 MB, 10,000 lines) is read in 0.009 seconds. Chosen: the hook
+  decides nothing. It notes every main session picker by session, transcript and picker id, says
+  nothing, and whichever hook next reads the transcript judges each noted picker in one pass: an
+  announcement's by the rules already there, any other settled so it is read once. A note that
+  holds no hash gives no wording, so such a picker is judged exactly as one with no note is, by
+  the file unchanged since his answer, and a note by ids alone lets nothing through that the same
+  picker read from its own session would not. Where the hook can already tell the picker is an
+  announcement's it still notes the file's hash, as before. Ruled out: keeping the notice for a
+  picker nobody can tell the source of, which is every picker on the measured path; a hook that
+  waits for the transcript to hold the line, whose wait holds up every picker Dan answers; and
+  reading the source from the payload alone, which the measurement shows is not there. The notice
+  that remains is for a note that could not be written, the one case where an approval is lost.
+  Sessions are read back by their newest unjudged note and not their first, since a session's first
+  note is now its first picker of any kind. What it costs: the record gains a line for every
+  picker and one more once judged, and nothing shortens it (README, "What bounds it").
+
+`hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh`,
+`hooks/test-announce-answer-note.sh` and the #3666 section of `hooks/test-changelog-tag.sh` hold it.
 
 ## Things known to be wrong and left that way
 
