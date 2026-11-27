@@ -276,6 +276,18 @@ check "and a pair it does not explain can be no edit of his" "a pair in none of 
 check_not "the number is no longer put to him as up to K" "up to K of those N" "$body"
 check_not "nor called a ceiling" "ceiling" "$body"
 check_not "nor an upper bound" "upper bound" "$body"
+# Sentences of the doubt block that could be changed or taken out with the suite still green (third
+# review, S4: five of seven changes to the skill survived). Each is held by its own words, and the
+# two ends of the block are held against a sentence slipped in after them.
+check "he is told what the count of explained pairs is and is not" "Say what that number is and is not." "$body"
+check "the doubt is told at every review while the share is unexplained" 'Say it at every review for as long as the reader'"'"'s own account, at the top of `draft-edit-diff.py`, lists that share as not explained.' "$body"
+check_not "and never at the first review only" "first review only" "$body"
+check "he is told a rule may rest partly on differences that are not his edits" "Until that is settled, a rule below may rest partly on differences that are not his edits." "$body"
+check "the cause is put as one likely reason the counts cannot settle" "One likely reason is that the two counts meant different things by it, and the counts by likeness cannot settle whether it is." "$body"
+check_not "and no longer as the likeliest" "likeliest" "$body"
+check "nothing follows the order to tell the doubt at every review" 'lists that share as not explained. A kind marked `too thin` is reported' "$body"
+check "nothing follows the order to ask nothing when no kind is recurring" 'Ask nothing. ## 3. Get one example pair for each recurring kind' "$body"
+check_not "no sentence lets the doubt be skipped" "kip the doubt" "$body"
 # The reader's own account and the skill say it together: when the share is explained, both change.
 check_eq "the reader's account still calls that share not explained, which is why the skill says so" "1" "$(grep -c 'That is not explained (see --likeness)' "$DIFF")"
 # Three sentences the feature rests on that no case held (second review, S6).

@@ -517,17 +517,24 @@ def mentions(folder):
     r.write(folder, "session-mentions.jsonl")
 
 
-def second_post(folder, second_after=120):
+def second_post(folder, second_after=120, labelled=False):
     """A draft, then a quick line of his own about something else, then the draft posted word for
     word, second_after seconds after the draft was saved. The reader pairs the draft with the first
     post after it. Not measured anywhere: it is here to show what that rule does, and that the count
-    beside it says so."""
+    beside it says so.
+
+    labelled puts a line shaped like a label, which the draft does not hold, under that later post.
+    Such a post would be set aside were it paired, since the line may be the connector's, so it is
+    not counted as a post more like the draft either: its likeness rests partly on that line."""
     r = Records()
     r.draft(100, "C0FIXTURE87", 0, "The harbour office has the winter mooring list and will answer by Friday.")
+    later = "The harbour office has the winter mooring list and will answer by Friday."
+    if labelled:
+        later += "\nNext step: tell the crew."
     r.thread(100 + second_after + 600, "C0FIXTURE87", 0, [
         (0, OTHER, "Any word on the moorings?"),
         (160, ME, "Give me a minute."),
-        (100 + second_after, ME, "The harbour office has the winter mooring list and will answer by Friday.")])
+        (100 + second_after, ME, later)])
     r.write(folder, "session-second-post.jsonl")
 
 
@@ -671,6 +678,8 @@ def main():
         second_post(folder)
     elif which == "second_post_late":  # the word for word post comes two hours after the draft
         second_post(folder, second_after=7200)
+    elif which == "second_post_labelled":  # the later post ends in a label line the draft does not hold
+        second_post(folder, labelled=True)
     elif which == "some_wordless":
         word_for_word(folder, "thread", wordless=1)
     elif which in ("broadcast", "broadcast_channel_first"):

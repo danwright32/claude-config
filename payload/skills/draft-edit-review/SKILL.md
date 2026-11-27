@@ -93,9 +93,10 @@ run's numbers:
   cuts lines, and a pair in none of these can still be no edit of his, when a read writes a message
   another way that nobody has listed.
 - That the first count, on the issue on 2026-11-24, read about one draft in five as sent as
-  drafted, that the first run of this reader read 6 of 184, and that nobody yet knows why. The
-  likeliest reason is that the two counts meant different things by it. Until that is settled, a
-  rule below may rest partly on differences that are not his edits.
+  drafted, that the first run of this reader read 6 of 184, and that nobody yet knows why. One
+  likely reason is that the two counts meant different things by it, and the counts by likeness
+  cannot settle whether it is. Until that is settled, a rule below may rest partly on differences
+  that are not his edits.
 
 Say it at every review for as long as the reader's own account, at the top of
 `draft-edit-diff.py`, lists that share as not explained.

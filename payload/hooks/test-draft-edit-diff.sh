@@ -417,6 +417,13 @@ check "no such post in the basics" "of those, more like that draft than the post
 out="$(run second_post_late)"
 check "late second post: the draft is still paired with the first post after it" "heavily rewritten: 1 of 1 pair" "$out"
 check "late second post: one two hours after the draft is not counted as more like it" "of those, more like that draft than the post it was paired with: 0" "$out"
+# Nor is a later post that ends in a label line the draft does not hold: paired, it would be set aside,
+# since that line may be the connector's (third review, S4: no case held this, and taking the test out
+# of the reader left the suite green).
+fixture second_post_labelled || { echo "FAIL: fixture second_post_labelled could not be built"; fail=$((fail + 1)); }
+out="$(run second_post_labelled)"
+check "labelled second post: the draft is still paired with the first post after it" "heavily rewritten: 1 of 1 pair" "$out"
+check "labelled second post: a later post that would be set aside for a label line is not counted as more like the draft" "of those, more like that draft than the post it was paired with: 0" "$out"
 # --differences: what one more thing set aside would make a changed pair the same. Six guesses at
 # what a read result adds or writes another way, none of them measured, and one real edit.
 fixture differences || { echo "FAIL: fixture differences could not be built"; fail=$((fail + 1)); }

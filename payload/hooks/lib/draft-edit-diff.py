@@ -1026,7 +1026,7 @@ def main():
     if args.likeness:
         # --likeness: how many pairs sit in each band of likeness. Counts only. It is here because the
         # issue's count of 2026-11-24 read 22 of 106 pairs as sent as drafted and the first run of this
-        # reader read 6 of 184, and the likeliest cause is that the two meant different things by it:
+        # reader read 6 of 184, and one likely cause is that the two meant different things by it:
         # this wants the two texts the same once formatting is set aside, and the issue reported four
         # bands of likeness. The bands are printed twice, by words and by characters, because the issue
         # never recorded which it compared, and a small change sits in very different bands under the two.
