@@ -1,10 +1,10 @@
 import { expect, mock } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
+import * as request from '../hooks/request.ts'
 import type { On, Register } from 'claude-code'
 import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
 import { CLOSE_HEADING, CLOSE_TITLE, PROCESS_TIMEOUT_MS, QUIET_MS } from '../hooks/close.ts'
-import * as request from '../hooks/request.ts'
 
 // The Goal accomplished box (claude-config#1563) in a session: shown once when a /goal is met (the
 // session is sent a prompt of its own asking for it once the turn has ended, since the met record
@@ -1787,13 +1787,33 @@ const NO_ANSWER: [string, unknown, RegExp | null][] = [
   ['answered under a name this mod does not read', { result: { questions: PICKER.questions, selections: { [QUESTION]: 'Fix the count' } }, text: '' }, /\(its result holds: questions, selections\)/],
   ['answered in a result keyed by the question itself', { result: { [QUESTION]: 'Fix the count', questions: PICKER.questions }, text: '' }, /\(its result holds: questions, and 1 more not named here\)/],
 ]
-// The one line the debug log holds about a picker's result in no shape this mod reads.
-const SHAPE_LINE = /a picker came back with no answer of Dan's in a shape this mod reads/
-for (const [how, answer, shape] of NO_ANSWER)
-  test(`a picker ${how} is no answer: work after it opens no new box, and the debug log ${shape ? 'names the keys its result held' : 'says nothing of its shape'} (#3843)`, withKit, async ($, on) => {
-    const { w, cards, logs } = world(on)
+for (const [how, answer] of NO_ANSWER)
+  test(`a picker ${how} is no answer: work after it opens no new box (#3843)`, withKit, async ($, on) => {
+    const { w, cards } = world(on)
     await start($)
     await askedAndShown($, 'Run the monthly sync', 'b1')
+    await picks(w, $, 'q1', answer)
+    await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
+    const again = await box($, MORE, 'b2')
+    expect(again.deny).toMatch(/already shown for this request/)
+    // The refusal says what would count, so a session knows when a later call is right.
+    expect(again.deny).toMatch(/a message he types, or work you do after an answer he gives in a picker/)
+    // The control: the same steps with his answer show the box.
+    await picks(w, $, 'q2')
+    await does(w, $, 'Edit', 'e2', { file_path: '/repo/a.ts' })
+    expect((await box($, MORE, 'b3')).deny).toBeUndefined()
+    expect((await cards()).map(c => c.toolUseId)).toEqual(['b1', 'b3'])
+  })
+
+// What the debug log says of each of those rows, in tests of their own that show no box: the line is
+// written when the picker comes back, whatever follows. SHAPE_LINE is the one line the log holds
+// about a picker's result in no shape this mod reads.
+const SHAPE_LINE = /a picker came back with no answer of Dan's in a shape this mod reads/
+for (const [how, answer, shape] of NO_ANSWER)
+  test(`a picker ${how}: the debug log ${shape ? 'names the keys its result held, and nothing he was asked or answered' : 'says nothing of its shape'} (#3843)`, withKit, async ($, on) => {
+    const { w, logs } = world(on)
+    await start($)
+    await says($, 'Run the monthly sync')
     await picks(w, $, 'q1', answer)
     const said = logs.filter(l => SHAPE_LINE.test(l))
     expect(said.length).toBe(shape ? 1 : 0)
@@ -1805,16 +1825,8 @@ for (const [how, answer, shape] of NO_ANSWER)
       expect(said[0]).not.toContain('Fix the count')
       expect(said[0]).not.toContain('Leave it')
     }
-    await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
-    const again = await box($, MORE, 'b2')
-    expect(again.deny).toMatch(/already shown for this request/)
-    // The refusal says what would count, so a session knows when a later call is right.
-    expect(again.deny).toMatch(/a message he types, or work you do after an answer he gives in a picker/)
-    // The control: the same steps with his answer show the box, and say nothing of a shape.
+    // The control: a picker he answered says nothing of a shape.
     await picks(w, $, 'q2')
-    await does(w, $, 'Edit', 'e2', { file_path: '/repo/a.ts' })
-    expect((await box($, MORE, 'b3')).deny).toBeUndefined()
-    expect((await cards()).map(c => c.toolUseId)).toEqual(['b1', 'b3'])
     expect(logs.filter(l => SHAPE_LINE.test(l)).length).toBe(shape ? 1 : 0)
   })
 
