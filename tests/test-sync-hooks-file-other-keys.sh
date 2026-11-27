@@ -153,6 +153,15 @@ jq '. + {model: "opus"}' "$CR/payload/settings.hooks.json" > "$WORK/c-model.json
 cp "$WORK/c-model.json" "$CR/payload/settings.hooks.json"
 npull "$WORK/n3"
 check "a new key beside it is news again, and is named" "line_has \"\$(cat '$NL')\" 'model' 'settings.hooks.json'"
+# A pull that cannot read the file is not one that found no key: the record of what was told stays,
+# so the same keys back again are not notified a second time.
+cp "$CR/payload/settings.hooks.json" "$WORK/c-good.json"
+printf 'this is not json\n' > "$CR/payload/settings.hooks.json"
+npull "$WORK/n4"
+cp "$WORK/c-good.json" "$CR/payload/settings.hooks.json"
+_told="$(wc -l < "$NL")"
+npull "$WORK/n5"
+check "failure path: a pull that could not read the file keeps what was told, so nothing is notified twice" "[ \"\$(wc -l < '$NL')\" = '$_told' ]"
 
 # Failure path: a shared file that cannot be parsed is held exactly as it was by the send, and the
 # pull does not claim to have found a key in it (it says the file could not be read instead).

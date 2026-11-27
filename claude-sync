@@ -5039,10 +5039,12 @@ payload_hooks_file_object(){
 # so the notification is posted once per set of keys rather than on every pull (L36), and a new key
 # is news again. Absent or unreadable means the next pull that meets a key notifies, the loud side.
 HOOKS_FILE_KEYS_TOLD_FILE="$SYNC_REPO/.hooks-file-keys-told"
-hooks_file_other_keys(){   # -> the payload file's top level keys other than hooks, comma separated
+hooks_file_other_keys(){   # -> the payload file's top level keys other than hooks, comma separated;
+  # fails when the file cannot be read, which is not the same as a file holding no other key, so a
+  # caller never clears the told record over a file it could not read
   local w
-  w="$(payload_hooks_file_object)" || return 0
-  jq -r '[keys_unsorted[] | select(. != "hooks")] | join(", ")' <<< "$w" 2>/dev/null || true
+  w="$(payload_hooks_file_object)" || return 1
+  jq -r '[keys_unsorted[] | select(. != "hooks")] | join(", ")' <<< "$w" 2>/dev/null
 }
 report_hooks_file_other_keys(){   # $1 = hooks_file_other_keys' answer
   if [ -z "$1" ]; then
@@ -7757,7 +7759,7 @@ MOVED
   # HERE, before any file moves, and this half only takes OUT what it no longer holds (this Mac's own
   # copy of every line that stays, untouched); the mirror then deletes and installs the scripts; and
   # the half after it puts in what is new, leaving out any line whose script is still missing.
-  local hk_settings="$CLAUDE_HOME/settings.json" hk_inc="" hk_bas="" hk_loc="" hk_target="" hk_wrote=""
+  local hk_settings="$CLAUDE_HOME/settings.json" hk_inc="" hk_bas="" hk_loc="" hk_target="" hk_wrote="" hk_extra=""
   if [ -f "$PAYLOAD/settings.hooks.json" ]; then
     [ -f "$hk_settings" ] || echo '{}' > "$hk_settings"
     # The hooks block used to be REPLACED wholesale, which silently unregistered a
@@ -7773,8 +7775,8 @@ MOVED
     # empty, and the second half says which file could not be read.
     hk_inc="$(detok < "$PAYLOAD/settings.hooks.json" | jq -c '.hooks // {}' 2>/dev/null)" || hk_inc=""
     # Any other key in the file is left out of settings.json, and said so, naming it (#3741). A file
-    # that cannot be read names none: the second half says it could not be read.
-    report_hooks_file_other_keys "$(hooks_file_other_keys)"
+    # that cannot be read names none and keeps the told record: the second half says it could not be read.
+    if hk_extra="$(hooks_file_other_keys)"; then report_hooks_file_other_keys "$hk_extra"; fi
     hk_bas="$(last_applied_hook_block)"
     # The SAME rule the send applies, with the roles the other way round: what is arriving is
     # primary, what is registered here is secondary (claude-config#300, see merge_hook_blocks). No
