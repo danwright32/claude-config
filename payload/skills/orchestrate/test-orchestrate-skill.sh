@@ -170,6 +170,24 @@ check "#3095 agent rules say to close every tab the agent did not mean to open" 
 check "#3095 agent rules say to finish by closing every tab the agent opened" "$(has "$RULES" 'close every tab you opened')"
 check "#3095 the tabs_context_mcp prohibition carries the one exception" "$(has "$RULES" 'except to close a tab your own click opened')"
 
+# claude-config#3542: on the night of 2026-11-23 the orchestrator restated these rules by hand in every
+# brief, one brief left one out, and that agent pushed past a lessons review finding with the review's
+# read key. Each now lives once in the agent rules, and a brief names only what is particular to its
+# item. Each check matches a phrase only that rule writes, so a later trim cannot drop one in silence.
+check "#3542 agent rules forbid the lessons review's read key" "$(has "$RULES" "Never use the lessons review's read key")"
+check "#3542 agent rules say a finding judged not real is handed back and the push waits" "$(has "$RULES" 'hand it back, and the push waits')"
+check "#3542 agent rules read the load before a push against the brief's limit" "$(has "$RULES" 'run `uptime` before each push')"
+check "#3542 agent rules run only the brief's suites, one at a time, on a quiet Mac" "$(has "$RULES" 'unless your brief says the Mac must stay quiet')"
+check "#3542 agent rules leave an hour long count to the main session" "$(has "$RULES" 'An hour long count')"
+check "#3542 agent rules let an agent decide an area check hold, never by restructure" "$(has "$RULES" 'never `restructure`')"
+check "#3542 agent rules stop for Dan before any allowlist or exemption entry" "$(has "$RULES" 'add an allowlist or exemption entry')"
+check "#3542 agent rules forbid an amend or a force push" "$(has "$RULES" 'Never amend a commit or force push')"
+check "#3542 agent rules point a no verdict refusal at its one home" "$(has "$RULES" 'One unchanged resend after no verdict')"
+check "#3542 agent rules never count refusals their own way" "$(grep -i -F -q -- 'refused twice' "$RULES" && echo 'says refused twice, which the no verdict rule does not' || echo ok)"
+briefs="$(section "## 3. Briefs")"
+check "#3542 a brief names only what is particular to its item" "$(text_has "$briefs" 'a brief names only what is particular to its item' 'section 3 does not limit a brief to its item')"
+check "#3542 a brief never restates a shared rule" "$(text_has "$briefs" 'never restates a shared rule' 'section 3 does not forbid restating a shared rule')"
+
 # claude-config#2563: the merge command written in the skill and in the global rules must carry
 # every argument the helper's usage marks required, say it runs from inside a checkout, and say how
 # the merge method is chosen. Required is read from the helper's own usage line: a token outside [].
