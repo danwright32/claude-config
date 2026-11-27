@@ -1044,7 +1044,7 @@ const workedAndQuiet = async ($: Engine$, clock: { advance: (ms: number) => Prom
   await turnEnds($, { answer: o.answer ?? 'Merged and live.' })
   await clock.advance(QUIET_MS)
 }
-const reasonsOf = (w: World) => JSON.parse(w.written[REASONS] ?? 'null') as { pinned: boolean; reasons: string[] } | null
+const reasonsOf = (w: World) => JSON.parse(w.written[REASONS] ?? 'null') as { pinned: boolean; reasons: string[]; notes?: string[] } | null
 const bash = ($: Engine$, command: string, more: Record<string, unknown> = {}) => $.tool.call({ tool: 'Bash', tool_use_id: 'x1', command, ...more } as never)
 
 test('all clear: once the box is shown and the session stays quiet, exactly one card is pinned, for this session alone and with no Done (#3770)', withAll, async ($, on) => {
@@ -1378,22 +1378,34 @@ test('a process carrying this session\'s id withholds the card; a look that fail
 // which carry its id for as long as it is open. The look now follows each carrier's parents by pid
 // (tests/test-close-card-process-look.sh runs it on real processes) and answers three ways: `found`
 // for one left behind, `unread` for one whose parents could not be followed, and a count of those
-// still attached to the session, which withhold nothing.
-test("processes carrying this session's id that are still attached to it withhold nothing; one whose parents could not be followed withholds the card, saying so (#3770)", withAll, async ($, on) => {
+// still attached to the session, which withhold nothing. Dan, 2026-11-26, by picker: "2.1 Unreadable
+// counts as nothing". One whose parents could not be followed is no reason either way: it never
+// withholds the card and never pins it, and the reasons file keeps it as a note, seen and not counted.
+const UNREAD_NOTE = "process 777 (node) carries this session's id, and whether it is still attached to this session could not be read (process 700, a parent of it, is not in the process list), so it was seen and not counted"
+test("processes carrying this session's id that are still attached to it withhold nothing; nor does one whose parents could not be followed, which the reasons file notes as seen and not counted (#3770)", withAll, async ($, on) => {
   const { w, clock } = world(on, { procs: { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [], attached: 6 }) } })
   await start($)
   await says($, 'Add the goal box')
   await workedAndQuiet($, clock)
-  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [], notes: [] })
   expect(w.pinned).toHaveLength(1)
   w.procs = { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [{ pid: 777, name: 'node', why: 'process 700, a parent of it, is not in the process list' }], attached: 6 }) }
   await says($, 'And one more thing')
   await workedAndQuiet($, clock, { id: 'b2' })
-  expect(w.pinned).toHaveLength(1)
+  expect(w.pinned).toHaveLength(2)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [], notes: [UNREAD_NOTE] })
+})
+
+test("an unread process beside one left behind changes nothing: the one left behind still withholds the card, and the unread one is only a note (#3770)", withAll, async ($, on) => {
+  const procs = { found: [{ pid: 4321, name: 'node' }], unread: [{ pid: 777, name: 'node', why: 'process 700, a parent of it, is not in the process list' }], attached: 0 }
+  const { w, clock } = world(on, { procs: { exitCode: 0, stdout: JSON.stringify(procs) } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
   expect(reasonsOf(w)?.pinned).toBe(false)
-  expect(reasonsOf(w)?.reasons).toEqual([
-    "process 777 (node) carries this session's id, and whether it is still attached to this session could not be read (process 700, a parent of it, is not in the process list), so it counts as left running",
-  ])
+  expect(reasonsOf(w)?.reasons).toEqual(["process 4321 (node) carries this session's id and its parents no longer lead to this session, so something this session started was left running"])
+  expect(reasonsOf(w)?.notes).toEqual([UNREAD_NOTE])
 })
 
 test('a look that answers garbled output withholds nothing, so the other readings decide and the card is pinned (#3770)', withAll, async ($, on) => {

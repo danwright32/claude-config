@@ -11526,7 +11526,9 @@ read in full, which withholds it for the rest of the session. The look follows e
 parents by pid and parent pid, never a command's text: one that meets the look's own line of
 parents, which the session's own process is on, is still attached (the session's connected servers
 are, for as long as it is open) and withholds nothing; one that reaches launchd was left behind;
-one whose parents cannot be followed withholds as unread
+one whose parents cannot be followed counts as nothing either way (Dan, 2026-11-26: "2.1
+Unreadable counts as nothing"), never a reason to withhold or to pin, and is kept as a note
+(`notes`) in the reasons file, seen and not counted
 (`tests/test-close-card-process-look.sh` runs the look on real processes). A reading that cannot be
 taken withholds it. Each reason is written to `~/.claude/state/close-session/<session id>.json`, newest
 replacing the one before. The next turn start takes the card down as withdrawn; it comes back

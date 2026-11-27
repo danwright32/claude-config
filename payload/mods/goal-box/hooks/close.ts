@@ -173,18 +173,20 @@ print(json.dumps({'found': found, 'unread': unread, 'attached': attached}))
 /**
  * What reading A found, one sentence each. It may only withhold the card: a look that failed, ran
  * out of time or answered anything else says nothing either way, and is never why a card is pinned.
- * A carrier left behind withholds it. So does one whose parents could not be followed (#3770): a
- * process carrying this session's id was found, which is what Dan's 3.76.1 withholds for, and still
- * attached is the exception that has to be shown, so unread it counts as left running, said as such.
- * Carriers still attached are counted by the look and are no reason at all.
+ * A carrier left behind withholds it (`holds`). One whose parents could not be followed does not
+ * (#3770; Dan, 2026-11-26, by picker: "2.1 Unreadable counts as nothing"): it counts as nothing
+ * either way, never a reason to withhold and never by itself a reason to pin, and is handed back as
+ * a note (`notes`) for the reasons file, so that it was seen and not counted is not lost. The first
+ * build of this withheld for it; that was changed on his answer. Carriers still attached are
+ * counted by the look and are no reason at all.
  */
-export const processHolds = (r: { exitCode: number; stdout: string }): string[] => {
-  if (r.exitCode !== 0) return []
+export const processHolds = (r: { exitCode: number; stdout: string }): { holds: string[]; notes: string[] } => {
+  if (r.exitCode !== 0) return { holds: [], notes: [] }
   let o: unknown
   try {
     o = JSON.parse(r.stdout)
   } catch {
-    return []
+    return { holds: [], notes: [] }
   }
   const listed = (key: 'found' | 'unread'): { who: string; why: string }[] => {
     const list = (typeof o === 'object' && o !== null ? (o as Record<string, unknown>)[key] : undefined) as unknown
@@ -195,10 +197,10 @@ export const processHolds = (r: { exitCode: number; stdout: string }): string[] 
       return [{ who: `process ${x.pid} (${typeof x.name === 'string' && x.name ? x.name : 'unnamed'})`, why: typeof x.why === 'string' && x.why ? x.why : 'the look gave no reason' }]
     })
   }
-  return [
-    ...listed('found').map(p => `${p.who} carries this session's id and its parents no longer lead to this session, so something this session started was left running`),
-    ...listed('unread').map(p => `${p.who} carries this session's id, and whether it is still attached to this session could not be read (${p.why}), so it counts as left running`),
-  ]
+  return {
+    holds: listed('found').map(p => `${p.who} carries this session's id and its parents no longer lead to this session, so something this session started was left running`),
+    notes: listed('unread').map(p => `${p.who} carries this session's id, and whether it is still attached to this session could not be read (${p.why}), so it was seen and not counted`),
+  }
 }
 
 /** The step as the manual steps noun takes it: this session alone, with no Done. */
