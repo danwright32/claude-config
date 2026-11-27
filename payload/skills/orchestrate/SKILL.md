@@ -13,6 +13,17 @@ Number every item and say it back in one line, in Dan's words. Settle what you c
 
 Record where each item came from, so it can be answered there (see "Answering each item at its source" below): for a Slack alert, post or thread, the channel id and message ts of the message it started from; for a Slack list row, the list id and record id; for a GitHub issue, the repo and issue number. An item Dan typed into the chat has no source, and the board says so.
 
+For every item whose source is not a GitHub issue and that has a repository, look for an open issue or pull request that already covers it (claude-config#3555): someone may have filed the alert already, or another session may have its fix open. Run, with the item's text in the message's words, inside a quoted heredoc so nothing in it is run by the shell:
+
+    bash ~/.claude/skills/orchestrate/find-existing.sh <owner/repo or a folder in its checkout> <<'ITEM'
+    <the item's text>
+    ITEM
+
+- Exit 0, nothing printed: no open issue or pull request shares the item's wording. It matches on words, so this is not proof that nothing covers it.
+- Exit 0, `MAY ALREADY BE COVERED`: read each one it names (at most three, issues and pull requests both) and decide; the script never rules an item a duplicate. When an issue covers it, its number goes on the board beside the Slack source, a `build` item is claimed on that issue as in "Claiming an issue before its builder starts", and the reply at the source links the issue. When an open pull request covers it, the item is already in hand: its row shows `covered by #<n>` and no builder is dispatched for it.
+- A `READ ONLY THE NEWEST` line: a list filled the read limit, and older items were not compared. Say so on the board.
+- Exit 2, `COULD NOT LOOK`: show the reason it prints on the board. Never read it as nothing covering the item.
+
 ## 2. Dispatch board
 
 Build the board, one row per item:

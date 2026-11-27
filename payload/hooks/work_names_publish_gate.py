@@ -13,9 +13,23 @@ gh repo create (its own text, and the history --push sends), gh repo edit, gh re
 create and edit (title and notes), gh gist create --public (its files and description), and since
 #2412 gh gist edit on a public gist and gh repo edit --visibility public. gh's
 other names for these (gh pr new, gh issue new, gh release new and the rest) are read as the long
-form by lib/shell-words.py. Only where the target is PUBLIC: a private repository passes without the
-list ever being read, and so does a secret gist. A public repository owned by a work owner passes
-too, a work repository naming its own work. The text judged is the whole command (so a heredoc fed
+form by lib/shell-words.py. Only where the target is PUBLIC, or declares itself public (below): a
+private repository that does not passes without the list ever being read, and so does a secret gist.
+A public repository owned by a work owner passes too, a work repository naming its own work.
+
+A REPOSITORY THAT DECLARES ITSELF PUBLIC IS JUDGED WHILE IT IS PRIVATE (claude-config#3582; Dan, by
+picker on 2026-11-25). On 2026-11-24 this repository was private for some hours, everything posted
+to it passed unread, and it turned public again with work names in two issues. So for a repository
+GitHub says is not public, its .github/expected-visibility is read (declared): one that says public
+is judged exactly as a public repository is, one that says private or internal, or has no such
+file, passes as before. A checkout of the repository the text goes to is read on disk through
+lib/expected-visibility.py, the reader the session start notice uses, so the two cannot read the
+file differently; for any other repository (--repo, GH_REPO or a gh api path naming one the folder
+is no checkout of) GitHub is asked for the copy on its default branch, never the folder's own file.
+A declaration that is there and cannot be read or understood (an empty file, a word that is none of
+the three, a folder at that path, GitHub failing to hand it over) is refused as cannot tell.
+
+The text judged is the whole command (so a heredoc fed
 body is read) and every body, notes or gist file it names that can be read. Since claude-config#2909,
 for gh pr and issue commands, gh release and gh api writes (not gh repo or gist), two parts of the
 command that are never posted are left out of that (posted_text): a plain cd, unless the command can
@@ -65,7 +79,8 @@ bare word it is prose, #2184). Repository names are matched here although
 list is read by work_repo_names in lib/work-names.py, the one reader the commit message checks
 (work-names.py --work-repos, claude-config#2111) use as well.
 
-CANNOT TELL IS REFUSED (L98, L345): the visibility unreadable under every account, the list
+CANNOT TELL IS REFUSED (L98, L345): the visibility unreadable under every account, the declaration
+of a repository that is not public there but unreadable or stating none of the three (#3582), the list
 unreadable, empty or of the wrong shape, the registry unreadable, the project list unreadable or
 holding no work MacBook project, a body file the command writes from
 something it does not show, a body file a gh api call names that cannot be read, a command that
@@ -168,6 +183,9 @@ def _load(name, path):
 scan = _load("gh_issue_scan", os.path.join(_HERE, "gh_issue_scan.py"))
 field = _load("issue_field_gate", os.path.join(_HERE, "issue_field_gate.py"))
 wn = _load("work_names", os.path.join(_HERE, "lib", "work-names.py"))
+# The one reader of a repository's .github/expected-visibility, which the session start notice
+# (repo-visibility-notice.sh) reads through as well (claude-config#3582).
+ev = _load("expected_visibility", os.path.join(_HERE, "lib", "expected-visibility.py"))
 
 KINDS = frozenset(scan.BODY_FILE_COMMANDS | {("pr", "review")})
 API_ENDPOINT = re.compile(r"^/?repos/([^/\s]+)/([^/\s?#]+)/(?:issues|pulls|comments)(?:[/?#]|$)")
@@ -253,13 +271,134 @@ def _work_owner(owner):
     return bool(owner) and (owner in owners or wn.sha(owner) in matcher.hashes)
 
 
+DECLARATION_QUERY = ("query($owner:String!,$name:String!){repository(owner:$owner,name:$name){nameWithOwner "
+                     "object(expression:\"HEAD:%s\"){__typename ... on Blob{text isBinary isTruncated}}}}"
+                     % ev.PATH)
+_DECLARED = {}
+_AS_DECLARED = {}
+
+
+FIX_THE_FILE = ("Put the file right (its first line that is not a comment must be public, private or "
+                "internal), then run the command again")
+READ_IT_AGAIN = "Run the command again once the file can be read"
+
+
+def _undeclared(full, vis, why, then=READ_IT_AGAIN):
+    """CannotTell for a repository whose declaration is there, or may be, and could not be read or
+    understood. then: what changes that, by which of the two it was."""
+    return CannotTell("could not tell whether %s, which is %s on GitHub today, says it is meant to be "
+                      "public: %s. Text posted to a repository that declares itself public is judged even "
+                      "while it is not public (claude-config#3582), so this is refused rather than passed "
+                      "unjudged. %s" % (full, vis, why, then))
+
+
+def _declared_on_github(full, vis):
+    """What the default branch of full holds at .github/expected-visibility, asked of GitHub: one of
+    ev.VALUES, or None when no such file is there. Raises CannotTell for anything else.
+
+    One GraphQL read that names the repository back, through each signed in account in turn, so no
+    file there is said only by an account that could see the repository: a plain 404 reads the same
+    for a missing file as for a private repository the account cannot see. The shapes were measured
+    on 2026-11-26: a Blob with its text, a Tree for a folder, null for no such path, and a null
+    repository with an error for a repository that cannot be resolved."""
+    owner, _sep, name = full.partition("/")
+    words = ["gh", "api", "graphql", "-f", "query=" + DECLARATION_QUERY, "-f", "owner=" + owner,
+             "-f", "name=" + name]
+    last = ""
+    for tok in _tokens():
+        ok, out, err = _gh(words, None, tok, None)
+        if not ok:
+            last = err or last
+            continue
+        try:
+            repo = json.loads(out)["data"]["repository"]
+            named = str(repo["nameWithOwner"])
+            found = repo["object"]
+        except (ValueError, KeyError, TypeError):
+            last = "gh api answered with something that is not the repository's JSON"
+            continue
+        if named.lower() != full.lower():
+            last = "gh api answered about another repository"
+            continue
+        if found is None:
+            return None
+        if not isinstance(found, dict) or found.get("__typename") != "Blob":
+            raise _undeclared(full, vis, "its %s on GitHub is there but is not a file" % ev.PATH, FIX_THE_FILE)
+        if found.get("isBinary") or found.get("isTruncated") or not isinstance(found.get("text"), str):
+            raise _undeclared(full, vis, "GitHub did not hand over the whole text of its %s" % ev.PATH,
+                              FIX_THE_FILE)
+        value = ev.parse(found["text"])
+        if value is None:
+            raise _undeclared(full, vis, ev.NOT_ONE_OF, FIX_THE_FILE)
+        return value
+    raise _undeclared(full, vis, "no signed in account could read its %s from GitHub (%s)"
+                      % (ev.PATH, last[:200]))
+
+
+def declared(full, vis, cwd):
+    """What full, a repository that is not public today, says its visibility is meant to be
+    (claude-config#3582): one of ev.VALUES, or None when it states nothing. Raises CannotTell when a
+    declaration is there, or may be, and cannot be read or understood.
+
+    The declaration read is the one of the repository the text goes to. When cwd is in a checkout
+    whose origin is that repository, it is the checkout's own file, read as the session start notice
+    reads it (lib/expected-visibility.py: the working tree's copy from the checkout's root, a
+    worktree's own, else origin's default branch as last fetched), with no call. For any other
+    repository (--repo or GH_REPO naming one this folder is no checkout of, a folder in no checkout,
+    an origin this cannot read) the folder's file says nothing about it, so GitHub is asked for the
+    copy on that repository's default branch."""
+    co = ev.checkout(cwd or os.getcwd())
+    # git not answering which checkout this is, or what its origin is, is never read as a folder that
+    # is no checkout of the repository: that would ask GitHub in the place of a checkout whose own
+    # file may say public where GitHub's copy does not (the lessons review of 3a7131c).
+    if co is not None and (co.top is None or co.origin_state == ev.ORIGIN_SILENT):
+        raise _undeclared(full, vis, "%s, so whether the command runs in a checkout of %s, whose own %s "
+                          "would be the one to read, could not be told"
+                          % (co.why if co.top is None else "git did not answer in time for the origin of "
+                             "the checkout the command runs in to be read", full, ev.PATH))
+    here = co is not None and co.slug is not None and co.slug.lower() == full.lower()
+    key = (full.lower(), co.top if here else None)
+    if key in _DECLARED:
+        return _DECLARED[key]
+    if not here:
+        value = _declared_on_github(full, vis)
+    elif co.state == ev.SILENT:
+        raise _undeclared(full, vis, co.why)
+    elif co.state in (ev.UNREADABLE, ev.UNKNOWN):
+        # The guard withholds the path as it withholds the name: a script's error output can land in a
+        # log, and a checkout's path can hold a name (claude-config#2909).
+        where = "the checkout it ran in" if _WITHHOLD else "the checkout at %s" % co.top
+        raise _undeclared(full, vis, "%s, in %s" % (co.why, where), FIX_THE_FILE)
+    else:
+        value = co.value
+    _DECLARED[key] = value
+    return value
+
+
 def published(slug, cwd, gh_repo):
-    """The repository's full name when text posted there is public and judged (a public repository
-    no work owner owns), else None. Raises CannotTell as visibility does."""
+    """The repository's full name when text posted there is judged, else None: a public repository,
+    or one that is not public today and declares itself public in its .github/expected-visibility
+    (Dan, 2026-11-25, claude-config#3582), in both cases one no work owner owns. A repository that is
+    not public and states nothing, or states private or internal, passes as before, without the list
+    ever being read. Raises CannotTell as visibility and declared do."""
     full, vis = visibility(slug, cwd, gh_repo)
-    if vis != "PUBLIC" or _work_owner(full.split("/", 1)[0]):
+    if vis != "PUBLIC":
+        if declared(full, vis, cwd) != "public":
+            return None
+        _AS_DECLARED[full] = vis
+    if _work_owner(full.split("/", 1)[0]):
         return None
     return full
+
+
+def standing(full):
+    """How a refusal describes the repository published() named: public, or judged as public by its
+    own declaration while it is not."""
+    if full in _AS_DECLARED:
+        return ("a repository that is %s on GitHub today and says in its %s that it is meant to be "
+                "public, so text posted to it is judged as public text (claude-config#3582)"
+                % (_AS_DECLARED[full], ev.PATH))
+    return "a public repository"
 
 
 def judge(what, slug, cwd, gh_repo, command, bodies, unseen=(), place=None):
@@ -269,7 +408,7 @@ def judge(what, slug, cwd, gh_repo, command, bodies, unseen=(), place=None):
     full = published(slug, cwd, gh_repo)
     if full is None:
         return None
-    return judge_public(what, "to %s, a public repository," % full, command, bodies, unseen, place)
+    return judge_public(what, "to %s, %s," % (full, standing(full)), command, bodies, unseen, place)
 
 
 def judge_public(what, to, command, bodies, unseen=(), place=None):
@@ -491,9 +630,9 @@ def judge_repo_sync(what, args, where):
     src, vis = visibility(sources[-1], where, None)
     if vis == "PUBLIC":
         return None
-    return ("%s copies the commits of %s, which is not public, into %s, a public repository, and their "
+    return ("%s copies the commits of %s, which is not public, into %s, %s, and their "
             "messages cannot be read here, so whether they name a work organisation or repository cannot "
-            "be told." % (what, src, full))
+            "be told." % (what, src, full, standing(full)))
 
 
 # The one letter flags that take a value, per command whose repository _repo_of reads, from each
