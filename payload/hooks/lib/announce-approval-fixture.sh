@@ -36,18 +36,31 @@
 #       answer <id> <repo> <file> [answer] [shape] [session]
 #                                    his answer to a picker `put` wrote: the user entry carrying its
 #                                    tool_result.
+#       late <id> <repo> <file> [shape] [session]
+#                                    the assistant entry holding the tool_use of a picker with that
+#                                    id, written AFTER the hook ran on its `payload` (below).
 #       payload <id> <repo> <file> [answer] [shape] [session] [agent id]
 #                                    prints, and writes nothing: what Claude Code hands a PostToolUse
-#                                    hook once that picker is answered. A hook that runs then finds
-#                                    the picker's tool_use in the transcript and NOT its tool_result,
-#                                    which is written after the hooks have run (measured 2026-11-26,
-#                                    claude-config#3742: the transcript of a session read at the
-#                                    moment a PostToolUse hook of its own call ran ended at that
-#                                    call's tool_use). So a case about that hook is `put`, the hook on
-#                                    `payload`, then `answer`. AAF_PAYLOAD_FORM (answers,
-#                                    nometadata, or both words) makes the payload's copy of the
-#                                    picker's input differ from the transcript's in the ways the
-#                                    dialog may change it, since no real payload has been printed.
+#                                    hook once that picker is answered. The picker's tool_result is
+#                                    never in the transcript when that hook runs: it is written
+#                                    after the hooks have run. Its tool_use has been measured both
+#                                    ways on 2026-11-26. In one session the transcript, read at the
+#                                    moment a PostToolUse hook of its own call ran, ended at that
+#                                    call's tool_use (claude-config#3742). In another (18.8 MB, about
+#                                    9,400 lines) the hook found no line holding the picker's id,
+#                                    for two pickers, and the transcript read afterwards held both,
+#                                    each stamped when it was asked (claude-config#3789). So a case
+#                                    about that hook is built in one of two orders: `put`, the hook
+#                                    on `payload`, then `answer`; or the hook on `payload` with an
+#                                    id of the case's own, then `late`, then `answer`.
+#                                    AAF_PAYLOAD_FORM (answers, nometadata, or both words) makes the
+#                                    payload's copy of the picker's input differ from the
+#                                    transcript's: `nometadata` is the form measured in #3789, where
+#                                    metadata a session sent was not in the hook's copy.
+#   aaf_bulk <transcript> <lines> <bytes a line>
+#                                    that many more lines of an ordinary long session, each about
+#                                    that long: text, Bash calls and their results, and now and
+#                                    then an ordinary picker. Every word in them is invented.
 #   aaf_shown <folder> <transcript> <wording>
 #                                    <folder>/announcement.md holding the wording, written by the
 #                                    session and then opened in front of Dan; prints the file's path.
@@ -140,6 +153,9 @@ elif action == "put":
     uid = "toolu_ask%d" % time.time_ns()
     send(uid, "AskUserQuestion", ask, arg(3) or None)
     print(uid, end="")
+elif action == "late":
+    ask, _ = picker(rest[1], rest[2], "", arg(3))
+    send(rest[0], "AskUserQuestion", ask, arg(4) or None)
 elif action == "answer":
     _, result = picker(rest[1], rest[2], arg(3) or "Approve the wording", arg(4))
     back(rest[0], arg(4) == "error", result, arg(5) or None)
@@ -181,6 +197,44 @@ except ValueError:
 pr = sys.argv[4] if len(sys.argv) > 4 else ""
 sys.stdout.reconfigure(errors="replace")
 json.dump(lib.check(sys.argv[2], sys.argv[3], payload, int(pr) if pr.isdigit() else None), sys.stdout)' "$@"
+}
+
+# aaf_bulk <transcript> <lines> <bytes a line>: an ordinary long session's lines, appended. The
+# shapes are a real transcript's (an assistant entry of text or of one tool_use, a user entry of its
+# tool_result) and every word is invented here: a real transcript holds private text.
+aaf_bulk() {
+  python3 - "$@" <<'PY'
+import json, sys
+path, lines, size = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+words = "the build ran and the suite passed on the second try with nothing left to do "
+pad = (words * (size // len(words) + 1))[:max(size - 260, 20)]
+with open(path, "a", encoding="utf-8", errors="replace") as f:
+    n = 0
+    while n < lines:
+        stamp = "2026-01-01T00:%02d:%02d.000Z" % ((n // 60) % 60, n % 60)
+        base = {"sessionId": "s1", "cwd": "/", "timestamp": stamp}
+        if n % 500 == 499 and n + 1 < lines:
+            uid = "toolu_bulkask%d" % n
+            ask = {"questions": [{"question": "Which one? " + pad[:200], "header": "Pick", "multiSelect": False,
+                                  "options": [{"label": "A", "description": "a"}, {"label": "B", "description": "b"}]}]}
+            entries = [dict(base, type="assistant", message={"role": "assistant", "content": [
+                           {"type": "tool_use", "id": uid, "name": "AskUserQuestion", "input": ask}]}),
+                       dict(base, type="user", toolUseResult={"questions": ask["questions"], "answers": {"Which one?": "A"},
+                                                              "annotations": {}},
+                            message={"role": "user", "content": [
+                                {"type": "tool_result", "tool_use_id": uid, "content": "done", "is_error": False}]})]
+        elif n % 3 == 0:
+            entries = [dict(base, type="assistant", message={"role": "assistant", "content": [{"type": "text", "text": pad}]})]
+        elif n % 3 == 1:
+            entries = [dict(base, type="assistant", message={"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_bulk%d" % n, "name": "Bash", "input": {"command": "ls " + pad, "description": "d"}}]})]
+        else:
+            entries = [dict(base, type="user", toolUseResult={"stdout": pad, "stderr": ""}, message={"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_bulk%d" % (n - 1), "content": pad[:200], "is_error": False}]})]
+        for e in entries:
+            f.write(json.dumps(e) + "\n")
+            n += 1
+PY
 }
 
 aaf_shown() {  # <folder> <transcript> <wording>
