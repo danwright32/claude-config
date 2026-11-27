@@ -13,6 +13,7 @@ command that never succeeds, serve dying by itself, the deadline, and the superv
 import contextlib
 import errno
 import fcntl
+import glob
 import io
 import json
 import os
@@ -180,6 +181,7 @@ class RunFixture(unittest.TestCase):
             ".claude/verification/guides/invoices.md": GUIDE,
             "scripts/fake_serve.py": FAKE_SERVE,
             "scripts/drive.sh": DRIVE,
+            "scripts/drive_browser.py": DRIVE_BROWSER,
         }
         for rel, text in files.items():
             p = os.path.join(self.repo, rel)
@@ -415,19 +417,206 @@ exec sleep 3600
 '''
 
 
+# The helper browser's executable file name, written out here and never read from egress.py: the
+# cases below must fail if the rule is ever aimed at another name (L721).
+BROWSER = "chrome-headless-shell"
+
+# One connect per "<address>,<port>" argument (UDP) or "<address>,<port>,tcp", saying whether the
+# kernel let it happen. A UDP connect sends no packet, so it reaches no host whatever address it
+# names. A TCP one is started without waiting and closed at once, and is only ever aimed at 192.0.2.1,
+# the reserved address the serve fixture above already connects to. A drive call appends its own
+# arguments (open /invoices), which hold no comma and are passed over.
+CONNECT_PL = r'''
+use Socket qw(:all);
+use Fcntl;
+$| = 1;
+for my $spec (grep { /,/ } @ARGV) {
+  my ($host, $port, $tcp) = split /,/, $spec;
+  my $v6 = $host =~ /:/;
+  socket(my $s, $v6 ? PF_INET6 : PF_INET, $tcp ? SOCK_STREAM : SOCK_DGRAM, 0) or die "socket: $!";
+  fcntl($s, F_SETFL, fcntl($s, F_GETFL, 0) | O_NONBLOCK) if $tcp;
+  my $addr = $v6 ? pack_sockaddr_in6($port, inet_pton(AF_INET6, $host)) : pack_sockaddr_in($port, inet_aton($host));
+  if (connect($s, $addr)) { print "$spec connected\n"; }
+  elsif ($!{EINPROGRESS}) { print "$spec started\n"; }
+  else { print "$spec failed: $!\n"; }
+  close($s);
+}
+'''
+
+
+# A program that holds a TCP connection to this machine on a port it is given by the system and, on
+# the SAME port, makes a UDP connect to 198.51.100.1 (TEST-NET-2: reserved, and a UDP connect sends
+# no packet) which it closes at once. It then goes on holding the first until the monitor has
+# written its report for that port into the record, which the monitor does only after reading this
+# process's sockets, or until 60 s have passed, and says which.
+SAME_PORT_PL = r'''
+use Socket qw(:all);
+$| = 1;
+socket(my $l, PF_INET, SOCK_STREAM, 0) or die "socket: $!";
+bind($l, pack_sockaddr_in(0, INADDR_LOOPBACK)) or die "bind: $!";
+listen($l, 1) or die "listen: $!";
+my ($port) = unpack_sockaddr_in(getsockname($l));
+socket(my $c, PF_INET, SOCK_STREAM, 0) or die "socket: $!";
+connect($c, pack_sockaddr_in($port, INADDR_LOOPBACK)) or die "connect to this machine: $!";
+socket(my $u, PF_INET, SOCK_DGRAM, 0) or die "socket: $!";
+my $left = connect($u, pack_sockaddr_in($port, inet_aton("198.51.100.1"))) ? "connected" : "failed: $!";
+close($u);
+print "$port $left\n";
+my $events = "$ENV{VERIFICATION_RECEIPT_DIR}/egress.jsonl";
+my $seen = "never";
+for (1 .. 1200) {
+  if (open(my $f, "<", $events)) {
+    local $/;
+    my $text = <$f>;
+    close($f);
+    if ($text =~ /"event": "report"[^\n]*"port": $port,/) { $seen = "read"; last; }
+  }
+  select(undef, undef, undef, 0.05);
+}
+print "$seen\n";
+'''
+
+
+def stand_in_unavailable():
+    """Why this machine cannot run a program whose executable FILE has a name of our choosing, or
+    None when it can. The rule under test names the helper browser by its executable's file name, so
+    the cases need a real executable called that (a copy of perl, which ships with macOS), not a
+    script or a link: a script's process is its interpreter, and a link resolves to its target."""
+    if NO_SANDBOX:
+        return NO_SANDBOX
+    if not os.access("/usr/bin/perl", os.X_OK):
+        return "/usr/bin/perl is not on this Mac, so no stand in for the helper browser can be made"
+    r = subprocess.run(["/usr/bin/perl", "-MSocket", "-e", "1"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return "/usr/bin/perl cannot load Socket here (exit %d: %s)" % (r.returncode, r.stderr.strip()[:200])
+    return None
+
+
+NO_STAND_IN = stand_in_unavailable()
+STAND_IN = unittest.skipIf(NO_STAND_IN, "UNMEASURED, not passed: %s" % NO_STAND_IN)
+
+BROWSER_FLAGS = ["--headless", "--no-sandbox", "--disable-gpu", "--no-first-run", "--disable-background-networking",
+                 "--disable-component-update", "--disable-sync", "--proxy-server=http://127.0.0.1:9"]
+_REAL_BROWSER = []
+
+
+def real_browser():
+    """(path, None) for a real helper browser this suite can start, else (None, why not). Found where
+    Playwright keeps it, then started once on about:blank, outside any sandbox and with a time
+    limit: a blank page looks up no address, so that launch connects to nothing (L411)."""
+    if _REAL_BROWSER:
+        return _REAL_BROWSER[0]
+    cache = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.path.expanduser("~/Library/Caches/ms-playwright")
+    found = sorted(glob.glob(os.path.join(cache, "chromium_headless_shell-*", "chrome-headless-shell-*", BROWSER)))
+    if NO_SANDBOX:
+        answer = (None, NO_SANDBOX)
+    elif not found:
+        answer = (None, "no %s under %s, so there is no real helper browser to start" % (BROWSER, cache))
+    else:
+        profile = tempfile.mkdtemp(prefix="vg-browser-check-")
+        p = subprocess.Popen([found[-1]] + BROWSER_FLAGS + ["--user-data-dir=" + profile, "--dump-dom", "about:blank"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             start_new_session=True)
+        try:
+            out, err = p.communicate(timeout=60)
+            ok = p.returncode == 0 and "<html" in out
+            why = None if ok else "exit %s: %s" % (p.returncode, err.strip()[-200:])
+        except subprocess.TimeoutExpired:
+            why = "still running after 60s"
+        finally:
+            if p.poll() is None:  # only a browser still running: an exited one's group id may be reused
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                p.wait()
+            shutil.rmtree(profile, ignore_errors=True)
+        answer = (found[-1], None) if why is None else (None, "%s could not be started here (%s)" % (found[-1], why))
+    _REAL_BROWSER.append(answer)
+    return answer
+
+
+# The drive helper of the real browser cases. It serves one page on 127.0.0.1 and opens it in the
+# browser named by FAKE_BROWSER, or, when FAKE_BROWSER_GOES is "outside", sends the browser to
+# 192.0.2.1 (TEST-NET-1, reserved for documentation, the same stand in for an outside host the serve
+# fixture above uses) and waits for the monitor to name it. The browser sends every other address
+# to a dead proxy on this machine, has a time limit, and is stopped by its process group.
+DRIVE_BROWSER = r'''
+import http.server, json, os, shutil, signal, subprocess, sys, tempfile, threading, time
+
+d = os.environ["FAKE_DIR"]
+flags = json.loads(os.environ["FAKE_BROWSER_FLAGS"])
+
+
+class Page(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b"<!doctype html><title>t</title><p>served on this machine</p>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Page)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+outside = os.environ.get("FAKE_BROWSER_GOES") == "outside"
+url = "http://192.0.2.1:8080/" if outside else "http://127.0.0.1:%d/" % srv.server_address[1]
+profile = tempfile.mkdtemp(dir=d)
+out_path = os.path.join(profile, "dom")
+cmd = [os.environ["FAKE_BROWSER"]] + flags + ["--user-data-dir=" + profile]
+if outside:
+    cmd.append("--proxy-bypass-list=192.0.2.1")
+said = "the browser was still running after 60s"
+with open(out_path, "w") as dom:
+    p = subprocess.Popen(cmd + ["--dump-dom", url], stdin=subprocess.DEVNULL, stdout=dom,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        deadline = time.monotonic() + 60
+        events = os.path.join(os.environ["VERIFICATION_RECEIPT_DIR"], "egress.jsonl")
+        while time.monotonic() < deadline:
+            if outside:
+                with open(events) as f:
+                    if "192.0.2.1" in f.read():
+                        said = "192.0.2.1 named"
+                        break
+                if p.poll() is not None:
+                    said = "the browser exited %s before the monitor named 192.0.2.1" % p.returncode
+                    break
+            elif p.poll() is not None:
+                with open(out_path) as f:
+                    said = "page loaded" if "served on this machine" in f.read() else "exit %s, no page" % p.returncode
+                break
+            time.sleep(0.05)
+    finally:
+        if p.poll() is None:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            p.wait()
+shutil.rmtree(profile, ignore_errors=True)
+with open(os.path.join(d, "drive-out"), "w") as f:
+    f.write(said + "\n")
+'''
+
+
 class EgressTests(RunFixture):
     """The egress monitor (claude-config#1571): a run's receipt says what serve and the drive helper
     reached outside this machine, judged against areas.json's egress.allow, and the merge check in
     block mode passes only a clean verdict. The fixtures reach 127.0.0.1 and ::1, or 192.0.2.1,
     which is TEST-NET-1: reserved for documentation, so no real host is ever contacted."""
 
-    def run_to_receipt(self, connect, drive_connect=None, wait_for=None):
+    def run_to_receipt(self, connect, drive_connect=None, wait_for=None, commands=None):
         self.extra_env = dict(self.extra_env, FAKE_CONNECT=connect)
         drive = None
         if drive_connect:
             drive = ('python3 -c "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM);'
                      ' s.connect((\'%s\', 9))"' % drive_connect)
-        sha = self.commit(**({"drive": drive} if drive else {}))
+        sha = self.commit(**dict({"drive": drive} if drive else {}, **(commands or {})))
         r = self.start(sha)
         self.assertEqual(r.returncode, 0, r.stderr)
         rid = json.loads(r.stdout)["receipt_id"]
@@ -483,13 +672,38 @@ class EgressTests(RunFixture):
         # One before the first canary and one after serve was gone, at the least.
         self.assertGreaterEqual(beats["fired"], 2, egress)
         self.assertGreaterEqual(egress["attach"]["seen"], 1, egress)
+        # A canary is a round of three connections (claude-config#3319), and the receipt counts them
+        # by connection: a whole number of rounds was fired, and no more were seen than fired.
+        self.assertEqual(canaries["fired"], 3 * canaries["rounds"], egress)
+        self.assertGreaterEqual(canaries["rounds"], 2, egress)  # the start canary and the end canary
+        self.assertLessEqual(canaries["seen"], canaries["fired"], egress)
+        self.assertEqual(sum(canaries["unseen"].values()), canaries["fired"] - canaries["seen"], egress)
         if beats["reported"] < beats["fired"] or canaries["seen"] < canaries["fired"]:
             # Said in the test's own output, so a run of the suite shows which arm each test took.
-            sys.stderr.write("[this Mac withheld %d of %d test connections and %d of %d canaries; the run read %s] "
+            sys.stderr.write("[this Mac withheld %d of %d test connections and %d of %d canary connections %s;"
+                             " the run read %s] "
                              % (beats["fired"] - beats["reported"], beats["fired"],
-                                canaries["fired"] - canaries["seen"], canaries["fired"], egress["verdict"]))
+                                canaries["fired"] - canaries["seen"], canaries["fired"],
+                                json.dumps(canaries["unseen"], sort_keys=True), egress["verdict"]))
             return True
         return False
+
+    def assert_only_what_was_seen_on_a_mac_that_withheld(self, rid, sha, egress, made, refusable=()):
+        """The withheld arm of a run whose fixture made connections off this machine: `made` is every
+        (process, port) it made that leaves, `refusable` the refused entries its drive call can
+        produce. Some of their reports may never have been written, so the run shows a part of them
+        and never anything else. Seeing any of them it reads not-clean, with the gap said beside
+        it; seeing none it reads unmeasured. Either way the merge is refused, and it is never clean."""
+        seen = set(self.left(egress))
+        self.assertLessEqual(seen, set(made), egress)
+        self.assertLessEqual(set(self.refused(egress)), set(refusable), egress)
+        if not seen:
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
+        self.assertEqual(egress["verdict"], "not-clean", egress)
+        self.assertIn(WITHHELD, egress["why"])
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual(out["decision"], "refuse")
+        self.assertEqual(sorted({p["kind"] for p in out["problems"]}), ["egress-not-clean"])
 
     def assert_unmeasured_because_reports_were_withheld(self, rid, sha, egress):
         """What a run reads on a Mac that withheld a report: unmeasured, saying so, and no merge."""
@@ -597,6 +811,239 @@ class EgressTests(RunFixture):
             return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
         self.assertEqual(egress["verdict"], "not-clean", egress)
         self.assertIn("port 9", egress["why"])
+        if self.withheld(egress):  # what was seen is never downgraded, and the gap is said beside it
+            self.assertIn(WITHHELD, egress["why"])
+
+    # The one refusal (claude-config#3319).
+    # The helper browser a drive call starts asks, before its first address lookup, whether a fixed
+    # public IPv6 address could be reached: a UDP connect to port 443 that sends nothing and that the
+    # monitor could never name, so every run with a browser was not clean. The drive profile refuses
+    # that one kind of connection for that one executable, and each refusal is written into the record.
+    # 198.51.100.1 is TEST-NET-2 and 192.0.2.1 TEST-NET-1: reserved, so no real host is contacted.
+    #
+    # These runs go through the real sandbox too, so they read by the same rule as the four above
+    # (claude-config#3576): what the kernel DID to a connection (the program's own words, in
+    # drive-out) is asserted on every Mac, since no report is needed for it. What the run READ is
+    # asserted in full where every report the monitor asked for arrived, and on a Mac whose receipt
+    # shows one withheld it is unmeasured, or not-clean for whatever was seen, and never clean.
+
+    def stand_in(self, name):
+        """A real executable whose file is called `name` (a copy of perl), and the script it runs."""
+        bindir = os.path.join(self.fake, "bin")
+        os.makedirs(bindir, exist_ok=True)
+        path = os.path.join(bindir, name)
+        shutil.copy("/usr/bin/perl", path)
+        r = subprocess.run([path, "-MSocket", "-e", "1"], capture_output=True, text=True)
+        if r.returncode != 0:
+            self.skipTest("UNMEASURED, not passed: a copy of perl named %s does not run here (exit %d: %s)"
+                          % (name, r.returncode, r.stderr.strip()[:200]))
+        with open(os.path.join(self.fake, "connect.pl"), "w") as f:
+            f.write(CONNECT_PL)
+
+    def udp(self, program, *specs, out="drive-out"):
+        """The shell words that have `program` try one UDP connect per "<address>,<port>"."""
+        return '"$FAKE_DIR/bin/%s" "$FAKE_DIR/connect.pl" %s > "$FAKE_DIR/%s"' % (program, " ".join(specs), out)
+
+    def said(self, name="drive-out"):
+        with open(os.path.join(self.fake, name)) as f:
+            return f.read().splitlines()
+
+    def events(self, rid, *kinds):
+        with open(os.path.join(self.home, "receipts", rid, "egress.jsonl")) as f:
+            return [e for e in map(json.loads, f) if e.get("event") in kinds]
+
+    def left(self, egress):
+        """(process, port) of every connection the receipt says left this machine, named or not."""
+        return sorted([(u["process"], u["port"]) for u in egress["unnamed"]]
+                      + [(p, d["port"]) for d in egress["destinations"] for p in d["processes"]])
+
+    def refused(self, egress):
+        return [(r["process"], r["port"], r["by_the_rule"]) for r in egress["refused"]]
+
+    @STAND_IN
+    def test_the_helper_browsers_udp_443_is_refused_and_recorded_and_the_run_is_clean(self):
+        self.stand_in(BROWSER)
+        rid, sha, rec = self.run_to_receipt("local", commands={"drive": self.udp(BROWSER, "198.51.100.1,443")})
+        self.assertEqual(self.said(), ["198.51.100.1,443 failed: Operation not permitted"])
+        egress = rec["egress"]
+        self.assertEqual((egress["destinations"], egress["unnamed"]), ([], []), egress)
+        if self.withheld(egress):
+            self.assertIn(self.refused(egress), ([], [(BROWSER, 443, True)]), egress)
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
+        self.assertEqual(egress["verdict"], "clean", egress)
+        self.assertEqual(self.refused(egress), [(BROWSER, 443, True)])
+        self.assertGreaterEqual(egress["refused"][0]["reports"], 1)
+        self.assertIn("refused", egress["why"])
+        written = self.events(rid, "refused", "report")
+        self.assertEqual([(e["event"], e["process"], e["port"]) for e in written], [("refused", BROWSER, 443)])
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual((out["problems"], out["decision"]), ([], "allow"))
+
+    def reported(self, rid):
+        """(process, port) of every connection the record says left this machine. Never a count: the
+        kernel collapses repeats of one line, so a count is a lower bound."""
+        return sorted({(e["process"], e["port"]) for e in self.events(rid, "report")})
+
+    @STAND_IN
+    def test_the_helper_browser_on_every_other_route_is_still_reported_and_not_clean(self):
+        # The control: the same executable, off this machine, on every route but the refused one.
+        # UDP one port over, UDP on another port, and TCP to port 443 itself, which is where a page
+        # lands when HTTP/3 is refused. Each is let through and reported, the run is not clean, and
+        # the refusal beside them is counted apart.
+        self.stand_in(BROWSER)
+        rid, sha, rec = self.run_to_receipt("local", commands={"drive": self.udp(
+            BROWSER, "198.51.100.1,443", "198.51.100.1,9", "198.51.100.1,8443", "192.0.2.1,443,tcp")})
+        self.assertEqual(self.said(), ["198.51.100.1,443 failed: Operation not permitted", "198.51.100.1,9 connected",
+                                       "198.51.100.1,8443 connected", "192.0.2.1,443,tcp started"])
+        egress = rec["egress"]
+        if self.withheld(egress):
+            return self.assert_only_what_was_seen_on_a_mac_that_withheld(
+                rid, sha, egress, [(BROWSER, 9), (BROWSER, 443), (BROWSER, 8443)], [(BROWSER, 443, True)])
+        self.assertEqual(egress["verdict"], "not-clean", egress)
+        self.assertEqual(sorted(set(self.left(egress))), [(BROWSER, 9), (BROWSER, 443), (BROWSER, 8443)])
+        self.assertEqual(self.refused(egress), [(BROWSER, 443, True)])
+        self.assertEqual(self.reported(rid), [(BROWSER, 9), (BROWSER, 443), (BROWSER, 8443)])
+        self.assertEqual([(e["process"], e["port"]) for e in self.events(rid, "refused")], [(BROWSER, 443)])
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual(out["decision"], "refuse")
+        self.assertEqual(sorted({p["kind"] for p in out["problems"]}), ["egress-not-clean"])
+
+    @STAND_IN
+    def test_another_program_in_a_drive_call_is_not_refused_and_is_reported_as_before(self):
+        # Every route, the refused one included: under the profile of drive calls a program that is
+        # not the helper browser is refused nothing, and nothing it does goes unreported. With one
+        # line fewer in that profile its UDP connect to port 443 passed in silence (macOS 26.6.2).
+        # Two programs, so the two connections to port 443 are two lines no count could merge.
+        self.stand_in("other-program")
+        self.stand_in("other-by-tcp")
+        rid, sha, rec = self.run_to_receipt("local", commands={"drive": "%s; %s" % (
+            self.udp("other-program", "198.51.100.1,443", "198.51.100.1,9"),
+            self.udp("other-by-tcp", "192.0.2.1,443,tcp", out="drive-out-tcp"))})
+        self.assertEqual(self.said(), ["198.51.100.1,443 connected", "198.51.100.1,9 connected"])
+        self.assertEqual(self.said("drive-out-tcp"), ["192.0.2.1,443,tcp started"])
+        egress = rec["egress"]
+        everything = [("other-by-tcp", 443), ("other-program", 9), ("other-program", 443)]
+        self.assertEqual(self.events(rid, "refused"), [])
+        if self.withheld(egress):
+            return self.assert_only_what_was_seen_on_a_mac_that_withheld(rid, sha, egress, everything)
+        self.assertEqual(egress["verdict"], "not-clean", egress)
+        self.assertEqual(sorted(set(self.left(egress))), everything)
+        self.assertEqual(self.reported(rid), everything)
+        self.assertEqual(egress["refused"], [])
+        self.assertEqual(self.events(rid, "refused"), [])
+
+    @STAND_IN
+    def test_the_served_app_running_the_same_executable_is_not_refused(self):
+        # The rule is in the drive profile only. Serve's tree runs an executable with the browser's
+        # name, makes the same connection, and it is allowed and reported as it always was.
+        self.stand_in(BROWSER)
+        serve = self.udp(BROWSER, "198.51.100.1,443", out="serve-out") + "; exec python3 scripts/fake_serve.py"
+        rid, sha, rec = self.run_to_receipt("local", commands={"serve": serve})
+        self.assertEqual(self.said("serve-out"), ["198.51.100.1,443 connected"])
+        egress = rec["egress"]
+        self.assertEqual(egress["refused"], [])
+        if self.withheld(egress):
+            return self.assert_only_what_was_seen_on_a_mac_that_withheld(rid, sha, egress, [(BROWSER, 443)])
+        self.assertEqual(egress["verdict"], "not-clean", egress)
+        self.assertEqual(self.left(egress), [(BROWSER, 443)])
+
+    @STAND_IN
+    def test_udp_to_port_443_on_this_machine_is_not_refused(self):
+        self.stand_in(BROWSER)
+        rid, sha, rec = self.run_to_receipt(
+            "local", commands={"drive": self.udp(BROWSER, "127.0.0.1,443", "::1,443")})
+        self.assertEqual(self.said(), ["127.0.0.1,443 connected", "::1,443 connected"])
+        egress = rec["egress"]
+        self.assertEqual((egress["refused"], egress["destinations"], egress["unnamed"]), ([], [], []))
+        if self.withheld(egress):
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
+        self.assertEqual(egress["verdict"], "clean", egress)
+
+    @STAND_IN
+    def test_a_connection_that_closed_is_not_excused_by_one_to_this_machine_on_the_same_port(self):
+        # Why a report is never read as local from what lsof shows (pull request 3570). One program
+        # holds a TCP connection to this machine on a port and, on the same port, makes a UDP connect
+        # off this machine that has closed before lsof runs. The report names the process and the
+        # port, and all lsof can show for them is the connection to this machine. On a Mac that
+        # reports no connection to this machine (macOS 26.6.2) the report is the one that left; on
+        # one that reports them too (macOS 27.2, in a drive call) there are two reports and nothing
+        # says which is which. Either way the run is not clean, and the record says what was seen.
+        self.stand_in("other-program")
+        with open(os.path.join(self.fake, "same-port.pl"), "w") as f:
+            f.write(SAME_PORT_PL)
+        rid, sha, rec = self.run_to_receipt("local", commands={
+            "drive": '"$FAKE_DIR/bin/other-program" "$FAKE_DIR/same-port.pl" > "$FAKE_DIR/drive-out"'})
+        said = self.said()
+        self.assertEqual(len(said), 2, said)
+        port, left = said[0].split(" ", 1)
+        port = int(port)
+        self.assertEqual(left, "connected")
+        egress = rec["egress"]
+        self.assertNotEqual(egress["verdict"], "clean", egress)
+        self.assertEqual((egress["destinations"], egress["refused"]), ([], []), egress)
+        if said[1] != "read":
+            # The report never reached the record, which only a Mac that withheld it may do.
+            self.assertTrue(self.withheld(egress), egress)
+            return self.assert_only_what_was_seen_on_a_mac_that_withheld(rid, sha, egress, [("other-program", port)])
+        self.assertEqual(egress["verdict"], "not-clean", egress)
+        self.assertEqual([(u["process"], u["port"], u["name_error"], u["this_machine"]) for u in egress["unnamed"]],
+                         [("other-program", port, None, ["127.0.0.1"])], egress)
+        self.assertIn("other-program port %d" % port, egress["why"])
+        self.assertIn("was to this machine (127.0.0.1)", egress["why"])
+        self.assertNotIn("closed before it could be read", egress["why"])
+        seen = self.events(rid, "report")
+        self.assertEqual({(e["process"], e["port"], tuple(e["addresses"]), tuple(e["this_machine"])) for e in seen},
+                         {("other-program", port, (), ("127.0.0.1",))}, seen)
+        if self.withheld(egress):  # what was seen is never downgraded, and the gap is said beside it
+            self.assertIn(WITHHELD, egress["why"])
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual(out["decision"], "refuse")
+        self.assertEqual(sorted({p["kind"] for p in out["problems"]}), ["egress-not-clean"])
+
+    def with_a_real_browser(self, goes=None):
+        path, why = real_browser()
+        if not path:
+            self.skipTest("UNMEASURED, not passed: %s" % why)
+        self.extra_env = dict(self.extra_env, FAKE_BROWSER=path, FAKE_BROWSER_FLAGS=json.dumps(BROWSER_FLAGS),
+                              **({"FAKE_BROWSER_GOES": goes} if goes else {}))
+
+    def test_a_real_helper_browser_launch_ends_clean_with_its_probe_refused_and_recorded(self):
+        self.with_a_real_browser()
+        rid, sha, rec = self.run_to_receipt("local", commands={"drive": "python3 scripts/drive_browser.py"})
+        self.assertEqual(self.said(), ["page loaded"])
+        egress = rec["egress"]
+        self.assertEqual((egress["destinations"], egress["unnamed"]), ([], []), egress)
+        self.assertEqual(self.events(rid, "report"), [])
+        if self.withheld(egress):
+            # The record of the refusal is a line this Mac may not have written either.
+            self.assertIn(self.refused(egress), ([], [(BROWSER, 443, True)]), egress)
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
+        self.assertEqual(egress["verdict"], "clean", egress)
+        self.assertEqual(self.refused(egress), [(BROWSER, 443, True)])
+        self.assertGreaterEqual(len(self.events(rid, "refused")), 1)
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual((out["problems"], out["decision"]), ([], "allow"))
+
+    def test_a_real_helper_browser_reaching_outside_by_tcp_is_still_not_clean(self):
+        # The control with the real browser: a TCP connection to an address off this machine is
+        # reported, named and not clean, whatever the refusal rule did to its probe.
+        self.with_a_real_browser(goes="outside")
+        rid, sha, rec = self.run_to_receipt("local", commands={"drive": "python3 scripts/drive_browser.py"})
+        egress = rec["egress"]
+        named = [d for d in egress["destinations"] if d["address"] == "192.0.2.1"]
+        if not named:
+            # Only a Mac that withheld reports may fail to name it, and then the run is never clean.
+            self.assertTrue(self.withheld(egress), (self.said(), egress))
+            return self.assert_only_what_was_seen_on_a_mac_that_withheld(
+                rid, sha, egress, [(BROWSER, 8080)], [(BROWSER, 443, True)])
+        self.assertEqual(self.said(), ["192.0.2.1 named"])
+        self.assertEqual(egress["verdict"], "not-clean", egress)
+        self.assertEqual([(d["port"], d["processes"], d["allowed"]) for d in named], [(8080, [BROWSER], False)])
+        if self.withheld(egress):  # what was seen is never downgraded, and the gap is said beside it
+            self.assertIn(WITHHELD, egress["why"])
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual(out["decision"], "refuse")
+        self.assertIn("192.0.2.1", out["text"])
 
     @MEASURED
     def test_a_beat_program_that_cannot_be_signed_leaves_unmeasured(self):
@@ -642,6 +1089,7 @@ class EgressTests(RunFixture):
         self.assertEqual(egress["verdict"], "unmeasured", egress)
         self.assertIn("canary", egress["why"])
         self.assertIsNone(rec.get("egress_sandbox"), "serve must not run under a profile nothing reads")
+        self.assertIsNone(rec.get("egress_drive_sandbox"), "nor a drive call under one that refuses unseen")
         if rec.get("egress_monitor_pgid"):
             self.assertEqual(live_members(rec["egress_monitor_pgid"]), [])
 

@@ -122,23 +122,71 @@ cleanup step that also failed, which `start` reports too, as `start-cleanup-fail
 
 The receipt's `egress` is the verdict of the egress monitor, [scripts/egress.py](scripts/egress.py),
 which the run's supervisor starts before serve and settles after serve's whole process group is
-gone. Serve and every drive call run under macOS's `sandbox-exec` with a profile that blocks
-nothing but reports each connection to an address other than loopback; `log stream` reads the
-reports (no password), and `lsof` names each one's remote address the moment it arrives. A
-canary connection, a UDP connect to the reserved address 198.51.100.1 that sends no packet,
-proves the stream live at the start and again at the end. The field holds `verdict`, `why`,
-`allowed_hosts`, `destinations` (each `{address, port, reports, processes, allowed}`) and
-`unnamed` (connections whose address was never read, each with `name_error`: null when the
-connection closed before lsof could read it, else why lsof could not). `clean` means the monitor
-was proved live for the whole run, every report it asked for itself arrived, and every destination
-was allowed; `not-clean` names what was reached, and an unnamed connection is never clean;
-`unmeasured` gives the reason the monitor could not see (not a Mac, `sandbox-exec` missing or
-refused, the canary never reported, a report the monitor asked for never arrived, the supervisor
-killed). A request body or header is never recorded: the monitor never sees one. Two limits,
-stated: a serve or drive helper that applies its own macOS sandbox fails under this one, which
-shows as serve stopping, and the kernel collapses repeated reports, so `reports` is a lower bound.
-`egress.jsonl` beside the receipt is the monitor's own log of every report as it arrived, and of
-every canary and test connection as it was made.
+gone. Serve and every drive call run under macOS's `sandbox-exec` with a profile that reports each
+connection to an address other than loopback; `log stream` reads the reports (no password), and
+`lsof` names each one's remote address the moment it arrives. A canary connection, a UDP connect to
+the reserved address 198.51.100.1 that sends no packet, proves the stream live at the start and
+again at the end. The field holds `verdict`, `why`, `allowed_hosts`, `destinations` (each
+`{address, port, reports, processes, allowed}`), `unnamed` (connections whose address was never
+read, each with `name_error`, why lsof could not read the process or null when it could, and
+`this_machine`, the loopback addresses the process held on that port: empty when it held nothing
+there, so the connection had closed before lsof could read it) and `refused` (below). An entry
+whose `this_machine` is not empty is a report for which the only connection lsof saw on that port
+was one to this machine itself. It is not counted as local and the run is `not-clean`: a report
+names a process and a port and never an address, so it cannot be told from a report for a
+connection to another host that had already closed while the process held one to this machine on
+the same port. macOS 26.6.2 reports no connection to this machine, so there it is always that.
+macOS 27.2 does report one, for TCP in a drive call (measured 2026-11-25), so there a drive helper
+that opens a page served on this machine reads `not-clean` this way until the profile of drive
+calls is changed for it, which is not done yet.
+
+`clean` means the monitor was proved live for the whole run,
+every report it asked for itself arrived, and every destination was allowed; `not-clean` names what
+was reached, and an unnamed connection is never clean; `unmeasured` gives the reason the monitor
+could not see (not a Mac, `sandbox-exec` missing or refused, the canary never reported, a report
+the monitor asked for never arrived, the supervisor killed). A request body or header is never
+recorded: the monitor never sees one. Two limits, stated: a serve or drive helper that applies its
+own macOS sandbox fails under this one, which shows as serve stopping, and the kernel collapses
+repeated reports, so `reports` is a lower bound. `egress.jsonl` beside the receipt is the monitor's
+own log of every report and every refusal as it arrived, and of every canary and test connection
+as it was made.
+
+Serve's profile blocks nothing. The profile of drive calls refuses one kind of connection and
+nothing else (#3319, Dan's decision of 2026-11-24): a UDP connect to port 443 on any address but
+loopback, by a process whose executable file is named `chrome-headless-shell`, the helper browser a
+drive helper starts. That browser asks, before its first address lookup, whether a fixed public
+IPv6 address could be reached. The attempt sends nothing and closes before `lsof` can read it, so
+it used to make every run with a browser `not-clean`. Refused, it never leaves, so `clean` still
+means nothing left this machine for a host outside the allowed ones. What follows from the rule:
+
+- Each refused attempt is recorded: a `refused` event in `egress.jsonl` (a connection that left is
+  a `report` event, never the same kind), and an entry in the receipt's `refused`, each
+  `{process, port, reports, pids, by_the_rule, mismatch}`. `why` says how many were refused, on a
+  clean verdict and on a not clean one, apart from what left.
+- The kernel's own word, `allow` or `deny`, decides which event a line is, never the message it
+  carries. A line where the two disagree is nothing either profile is written to produce, so it is
+  recorded with `mismatch` true and the run is `not-clean`: `allow` under the refusal's message is
+  a connection that left, a `report` event judged like any other and never clean whatever host it
+  reached, and `deny` under the reporting message is a `refused` event whose entry has
+  `by_the_rule` false. `why` names each.
+- Nothing else newly passes. The same browser over TCP, or over UDP to any other port, is reported
+  and judged as before, and so is the same connection by any other program in a drive call and by
+  anything serve starts, an executable of the same name included.
+- A page or app that would use HTTP/3, which is UDP on port 443, falls back in that browser to
+  HTTP over TCP, which is reported. UDP to port 443 on loopback is not refused.
+- The rule knows the browser only by the file name of its executable. Any program a drive helper
+  starts from a file with that name gets the same refusal, and a helper browser under another name
+  (a full Chrome, WebKit) gets none, so its probe is still reported.
+- It fails closed. What a compiled profile reports cannot be read off its text (measured: with one
+  line fewer, another program's UDP connect to port 443 was let through with no report), so each
+  canary is three processes. One runs under serve's profile, as before. One runs under the exact
+  profile of drive calls as a program that is not the browser and tries the refused kind of
+  connection: it must be let through and reported. One runs under the rule aimed at itself: it must
+  be refused, and the refusal must reach the report stream. If any of the three is missing, or
+  either profile cannot be written, the verdict is `unmeasured` with that reason. A refusal that
+  cannot be written to `egress.jsonl` stops the reader, which is `unmeasured` too. A refusal under
+  this run's tag that the rule could not have produced (another process name or port, where
+  `by_the_rule` is false) is `not-clean`.
 
 A Mac may not write every report it is asked for (#3576). Measured on macOS 26.6.2 on 2026-11-24:
 in each window of about a minute the kernel did not write 8 of the reports for programs not
@@ -151,8 +199,11 @@ program make a test connection of the canary's kind before the first canary, abo
 for the whole run, and once more after serve is gone; the copy is removed when the run stops.
 The receipt's `egress` records what was asked for and what came back: `beats` (`fired`,
 `reported`, the first 20 `unreported`, and `failure` when the beat program could not be made or
-run, or ended badly), `canaries` (`fired`, `seen`) and `attach` (the canaries that show the stream
-is attached before anything is counted). One test connection or canary that was never reported
+run, or ended badly), `canaries` and `attach` (the canaries that show the stream is attached before
+anything is counted). `canaries` counts by connection, since each canary is a round of three (see
+above): `rounds`, then `fired`, `seen` and `unseen` (how many under each of `serve`, `drive` and
+`refusal`). One test connection or canary connection that was never seen, whichever of a round's
+three it was and whether or not a later round arrived whole,
 makes the run `unmeasured`, saying that this Mac did not report every connection it was asked to,
 and so does a beat program that could not be made or started, or that ended badly: the monitor
 reads its exit status when it stops, and one that had ended by itself before the run was over,
