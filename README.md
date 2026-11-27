@@ -6368,6 +6368,9 @@ whatever state `lib/hook-notice.sh` is in beside the hook, since a hook that pri
 the command: when the library is missing, is a copy with no `_hn_decision_json` (the private builder
 a refusal is made with), or that builder prints anything but one whole refusal, the hook writes the
 refusal itself, without the characters that need escaping, and says which of the three it found.
+A refusal written that way is the decision alone: a notice the library would have put beside it
+(the one about pre-allowed Salesforce writes) is said inside the refusal's reason, since only the
+library builds a notice (#1906).
 `read-only-query-allow.sh` approves no such command either. A reader that cannot be asked at all is
 still asked about, since no rewriting helps, and so is a push whose earlier dry run held such a
 line. Over 105,627 Bash calls recorded on the personal MacBook (86,010 distinct commands, 2026-11-26)

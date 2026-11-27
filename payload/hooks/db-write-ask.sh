@@ -197,12 +197,16 @@ refuse_json() {
 }
 
 # refuse_plain <reason> <notice> <why>: a refusal built with no library, keeping only characters
-# that need no escaping, so the object is valid whatever the two texts held. <why> says, after
-# each, why it is written this way; it is this hook's own text and holds no such character.
+# that need no escaping, so the object is valid whatever the two texts held. <why> says, at the
+# end, why it is written this way; it is this hook's own text and holds no such character.
+# The object has one field, the decision. The notice is said inside the reason, after it, and
+# never as a systemMessage beside the decision: that field is built by the library alone
+# (claude-config#1906; the scan in test-hook-notice.sh failed on one built here), and a refusal
+# is read by the session whether or not anything is shown beside it.
 refuse_plain() {
   local r="${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}" n="${2:-}" why="$3"
   n="${n//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
-  printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "%s (%s)"}%s}\n' "$r" "$why" "${n:+, \"systemMessage\": \"$n ($why)\"}"
+  printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "%s%s (%s)"}}\n' "$r" "${n:+ $n}" "$why"
 }
 
 # The screen: a payload holding none of these words, in any case, names no database call.

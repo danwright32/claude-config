@@ -564,9 +564,10 @@ def shown(by, command, cwd, t=None, home_dir=None, sent=None):
 stood = []
 
 
-def refused(label, by, command, cwd, t, holds, lacks=(), home_dir=None, notice=()):
+def refused(label, by, command, cwd, t, holds, lacks=(), home_dir=None, notice=(), bare=False):
     """One case: the hook by refuses command, in one JSON object that holds every text of holds in
-    its reason and none of lacks, and every text of notice in the notice beside it."""
+    its reason and none of lacks, and every text of notice in the notice beside it. With bare, the
+    object holds no notice beside the refusal at all."""
     got, reason, message, out = shown(by, command, cwd, t, home_dir)
     if got != "deny rc=0":
         verdict = "wanted deny rc=0, got %s: %s" % (got, (reason or out)[:400])
@@ -576,6 +577,8 @@ def refused(label, by, command, cwd, t, holds, lacks=(), home_dir=None, notice=(
         verdict = "the refusal holds %s: %s" % ([w for w in lacks if w in reason], reason[:700])
     elif [w for w in notice if w not in message]:
         verdict = "the notice beside the refusal does not say %s: %s" % ([w for w in notice if w not in message], message[:500])
+    elif bare and "systemMessage" in out:
+        verdict = "the refusal written without the library builds a notice beside it by hand: %s" % out[-500:]
     else:
         verdict = "ok"
     stood.append((verdict, label))
@@ -627,14 +630,22 @@ for name, text, why in (("odd-renamed", RENAMED, NO_BUILDER), ("odd-gone", GONE,
             % ("left out" if text is GONE else "holding no _hn_decision_json"),
             beside(name, text, ODD_TAIL), CLOSE, work, None,
             (SAYS["close"], "Write it as ab so,on two lines", why), ('"', "'", "\\", "\t", "\n"))
-# The notice a question carries beside it is carried by a refusal built this way too.
+# The notice a question carries beside it is carried by a refusal too. Beside the real library it
+# is the library's own notice beside the refusal. A refusal written without the library says it
+# inside its reason and builds no notice of its own: a notice is built only by the library
+# (claude-config#1906, whose scan in test-hook-notice.sh failed on one built here).
 sf_home = os.path.join(work, "sf-home")
 os.makedirs(os.path.join(sf_home, ".claude"))
 write(os.path.join(sf_home, ".claude", "settings.local.json"),
       json.dumps({"permissions": {"allow": ["mcp__claude_ai_SFDC_USE__createSobjectRecord"]}}))
-refused("beside a notice library with no _hn_decision_json, a refusal carries the notice about pre-allowed Salesforce "
-        "writes", renamed, CLOSE, work, None, SAID + (NO_BUILDER,), home_dir=sf_home,
-        notice=("SALESFORCE WRITES SKIP AUTO MODE", "mcp__claude_ai_SFDC_USE__createSobjectRecord", NO_BUILDER))
+SF_SAID = ("SALESFORCE WRITES SKIP AUTO MODE", "mcp__claude_ai_SFDC_USE__createSobjectRecord")
+refused("(control) beside the real notice library, a refusal carries the notice about pre-allowed Salesforce writes "
+        "beside it", hook, CLOSE, work, None, SAID, home_dir=sf_home, notice=SF_SAID)
+for by, state, why in ((renamed, "with no _hn_decision_json", NO_BUILDER),
+                       (beside("gone", GONE), "left out", "lib/hook-notice.sh is missing")):
+    refused("beside a notice library %s, a refusal says the notice about pre-allowed Salesforce writes inside its "
+            "reason, and builds no notice beside it by hand" % state, by, CLOSE, work, None,
+            SAID + SF_SAID + (why,), home_dir=sf_home, bare=True)
 # The hook's other broken states, on that same command: each asks, as it did before #3472 and
 # after it, since no rewriting of the command mends any of them. None passes it in silence.
 asked("with lib/db-write-calls.py one python3 cannot load, a delete behind a heredoc the reader cannot find the end of "
@@ -794,7 +805,7 @@ while IFS=$'\t' read -r verdict label; do
   if [ -n "$label" ]; then check "#3472 $label" "$verdict"; elif [ -n "$verdict" ]; then check "#3472 the cases program said something that is not a case" "${verdict:0:300}"; fi
 done <<< "$rows"
 # A program that stopped early checks nothing and would read as a pass (L288).
-WANT_RAN=223
+WANT_RAN=225
 [ "$ran" = "$WANT_RAN" ] && check "#3472 all $WANT_RAN cases ran" ok || check "#3472 all $WANT_RAN cases ran" "ran: ${ran:-none}; ${rows: -300}"
 
 # With no python3 on PATH nothing can be read at all, so the same command, a delete behind a
