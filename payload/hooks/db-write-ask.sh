@@ -186,9 +186,14 @@ payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 #
 # It is checked in two steps, since this hook may not write the notice field's name: a notice is
 # built by the library alone, and test-hook-notice.sh fails on a hook that names the field (#1906).
-#   1. refusal_shape reads the text with Python's JSON reader and answers "alone" for a
-#      refusal with no other key, "beside" for one with exactly one other key holding a text, and
-#      nothing for everything else. It never learns that key's name.
+#   1. refusal_shape reads the text as strict UTF-8 and then with Python's JSON reader, and
+#      answers "alone" for a refusal with no other key, "beside" for one with exactly one other
+#      key holding a text, and nothing for everything else. It never learns that key's name. For
+#      a refusal that is alone this step is all that decides, so its two rules on what stands
+#      inside the decision (only the event, the decision and a reason; every value a text) each
+#      have their own cases in section 7 of test-db-write-ask-unsure-line.sh (the third review of
+#      #3793 took both out and that suite still passed). Strict UTF-8 matters for one form: a
+#      lone surrogate written as three bytes, which the JSON reader takes when handed bytes.
 #   2. A refusal that is alone is passed on. One with a key beside it is passed on only when the
 #      library's hook_decision_verdict, the one place that names the key allowed there, is a
 #      function, returned 0 and said nothing. Beside a library with no such function (an older
@@ -203,12 +208,16 @@ payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 # a brace, two objects on two lines, a raw line break inside the reason and an ask holding a deny
 # under another key all went out as the refusal (section 7 of test-db-write-ask-unsure-line.sh
 # holds every case named here). The hook reaches a refusal only through its classifier, which is
-# python3, so python3 is there. What a refusal costs in python3 starts: none when refuse_plain is
-# used for a missing library or a library with no hook_deny_json; one for a refusal with no
-# notice, and for a text that is no refusal, which refuse_plain then replaces; two for a refusal
-# that carries a notice, the second inside the library. A python3 that cannot start, or says
-# nothing, judges nothing, so refuse_plain's object goes out. Whatever happens, exactly one
-# object is printed, and it is a refusal.
+# python3, so python3 is there. What a refused command costs in python3 starts, all of them
+# counted (the third review measured it with a counting stand in): the classifier is one. Beside
+# a missing library, or one with no hook_deny_json, that is all. Beside the real library its
+# builder is a second, and this check adds a third for a refusal with no notice and a fourth for
+# one that carries a notice, the fourth inside hook_decision_verdict. A text that is no refusal
+# costs the check one start before refuse_plain replaces it, and a builder that printed nothing
+# costs the check none, since refusal_shape returns before it reaches python3. A python3 that
+# cannot start, or says nothing, judges nothing, so refuse_plain's object goes out. Whatever
+# happens once the classifier has asked for a refusal, exactly one object is printed, and it is
+# a refusal.
 #
 # refusal_shape itself is written further down, below the place where this hook asks whether
 # python3 is there and names it when it is not: test-gate-payload-reader.sh holds every hook that
@@ -324,7 +333,7 @@ raw = sys.stdin.buffer.read()
 if not (raw.startswith(b"{") and raw.endswith(b"}")):
     sys.exit(1)
 try:
-    d = json.loads(raw, object_pairs_hook=once)
+    d = json.loads(raw.decode("utf-8"), object_pairs_hook=once)
 except Exception:
     sys.exit(1)
 h = d.get("hookSpecificOutput")

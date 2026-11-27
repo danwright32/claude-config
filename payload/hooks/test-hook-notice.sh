@@ -380,6 +380,33 @@ for text in '' "$(printf '{"hookSpecificOutput": %s}\n{"hookSpecificOutput": %s}
   v="$(decision_verdict "$PATH" "$text" deny)"
   said_no "$v" && ok || bad "#3793 hook_decision_verdict did not say why and return 1 for an empty text, two refusals on two lines or a raw line break in the reason: ${v//$'\n'/ / }"
 done
+# Bytes that are not UTF-8 in a form Python's JSON reader takes when it is handed bytes: a lone
+# surrogate written as the three bytes ED A0 80 (the third review of #3793). The function reads
+# the text as strict UTF-8 first, so it refuses one in the reason and one in the notice. The
+# library's two arms differ on such bytes. python3 replaces them as it builds, so what that arm
+# built is taken. The arm with nothing on PATH cannot tell them from text: it writes the bytes it
+# was given, less any byte the shell's locale counts as a control character, which differs by
+# platform. So that arm is held to the one thing that is true everywhere: what it built is taken
+# only when it is UTF-8, and the suite says which of the two it met here.
+DV_SUR="$(printf '\355\240\200')"
+[ "$(printf '%s' "$DV_SUR" | wc -c | tr -d ' ')" = 3 ] && ok || bad "#3793 (control) the lone surrogate this suite writes is not the three bytes ED A0 80"
+for text in "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"r $DV_SUR\"}}" "{\"hookSpecificOutput\": $DV_D, \"systemMessage\": \"n $DV_SUR\"}"; do
+  v="$(decision_verdict "$PATH" "$text" deny)"
+  said_no "$v" && ok || bad "#3793 hook_decision_verdict did not say why and return 1 for a refusal whose reason or notice holds a lone surrogate written as three bytes: ${v//$'\n'/ / }"
+done
+for arm in "$PATH" "$WORK/empty"; do
+  built="$(env PATH="$arm" HN_A="r $DV_SUR" HN_B="n $DV_SUR" "$BASH" -c '. "$0" && hook_deny_json "$HN_A" "$HN_B"' "$LIB" 2>/dev/null)"
+  v="$(decision_verdict "$PATH" "$built" deny)"
+  if [ "$arm" = "$PATH" ]; then
+    [ "$v" = "rc=0" ] && printf '%s' "$built" | python3 -I -c 'import sys; sys.stdin.buffer.read().decode("ascii")' 2>/dev/null && ok || bad "#3793 built with python3: a refusal whose reason and notice held a lone surrogate written as three bytes did not come out as ASCII with those bytes replaced, or hook_decision_verdict did not take it: ${v//$'\n'/ / }"
+  elif printf '%s' "$built" | python3 -I -c 'import sys; sys.stdin.buffer.read().decode("utf-8")' 2>/dev/null; then
+    echo "  built with nothing on PATH from a lone surrogate written as three bytes: the refusal came out as UTF-8"
+    [ "$v" = "rc=0" ] && ok || bad "#3793 built with nothing on PATH: the refusal came out as UTF-8 and hook_decision_verdict did not take it: ${v//$'\n'/ / }"
+  else
+    echo "  built with nothing on PATH from a lone surrogate written as three bytes: the refusal is not UTF-8"
+    said_no "$v" && ok || bad "#3793 built with nothing on PATH: hook_decision_verdict took a refusal that is not UTF-8: ${v//$'\n'/ / }"
+  fi
+done
 # Each rule seen to fail (L1): a copy of the library with that one rule taken out must take a text
 # the real one refuses. <name> TAB <text in the library> TAB <what it becomes> TAB <the PATH: real
 # or mute> TAB <the text it then takes>.

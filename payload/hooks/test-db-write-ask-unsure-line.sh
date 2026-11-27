@@ -524,6 +524,14 @@ def prints(name, text):
     return NOTICE + "\nhook_deny_json() { cat '%s'; }\n" % write(os.path.join(work, name + ".printed"), text)
 
 
+def prints_bytes(name, data):
+    """The same for bytes that are no text, which write() cannot hold (the third review of #3793)."""
+    path = os.path.join(work, name + ".printed")
+    with open(path, "wb") as f:
+        f.write(data)
+    return NOTICE + "\nhook_deny_json() { cat '%s'; }\n" % path
+
+
 # Five outputs that each start with {, end with } and name deny somewhere, and none of which is the
 # one refusal the library's builder prints. A bash match of { .* "deny" .* } took every one, since a
 # dot there takes a line break too, and the hook passed each on as its refusal.
@@ -611,8 +619,14 @@ def shown(by, command, cwd, t=None, home_dir=None, sent=None):
         h = whole.get("hookSpecificOutput") or {}
     except (ValueError, AttributeError):
         return "badjson rc=%d" % p.returncode, "", "", out
-    return ("%s rc=%d" % (h.get("permissionDecision", "none"), p.returncode), h.get("permissionDecisionReason", ""),
-            whole.get("systemMessage", ""), out)
+    # A reason or a notice that is no text is shown as words that say so: a case that wants a
+    # refusal's words then fails on that one line, where a number here stopped the whole program.
+    reason, message = h.get("permissionDecisionReason", ""), whole.get("systemMessage", "")
+    if not isinstance(reason, str):
+        reason = "(the reason is not a text: %r)" % (reason,)
+    if not isinstance(message, str):
+        message = "(the notice is not a text: %r)" % (message,)
+    return "%s rc=%d" % (h.get("permissionDecision", "none"), p.returncode), reason, message, out
 
 
 stood = []
@@ -733,6 +747,49 @@ for label, name, text, message in (
     refused("(control) beside a notice library whose hook_deny_json prints a whole refusal %s, that refusal is passed "
             "on as it was printed" % label, beside("whole-" + name, prints(name, text)), CLOSE, work, None,
             ("printed by a stand in",), (NO_REFUSAL, NOT_TAKEN, NO_VERDICT), notice=message)
+# A refusal with no key beside it, and something wrong INSIDE its hookSpecificOutput: more than its
+# event, its decision and a reason, or a value that is no text (the third review of #3793). For a
+# refusal that stands alone the hook never asks the library, so its own two rules on what stands
+# inside are all that decides. No case here reached either: with both lines taken out of
+# refusal_shape this suite passed whole, while the hook passed on each of these ten. Claude Code's
+# own reader does not take the NaN one as JSON at all, so that call would have gone ahead.
+
+
+def inside(more):
+    """A whole refusal, alone, with more written inside its hookSpecificOutput."""
+    return '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", %s}}\n' % more
+
+
+STAND_IN = '"permissionDecisionReason": "printed by a stand in"'
+for label, name, text in (
+        ("holding an updatedInput that is an object", "input-object", inside('"updatedInput": {"command": "printed by a stand in"}')),
+        ("holding an updatedInput that is a text", "input-text", inside(STAND_IN + ', "updatedInput": "x"')),
+        ("holding an additionalContext", "context", inside(STAND_IN + ', "additionalContext": "x"')),
+        ("holding the notice field inside the decision", "notice-inside", inside(STAND_IN + ', "systemMessage": "x"')),
+        ("holding an empty key", "empty-key", inside(STAND_IN + ', "": "x"')),
+        ("holding a look alike of the reason beside the reason", "look-alike",
+         inside(STAND_IN + ', "permissionDecisionRe%sson": "x"' % chr(0x430))),
+        ("whose reason is a number", "reason-number", inside('"permissionDecisionReason": 5')),
+        ("whose reason is null", "reason-null", inside('"permissionDecisionReason": null')),
+        ("whose reason is a list", "reason-list", inside('"permissionDecisionReason": ["printed by a stand in"]')),
+        ("whose reason is NaN", "reason-nan", inside('"permissionDecisionReason": NaN'))):
+    refused("beside a notice library whose hook_deny_json prints a refusal alone %s, the same delete is refused in the "
+            "hook's own words, never passed on" % label, beside("inside-" + name, prints(name, text)), CLOSE, work, None,
+            SAID + (NO_REFUSAL,), ("printed by a stand in", "is not a text"), bare=True)
+# Bytes that are not UTF-8 in a form Python's JSON reader takes when it is handed bytes: a lone
+# surrogate written as the three bytes ED A0 80 (the third review of #3793). The hook reads the
+# text as strict UTF-8 first, so such a refusal is replaced, in the reason and in the notice.
+SURROGATE = b"\xed\xa0\x80"
+for label, name, data in (
+        ("whose reason holds a lone surrogate written as three bytes", "surrogate-reason",
+         inside('"permissionDecisionReason": "printed by a stand in @"').encode().replace(b"@", SURROGATE)),
+        ("whose notice holds a lone surrogate written as three bytes", "surrogate-notice",
+         ('{"hookSpecificOutput": %s, "systemMessage": "said beside it @"}\n' % DENY).encode().replace(b"@", SURROGATE))):
+    stood.append(("ok" if SURROGATE in data and data.count(b"@") == 0 else "the stand in text holds no surrogate bytes",
+                  "(control) the stand in refusal %s holds the bytes ED A0 80" % label))
+    refused("beside a notice library whose hook_deny_json prints a whole refusal %s, the same delete is refused in the "
+            "hook's own words, never passed on" % label, beside("bytes-" + name, prints_bytes(name, data)), CLOSE, work,
+            None, SAID + (NO_REFUSAL,), ("printed by a stand in",), bare=True)
 for name, text, why in (("odd-renamed", RENAMED, NO_BUILDER), ("odd-gone", GONE, "lib/hook-notice.sh is missing")):
     refused("with the notice library %s, a refusal whose advice holds quotes, a backslash, a tab and a line break is "
             "still one JSON object, with those characters taken out"
@@ -935,7 +992,7 @@ while IFS=$'\t' read -r verdict label; do
   if [ -n "$label" ]; then check "#3472 $label" "$verdict"; elif [ -n "$verdict" ]; then check "#3472 the cases program said something that is not a case" "${verdict:0:300}"; fi
 done <<< "$rows"
 # A program that stopped early checks nothing and would read as a pass (L288).
-WANT_RAN=249
+WANT_RAN=263
 [ "$ran" = "$WANT_RAN" ] && check "#3472 all $WANT_RAN cases ran" ok || check "#3472 all $WANT_RAN cases ran" "ran: ${ran:-none}; ${rows: -300}"
 
 # With no python3 on PATH nothing can be read at all, so the same command, a delete behind a

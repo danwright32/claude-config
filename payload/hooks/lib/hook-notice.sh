@@ -272,8 +272,11 @@ if not re.search(os.environ["HN_WANT"], m):
     print("the systemMessage does not say /%s/: %r" % (os.environ["HN_WANT"], m[:300]))' 2>&1
 }
 
-# The text travels on stdin, as bytes, so its length meets no limit on an environment and a byte
-# that is not UTF-8 is refused as it is. python3 says one fixed line for a decision it took, and
+# The text travels on stdin, as bytes, so its length meets no limit on an environment. It is read
+# as strict UTF-8 before it is read as JSON, so bytes that are not UTF-8 are refused, a lone
+# surrogate written as three bytes (ED A0 80) included: Python's JSON reader, handed the bytes
+# themselves, takes that one (the third review of #3793). A lone surrogate written as a JSON
+# escape is plain ASCII and is not refused. python3 says one fixed line for a decision it took, and
 # only that line is read as "fine": a python3 that printed nothing judged nothing. A key written
 # twice is refused, since which copy a reader keeps is the reader's choice.
 hook_decision_verdict() {
@@ -301,7 +304,7 @@ def once(pairs):
 if not (raw.startswith(b"{") and raw.endswith(b"}")):
     no("the text does not start with { and end with }: %r" % raw[:300])
 try:
-    d = json.loads(raw, object_pairs_hook=once)
+    d = json.loads(raw.decode("utf-8"), object_pairs_hook=once)
 except Exception as e:
     no("the text is not exactly one JSON object (%s): %r" % (e, raw[:300]))
 h = d.get("hookSpecificOutput")
