@@ -195,7 +195,7 @@ const ROOT = '/repo'
 // `files` is the disk the mod reads a published page from (#1811); a path not in it is missing. The
 // Artifact tool beneath publishes any page, and refuses one whose path holds REFUSED.
 type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; columns?: number; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; panesFail: boolean; turn: string | { fails: string } | 'truncated'; files: Record<string, string>; held: string[]; holdFails: string; sessionFails: boolean }
-const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
+const world =(on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
   const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, panesFail: false, turn: '', files: {}, held: [], holdFails: '', sessionFails: false, ...init }
   const mem: Record<string, unknown> = { ...store }
   const asked = new Set<string>()
@@ -2374,4 +2374,38 @@ test('where nobody is at the prompt, or the turn could not be read, a refused ca
   await start($)
   w.turn = { fails: '/t: No such file or directory' }
   expect((await turnStop($, ROW_REPLY)).block).toBeUndefined()
+})
+
+// Review of pull request 3854: the card could not be read, so the step left in prose is not asked
+// about (asking on a guess could ask for a card already there), and the log says so. The refused
+// call is judged from the turn alone, never from the card, so its ask is still given.
+// The card's own read, refused once `fails` is set, as #2437's read of the running turn is above:
+// refused rather than thrown, since a hook that throws is skipped and the engine beneath answers.
+const cardRead = (on: On) => {
+  const card = { fails: false }
+  on('state.get', async ($s, e, next) => (card.fails && (e as { key?: string }).key === 'card' ? ({ deny: 'the card could not be read' } as never) : next(e)))
+  return card
+}
+
+test('when the steps card cannot be read, a refused call is still asked about and a step left in prose is not (#3842)', withKit, async ($, on) => {
+  const { w, logs } = world(on, { turn: [prompt(), refusedCall(), wrote(PROSE_STEP)].join('\n') })
+  const card = cardRead(on)
+  await start($)
+  card.fails = true
+  const r = await turnStop($, PROSE_STEP)
+  expect(logs.filter(l => /could not read the steps card, so a step left in prose was not checked: .*the card could not be read/.test(l))).toHaveLength(1)
+  expect(r.block).toMatch(/^The permission check refused a call of yours in this turn/)
+  expect(r.block).not.toMatch(/leaves Dan a step in prose/)
+  // With no refused call in the turn, the unread card asks for nothing.
+  w.turn = [prompt(), wrote(PROSE_STEP)].join('\n')
+  expect((await turnStop($, PROSE_STEP)).block).toBeUndefined()
+  expect(logs.filter(l => /could not read the steps card/.test(l))).toHaveLength(2)
+})
+
+test('when the steps card cannot be read, the ask for a refused call is kept beside a block from beneath (#3842)', withKit, async ($, on) => {
+  world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY)].join('\n') }, {}, { STOP_BLOCK: 'Run the suite before you stop.' })
+  const card = cardRead(on)
+  await start($)
+  card.fails = true
+  expect((await turnStop($, ROW_REPLY)).block).toMatch(/^Run the suite before you stop\.\n\nThe permission check refused a call of yours in this turn/)
 })

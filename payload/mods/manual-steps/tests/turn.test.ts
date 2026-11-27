@@ -135,6 +135,18 @@ describe('a call the permission check refused in the turn (#3842)', () => {
     expect(turnIn([user('p1'), denied('automode-blocked'), pinned, user('p1'), denied('automode-blocked'), said('x')].join('\n')).refused).toBe(1)
   })
 
+  // Review of pull request 3854: a subagent's records can sit inside the main record, and a step it
+  // pinned is its own, not the one the main conversation's refused call left. The same call by the
+  // main conversation, in the same place, does answer.
+  test('a steps tool call a subagent made inside the main record does not answer a refusal', () => {
+    const byAgent = JSON.stringify({ type: 'assistant', isSidechain: true, isPinning: true })
+    const byAgentWhole = JSON.stringify({ type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: 'Pinning it.' }, { type: 'tool_use', name: 'mcp__manual-steps__steps', input: {} }] } })
+    for (const agentPin of [byAgent, byAgentWhole])
+      expect(turnIn([user('p1'), denied('automode-blocked'), agentPin, user('p1'), said('The agent pinned a step of its own.')].join('\n')).refused).toBe(1)
+    const byMain = JSON.stringify({ type: 'assistant', isSidechain: false, isPinning: true })
+    expect(turnIn([user('p1'), denied('automode-blocked'), byMain, user('p1'), said('It is on the card.')].join('\n')).refused).toBe(0)
+  })
+
   test('no verdict, a hook\'s or a rule\'s refusal, a prompt Dan declined and a cancelled call are not it', () => {
     for (const kind of ['automode-unavailable', 'permission-rule', 'user-rejected', 'cancelled', 'interrupted'])
       expect(turnIn([user('p1'), denied(kind), said('Carrying on.')].join('\n')).refused).toBe(0)
