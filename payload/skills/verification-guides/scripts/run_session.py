@@ -161,7 +161,9 @@ STOP_REASONS = ("stop", "ready_failed", "caller_gone")
 READY_ATTEMPT_MAX_S = 30
 GONE_POLL_S = 0.05
 KILLED_WAIT_S = 30  # how long serve is waited for once it has been killed, before the stop is cut off
-COLLECT_S = 5  # how long a serve that was seen to go is waited for to be collected, which is at once
+# How long a serve that was seen to go is waited for to be collected, which is at once, and how long
+# a cut off gives the rest of serve's group to go after its SIGKILL before it lists what is left.
+COLLECT_S = 5
 COLLECTING_WAIT_S = 1  # how long a signal waits for a Popen that something else is collecting right now
 CUT_OFF_ROOM_S = 60  # how long cutting a run off may take, besides the project's stop command
 # One thread at a time decides how a run ended, and the first ending recorded is the one kept: a stop
@@ -662,8 +664,10 @@ def project_stop(rdir, rec, detail):
         with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
             doc = json.load(f)
     except (OSError, ValueError) as e:
-        detail = (detail + "; " if detail else "") + "areas.json copy unreadable, project stop not run: %s" % e
-    stop_s = (doc or {}).get("timeouts", {}).get("stop_s", v.TIMEOUT_DEFAULTS["stop_s"])
+        if rdir not in STOP_COMMAND:  # said once: a cut off that follows a stop in this process comes here again
+            detail = (detail + "; " if detail else "") + "areas.json copy unreadable, project stop not run: %s" % e
+            STOP_COMMAND[rdir] = None
+    stop_s =(doc or {}).get("timeouts", {}).get("stop_s", v.TIMEOUT_DEFAULTS["stop_s"])
     if rdir in STOP_COMMAND:
         if STOP_COMMAND[rdir] == "running":
             return None, (detail + "; " if detail else "") + "the project's stop command had not finished", stop_s

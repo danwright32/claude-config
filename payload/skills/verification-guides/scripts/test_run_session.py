@@ -1492,6 +1492,18 @@ class CutOffTests(RunFixture):
         self.assertEqual(wait_group_empty(serve.pid), [])
         self.assertTrue(rec["worktree_removed"], rec)
 
+    def test_an_areas_copy_that_cannot_be_read_is_said_once_when_a_cut_off_follows_the_stop(self):
+        # The stop reads the run's copy of areas.json for the project's stop command, and so does
+        # the cut off that follows it. One that cannot be read was said twice in the receipt.
+        rdir = self.a_run_on_disk()
+        self.addCleanup(run_session.STOP_COMMAND.pop, rdir, None)
+        rec = self.on_disk(rdir)
+        os.unlink(os.path.join(rdir, "areas.json"))
+        first_exit, detail, _ = run_session.project_stop(rdir, rec, None)
+        again_exit, detail, _ = run_session.project_stop(rdir, rec, detail)  # as the cut off calls it
+        self.assertEqual(detail.count("areas.json copy unreadable"), 1, detail)
+        self.assertEqual((first_exit, again_exit, self.stops_ran()), (None, None, 0))
+
     def test_a_stop_that_finishes_after_the_run_was_cut_off_does_not_rewrite_the_receipt(self):
         cut = {"verdict": "unmeasured", "why": "the run was cut off"}
         rdir = self.a_run_on_disk(stopped_at="2026-01-01T00:00:00Z", stopped_by="caller_gone",
@@ -1908,7 +1920,8 @@ class CutOffTests(RunFixture):
     def test_an_ordinary_stop_gives_up_recovery_by_number_before_its_first_signal(self):
         # The supervisor's first act when it begins to end its children. From its first signal on,
         # a number in the receipt can come free at any moment, so the file must already be gone.
-        serve = self.child()
+        # This serve ends on the SIGTERM it is sent, so no wait in the stop runs to its limit.
+        serve = self.child("import sys\nprint('up', flush=True)\nsys.stdin.read()\n")
         rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
         really, sent = os.killpg, []
 
