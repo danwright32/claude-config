@@ -51,7 +51,7 @@ mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR" "$TMPDIR"
 unset CLAUDE_DETACHED_RUN CLAUDE_CODE_SESSION_ID CLAUDE_TRANSCRIPT_ROOT CLAUDE_REVIEW_RECORD_MIDWRITE CLAUDE_REVIEW_REASON_FORCE_FAIL
 
 python3 -I -B - "$DIR" "$WORK" <<'PY'
-import glob, json, os, stat, subprocess, sys
+import contextlib, glob, importlib.util, io, json, os, re, stat, subprocess, sys
 
 hooks, work = sys.argv[1], sys.argv[2]
 RECORD = os.path.join(hooks, 'lib', 'review-record.py')
@@ -134,6 +134,30 @@ def state(path):
 
 def said(what, got, want):
     check(what, None if got == want else 'it said %r, expected %r' % (got, want))
+
+
+def unmeasured(what, why):
+    """One check this machine cannot make, said on the line run-all-tests.sh counts, never as a pass
+    and never as a fail (L411)."""
+    print('SUITE-PART-UNMEASURED %s (%s)' % (what, why))
+
+
+NOT_LOCKED = 'a write into a folder with its write permission taken away succeeded on this machine, as it does for the superuser, so this suite cannot make a folder nothing can be written in'
+
+
+def locked(folder):
+    """Takes the right to write in a folder away and says whether that holds here, by trying a write.
+    It does not hold for the superuser, whose writes pass the permission bits by: a check that needs
+    the write refused would then fail for a reason that is not the code's, so its caller says it is
+    unmeasured. The caller gives the right back."""
+    os.chmod(folder, stat.S_IRUSR | stat.S_IXUSR)
+    probe = os.path.join(folder, 'probe')
+    try:
+        open(probe, 'w').close()
+    except OSError:
+        return True
+    os.remove(probe)
+    return False
 
 
 HANDED = lambda t: t + '.review-handed.json'
@@ -246,10 +270,21 @@ check('and its state is "cannot be read", saying the turn cannot be told, never 
 
 # A hand over that cannot be written.
 t6 = transcript('readonly', WORKED('p1'))
-os.chmod(os.path.dirname(t6), stat.S_IRUSR | stat.S_IXUSR)
+holds = locked(os.path.dirname(t6))
 code, out, err = record('handed', '--transcript', t6)
 os.chmod(os.path.dirname(t6), stat.S_IRWXU)
-check('a hand over that cannot be written is an error that names the file and why', None if code == 2 and 'review-handed.json' in err else 'exit %d, err %r' % (code, err))
+WHAT = 'a hand over that cannot be written is an error that names the file and why'
+if holds:
+    check(WHAT, None if code == 2 and 'review-handed.json' in err else 'exit %d, err %r' % (code, err))
+else:
+    unmeasured(WHAT, NOT_LOCKED)
+# The same rule where no permission is involved, so it is measured for the superuser too: a folder
+# sits where the record's file goes, and the move into place is refused for anybody.
+t6b = transcript('inplace', WORKED('p1'))
+os.mkdir(HANDED(t6b))
+code, out, err = record('handed', '--transcript', t6b)
+check('a hand over whose file cannot be moved into place is an error that names the file and why', None if code == 2 and 'review-handed.json' in err else 'exit %d, err %r' % (code, err))
+check('and it leaves no half written file beside the transcript', None if beside(t6b) == [os.path.basename(HANDED(t6b))] else 'beside it: %r' % beside(t6b))
 
 # ---- Assume it runs twice ----
 t7 = transcript('twice', WORKED('p1'))
@@ -274,6 +309,7 @@ procs = [subprocess.Popen([sys.executable, '-I', '-B', RECORD, 'handed', '--tran
 reads = [state(t8) for _ in range(12)]
 codes = [(p.wait(timeout=60), p.stderr.read()) for p in procs]
 check('twelve hand overs at once all succeed', None if all(c == 0 for c, _ in codes) else 'exits and errors: %r' % [x for x in codes if x[0] != 0])
+check("and none of them says anything of another's files on the way", None if not any(e.strip() for _, e in codes) else 'they said: %r' % sorted(set(e.strip() for _, e in codes if e.strip())))
 check('every read taken while they ran was a whole record or none', None if all(s in ('none', 'handed') for s in reads) else 'reads: %r' % reads)
 said('and the record they leave is one whole hand over', state(t8), 'handed')
 check('with no temp file left behind', None if beside(t8) == [os.path.basename(HANDED(t8))] else 'beside it: %r' % beside(t8))
@@ -291,6 +327,41 @@ record('handed', '--transcript', t9)
 left = sorted(os.listdir(folder))
 want = sorted(['kept.jsonl', 'kept.jsonl.review-handed.json', 'other.jsonl', 'other.jsonl.review-handed.json', 'notes.txt', 'other.jsonl.skip-stop-hooks'])
 check("a hand over removes the record files of transcripts that have gone, and nothing else", None if left == want else 'the folder holds %r, expected %r' % (left, want))
+
+# Two hand overs at once tidy one folder. A temp file listed a moment ago has since been moved into
+# place by its writer, and a leftover has since been removed by the other's tidy up: gone is what
+# the tidy up wanted, so neither is said as a file that "could not be removed", a false line in what
+# Dan reads. The tidy up is handed the folder's listing as it stood a moment before, with none of
+# the files there, which is the race itself and waits on no timing (L290). Only the copy of the
+# record's file loaded here sees that listing.
+def tidy_says(names, refuses=False):
+    spec = importlib.util.spec_from_file_location('review_record_under_test', RECORD)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class Moment:
+        def __getattr__(self, name):
+            return getattr(os, name)
+
+        def listdir(self, folder):
+            return list(names)
+
+        def remove(self, path):
+            if refuses:
+                raise PermissionError(13, 'Permission denied', path)
+            return os.remove(path)
+
+    module.os = Moment()
+    said = io.StringIO()
+    with contextlib.redirect_stderr(said):
+        module.sweep(os.path.join(work, 'tidy-project'))
+    return said.getvalue().strip()
+
+
+said('a temp file its writer has since moved into place is passed over, with nothing said', tidy_says(['w.jsonl.review-handed.json.tmp.4242.0a1b2c3d']), '')
+said('a leftover another hand over has since removed is passed over, with nothing said', tidy_says(['gone.jsonl.review-handed.json', 'gone.jsonl.review-answered.json']), '')
+got = tidy_says(['gone.jsonl.review-handed.json'], refuses=True)
+check('a leftover that is there and cannot be removed is still said', None if 'could not be removed' in got and 'Permission denied' in got else 'it said %r' % got)
 
 # ---- The one place a hand over is written: lib/review-reason.py ----
 def reason(argv_more, env=None):
@@ -325,11 +396,22 @@ check('a review whose instruction is missing was not handed over, so nothing is 
 # A hand over that could not be written is said in the reason, which is what Dan sees, and the
 # review still goes out.
 t13 = transcript('reasonro', WORKED('p1'))
-os.chmod(os.path.dirname(t13), stat.S_IRUSR | stat.S_IXUSR)
+holds = locked(os.path.dirname(t13))
 code, text, err = reason(['--instruction', REFLECTION, '--label', 'SESSION REFLECTION', '--transcript', t13])
 os.chmod(os.path.dirname(t13), stat.S_IRWXU)
-check('a hand over that could not be written still sends the review', None if code == 0 and text and 'SESSION REFLECTION. ' in text else 'exit %d, reason %r, err %r' % (code, text, err))
-check('and says in the reason that the record was not written, and why', None if text and 'REVIEW RECORD NOT WRITTEN' in text and 'review-handed.json' in text else 'reason: %r' % text)
+for what, problem in (
+    ('a hand over that could not be written still sends the review', None if code == 0 and text and 'SESSION REFLECTION. ' in text else 'exit %d, reason %r, err %r' % (code, text, err)),
+    ('and says in the reason that the record was not written, and why', None if text and 'REVIEW RECORD NOT WRITTEN' in text and 'review-handed.json' in text else 'reason: %r' % text),
+):
+    if holds:
+        check(what, problem)
+    else:
+        unmeasured(what, NOT_LOCKED)
+# Measured for the superuser too: a folder sits where the record's file goes.
+t13b = transcript('reasoninplace', WORKED('p1'))
+os.mkdir(HANDED(t13b))
+code, text, err = reason(['--instruction', REFLECTION, '--label', 'SESSION REFLECTION', '--transcript', t13b])
+check('a hand over whose file could not be moved into place still sends the review, and says the record was not written', None if code == 0 and text and 'SESSION REFLECTION. ' in text and 'REVIEW RECORD NOT WRITTEN' in text and 'review-handed.json' in text else 'exit %d, reason %r, err %r' % (code, text, err))
 code, text, err = reason(['--instruction', REFLECTION, '--label', 'SESSION REFLECTION'])
 check('a review built with no transcript says the hand over could not be recorded', None if code == 0 and text and 'REVIEW RECORD NOT WRITTEN' in text else 'exit %d, reason %r' % (code, text))
 
@@ -366,6 +448,13 @@ tail = body.split('EITHER WAY', 1)[1] if 'EITHER WAY' in body else ''
 check('the reflection gives the last step its command, in the part that holds either way', None if COMMAND in tail else 'the command %r is not after EITHER WAY' % COMMAND)
 check('and puts it before the call for the Goal accomplished box', None if COMMAND in tail and 'goal_accomplished' in tail.split(COMMAND, 1)[1] else 'goal_accomplished does not come after the command')
 check('the file that command names is this one', None if os.path.isfile(RECORD) else 'no file at %s' % RECORD)
+# The record's own account of who runs the last step names the instruction files that carry it. Each
+# file it names does carry the command, so that account cannot go on naming one that never did.
+source = open(RECORD).read()
+account = source.split('  answered  ', 1)[1].split('  state  ', 1)[0] if '  answered  ' in source and '  state  ' in source else ''
+named = sorted(set(re.findall(r'review/([a-z-]+\.md)', account)))
+lacking = [n for n in named if COMMAND not in open(os.path.join(hooks, 'review', n)).read()]
+check("every instruction the record's own account says runs the last step holds its command", None if named and not lacking else 'it names %r, and the command is not in %r' % (named, lacking))
 tb = transcript('both', WORKED('p1'))
 spoke = ['"decision"' in hook(name, tb)[1] for name in ('feature-issue-review.sh', 'session-reflection.sh')]
 check('on a turn the issue review is handed over, the reflection, which carries the last step, is too', None if spoke == [True, True] else 'issue review spoke: %r, reflection spoke: %r' % tuple(spoke))

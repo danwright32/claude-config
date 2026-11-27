@@ -17,10 +17,11 @@ cannot come to keep it differently (L70).
 WHO CALLS WHAT.
   handed    lib/review-reason.py, the one place both review hooks build their payload, when the
             instruction it points at is an end of turn review's.
-  answered  the session, as the last step of the review (review/issue-review.md step 6,
-            review/session-reflection.md EITHER WAY). With no --transcript it finds the session's
-            transcript by CLAUDE_CODE_SESSION_ID, which a Bash call carries, under
-            CLAUDE_TRANSCRIPT_ROOT (default ~/.claude/projects).
+  answered  the session, as the last step of the review (review/session-reflection.md EITHER WAY,
+            the one instruction that carries the command: the reflection is handed over in every
+            turn the issue review is). With no --transcript it finds the session's transcript by
+            CLAUDE_CODE_SESSION_ID, which a Bash call carries, under CLAUDE_TRANSCRIPT_ROOT
+            (default ~/.claude/projects).
   state     the goal box mod, before it shows a box. One JSON line on stdout:
             {"state": "none" | "handed" | "answered", "turn": ..., "handed_at": ..., "label": ...}.
 
@@ -148,7 +149,10 @@ def write_record(path, obj):
 
 
 def sweep(folder):
-    """Removes record files whose transcript has gone, and temp files a killed writer left."""
+    """Removes record files whose transcript has gone, and temp files a killed writer left. A file
+    that has gone since the folder was listed is passed over in silence: with two hand overs at once
+    the other's writer has moved its temp file into place, or its sweep has removed the same
+    leftover, and gone is what was wanted. Only a file that is there and could not be removed is said."""
     try:
         names = os.listdir(folder)
     except OSError:
@@ -162,6 +166,8 @@ def sweep(folder):
                     os.remove(path)
                 elif (".jsonl" + suffix + ".tmp.") in name and now - os.path.getmtime(path) > TEMP_MAX_AGE:
                     os.remove(path)
+        except FileNotFoundError:
+            continue
         except OSError as exc:
             print("review-record: a leftover record file could not be removed (%s)" % exc, file=sys.stderr)
 
