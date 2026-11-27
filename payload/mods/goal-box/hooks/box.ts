@@ -25,6 +25,7 @@ export const DESCRIPTION = [
   'With a /goal set, do not call it yourself: when the goal\'s own check finds it met, you are told to call it.',
   'goal: what Dan asked for, in a few words of his own terms. shipped: one short line per thing that shipped, issues closed and pull requests merged and live, each naming its number (for example "#1563 closed: Goal accomplished box", "PR #1700 merged and live").',
   'It refuses while anything is still in flight (an agent still running, a merge or deploy not confirmed, a pull request this session touched still open), naming what; settle that and call it again. It shows once per thing Dan asked for: once for his message, and again once work he then picked in a picker is finished (an answer you did no work after is not a new request).',
+  'In a turn that has changed something it also waits until the end of turn review has run and Dan has answered it: a call before then is refused, saying what to do, so make the call as that review\'s last step.',
 ].join(' ')
 
 export const SCHEMA = {

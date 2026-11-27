@@ -12018,8 +12018,29 @@ a call that was refused or came back as an error (how a settings hook's refusal 
 and a subagent's call are not work; a picker dismissed, failed or closed while he was away is no
 answer; a message he types drops an answer still waiting. A test that
 cannot be run is said in the refusal, never read as no work. The refusal of a second box says
-which of these it is and when a later call is right. Where the card is not drawn, the result is the
-same box as text, shaped like SESSION REFLECTION. What holds the box is read through mod-kit's one
+which of these it is and when a later call is right. The box also waits for the turn's end of turn
+review (#3843, Dan's answers of 2026-11-27: hold it "until the review is answered", and, of how the
+box is to know, "The review says so itself"). The review keeps its own record.
+`hooks/lib/review-reason.py`, which both review hooks build their payload through, records that a
+review was handed to the session, only for an instruction in the hooks' own `review/` folder, and
+says in the reason Dan sees when that could not be written. The review's last step records that he
+answered it, or that it asked him nothing: `python3 ~/.claude/hooks/lib/review-record.py answered`,
+given in `review/session-reflection.md`, which is handed over in every turn a review is.
+`hooks/lib/review-record.py` is the record's one owner: two files beside the session's transcript
+(`<transcript>.review-handed.json` and `<transcript>.review-answered.json`), each written whole and
+moved into place, an answer naming the hand over it answers. A record belongs to one turn, told by
+the `promptId` of the transcript's last user line, so the next prompt of any origin ends it and a
+review nobody answered holds no later turn. The mod runs its `state` command before it shows a box:
+handed over and not answered refuses the box and names the command; nothing handed over refuses it
+only in a turn that has had a main conversation call the review's test counts, whatever became of
+the call, since that turn's review is still to come; answered shows it. A box refused this way and
+not shown by the turn's end is asked for once more, once per request, by a message the mod sends
+in place of the turn end's other question, because the hooks do not hand a review over at every
+such turn's end. A record that cannot be read never holds the box: the box shows, with a line in
+the log and a note in the close card's reasons file. While Dan is asleep the reviews stand down
+and nothing is held. `payload/hooks/test-review-record.sh` holds the record and its writers, and
+`tests/test-goal-box-review-record.sh` holds the mod's two commands to the real file. Where the
+card is not drawn, the result is the same box as text, shaped like SESSION REFLECTION. What holds the box is read through mod-kit's one
 list of what is in flight (`hooks/mod-kit/inflight.ts`, #3770), asked for the box's three kinds.
 The close this session card (#3770, Dan's answers of 2026-11-26): a manual steps card headed
 "Nothing this session can see is running or waiting", whose one step, "Close this session if you

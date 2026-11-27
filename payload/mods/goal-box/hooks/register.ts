@@ -4,6 +4,7 @@ import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
 import { WORK_TEST_MS, alreadyShownText, answered, workRead, workTestArgv, type WorkRead } from './request.ts'
+import { REVIEW_STATE_MS, answeredCommand, askAgainText, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, type ReviewRead, type ReviewWait } from './review.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { askPr } from './mod-kit/prmerged.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
@@ -37,6 +38,9 @@ import { CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOO
 //    review once dropped its line (#2523), so a prompt is not the whole reminder (L27): at a turn end
 //    where work measurably shipped (an is it live card made since Dan's last message), nothing is in
 //    flight and no box was shown, this mod asks the session itself, once per request of Dan's.
+//    Since #3843 the box also waits for the turn's end of turn review: it is refused while that
+//    review is still to come or is handed over and not on record as answered, by the review's own
+//    record (review.ts), and a box refused so and never shown is asked for once at the turn's end.
 //
 // The box is the tool's result: drawn as mod-kit's card, its heading in the success colour, and as
 // text led by the goal wherever the card is not drawn (#2512).
@@ -49,6 +53,11 @@ const requestAtRef = { plugin: 'goal-box', key: 'requestAt' } as const
 const askedDoneRef = { plugin: 'goal-box', key: 'askedDone' } as const
 // #3843, request.ts: an answer of Dan's in a picker that no work has followed yet.
 const pickerRef = { plugin: 'goal-box', key: 'picker' } as const
+// #3843, review.ts: the box waits for the end of turn review.
+const reviewWorkRef = { plugin: 'goal-box', key: 'reviewWork' } as const
+const reviewHeldRef = { plugin: 'goal-box', key: 'reviewHeld' } as const
+const reviewAskedRef = { plugin: 'goal-box', key: 'reviewAsked' } as const
+const reviewUnreadRef = { plugin: 'goal-box', key: 'reviewUnread' } as const
 // #3770, the close this session card's own record.
 const closeSeqRef = { plugin: 'goal-box', key: 'closeSeq' } as const
 const closeStopRef = { plugin: 'goal-box', key: 'closeStop' } as const
@@ -268,11 +277,16 @@ const claim = async ($: EngineInterface, entry: GoalBoxShown): Promise<boolean> 
   for (let i = 0; i < 10; i++) {
     const held = await $.state.get(shownRef)
     const list = held.value ?? []
-    const last = list[list.length - 1]
-    if (list.some(s => s.key === entry.key) || (entry.kind === 'request' && last !== undefined && entry.prompts <= last.prompts)) return false
+    if (taken(list, entry)) return false
     if ((await $.state.set(shownRef, [...list, entry], { ifVersion: held.version })).isSet) return true
   }
   return false
+}
+
+/** Whether a box with this key, or any box since Dan's last request, is on the list: the claim's own test. */
+const taken = (list: GoalBoxShown[], entry: Pick<GoalBoxShown, 'key' | 'kind' | 'prompts'>): boolean => {
+  const last = list[list.length - 1]
+  return list.some(s => s.key === entry.key) || (entry.kind === 'request' && last !== undefined && entry.prompts <= last.prompts)
 }
 
 /** Marks a met goal as asked about; false when it already was, or its box already shown. */
@@ -423,6 +437,109 @@ const noteCall = async ($: EngineInterface, tool: string): Promise<void> => {
   if (read.changes) await pickedWorkBegan($)
 }
 
+// ---- The box waits for the end of turn review (#3843) ----
+// The rule and its words are review.ts; this is where the session's events and the record are read.
+
+/**
+ * A tool call of the main conversation, as it arrives: a tool the review's test counts makes this a
+ * turn whose end of turn review is to come, whatever becomes of the call, since the review hooks
+ * count the tool's name in the transcript and never ask how the call ended. Kept under the turn's
+ * count (closeSeq, which every turn start and message moves), so it ends with the turn. Once a turn
+ * is known to have changed something nothing more is read, and a test that could not be run is kept
+ * as that, never as a turn that changed nothing. Never throws: it only watches.
+ */
+const noteTurnWork = async ($: EngineInterface, tool: string): Promise<void> => {
+  try {
+    for (let i = 0; i < 10; i++) {
+      const seq = (await $.state.get(closeSeqRef)).value ?? 0
+      const held = await $.state.get(reviewWorkRef)
+      // One failed run a turn: a test that cannot be run is not run again on every call of the turn.
+      if (held.value?.seq === seq && (held.value.worked || held.value.unread !== undefined)) return
+      const read = await changesSomething($, tool)
+      if ('changes' in read && !read.changes) return
+      const next = 'changes' in read ? { seq, worked: true } : { seq, worked: false, unread: read.unread }
+      if ((await $.state.set(reviewWorkRef, next, { ifVersion: held.version })).isSet) return
+    }
+  } catch (err) {
+    debug($, `whether ${tool} makes this a turn with an end of turn review to come could not be recorded (${errorText(err, MOD)})`)
+  }
+}
+
+/** Scope modes' one sleep predicate; scope modes not loaded, or a predicate that fails, is awake. */
+const asleepNow = async ($: EngineInterface): Promise<boolean> => {
+  try {
+    return (await ($ as unknown as { scopeModes: { isAsleep: () => Promise<boolean> } }).scopeModes.isAsleep()) === true
+  } catch (err) {
+    if (missingOf(err)?.noun !== 'scopeModes') debug($, `whether Dan is asleep could not be read (${errorText(err, MOD)}), so the box waits for the end of turn review as if he were awake`)
+    return false
+  }
+}
+
+/**
+ * Whether the end of turn review holds a box that would otherwise show (review.ts). While Dan is
+ * asleep the review hooks stand down, so nothing is held and the record is not asked. The record is
+ * read by its one owner, for the transcript this session's /goal was just read from.
+ */
+const reviewNow = async ($: EngineInterface): Promise<ReviewWait> => {
+  if (await asleepNow($)) return null
+  const t = await transcriptNow($)
+  if ('why' in t) return { unread: `the end of turn review's record could not be read (this session's transcript, which it is kept beside, was not found: ${t.why})` }
+  let read: ReviewRead
+  try {
+    const home = await $.env.get('HOME')
+    read = home ? reviewRead(await $.process.run(reviewStateArgv(home, t.path), { timeoutMs: REVIEW_STATE_MS })) : { unread: "HOME is not set, so the record's reader cannot be found" }
+  } catch (err) {
+    read = { unread: errorText(err, MOD) }
+  }
+  const seq = (await $.state.get(closeSeqRef)).value ?? 0
+  const work = (await $.state.get(reviewWorkRef)).value
+  return reviewWait({ read, work: work?.seq === seq ? work : undefined, command: answeredCommand(t.path) })
+}
+
+/** Remembers that a call was refused until the review was answered, under the request it was made in. */
+const noteReviewHeld = async ($: EngineInterface, prompts: number): Promise<void> => {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(reviewHeldRef)
+    if (held.value !== undefined && held.value >= prompts) return
+    if ((await $.state.set(reviewHeldRef, prompts, { ifVersion: held.version })).isSet) return
+  }
+}
+
+/**
+ * At a turn's end: a call was refused until the review was answered, no box has been shown since, and
+ * nothing is in flight. The review hooks do not hand a review over at every such turn's end, so the
+ * session is asked once to call again (Dan's yes to this message is his answer of 2026-11-27 on the
+ * issue). Once per request: claimed before it is sent, so two turn ends at once send one, and
+ * released when it did not enter, so a passing failure is asked again at the next turn end (L368).
+ * It asks what the turn end's other question asks, so that one is marked asked too. True when sent.
+ */
+const askAfterReview = async ($: EngineInterface): Promise<boolean> => {
+  const held = (await $.state.get(reviewHeldRef)).value
+  if (held === undefined) return false
+  const asked = await $.state.get(reviewAskedRef)
+  if (asked.value !== undefined && asked.value >= held) return false
+  if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= held)) return false
+  if ((await boxHolds($)).length) return false
+  const prompts = (await $.state.get(promptsRef)).value ?? 0
+  if (!(await $.state.set(reviewAskedRef, prompts, { ifVersion: asked.version })).isSet) return false
+  const failed = await sendHeld($, 'ask-after-review', 'the prompt asking for the Goal accomplished box again', askAgainText())
+  if (failed === undefined) {
+    for (let i = 0; i < 10; i++) {
+      const done = await $.state.get(askedDoneRef)
+      if (done.value !== undefined && done.value >= prompts) break
+      if ((await $.state.set(askedDoneRef, prompts, { ifVersion: done.version })).isSet) break
+    }
+    return true
+  }
+  for (let i = 0; i < 10; i++) {
+    const now = await $.state.get(reviewAskedRef)
+    if (now.value !== prompts) break
+    if ((await $.state.set(reviewAskedRef, asked.value ?? -1, { ifVersion: now.version })).isSet) break
+  }
+  $.ui.log(`The session could not be asked to call the Goal accomplished box again (${failed}); it is asked again at the next turn end.`)
+  return false
+}
+
 // ---- The close this session card (#3770) ----
 // At the main conversation's turn end, once interactive, a quiet period of QUIET_MS starts on the
 // engine's clock. Any turn start or message of any origin since (closeSeq moved) ends it unread. At
@@ -531,7 +648,11 @@ const closeReasons = async ($: EngineInterface, seq: number): Promise<{ reasons:
   }
   const left = (await $.state.get(leftBehindRef)).value
   const processes = await processesNow($)
-  return { reasons: [...inflightHolds(facts, INFLIGHT_KINDS).map(h => h.text), ...(left ? [leftBehindReason(left)] : []), ...processes.holds], seen: { notes: processes.notes, attached: processes.attached } }
+  // #3843: this request's box was shown over a reading of the end of turn review that failed. Only
+  // a note: it decides nothing here, and is kept where a later session can read why.
+  const unread = (await $.state.get(reviewUnreadRef)).value
+  const notes = [...(unread && unread.prompts >= prompts ? [unread.text] : []), ...processes.notes]
+  return { reasons: [...inflightHolds(facts, INFLIGHT_KINDS).map(h => h.text), ...(left ? [leftBehindReason(left)] : []), ...processes.holds], seen: { notes, attached: processes.attached } }
 }
 
 /** At the end of a quiet period armed under `seq`: pins the card when nothing holds it, or says why not. */
@@ -658,8 +779,24 @@ export const register: Register = on => {
     const d = decide({ goal, input, shown, prompts, holds })
     if ('refuse' in d) return { deny: `No box yet: ${d.refuse.join('; ')}.` }
     const entry: GoalBoxShown = { key: d.show.key, kind: d.show.kind, at: await $.clock.now(), prompts }
+    // #3843: a box that would show waits for the turn's end of turn review (review.ts). One the
+    // claim below would refuse anyway is left to it, so "already shown" is never said as "waiting".
+    const review = taken(shown, entry) ? null : await reviewNow($)
+    if (review && 'hold' in review) {
+      await noteReviewHeld($, prompts)
+      return { deny: review.hold }
+    }
     // #3843: said in the words of what is known of a picker Dan answered since (request.ts).
     if (!(await claim($, entry))) return { deny: alreadyShownText((await $.state.get(pickerRef)).value) }
+    const context = ['The Goal accomplished box is shown to Dan above. Do not repeat it in your reply.']
+    if (review) {
+      // A reading that failed never holds the box and is never passed over in silence: said to Dan,
+      // to the session, and kept for the close card's reasons file, where a later session can read it.
+      const said = shownUnreadText(review.unread)
+      $.ui.log(said)
+      context.push(said)
+      await $.state.set(reviewUnreadRef, { prompts, text: said })
+    }
     const text = boxText(d.show.goal, input.shipped)
     try {
       await $.modkit.card(cardOf(String(toolUseId), d.show.goal, input.shipped))
@@ -667,7 +804,7 @@ export const register: Register = on => {
       // The text below is the box where the card is not drawn: still shown, never lost.
       debug($, `the card could not be drawn (${errorText(err, MOD)}), so the box is shown as text`)
     }
-    return { result: text, text, context: ['The Goal accomplished box is shown to Dan above. Do not repeat it in your reply.'] }
+    return { result: text, text, context }
   }).catch(($, e, next) => cutOwn('the goal box', next))
 
   // #3770: a turn of the main conversation starting, of any origin, takes the close card down and
@@ -720,7 +857,11 @@ export const register: Register = on => {
   // refused or came back as an error: a settings hook's refusal reaches a mod as an errored result,
   // the same as a command that failed, so neither is counted and the next call that runs clean is.
   // Every other call is read for being that work (noteCall).
+  // The same calls, as they arrive and whatever becomes of them, are read for making this a turn
+  // whose end of turn review is to come (noteTurnWork): that question is the review hooks', who
+  // count a tool named in the transcript, where the picker's is whether anything was changed.
   on('tool.call', async ($, e, next) => {
+    if (e.agentId === undefined && e.tool !== TOOL && e.tool !== 'AskUserQuestion') await noteTurnWork($, e.tool)
     const r = await next(e)
     if (e.agentId !== undefined || e.tool === TOOL) return r
     if (e.tool === 'AskUserQuestion') {
@@ -742,6 +883,9 @@ export const register: Register = on => {
     const seq = (await $.state.get(closeSeqRef)).value ?? 0
     await $.state.set(closeAnswerRef, { seq, text: e.answer })
     $.clock.after(QUIET_MS, () => void closeCheck($, seq).catch(err => debug($, `the close this session card could not be judged (${errorText(err, MOD)})`)))
+    // #3843: a call refused until the review was answered, and no box since. One prompt a turn end,
+    // so this one stands in for the two below, which ask for the same call.
+    if (await askAfterReview($)) return r
     const goal = await goalNow($)
     if (goal.state !== 'none') return r
     if (!goal.met) {

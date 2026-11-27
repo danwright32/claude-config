@@ -50,6 +50,17 @@ declare module 'claude-code' {
       closed: { prompts: number; pinned: boolean }
       /** #3770: what a command this session ran did that may leave a process behind; once set, for the session. */
       leftBehind: string
+      /**
+       * #3843: whether the turn under this closeSeq has had a main conversation call the end of turn
+       * review's test counts, which makes its review still to come, or why that could not be read.
+       */
+      reviewWork: { seq: number; worked: boolean; unread?: string }
+      /** #3843: the request (`prompts` above) in which a box was last refused until the review was answered. */
+      reviewHeld: number
+      /** #3843: the value of `prompts` when the session was last asked, at a turn's end, to call for such a box again. */
+      reviewAsked: number
+      /** #3843: the request whose box was shown over a reading of the review that failed, and what was said of it. */
+      reviewUnread: { prompts: number; text: string }
     }
   }
 }
