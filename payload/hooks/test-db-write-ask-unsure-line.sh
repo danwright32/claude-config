@@ -505,10 +505,41 @@ CUT = (NOTICE + "\nhook_deny_json() { printf '%s' '{\"hookSpecificOutput\": {\"h
 # The function is there and prints a whole object that is no refusal.
 ASKS = (NOTICE + "\nhook_deny_json() { printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", "
         "\"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"r\"}}'; }\n")
+
+
+def prints(name, text):
+    """The library with a hook_deny_json that prints text exactly, bytes and all (#3793 review)."""
+    return NOTICE + "\nhook_deny_json() { cat '%s'; }\n" % write(os.path.join(work, name + ".printed"), text)
+
+
+# Five outputs that each start with {, end with } and name deny somewhere, and none of which is the
+# one refusal the library's builder prints. A bash match of { .* "deny" .* } took every one, since a
+# dot there takes a line break too, and the hook passed each on as its refusal.
+HEAD = '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny"'
+NOT_ONE_REFUSAL = (
+    ("a refusal cut short at a brace inside its reason", "brace",
+     HEAD + ', "permissionDecisionReason": "cut at a }'),
+    ("two objects on two lines", "two", '{"systemMessage": "x"}\n' + HEAD + "}}\n"),
+    ("a refusal with a raw line break inside its reason", "rawnl",
+     HEAD + ', "permissionDecisionReason": "a\nb"}}\n'),
+    ("an ask with a deny under another key", "nested",
+     '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask"}, '
+     '"x": {"permissionDecision": "deny"}}\n'),
+    ("a refusal for another event", "event",
+     '{"hookSpecificOutput": {"hookEventName": "PostToolUse", "permissionDecision": "deny"}}\n'),
+)
+# The library with its decisions built by its no python3 arm, as on a Mac whose python3 fails
+# inside the builder.
+PY_ARM = 'if command -v python3 >/dev/null 2>&1; then\n    HN_DECISION='
+BASH_ARM = NOTICE.replace(PY_ARM, 'if false; then\n    HN_DECISION=') if NOTICE.count(PY_ARM) == 1 else None
 # A copy of lib/db-write-calls.py whose advice on rewriting holds what JSON must escape: both
-# quotes, a backslash, a tab and a line break.
-ODD = 'Write "it" as \'a\\b\' \tso,\non two lines'
+# quotes, a backslash, a tab and a line break, and a pair of braces.
+ODD = 'Write "it" as \'a\\b\' \tso,\non two lines {x}'
 ODD_TAIL = "\n\ndef unsure_fix(told):\n    return %r if isinstance(told, (Unsure, UnsureFinding)) else None\n" % ODD
+# The same, ending in a character that is not ASCII, which the no python3 arm writes as it is and
+# python3 writes as an escape: so its raw presence shows which arm built the refusal.
+ODD_U = ODD + " Dan’s"
+ODD_U_TAIL = "\n\ndef unsure_fix(told):\n    return %r if isinstance(told, (Unsure, UnsureFinding)) else None\n" % ODD_U
 NO_BUILDER = "lib/hook-notice.sh beside this hook has no hook_deny_json"
 NO_REFUSAL = "hook_deny_json in lib/hook-notice.sh beside this hook printed no refusal"
 
@@ -622,8 +653,24 @@ refused("beside a notice library whose hook_deny_json prints an ask where a refu
 # A refusal whose words hold what JSON must escape. Beside the real library every character of
 # them arrives (which is also what shows the stand in advice reaches the refusal); in the form
 # built without it they are taken out, and the object is still one a JSON reader takes.
-refused("(control) beside the real notice library, a refusal whose advice holds quotes, a backslash, a tab and a line "
-        "break arrives whole", beside("odd", calls_tail=ODD_TAIL), CLOSE, work, None, (SAYS["close"], ODD))
+refused("(control) beside the real notice library, a refusal whose advice holds quotes, a backslash, a tab, a line "
+        "break and braces arrives whole, as the library built it", beside("odd", calls_tail=ODD_TAIL), CLOSE, work, None,
+        (SAYS["close"], ODD), (NO_REFUSAL, NO_BUILDER))
+# The same through the library's no python3 arm, which builds the same grammar by hand (#3793 review).
+if BASH_ARM is None:
+    stood.append(("the python3 arm of _hn_decision_json in lib/hook-notice.sh no longer starts with %r, so the no "
+                  "python3 arm could not be forced; update PY_ARM in this suite" % PY_ARM,
+                  "(control) beside a notice library building by its no python3 arm, a refusal arrives whole"))
+else:
+    got, reason, _, out = shown(beside("odd-bash-arm", BASH_ARM, ODD_U_TAIL), CLOSE, work, None)
+    stood.append(("ok" if got == "deny rc=0" and ODD_U in reason and "’" in out and NO_REFUSAL not in reason
+                  else "got %s, the no python3 arm %s: %s" % (got, "ran" if "’" in out else "did not run", out[:500]),
+                  "(control) beside a notice library building by its no python3 arm, a refusal whose advice holds "
+                  "quotes, a backslash, a tab, a line break and braces arrives whole, as the library built it"))
+for label, name, text in NOT_ONE_REFUSAL:
+    refused("beside a notice library whose hook_deny_json prints %s, the same delete is refused in the hook's own "
+            "words, never passed on" % label, beside("not-one-" + name, prints(name, text)), CLOSE, work, None,
+            SAID + (NO_REFUSAL,))
 for name, text, why in (("odd-renamed", RENAMED, NO_BUILDER), ("odd-gone", GONE, "lib/hook-notice.sh is missing")):
     refused("with the notice library %s, a refusal whose advice holds quotes, a backslash, a tab and a line break is "
             "still one JSON object, with those characters taken out"
@@ -805,7 +852,7 @@ while IFS=$'\t' read -r verdict label; do
   if [ -n "$label" ]; then check "#3472 $label" "$verdict"; elif [ -n "$verdict" ]; then check "#3472 the cases program said something that is not a case" "${verdict:0:300}"; fi
 done <<< "$rows"
 # A program that stopped early checks nothing and would read as a pass (L288).
-WANT_RAN=225
+WANT_RAN=231
 [ "$ran" = "$WANT_RAN" ] && check "#3472 all $WANT_RAN cases ran" ok || check "#3472 all $WANT_RAN cases ran" "ran: ${ran:-none}; ${rows: -300}"
 
 # With no python3 on PATH nothing can be read at all, so the same command, a delete behind a

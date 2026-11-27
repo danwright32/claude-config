@@ -794,16 +794,23 @@ else
   printf '%s\n' "$found" | sed "s|$DIR/|  |"
 fi
 
-# scan_private <file>...: a line of code outside lib/hook-notice.sh naming one of its private
-# functions, whose names start _hn_. A private name can change with no notice to a caller outside
-# the library, and a refusal a hook then fails to build is a command that runs (db-write-ask.sh
-# called _hn_decision_json to refuse, claude-config#3793). The library's public names are what a
-# hook calls: hook_ask_json, hook_allow_json and hook_deny_json for a decision. A comment line is
-# not code, so a history that names the old builder is left alone.
+# scan_private <file>...: a line outside lib/hook-notice.sh naming one of its private names: a
+# function starting _hn_, a variable starting _HN_, or HN_MAX. A private name can change with no
+# notice to a caller outside the library, and a refusal a hook then fails to build is a command that
+# runs (db-write-ask.sh called _hn_decision_json to refuse, claude-config#3793). The library's
+# public names are what a hook calls: hook_ask_json, hook_allow_json and hook_deny_json for a
+# decision.
+#
+# What it sees and does not: it is a search for the name as a whole word on every line that does not
+# start with #. So it finds a call however it is made (directly, through command or eval, inside
+# $( )), and it also flags the name in a trailing comment, a quoted string or a here document's
+# body, which fails loud on a mention that is not a call. It does not see a name put together at run
+# time. lib/shell_code_lines.py could tell code from text, but an open pull request is changing it,
+# so this scan does not lean on it yet.
 scan_private(){
   python3 - "$@" <<'PY'
 import re, sys
-private = re.compile(r"(?<![A-Za-z0-9_])_hn_[A-Za-z0-9_]+")
+private = re.compile(r"(?<![A-Za-z0-9_])(_hn_[A-Za-z0-9_]+|_HN_[A-Za-z0-9_]+|HN_MAX)(?![A-Za-z0-9_])")
 for path in sys.argv[1:]:
     for n, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
         s = line.strip()
@@ -816,11 +823,22 @@ PY
 }
 printf 'built="$(_hn_decision_json deny "$r" "$n")"\n' > "$WORK/private-call.sh"
 printf 'if ! declare -F _hn_string >/dev/null; then exit 0; fi\n' > "$WORK/private-declare.sh"
-printf '# a refusal used to be built with _hn_decision_json\nbuilt="$(hook_deny_json "$r" "$n")"\nx="$MY_hn_x"\n' > "$WORK/private-clean.sh"
+printf 'echo "$_HN_PY_CUT" | python3\nn="${HN_MAX:-0}"\n' > "$WORK/private-variables.sh"
+printf '# a refusal used to be built with _hn_decision_json\nbuilt="$(hook_deny_json "$r" "$n")"\nx="$MY_hn_x $HN_MAXIMUM"\n' > "$WORK/private-clean.sh"
 [ -n "$(scan_private "$WORK/private-call.sh")" ] && ok || bad "#3793 canary: the private name scan did not find a call to _hn_decision_json"
 [ -n "$(scan_private "$WORK/private-declare.sh")" ] && ok || bad "#3793 canary: the private name scan did not find a declare -F of a private name"
+[ "$(scan_private "$WORK/private-variables.sh" | grep -c -E ': (_HN_PY_CUT|HN_MAX):')" = 2 ] && ok || bad "#3793 canary: the private name scan did not find the library's private variable _HN_PY_CUT or HN_MAX: $(scan_private "$WORK/private-variables.sh")"
 [ -z "$(scan_private "$WORK/private-clean.sh")" ] && ok || bad "#3793 control: the private name scan flagged a comment, a public name or a longer word: $(scan_private "$WORK/private-clean.sh")"
-found="$(scan_private "${shell_files[@]}")"
+# Its subjects: every shell script the hand built scan reads, and the scripts under bin/ that have
+# no extension (bin/gh), told by their first line.
+private_files=("${shell_files[@]}")
+for f in "$DIR"/bin/*; do
+  case "${f##*/}" in *.*) continue ;; esac
+  [ -f "$f" ] || continue
+  case "$(head -n 1 "$f")" in '#!'*sh*) private_files+=("$f") ;; esac
+done
+case " ${private_files[*]} " in *"$DIR/bin/gh "*) ok ;; *) bad "#3793 bin/gh, a shell script with no extension, is not among the files the private name scan reads" ;; esac
+found="$(scan_private "${private_files[@]}")"
 if [ -z "$found" ]; then ok
 else
   bad "#3793 these scripts call a private function of lib/hook-notice.sh, whose name can change with no notice to them. Call its public names instead (hook_deny_json for a refusal):"

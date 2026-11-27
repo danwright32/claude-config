@@ -174,11 +174,32 @@ payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 # Claude Code reads no decision as none. Beside a library that loaded and had no such function (a
 # copy from before #3793 that the sync held back), a call to it would print nothing, so a command
 # the hook meant to refuse would run with no question at all. So the function is looked for first,
-# and what it printed is judged before it is passed on: it must be one object, from { to }, naming
-# deny as its decision. Anything else, nothing included, is replaced by refuse_plain's object, which
-# needs no library. Judged by its shape and in bash, since python3 is the first thing the library
-# itself may have lost. Whatever happens, a refusal is printed.
-REFUSAL_SHAPE='^\{.*"permissionDecision"[[:space:]]*:[[:space:]]*"deny".*\}$'
+# and what it printed is passed on only when Python's JSON reader takes it as exactly one object
+# whose hookSpecificOutput is a PreToolUse deny, holding nothing but its event, its decision and a
+# reason, beside which only texts stand (refusal_is_one_deny). Anything else, nothing included, is
+# replaced by refuse_plain's object, which needs no library. An earlier form was a bash match asking
+# only for a { first, a } last and the deny somewhere between, and a dot there takes a line break
+# too, so a refusal cut short at a brace, two objects on two lines, a raw line break inside the
+# reason and an ask holding a deny under another key all went out as the refusal (the review of
+# #3793; section 7 of test-db-write-ask-unsure-line.sh). The hook reaches a refusal only through its
+# classifier, which is python3, so python3 is there: one start per refusal, none when refuse_plain
+# is used for a missing library or function, and a python3 that cannot start judges nothing, so
+# refuse_plain's object goes out. Whatever happens, a refusal is printed.
+refusal_is_one_deny() {
+  [ -n "$1" ] || return 1
+  printf '%s' "$1" | python3 -I -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.buffer.read())
+except Exception:
+    sys.exit(1)
+h = d.get("hookSpecificOutput") if isinstance(d, dict) else None
+ok = (isinstance(h, dict) and h.get("hookEventName") == "PreToolUse" and h.get("permissionDecision") == "deny"
+      and set(h) <= {"hookEventName", "permissionDecision", "permissionDecisionReason"}
+      and all(isinstance(v, str) for v in h.values())
+      and len(d) <= 2 and all(isinstance(v, str) for k, v in d.items() if k != "hookSpecificOutput"))
+sys.exit(0 if ok else 1)' 2>/dev/null
+}
 refuse_json() {
   local built=""
   if [ "$NOTICE_LIBRARY" = missing ]; then
@@ -190,7 +211,7 @@ refuse_json() {
     return 0
   fi
   built="$(hook_deny_json "$1" "${2:-}" 2>/dev/null)"
-  if payload_match "$built" "$REFUSAL_SHAPE"; then
+  if refusal_is_one_deny "$built"; then
     printf '%s\n' "$built"
     return 0
   fi

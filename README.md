@@ -6366,7 +6366,9 @@ line, in a sentence true of the mark the reader named it with (`UNSURE` in
 `lib/db-write-calls.py`), and how to write the command so that it can be read. A refusal is printed
 whatever state `lib/hook-notice.sh` is in beside the hook, since a hook that prints nothing passes
 the command: when the library is missing, is a copy with no `hook_deny_json` (the library's name for
-a refusal, #3793), or that function prints anything but one whole refusal, the hook writes the
+a refusal, #3793), or that function prints anything Python's JSON reader does not take as exactly
+one PreToolUse refusal (so a refusal cut short, two objects, a raw line break in the reason, an ask
+holding a deny elsewhere or a refusal for another event are all replaced), the hook writes the
 refusal itself, without the characters that need escaping, and says which of the three it found.
 A refusal written that way is the decision alone: a notice the library would have put beside it
 (the one about pre-allowed Salesforce writes) is said inside the refusal's reason, since only the
