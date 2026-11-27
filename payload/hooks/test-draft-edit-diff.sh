@@ -52,10 +52,10 @@ check_not "basics: no author name" "Ada" "$out"
 check_not "basics: no channel id" "C0FIXTURE" "$out"
 
 # The author by display name, whatever its case.
-out="$(python3 -B "$TOOL" --records "$WORK/basics" --author "ada example" 2>&1)"
+out="$(HOME="$WORK/user" python3 -B "$TOOL" --records "$WORK/basics" --author "ada example" 2>&1)"
 check "the author can be named as Slack shows them" "pairs: 5 in 5 threads" "$out"
 # Somebody else's posts are never paired with a draft.
-out="$(python3 -B "$TOOL" --records "$WORK/basics" --author "U0FIXTUREZ" 2>&1)"
+out="$(HOME="$WORK/user" python3 -B "$TOOL" --records "$WORK/basics" --author "U0FIXTUREZ" 2>&1)"
 check "an author with no posts pairs nothing" "pairs: 0" "$out"
 
 # --- the floor -----------------------------------------------------------------------------------
@@ -110,10 +110,10 @@ check_eq "skip: a kind that does not exist is refused" "2" "$rc"
 check "skip: and the kinds are named" "figures cut" "$out"
 
 # --- failure paths ---------------------------------------------------------------------------------
-out="$(python3 -B "$TOOL" --records "$WORK/basics" 2>&1)"; rc=$?
+out="$(HOME="$WORK/user" python3 -B "$TOOL" --records "$WORK/basics" 2>&1)"; rc=$?
 check_eq "no author: refused" "2" "$rc"
 check "no author: says what to pass" "--author" "$out"
-out="$(python3 -B "$TOOL" --records "$WORK/nowhere" --author "$ME" 2>&1)"; rc=$?
+out="$(HOME="$WORK/user" python3 -B "$TOOL" --records "$WORK/nowhere" --author "$ME" 2>&1)"; rc=$?
 check_eq "no records folder: refused, never a clean zero" "3" "$rc"
 check "no records folder: said" "could not be read" "$out"
 if [ "$(id -u)" != 0 ]; then
@@ -191,6 +191,63 @@ check_eq "some wordless: a few posts with no words are measured" "0" "$rc"
 check "some wordless: they are counted" "no text under the Message TS line: 3" "$out"
 check "some wordless: and are no post at all, so none is a post with no draft before it" "posts with no draft before them: 0" "$out"
 check "some wordless: the twelve are still read as sent" "sent as drafted: 12 of 12 pairs" "$out"
+
+# --- the review's should fix points -----------------------------------------------------------------
+for f in nearly broadcast broadcast_channel_first untimed keys; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
+# S10: the example is the pair most like its draft, which here is the sixth of twelve.
+out="$(run nearly --examples)"
+check "nearly: the example is the pair that keeps most of its draft, not simply the latest" "SENT: Gauge 1 read 41 at dawn, 57 at noon and 63 at dusk, against 38 and 60 last week." "$out"
+check_eq "nearly: and it is still the only one for its kind" "1" "$(printf '%s\n' "$out" | grep -c '^Example for figures cut')"
+# S6: a reply Slack also shows in the channel is one post, whichever read came first.
+for f in broadcast broadcast_channel_first; do
+  out="$(run "$f")"
+  check "$f: one post read back twice makes one pair" "pairs: 1 in 1 thread" "$out"
+  check "$f: and it is read as it was sent" "sent as drafted: 1 of 1 pair" "$out"
+  check "$f: the unsent draft for the top of the channel is paired with nothing" "drafts with no post read back after them: 1" "$out"
+done
+# S7: a saved draft with no time on its record is in a count.
+out="$(run untimed)"
+check "untimed: a saved draft with no time on its record is counted as left out" "saved drafts with no time on their record: 1" "$out"
+check "untimed: and makes no pair" "pairs: 0 in 0 threads" "$out"
+check "timed drafts are never counted there" "saved drafts with no time on their record: 0" "$(run basics)"
+# S1: --shapes prints a key of a read result only when it is in the fixed list.
+out="$(run keys --shapes)"
+check "keys: a field in the fixed list is named" "result field messages: 1" "$out"
+check "keys: and so is another" "result field pagination: 1" "$out"
+check "keys: a key not in the list is counted by its length alone" "result fields not in the fixed list, of 362 characters: 1" "$out"
+check_not "keys: and none of its text is printed" "lock gates" "$out"
+check_not "keys: not even its first word" "sentence" "$out"
+
+# --- what Dan decided is read by the reader itself (review S2) ----------------------------------------
+# The file is the one the skill's decisions.py writes; the skill's own suite has that program write it.
+decided(){ mkdir -p "$WORK/$1/.claude/state/draft-edit-review" && printf '%s\n' "$2" > "$WORK/$1/.claude/state/draft-edit-review/decisions.json"; }
+as(){ local who="$1" which="$2"; shift 2; HOME="$WORK/$who" python3 -B "$TOOL" --records "$WORK/$which" --author "$ME" "$@" 2>&1; }
+decided declined '{"version": 1, "decisions": {"figures cut": {"decision": "never", "at": 1793631600}, "length cut": {"decision": "not-now", "at": 1793631600}}}'
+out="$(as declined recurring --examples)"; rc=$?
+check_eq "decided: a run beside decisions succeeds" "0" "$rc"
+check "decided: a kind Dan said never to offer is not offered, with nothing passed" "figures cut: 12 of 12 pairs, in 3 threads: decided before, not offered" "$out"
+check_not "decided: and shows no example" "Example for figures cut" "$out"
+check "decided: a kind he put off is offered again" "length cut: 12 of 12 pairs, in 3 threads: recurring" "$out"
+decided took '{"version": 1, "decisions": {"the opening changed": {"decision": "accepted", "at": 1793631600, "where": "no-ai-tells"}}}'
+check "decided: a kind he accepted is not offered again either" "the opening changed: 12 of 12 pairs, in 3 threads: decided before, not offered" "$(as took recurring)"
+decided torn '{"decisions": {"figures cut": '
+out="$(as torn recurring --examples)"; rc=$?
+check_eq "decided: decisions that are not JSON are refused, never read as nothing decided" "3" "$rc"
+check "decided: said" "could not be read" "$out"
+check_not "decided: and no kind is offered" "recurring" "$out"
+check_not "decided: nor any message text shown" "Gauge" "$out"
+decided odd '{"version": 1, "decisions": {"figures cut": {"decision": "perhaps", "at": 1793631600}}}'
+out="$(as odd recurring)"; rc=$?
+check_eq "decided: an answer decisions.py never writes is refused" "3" "$rc"
+if [ "$(id -u)" != 0 ]; then
+  decided barred '{"version": 1, "decisions": {}}'
+  chmod 000 "$WORK/barred/.claude/state/draft-edit-review/decisions.json"
+  out="$(as barred recurring)"; rc=$?
+  check_eq "decided: decisions that cannot be opened are refused" "3" "$rc"
+  check_not "decided: with no traceback" "Traceback" "$out"
+  chmod 644 "$WORK/barred/.claude/state/draft-edit-review/decisions.json"
+fi
+check_eq "decided: --shapes does not need the decisions, so it still prints" "0" "$(as torn recurring --shapes >/dev/null 2>&1; echo $?)"
 
 # --- it writes nothing, and holds no way to -----------------------------------------------------------
 before="$(cd "$WORK" && find . -type f -exec cksum {} + | sort)"

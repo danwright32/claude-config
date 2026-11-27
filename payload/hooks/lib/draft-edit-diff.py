@@ -17,23 +17,33 @@ that reads them and could write a file. test-draft-edit-diff.sh reads this sourc
 WHAT IT PRINTS. Counts, by default, and no message text, name or channel. With --examples it also
 prints ONE pair (the draft and what was sent, each cut at EXAMPLE_CHARS) for each kind of edit that
 is recurring and was not passed with --skip, which puts Slack message text into the session that
-runs it. Dan chose that on 2026-11-27 (issue #3554). --shapes prints, in place of the tallies, how
-the read results are laid out: counts and field names only.
+runs it. Dan chose that on 2026-11-27 (issue #3554). The pair shown is the one of that kind most
+like its draft. --shapes prints, in place of the tallies, how the read results are laid out: counts,
+and a name only when it is in one of two fixed lists here (KNOWN_FIELDS, KNOWN_LABELS). A key or a
+label not in them is counted by its length and never printed, since it could be anybody's words.
+
+WHAT DAN DECIDED BEFORE. A kind he accepted or said never to offer again is not offered: this reads
+~/.claude/state/draft-edit-review/decisions.json itself, the file the skill's decisions.py writes,
+so that holds whether or not the session passes anything. --skip adds to it. A decisions file that
+is there and cannot be read is exit 3, never nothing decided. It looks under the home folder only:
+CLAUDE_HOME, which decisions.py honours, is not read here.
 
 HOW A PAIR IS MADE.
   * A draft is a slack_send_message_draft call whose answer says Slack saved it (not marked as an
     error and naming none of Slack's draft errors, as mods/is-it-live/hooks/threads.ts judges it).
     Its place is its channel and the thread it replies in, or the top of the channel with no thread.
-    Its time is the time on its record.
+    Its time is the time on its record. A saved draft whose record carries no time (one kept only
+    in the copy of a request) is in no pair, and is counted.
   * A post is a message by --author in the result of a LATER slack_read_thread or slack_read_channel
-    call in any session record. A thread's first message belongs to the top of its channel.
+    call in any session record. A thread's first message belongs to the top of its channel. A post
+    is one post however many reads show it: a reply Slack also shows in the channel is in its thread.
   * Each post is compared with the latest draft saved in the same place before it. A draft is used
     once: a second post after the same draft was written without one and is left out, as is a post
     with no draft before it, and a draft a later draft replaced before anything was posted.
   * A post more than PAIR_WITHIN_DAYS days after that draft is not paired with it. Both are left
     out and counted.
   * Both are compared after Slack's formatting is set aside (links, bold, italics, bullets, quote
-    marks, spacing and case), by words, with difflib.
+    markers at the start of a line, spacing and case), by words, with difflib.
 
 WHAT IT CANNOT SEE, so nobody reads more into a count than it measured.
   * A thread no later session read back. Its draft is counted as having no post read back after it.
@@ -44,6 +54,15 @@ WHAT IT CANNOT SEE, so nobody reads more into a count than it measured.
     rewritten too, so the strongest cuts are in no kind.
   * A message he wrote from the start with no draft: it is left out, never counted as an edit.
   * Anything on the other Mac: each Mac holds only its own records, for as long as it keeps them.
+  * Who pressed send. A post a session sent as Dan is read as his own.
+  * An edit he made after sending. The text compared is the one in whichever record was read last.
+  * A read result that was cut short: a long thread, a channel read's limit, or an answer too large
+    for the session, which Claude Code keeps as a preview. How a record holds one was not measured.
+  * How the connector shows a mention, an emoji or a quotation mark against how the draft wrote it.
+    Only links, bold, italics, bullets, quote markers at the start of a line, spacing and case are
+    set aside, so a draft that opens with a mention can read as the opening changed.
+  * A thread read that was handed a reply's own time, not its parent's: that reply is placed at the
+    top of the channel unless another read shows it inside its thread.
 
 THE KINDS. A pair is one of the first two and nothing else, or any number of the other four.
   sent as drafted     the two are the same once formatting is set aside
@@ -83,8 +102,9 @@ its default answer "includes reactions + thread info", and where those lines go 
     only when its name is in KNOWN_LABELS, a fixed list. Any other is counted by its length alone.
 None of this was measured against a real read. It makes a layout that differs fail aloud.
 
-Exit codes: 0 measured; 2 a wrong argument; 3 the records folder could not be read; 4 read results
-were there and none could be read, or the text of most messages is not where this looks for it.
+Exit codes: 0 measured; 2 a wrong argument; 3 the records folder or the decisions file could not be
+read; 4 read results were there and none could be read, or the text of most messages is not where
+this looks for it.
 """
 import argparse
 import collections
@@ -120,6 +140,9 @@ EXAMPLE_CHARS = 600
 
 REPORTED = ("sent as drafted", "heavily rewritten")
 OFFERED = ("figures cut", "length cut", "the ask reworded", "the opening changed")
+# The answers in decisions.json that keep a kind from being offered again: SKIPPED in the skill's
+# decisions.py, and the skill's suite fails when the two differ.
+DECIDED_FOR_GOOD = ("accepted", "never")
 
 CHANNEL_HEAD = re.compile(r"^=== Message from (.+?) \(([A-Z0-9]+)\) at .* ===\s*$")
 PARENT_HEAD = re.compile(r"^=== THREAD PARENT MESSAGE ===\s*$")
@@ -136,6 +159,11 @@ LABEL_LINE = re.compile(r"^([A-Z][A-Za-z]{0,20}(?: [A-Za-z]{1,20}){0,2}):(?: |$)
 KNOWN_LABELS = ("From", "Time", "Message TS", "Thread TS", "Reactions", "Reaction", "Files", "File",
                 "Attachments", "Attachment", "Replies", "Reply count", "Latest reply", "Thread", "Edited",
                 "Channel", "Type", "Subtype", "User", "Bot", "Link", "Permalink", "Pinned")
+# The only keys of a read result's JSON object that --shapes prints by name: another fixed list of
+# plain field names. A key not in it is counted by its length and never printed.
+KNOWN_FIELDS = ("result", "results", "messages", "message", "channel_link", "pagination", "pagination_info",
+                "next_cursor", "cursor", "has_more", "ok", "error", "warning", "channel", "channel_id",
+                "thread_ts", "message_ts", "count", "total", "metadata", "response_metadata")
 # What is counted about where the TEXT of a message sits. These are the names --shapes prints.
 FOUND = "messages found (a heading with an author and a Message TS line)"
 TEXT_LINES = "lines of text under a Message TS line"
@@ -272,7 +300,7 @@ def read_records(root, shape):
     drafts = {}   # call id -> {"place", "text", "at"}
     saved = {}    # call id -> whether Slack saved it
     reads = {}    # call id -> (tool, channel, parent ts)
-    posts = {}    # (place, ts) -> (name, member id, body)
+    posts = {}    # (channel, ts) -> (place, name, member id, body, whether its last line is label shaped)
     done = set()  # read call ids whose result was taken
     files = 0
 
@@ -357,7 +385,12 @@ def take_result(item, drafts, saved, reads, posts, done, shape):
         return
     inner, fields = unwrap(text)
     for field in fields:
-        shape["result field " + field] += 1
+        # A key is printed only when it is one of KNOWN_FIELDS. Any other could be anything, a
+        # sentence of somebody's included, so only its length is counted (the review, S1).
+        if field in KNOWN_FIELDS:
+            shape["result field " + field] += 1
+        else:
+            shape["result fields not in the fixed list, of %d characters" % len(field)] += 1
     found = posts_in(inner, shape)
     if not found:
         # No message with text: no heading this knows, or every message's text is somewhere else.
@@ -366,7 +399,12 @@ def take_result(item, drafts, saved, reads, posts, done, shape):
     shape["read results with messages"] += 1
     for ts, name, uid, body, labelled in found:
         place = (channel, "") if tool == CHANNEL_TOOL or ts == parent else (channel, parent)
-        posts[(place, ts)] = (name, uid, body, labelled)
+        known = posts.get((channel, ts))
+        if known is not None and known[0][1] and not place[1]:
+            # Already read inside its thread. A reply Slack also shows in the channel is ONE post, in
+            # its thread, whichever read came first: it is never a second post at the top (S6).
+            place = known[0]
+        posts[(channel, ts)] = (place, name, uid, body, labelled)
 
 
 def sentences(text):
@@ -423,7 +461,7 @@ def pair_up(drafts, saved, posts, author):
         if saved.get(call) and d["at"] is not None:
             by_place[d["place"]].append((d["at"], call, d["text"]))
     mine = collections.defaultdict(list)
-    for (place, ts), (name, uid, body, labelled) in posts.items():
+    for (_channel, ts), (place, name, uid, body, labelled) in posts.items():
         if uid.lower() == want or name.strip().lower() == want:
             mine[place].append((float(ts), body, labelled))
     pairs, used, no_draft, doubtful = [], set(), 0, 0
@@ -458,9 +496,46 @@ def pair_up(drafts, saved, posts, author):
                 replaced += 1
             else:
                 unread += 1
+    # A saved draft kept only in the copy of a request has no time, so nothing can be said to come
+    # after it. It is in no pair, and it is counted so that it is in a count (S7).
+    untimed = sum(1 for call, d in drafts.items() if saved.get(call) and d["at"] is None)
     return sorted(pairs, key=lambda p: p[1]), {"unread": unread, "replaced": replaced, "no_draft": no_draft,
                                                "doubtful": doubtful, "late_posts": late_posts,
-                                               "late_drafts": len(late)}
+                                               "late_drafts": len(late), "untimed": untimed}
+
+
+def decisions_path():
+    """Where the draft-edit-review skill's decisions.py keeps what Dan decided, on this Mac."""
+    return os.path.join(os.path.expanduser("~"), ".claude", "state", "draft-edit-review", "decisions.json")
+
+
+def decided_kinds():
+    """The kinds Dan accepted or said never to offer again, read from the file decisions.py writes.
+
+    Returns (kinds, None), or (None, why) when the file is there and cannot be read: that is never
+    taken as nothing decided, which would put to him again what he declined. Reading it HERE is what
+    makes "never" hold: it used to depend on the session passing --skip for each kind (S2)."""
+    path = decisions_path()
+    if not os.path.lexists(path):
+        return set(), None
+    try:
+        with open(path, "rb") as f:
+            data = json.loads(f.read().decode("utf-8", "replace"))
+    except OSError as e:
+        return None, "%s could not be read (%s)" % (path, e.strerror or e)
+    except ValueError:
+        return None, "%s could not be read (it is not JSON)" % path
+    found = data.get("decisions") if isinstance(data, dict) else None
+    if not isinstance(found, dict):
+        return None, "%s could not be read (it holds no decisions object)" % path
+    kinds = set()
+    for kind, entry in found.items():
+        answer = entry.get("decision") if isinstance(entry, dict) else None
+        if kind not in OFFERED or answer not in ("accepted", "not-now", "never"):
+            return None, "%s could not be read (an entry in it is not one decisions.py writes)" % path
+        if answer in DECIDED_FOR_GOOD:
+            kinds.add(kind)
+    return kinds, None
 
 
 def cut(text):
@@ -472,7 +547,7 @@ def plural(n, word):
 
 
 def print_shapes(shape):
-    print("How the Slack read results in these records are laid out (counts and field names only)")
+    print("How the Slack read results in these records are laid out (counts, and names from two fixed lists only)")
     for key in sorted(shape):
         print("  %s: %d" % (key, shape[key]))
 
@@ -497,6 +572,14 @@ def main():
         print("draft-edit-diff: the records folder %s could not be read, so nothing was measured." % args.records,
               file=sys.stderr)
         return 3
+    decided = set()
+    if not args.shapes:
+        decided, why = decided_kinds()
+        if decided is None:
+            print("draft-edit-diff: %s, so a kind Dan declined could be offered to him again. Nothing was "
+                  "measured, and nothing here is read as undecided." % why, file=sys.stderr)
+            return 3
+    skipped = decided | set(args.skip)
     shape = collections.Counter()
     for key in (FOUND, TEXT_LINES, NO_TEXT, ABOVE, ABOVE_LINES, LABELLED):
         shape[key] = 0  # printed by --shapes at zero too: where the text sits is what a first run checks
@@ -560,6 +643,8 @@ def main():
     print("also left out: posts more than %d days after the draft before them: %d (drafts: %d). The %d days "
           "is a setting chosen on 2026-11-27, not a measurement." % (
               PAIR_WITHIN_DAYS, left["late_posts"], left["late_drafts"], PAIR_WITHIN_DAYS))
+    print("also left out: saved drafts with no time on their record: %d (nothing can be said to come after "
+          "one)" % left["untimed"])
     tally = collections.defaultdict(list)
     for place, at, draft, sent in pairs:
         kinds, likeness = kinds_of(draft, sent)
@@ -573,7 +658,7 @@ def main():
     for kind in OFFERED:
         found = tally[kind]
         in_threads = len({p[0] for p in found})
-        if kind in args.skip:
+        if kind in skipped:
             standing = "decided before, not offered"
         elif len(found) >= FLOOR_PAIRS and in_threads >= FLOOR_THREADS:
             standing = "recurring"
@@ -585,7 +670,9 @@ def main():
                                           plural(in_threads, "thread"), standing))
     if args.examples:
         for kind in examples:
-            _place, _at, draft, sent, _likeness = tally[kind][-1]  # the latest pair of that kind
+            # The pair of that kind most like its draft, and the latest of those: the one that shows
+            # the edit with least else changed. The latest pair alone can be the least like one (S10).
+            _place, _at, draft, sent, _likeness = max(tally[kind], key=lambda p: (p[4], p[1]))
             print("")
             print("Example for %s (Slack message text: show it to Dan, and copy it nowhere)" % kind)
             print("DRAFT: " + cut(draft))
