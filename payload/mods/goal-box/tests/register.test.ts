@@ -1811,7 +1811,7 @@ const WORK_ROWS: [string, string, Record<string, unknown>, unknown, boolean][] =
   // Claude Code marks the result of a call whose tool held its input read only (`isReadOnly: true`,
   // "Bash `ls`: set"; for a connected tool, its server's declaration). Such a call changed nothing,
   // whatever the review's test says of its tool's name.
-  ['a command Claude Code marked read only, such as git status', 'Bash', { command: 'git status' }, { result: '', text: '', isReadOnly: true }, false],
+  ['a command whose result Claude Code marked read only', 'Bash', { command: 'git status' }, { result: '', text: '', isReadOnly: true }, false],
   ['a connected tool its server declares read only', 'mcp__is-it-live__card', {}, { result: '', text: '', isReadOnly: true }, false],
   // Never read only by default: a result without the mark, or with anything but true there, is
   // judged by the review's own test of the tool's name, as every call was before the mark was read.

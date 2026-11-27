@@ -12013,9 +12013,9 @@ session then does work after (his answer of 2026-11-27: an answer alone, such as
 step, is no request; a reply he types into the picker in place of a choice is an answer). His
 answer waits only until the turn it was given in ends, so work in a later turn he did not start is
 not work he picked. Work is a call of the main conversation that ran, that Claude Code did not mark
-read only (`isReadOnly` on the call's result, set when the tool held its input read only, as Bash
-does for `git status`; a result without the mark is never taken as read only), and whose tool the
-end of turn review's own test counts as able to change something (`is_mutating` in
+read only (`isReadOnly` on the call's result, set when the tool held its input read only, as its
+typings say Bash does for `ls`; a result without the mark is never taken as read only), and whose
+tool the end of turn review's own test counts as able to change something (`is_mutating` in
 `hooks/turn-worked.py`, run from that file by the mod, so there is one list of such tools;
 `tests/test-goal-box-work-test.sh` holds the mod's command to the real file; a run that could not
 be read is not made again for the same tool's name in that turn). The box's own tool,

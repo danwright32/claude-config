@@ -22,8 +22,9 @@ import type { GoalBoxPicker } from '../types/index.d.ts'
 // The review of pull request 3852 (2026-11-27) added three things. A call Claude Code itself marks
 // read only is not work whatever its tool's name: the result a tool.call hook gets carries
 // `isReadOnly: true` "only when the tool held the input it executed read-only by its own check", so
-// `git status` after an answer that only confirmed a step opens no second box; a result without the
-// mark is judged by the test above, never taken as read only. An answer waits only until the turn it
+// a look around after an answer that only confirmed a step opens no second box (the typings' example
+// is Bash `ls`; which commands Bash holds read only was not measured in a session); a result without
+// the mark is judged by the test above, never taken as read only. An answer waits only until the turn it
 // was given in ends, so a turn Dan did not start (a prompt a mod sends, a wake up, a job's notice)
 // cannot do work that counts as picked by an answer from before it. And a run of the test that could
 // not be read is not made again for the same tool's name in that turn, since each run holds the

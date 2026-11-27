@@ -765,9 +765,9 @@ export const register: Register = on => {
       return r
     }
     // Nor is a call Claude Code marked read only: `isReadOnly` is on the result "only when the tool
-    // held the input it executed read-only by its own check" (`git status`; a connected tool its
-    // server declares read only). A result without the mark is judged by the review's test, as
-    // every call was before the mark was read, and is never taken as read only.
+    // held the input it executed read-only by its own check" (the typings' example is Bash `ls`; for
+    // a connected tool, its server's declaration). A result without the mark is judged by the
+    // review's test, as every call was before the mark was read, and is never taken as read only.
     const came = r as { deny?: unknown; isError?: unknown; isReadOnly?: unknown }
     if (came.deny === undefined && came.isError !== true && came.isReadOnly !== true) await noteCall($, e.tool)
     return r
