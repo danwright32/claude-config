@@ -70,8 +70,8 @@ describe('turnAt', () => {
   }
   const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false })
 
-  // #1811: both of this mod's blocks are marks, the step left in prose and the page of steps, so a
-  // turn holding either is never blocked by this mod again.
+  // #1811, #3842: each of this mod's blocks is a mark, the step left in prose, the page of steps
+  // and the refused call, so a turn holding any of them is never blocked by this mod again.
   test('reads the transcript\'s last bytes through perl, the path and each mark as arguments, never in the program', async () => {
     const { asked, run } = runs(ok([user('p1'), said('hello')].join('\n')))
     expect(await turnAt(T, run)).toEqual({ state: 'read', texts: ['hello'], isOurs: false, promptId: 'p1', refused: 0 })
