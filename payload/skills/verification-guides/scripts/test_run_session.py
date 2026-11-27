@@ -2320,6 +2320,29 @@ class CutOffTests(RunFixture):
         with open(said) as f:
             self.assertEqual(f.read(), "gone\n", "the project's stop command ran before the file was removed")
 
+    def test_a_stop_that_cannot_list_serves_group_still_ends_it_and_records_its_ending(self):
+        # ps fails once the stop has removed the file and signalled serve. Raised out of the stop,
+        # that left a supervisor with no ending and no file: a later `stop` would then signal
+        # nothing, and whatever was left of serve's group would run on with nothing to end it by.
+        def ps_fails(pgid):
+            v.fail("ps-failed", "ps could not list processes: a stand in")
+
+        serve = self.child()  # ignores SIGTERM, so the stop has to kill it
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        monitor = MonitorThatSaysClean()
+        with mock.patch.object(run_session, "live_members", ps_fails):
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=monitor)
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertEqual((rec["stopped_by"], rec["serve_exit"]), ("stop", -signal.SIGKILL), rec)
+        self.assertIsNone(rec["serve_survivors"], "a group that could not be listed was recorded as empty")
+        self.assertIn("could not be read", rec["stop_detail"])
+        self.assertIn("a stand in", rec["stop_detail"])
+        self.assertEqual(monitor.asked, 1, "the stop did not go on to settle the monitor")
+        self.assertEqual(wait_group_empty(serve.pid), [], "serve's group outlived a stop that could not list it")
+        # And `stop` does not call that run stopped: nothing read what was left of serve's group.
+        rec, raised = self.stop_from_another_process(rdir)
+        self.assert_says_serve_unconfirmed(raised, serve.pid)
+
     def test_the_file_is_there_and_whole_before_the_supervisor_starts_its_first_child(self):
         # The order everything above rests on: a child that was started before the file existed and
         # then lost its supervisor could never be ended by a later `stop`. Seen at the two places a

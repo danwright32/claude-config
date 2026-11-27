@@ -198,8 +198,9 @@ STOP_COMMAND = {}
 # cross (see held). Never held across a wait.
 PIN = threading.Lock()
 # The members of serve's group still alive when a stop in this process had dealt with it, by receipt
-# folder, read while serve was not yet collected. A cut off that comes after serve was collected
-# reports these: by then the number is nobody's, and what `ps` shows under it may be a stranger's.
+# folder, read while serve was not yet collected, or None when ps could not list them. A cut off
+# that comes after serve was collected reports these: by then the number is nobody's, and what `ps`
+# shows under it may be a stranger's.
 LEFT = {}
 
 
@@ -846,10 +847,20 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
                        " watching it worked" % proc.pid)
                 return cut_off(rdir, reason, why, detail=detail, proc=proc, monitor=monitor, leave=leave)
         if signal_own(proc, signal.SIGTERM) is not None:
-            if not wait_gone(proc.pid, stop_s):
+            try:
+                if not wait_gone(proc.pid, stop_s):
+                    signal_own(proc, signal.SIGKILL)
+                    wait_gone(proc.pid, stop_s)
+                survivors = LEFT[rdir] = live_members(proc.pid)
+            except v.VerificationError as e:
+                # ps failed, so whether the group is empty cannot be read. That is never read as
+                # empty: the group is killed while serve still pins its number, the ending says
+                # nothing was read, and the stop goes on to record it. Raised from here it would
+                # leave no ending with the file already gone, and a later `stop` signals nothing.
                 signal_own(proc, signal.SIGKILL)
-                wait_gone(proc.pid, stop_s)
-            survivors = LEFT[rdir] = live_members(proc.pid)
+                survivors = LEFT[rdir] = None
+                detail = ((detail + "; " if detail else "") + "whether serve's group is empty could not be read, so"
+                          " it was killed unread: %s" % e)
         else:  # a cut off on another thread collected serve first: its ending is the one recorded
             survivors = LEFT.get(rdir)
         serve_exit = collect(proc, COLLECT_S)
