@@ -55,9 +55,16 @@ declare module 'claude-code' {
        * review's test counts, which makes its review still to come, or why that could not be read.
        */
       reviewWork: { seq: number; worked: boolean; unread?: string }
-      /** #3843: the request (`prompts` above) in which a box was last refused until the review was answered. */
-      reviewHeld: number
-      /** #3843: the value of `prompts` when the session was last asked, at a turn's end, to call for such a box again. */
+      /**
+       * #3843: the request (`prompts` above) in which a box was last refused until the review was
+       * answered; null once a message Dan typed has begun another request, which drops the hold.
+       */
+      reviewHeld: number | null
+      /**
+       * #3843: the value of `prompts` when the request's one message asking for such a box again
+       * was last spent at a turn's end: sent, or given up because a review handed over that turn
+       * was not answered.
+       */
       reviewAsked: number
       /** #3843: the request whose box was shown over a reading of the review that failed, and what was said of it. */
       reviewUnread: { prompts: number; text: string }

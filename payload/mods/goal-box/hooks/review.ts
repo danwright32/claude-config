@@ -86,6 +86,27 @@ export const reviewRead = (r: { exitCode: number; stdout: string; stderr: string
  */
 export const canBeTurnWork = (call: { tool: string; agentId?: unknown }): boolean => call.agentId === undefined && call.tool !== TOOL && call.tool !== 'AskUserQuestion'
 
+/**
+ * Whether a Bash command is the review's last step for the MAIN conversation's record: the record's
+ * `answered` command with no transcript named (it then finds the session by CLAUDE_CODE_SESSION_ID,
+ * which a subagent's Bash call carries too, as the main session's id: read in a subagent's own shell
+ * on 2026-11-27), or naming this session's transcript, quoted as the refusal writes it or not. With
+ * this session's transcript unknown, any `answered` is taken as the main conversation's: which
+ * record it would mark cannot be told. One naming another transcript, as a test of the record does,
+ * is not. Only a subagent's call is put to this (register.ts): a subagent, or a fork that inherited
+ * the review's instruction, would otherwise mark the main session's review answered while Dan still
+ * has its picker open.
+ */
+export const answersMainReview = (command: string, transcript: string | undefined): boolean => {
+  if (!/review-record\.py["']?\s+answered(?![\w-])/.test(command)) return false
+  if (!/\s--transcript[\s=]/.test(command) || transcript === undefined) return true
+  return command.includes(transcript) || command.includes(quoted(transcript))
+}
+
+/** What a subagent is told when its Bash call would answer the main conversation's review. */
+export const notMainReviewText = (): string =>
+  `Not run: only the main conversation records that its end of turn review was answered, as that review's last step, and this command would record it for the main conversation from a subagent. Leave it to the main conversation. To try the record's \`answered\` command itself, name a transcript of your own with --transcript.`
+
 /** Whether this turn has had a call the review hooks' test counts, or why that could not be read. */
 export type TurnWork = { worked: boolean; unread?: string }
 
@@ -95,12 +116,21 @@ export type ReviewWait = { hold: string } | { unread: string } | null
 const WAITS = 'the box waits until Dan has answered the end of turn review'
 const LAST_STEP = (command: string) => `Once Dan has answered what the review asked, or it asked him nothing, run \`${command}\` and then call this tool again, as the review's last step`
 
+// What a refusal says of the turn's end. The one message is sent once for a request, and not at all
+// after a review handed over for it went unanswered (register.ts askAfterReview), so a refusal made
+// after either must not promise it: before the review of pull request 3869 it did, and the session
+// waited for a message that never came.
+const ASKED_ONCE = 'If no review is handed to you when the turn ends, you are asked once to call this tool again.'
+const NOT_ASKED_AGAIN =
+  'Nothing asks you to call this tool again when this turn ends: that is done once for a request, and for this one it has been done or a review handed over for it was left unanswered. The box for this request now comes only through a review that is handed to you and answered.'
+
 /**
  * Whether the review holds a box that would otherwise show. Handed and not answered: held, whatever
  * the turn did. Answered: shown. None: held only in a turn that has changed something, where the
- * review is still to come. Unread, either reading: shown, and said.
+ * review is still to come. Unread, either reading: shown, and said. `spent` says this request's one
+ * message at a turn's end has been sent, or given up over an unanswered review.
  */
-export const reviewWait = (q: { read: ReviewRead; work: TurnWork | undefined; command: string }): ReviewWait => {
+export const reviewWait = (q: { read: ReviewRead; work: TurnWork | undefined; command: string; spent?: boolean }): ReviewWait => {
   const { read, work, command } = q
   if ('unread' in read) return { unread: `the end of turn review's record could not be read (${read.unread})` }
   if (read.state === 'answered') return null
@@ -108,7 +138,7 @@ export const reviewWait = (q: { read: ReviewRead; work: TurnWork | undefined; co
     return { hold: `No box yet: the end of turn review was handed to you this turn and is not on record as answered, and ${WAITS}. Finish the review first. ${LAST_STEP(command)}.` }
   if (work?.worked)
     return {
-      hold: `No box yet: this turn has changed something, so its end of turn review is still to come, and ${WAITS}. End your turn without the box. When the review is handed to you, do it. ${LAST_STEP(command)}. If no review is handed to you when the turn ends, you are asked once to call this tool again.`,
+      hold: `No box yet: this turn has changed something, so its end of turn review is still to come, and ${WAITS}. End your turn without the box. When the review is handed to you, do it. ${LAST_STEP(command)}. ${q.spent ? NOT_ASKED_AGAIN : ASKED_ONCE}`,
     }
   if (work?.unread !== undefined) return { unread: `whether this turn changed something, and so whether an end of turn review is still to come, could not be read (${work.unread})` }
   return null
@@ -130,4 +160,4 @@ export const promptedUnreadText = (why: string): string =>
  * answered and the turn then ended with no box shown.
  */
 export const askAgainText = (): string =>
-  `GOAL ACCOMPLISHED BOX WAITING. Earlier in this request a call to ${TOOL} was refused until the end of turn review had run and Dan had answered it. That turn has ended and no box was shown since. If every part of what Dan asked for is finished, call ${TOOL} again now, with goal set to what he asked for and shipped listing what shipped, one short line each. If part of it is still to do, do not call it and say nothing of the box.`
+  `GOAL ACCOMPLISHED BOX WAITING. Earlier in this request a call to ${TOOL} was refused until the end of turn review had run and Dan had answered it. That turn has ended and no box was shown since. If every part of what Dan asked for is finished, call ${TOOL} again now, with goal set to what he asked for and shipped listing what shipped, one short line each. Call it before anything else in this turn: a command or an edit first, the review's last step included, makes this a turn with a review of its own to come, and the call waits again. If part of it is still to do, do not call it and say nothing of the box.`

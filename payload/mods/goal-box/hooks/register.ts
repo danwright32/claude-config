@@ -1,11 +1,11 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
+import { cutCall, cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import { pickerCame } from './request.ts'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
 import { WORK_TEST_MS, alreadyShownText, answered, workRead, workTestArgv, type WorkRead } from './request.ts'
-import { REVIEWS_OFF_SUFFIX, REVIEW_STATE_MS, answeredCommand, askAgainText, canBeTurnWork, promptedUnreadText, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, type ReviewRead, type ReviewWait } from './review.ts'
+import { REVIEWS_OFF_SUFFIX, REVIEW_STATE_MS, answeredCommand, answersMainReview, askAgainText, canBeTurnWork, notMainReviewText, promptedUnreadText, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, type ReviewRead, type ReviewWait } from './review.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { askPr } from './mod-kit/prmerged.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
@@ -509,9 +509,14 @@ const noteTurnWork = async ($: EngineInterface, tool: string): Promise<void> => 
     for (let i = 0; i < 10; i++) {
       const seq = (await $.state.get(closeSeqRef)).value ?? 0
       const held = await $.state.get(reviewWorkRef)
+      if (held.value?.seq === seq && held.value.worked) return
       // One failed run a turn: a test that cannot be run is not run again on every call of the turn.
-      if (held.value?.seq === seq && (held.value.worked || held.value.unread !== undefined)) return
-      const read = await changesSomething($, tool)
+      // A name the test has already answered yes for costs no run, so it still makes this a turn
+      // that changed something: before the review of pull request 3869 one failed run for the
+      // turn's first tool switched the hold off for the whole turn.
+      const failed = held.value?.seq === seq && held.value.unread !== undefined
+      if (failed && workSaid.get(tool) !== true) return
+      const read: WorkRead = failed ? { changes: true } : await changesSomething($, tool)
       if ('changes' in read && !read.changes) return
       const next = 'changes' in read ? { seq, worked: true } : { seq, worked: false, unread: read.unread }
       if ((await $.state.set(reviewWorkRef, next, { ifVersion: held.version })).isSet) return
@@ -559,13 +564,17 @@ const recordNow = async ($: EngineInterface): Promise<{ read: ReviewRead; comman
   return { read, command: answeredCommand(t.path) }
 }
 
-/** Whether the end of turn review holds a box that would otherwise show (review.ts). */
-const reviewNow = async ($: EngineInterface): Promise<ReviewWait> => {
+/**
+ * Whether the end of turn review holds a box that would otherwise show (review.ts), for a call made
+ * under this count of Dan's requests.
+ */
+const reviewNow = async ($: EngineInterface, prompts: number): Promise<ReviewWait> => {
   const record = await recordNow($)
   if (!record) return null
   const seq = (await $.state.get(closeSeqRef)).value ?? 0
   const work = (await $.state.get(reviewWorkRef)).value
-  return reviewWait({ read: record.read, work: work?.seq === seq ? work : undefined, command: record.command })
+  const spent = (await $.state.get(reviewAskedRef)).value
+  return reviewWait({ read: record.read, work: work?.seq === seq ? work : undefined, command: record.command, spent: spent !== undefined && spent >= prompts })
 }
 
 /**
@@ -596,7 +605,7 @@ const endRecord = ($: EngineInterface): (() => Promise<EndRecord>) => {
 const noteReviewHeld = async ($: EngineInterface, prompts: number): Promise<void> => {
   for (let i = 0; i < 10; i++) {
     const held = await $.state.get(reviewHeldRef)
-    if (held.value !== undefined && held.value >= prompts) return
+    if (typeof held.value === 'number' && held.value >= prompts) return
     if ((await $.state.set(reviewHeldRef, prompts, { ifVersion: held.version })).isSet) return
   }
 }
@@ -615,7 +624,7 @@ const noteReviewHeld = async ($: EngineInterface, prompts: number): Promise<void
  */
 const askAfterReview = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<boolean> => {
   const held = (await $.state.get(reviewHeldRef)).value
-  if (held === undefined) return false
+  if (typeof held !== 'number') return false
   const asked = await $.state.get(reviewAskedRef)
   if (asked.value !== undefined && asked.value >= held) return false
   if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= held)) return false
@@ -865,6 +874,11 @@ export const register: Register = on => {
       // #3843: his message is the request now, so an answer he gave in a picker that no work
       // followed opens nothing more.
       await $.state.set(pickerRef, null)
+      // #3843: and a box refused until the review was answered belonged to the request before, so
+      // its one message is not sent under this one, where it would say "this request" of the wrong
+      // one and ask for a box under it (the review of pull request 3869). Work he picks in a picker
+      // does not do this: the hold is remembered across the new request that opens.
+      await $.state.set(reviewHeldRef, null)
     }
     return r
   })
@@ -888,7 +902,7 @@ export const register: Register = on => {
     const entry: GoalBoxShown = { key: d.show.key, kind: d.show.kind, at: await $.clock.now(), prompts }
     // #3843: a box that would show waits for the turn's end of turn review (review.ts). One the
     // claim below would refuse anyway is left to it, so "already shown" is never said as "waiting".
-    const review = taken(shown, entry) ? null : await reviewNow($)
+    const review = taken(shown, entry) ? null : await reviewNow($, prompts)
     if (review && 'hold' in review) {
       await noteReviewHeld($, prompts)
       return { deny: review.hold }
@@ -899,10 +913,16 @@ export const register: Register = on => {
     if (review) {
       // A reading that failed never holds the box and is never passed over in silence: said to Dan,
       // to the session, and kept for the close card's reasons file, where a later session can read it.
+      // The box is claimed by now, so nothing here may stop it being drawn: a note that cannot be
+      // kept is said and passed over (the review of pull request 3869).
       const said = shownUnreadText(review.unread)
-      $.ui.log(said)
       context.push(said)
-      await $.state.set(reviewUnreadRef, { prompts, text: said })
+      $.ui.log(said)
+      try {
+        await $.state.set(reviewUnreadRef, { prompts, text: said })
+      } catch (err) {
+        $.ui.log(`That the Goal accomplished box was shown without waiting could not be kept for the close card's reasons file (${errorText(err, MOD)}).`)
+      }
     }
     const text = boxText(d.show.goal, input.shipped)
     try {
@@ -946,6 +966,17 @@ export const register: Register = on => {
     await $.state.set(closeStopRef, { seq: (await $.state.get(closeSeqRef)).value ?? 0, tasks: x.background_tasks, crons: x.session_crons })
     return r
   }).catch(watchesOnly)
+
+  // #3843: only the main conversation answers its end of turn review. A subagent's Bash call that
+  // would record the answer for the main conversation (review.ts answersMainReview) is refused before
+  // it runs. The main conversation's own call, and every other command, pass straight through.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    if (e.agentId === undefined) return next(e)
+    const command = toolArgs(e as unknown as Record<string, unknown>).command
+    if (typeof command !== 'string' || !answersMainReview(command, undefined)) return next(e)
+    const t = await transcriptNow($)
+    return answersMainReview(command, 'why' in t ? undefined : t.path) ? { deny: notMainReviewText() } : next(e)
+  }).catch(($, e, next) => cutCall('the goal box', e, next))
 
   // #3770, reading B: a main conversation Bash call that ran (not one run in the background, which
   // the job watcher records, and not one a guard refused) is read for what may leave a process behind.
@@ -1024,7 +1055,10 @@ export const register: Register = on => {
     }
     // A met goal's prompt is not spent by an unanswered review, as the other two are: its box is the
     // one Dan set a /goal for, so it is sent at the first later turn end with no such review.
-    if (((await $.state.get(askedRef)).value ?? []).includes(goal.met.id)) return r
+    // Asked about already, or its box already shown (markAsked's own two tests): nothing to send, so
+    // the record is not asked either.
+    const metId = goal.met.id
+    if (((await $.state.get(askedRef)).value ?? []).includes(metId) || ((await $.state.get(shownRef)).value ?? []).some(s => s.key === `goal:${metId}`)) return r
     const end = await record()
     if (end.unanswered) {
       debug($, `${UNANSWERED}, so the prompt for the met /goal waits for a later turn end`)
