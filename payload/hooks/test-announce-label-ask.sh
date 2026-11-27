@@ -86,11 +86,13 @@ H="$(hash_text "$POST")"
 approve() { mkdir -p "$STORE"; printf '{"kind": "approved", "repo": "%s", "hash": "%s"}\n' "${1:-acme/widget}" "$H" >> "$STORE/record.jsonl"; }
 forget() { rm -rf "$STORE"; }
 # call <tool> <tool input json> [cwd]: the hook's answer, as "<decision> rc=<exit>|<reason>|<notice>".
-# TALK names a session transcript to carry (session s1); AGENT=1 makes the call a subagent's.
+# TALK names a session transcript to carry (session s1, or the one SESSION names); AGENT=1 makes the
+# call a subagent's.
 call() {
   local body rc
   body="$(python3 -c 'import json, os, sys
-d = {"hook_event_name": "PreToolUse", "tool_name": sys.argv[1], "tool_input": json.loads(sys.argv[2]), "cwd": sys.argv[3], "session_id": "s1",
+d = {"hook_event_name": "PreToolUse", "tool_name": sys.argv[1], "tool_input": json.loads(sys.argv[2]), "cwd": sys.argv[3],
+     "session_id": os.environ.get("SESSION") or "s1",
      "transcript_path": os.environ.get("TALK") or (sys.argv[3] + "/no-transcript.jsonl")}
 if os.environ.get("AGENT") == "1":
     d["agent_id"] = "a9bba4c0ffee"
@@ -239,6 +241,73 @@ check "and his approval is written to the record" "$(grep -q "\"hash\": \"$H\"" 
 r="$(run "$EDIT")"
 check "so a later session's command goes through on the record" "$(passed "$r" && echo ok || echo "$r")"
 forget
+# The picker's question must tell him to save the file (#3742 item 7): an edit he left unsaved in
+# the window is not in the wording that is hashed, so his Approve in a picker that does not say so
+# puts the label on nothing.
+F="$(aaf_shown "$WORK/nosave" "$WORK/nosave.jsonl" "$POST")"
+aaf_talk "$WORK/nosave.jsonl" ask acme/widget "$F" "" nosave
+r="$(TALK="$WORK/nosave.jsonl" run "$EDIT")"
+check "R10 his Approve in a picker whose question does not tell him to save the file puts no label on" "$(asks_dan "$r" && [[ "$r" == *"did not tell him to save the file"* ]] && echo ok || echo "$r")"
+check "and nothing is written to the record for it" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+aaf_talk "$WORK/nosave.jsonl" bash "$AAF_BBEDIT --front-window $F"
+aaf_talk "$WORK/nosave.jsonl" ask acme/widget "$F"
+r="$(TALK="$WORK/nosave.jsonl" run "$EDIT")"
+check "R10 still possible: asked again with the sentence, the command goes through" "$(passed "$r" && echo ok || echo "$r")"
+forget
+# An Approve with words typed beside it approves nothing (#3742 low 20; Dan, 2026-11-26): what he
+# typed is a change he wants, so the label goes on nothing and the refusal gives his words.
+F="$(aaf_shown "$WORK/typed" "$WORK/typed.jsonl" "$POST")"
+aaf_talk "$WORK/typed.jsonl" ask acme/widget "$F" "" "typed:approve, but fix line 2"
+r="$(TALK="$WORK/typed.jsonl" run "$EDIT")"
+check "R10 his Approve with words typed beside it puts no label on, and the refusal gives his words" "$(asks_dan "$r" && [[ "$r" == *"approve, but fix line 2"* && "$r" == *"approves nothing"* ]] && echo ok || echo "$r")"
+check "and no approval is written to the record for it" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+aaf_talk "$WORK/typed.jsonl" bash "$AAF_BBEDIT --front-window $F"
+aaf_talk "$WORK/typed.jsonl" ask acme/widget "$F"
+r="$(TALK="$WORK/typed.jsonl" run "$EDIT")"
+check "R10 still possible: asked again and approved with nothing typed, the command goes through" "$(passed "$r" && echo ok || echo "$r")"
+forget
+# Every picker is noted by its ids alone when he answers it (#3789), and this hook judges each noted
+# picker from its session's transcript. The command here is another session's (s2), which holds no
+# picker. An ordinary picker he answered with the approving words puts no label on and is settled;
+# his Approve in a picker the hook could not tell the source of, because the transcript did not
+# hold its line yet, puts the label on once the transcript holds it.
+noted() { ANNOUNCE_APPROVALS_DIR="$STORE" bash "$DIR/announce-answer-note.sh" 2>&1; }
+# on_record <kind> <picker> [needle]: whether the record holds a line of that kind for that picker,
+# holding the needle. Read into a variable and matched there, never piped into a quiet grep.
+on_record() {
+  local line
+  line="$(grep "\"kind\": \"$1\"" "$STORE/record.jsonl" 2>/dev/null | grep "\"picker\": \"$2\"")"
+  [[ -n "$line" && "$line" == *"${3:-}"* ]]
+}
+F="$(aaf_shown "$WORK/elsewhere" "$WORK/elsewhere.jsonl" "$POST")"
+PL="$(aaf_talk "$WORK/elsewhere.jsonl" put acme/widget "$F" plain)"
+said="$(aaf_talk "$WORK/elsewhere.jsonl" payload "$PL" acme/widget "$F" "" plain | noted)"
+aaf_talk "$WORK/elsewhere.jsonl" answer "$PL" acme/widget "$F" "Approve the wording" plain
+check "#3789 the hook that notes a picker says nothing after an ordinary one, and notes it" "$([ -z "$said" ] && on_record answered "$PL" && echo ok || echo "$said $(cat "$STORE/record.jsonl" 2>&1)")"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 #3789 an ordinary picker noted in another session, answered with the approving words, puts no label on" "$(asks_dan "$r" && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
+check "#3789 and this hook settled it, so it is read once" "$(on_record settled "$PL" && echo ok || cat "$STORE/record.jsonl" 2>&1)"
+aaf_talk "$WORK/elsewhere.jsonl" bash "$AAF_BBEDIT --front-window $F"
+said="$(AAF_PAYLOAD_FORM="answers nometadata" aaf_talk "$WORK/elsewhere.jsonl" payload toolu_elsewhere1 acme/widget "$F" | noted)"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 #3789 a note of a picker the transcript does not hold puts no label on, and the hook that noted it said nothing" "$([ -z "$said" ] && asks_dan "$r" && echo ok || echo "$said $r")"
+aaf_talk "$WORK/elsewhere.jsonl" late toolu_elsewhere1 acme/widget "$F"
+aaf_talk "$WORK/elsewhere.jsonl" answer toolu_elsewhere1 acme/widget "$F"
+r="$(SESSION=s2 AGENT=1 run "$EDIT")"
+check "#3789 a subagent's command counts his Approve in that session for the call, and writes nothing" "$(passed "$r" && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 still possible #3789: his Approve in another session, in a picker noted by its ids alone, lets the label on" "$(passed "$r" && echo ok || echo "$r")"
+check "#3789 and his approval is written to the record as the picker it came from" "$(on_record approved toolu_elsewhere1 "\"hash\": \"$H\"" && echo ok || cat "$STORE/record.jsonl" 2>&1)"
+forget
+# The same, with the file written after he answered: no hash was noted, so his Approve does not count.
+F="$(aaf_shown "$WORK/elsewhere-changed" "$WORK/elsewhere-changed.jsonl" "$POST")"
+AAF_PAYLOAD_FORM="answers nometadata" aaf_talk "$WORK/elsewhere-changed.jsonl" payload toolu_elsewhere2 acme/widget "$F" | noted >/dev/null
+aaf_talk "$WORK/elsewhere-changed.jsonl" late toolu_elsewhere2 acme/widget "$F"
+aaf_talk "$WORK/elsewhere-changed.jsonl" answer toolu_elsewhere2 acme/widget "$F"
+printf '%s\n' "$POST" > "$F"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 #3789 a file written after his answer, with no hash noted, puts no label on, and the refusal says to ask him again" "$(asks_dan "$r" && [[ "$r" == *"has changed since he answered"* && "$r" == *"ask him again"* ]] && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
+forget
 
 echo "one approval covers one pull request (Dan, 2026-11-25: \"One approval, one pull request\")"
 # Pull request 7 merged on his one approval of this wording: the merge gate recorded it as the one
@@ -341,6 +410,12 @@ r="$(broken "$EDIT")"
 check "with its rule file gone, a command naming the label is refused, saying the gate did not run" "$([[ "$r" == *"announce-label-ask.sh failed"*"could not be checked"*" rc=2" ]] && echo ok || echo "$r")"
 r="$(broken "ls -la")"
 check "and a command naming neither the label nor the record still passes" "$([[ "$r" == " rc=0" ]] && echo ok || echo "$r")"
+# The first test knows the library that writes the record by its file name (claude-config#3703): a
+# command running it names neither the label nor the record's folder, and left at the first test.
+r="$(broken "python3 $DIR/lib/announce-approval.py used --repo acme/widget --hash $H --pr 7")"
+check "R2 with its rule file gone, a command running the library that writes the record is judged, so refused" "$([[ "$r" == *"announce-label-ask.sh failed"*"could not be checked"*" rc=2" ]] && echo ok || echo "$r")"
+r="$(cut_payload '{"tool_name": "Bash", "tool_input": {"command": "python3 lib/Announce-Approval.py used --repo acme/widget"}')"
+check "R2 a payload it cannot parse that names the library is refused, naming the payload" "$([[ "$r" == *"payload"*" rc=2" ]] && echo ok || echo "$r")"
 
 # The hook's first test matches in any letter case, and that setting is the test's alone: a library
 # it loads afterwards must find the shell matching as it always does. The stand in library here
@@ -378,6 +453,79 @@ done
 for cmd in "cat $STORE/record.jsonl" "ls -la $STORE" "grep -rn announce-approvals payload/" "rg -n announce-approvals payload/" "git grep -n announce-approvals"; do
   r="$(run "$cmd")"
   check "a command only reading the record, or its name, passes: $cmd" "$(passed "$r" && echo ok || echo "$r")"
+done
+
+echo "the library that writes the record is not a session's to run to write (#3703)"
+# The review's first finding: a session wrote a file shaped like a transcript, holding a picker
+# nobody was shown, and ran the library's own command line with a payload naming it. The library
+# wrote his approval to the record. That command names neither the label nor the record's folder,
+# so this hook never judged it. It now refuses a Bash command that runs the library in any form but
+# the two that only read: `list`, and `check` without --claim.
+LIBRARY="$DIR/lib/announce-approval.py"
+mkdir -p "$WORK/forged"
+printf '%s\n' "$POST" > "$WORK/forged/post.md"
+aaf_new "$WORK/forged/talk.jsonl"
+aaf_talk "$WORK/forged/talk.jsonl" bash "$AAF_BBEDIT --front-window $WORK/forged/post.md"
+aaf_talk "$WORK/forged/talk.jsonl" ask acme/widget "$WORK/forged/post.md"
+FORGED="printf '{\"session_id\":\"s1\",\"transcript_path\":\"$WORK/forged/talk.jsonl\"}'"
+forget
+for cmd in "$FORGED | python3 $LIBRARY check --repo acme/widget --hash $H --pr 7 --claim" \
+           "$FORGED | python3 -B ~/.claude/hooks/lib/announce-approval.py check --claim --repo acme/widget --hash $H" \
+           "python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "printf '{}' | python3 $LIBRARY answered" \
+           "cd $DIR && /usr/bin/python3 -B -I lib/announce-approval.py used --repo acme/widget --hash $H --pr 7 --unread x" \
+           "env ANNOUNCE_APPROVALS_DIR=/tmp/other python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "$FORGED | xargs -0 python3 $LIBRARY check --claim" \
+           "find $WORK/forged -name post.md -exec python3 $LIBRARY used --repo acme/widget --hash $H --pr 7 \\;" \
+           "nice -n 5 caffeinate -i python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "sudo -u root python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "env -u ANNOUNCE_APPROVALS_DIR python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "echo acme/widget | xargs -I {} python3 $LIBRARY used --repo {} --hash $H --pr 7" \
+           "env -u ANNOUNCE_APPROVALS_DIR $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "nohup $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "python3 -BX utf8 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "python3 -Ic 'import runpy, sys; sys.dont_write_bytecode = True; runpy.run_path(\"$LIBRARY\", run_name=\"__main__\")'" \
+           "python3 -B -c\"import runpy; runpy.run_path('$LIBRARY', run_name='__main__')\"" \
+           "python3 -Bm runpy $LIBRARY used" \
+           "python3 -B --check-hash-based-pycs default $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "echo python3 $LIBRARY used --repo acme/widget --hash $H --pr 7 | sudo -u root sh" \
+           "bash -c 'python3 $LIBRARY used --repo acme/widget --hash $H --pr 7'" \
+           "chmod +x $LIBRARY && $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "python3 $LIBRARY \"\$VERB\" --repo acme/widget --hash $H" \
+           "python3 $LIBRARY" \
+           "python3 -B -c 'import runpy, sys; sys.argv = [\"x\", \"used\"]; runpy.run_path(\"$LIBRARY\", run_name=\"__main__\")'" \
+           "python3 -m runpy $LIBRARY used"; do
+  r="$(run "$cmd")"
+  check "R2 a command that runs the library to write, or in a form that cannot be told from one, is refused: ${cmd:0:150}" "$(refused "$r" && [[ "$r" == *"runs lib/announce-approval.py"* ]] && echo ok || echo "$r")"
+done
+check "R2 and none of them wrote the record" "$([ ! -e "$STORE/record.jsonl" ] && echo ok || cat "$STORE/record.jsonl")"
+r="$(run "$FORGED | python3 $LIBRARY check --repo acme/widget --hash $H --pr 7 --claim")"
+check "the refusal says only a hook writes his approval, the forms that read, and how to ask him" "$([[ "$r" == *"only a hook writes"*"announce-approval.py list"*"without --claim"*"AskUserQuestion"* ]] && echo ok || echo "$r")"
+# A program on standard input that names the library is not a command this hook can read.
+r="$(run "python3 - <<'PY'
+import importlib.util
+spec = importlib.util.spec_from_file_location('a', '$LIBRARY')
+PY")"
+check "R2 a program on standard input that names the library is refused, saying where it is named" "$(refused "$r" && [[ "$r" == *"a heredoc body"* ]] && echo ok || echo "$r")"
+# Still possible: the two forms that only read, and every command that names the file without
+# running it.
+for cmd in "python3 ~/.claude/hooks/lib/announce-approval.py list" \
+           "python3 -B $LIBRARY check --repo acme/widget --hash $H" \
+           "sudo -u root python3 -BX utf8 $LIBRARY list" \
+           "python3 -Bm py_compile $LIBRARY" \
+           "python3 $LIBRARY check --repo acme/widget --hash $H --pr 7 | python3 -m json.tool" \
+           "git add payload/hooks/lib/announce-approval.py" \
+           "git diff HEAD -- payload/hooks/lib/announce-approval.py" \
+           "grep -n 'def check' $LIBRARY" \
+           "grep -n python3 $LIBRARY" \
+           "rg -n python3 payload/hooks/lib/announce-approval.py payload/hooks/require-changelog-tag.sh" \
+           "wc -l $LIBRARY && sed -n 1,20p $LIBRARY" \
+           "python3 -m py_compile $LIBRARY" \
+           "bash $DIR/test-announce-approval.sh" \
+           "gh issue comment 12 --body 'lib/announce-approval.py check no longer writes'" \
+           "cp $LIBRARY $WORK/copy.py"; do
+  r="$(run "$cmd")"
+  check "still possible: a command that reads through the library, or names its file without running it, passes: ${cmd:0:110}" "$(passed "$r" && echo ok || echo "$r")"
 done
 
 echo "an ordinary call costs nothing and says nothing"

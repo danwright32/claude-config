@@ -2488,6 +2488,188 @@ want_push "f() ( git push ); f" "#3252 a function body written as a subshell is 
 want_notpush "echo 'git>/dev/null push'" "#3252 control: the same text quoted as an argument is no push"
 want_notpush "git status>/dev/null" "#3252 control: another subcommand with a redirection glued on is no push"
 
+# ---------------------------------------------------------------------------
+# A line a backslash joins to the next (claude-config#3470)
+# ---------------------------------------------------------------------------
+# The shell removes a backslash and the line break after it before it reads words, so the two lines
+# are one. The segmented form wrote that line break as "; " like any other, the backslash escaped
+# the ;, and the reader saw one command with a ; among its words: a push, an add, a commit or a pull
+# request creation written across such a pair was none of them to any hook reading that form.
+# Measured 2026-11-25 on bash 3.2.57 and zsh 5.9, with check-style-guide.sh and check-add-scope.sh
+# each exiting 0 on a command their shell ran.
+#
+# THE TABLE is held against this machine's own shells, never against what this file expects of
+# them: each text is run by bash, and by zsh where there is one, in an empty throwaway directory
+# with a PATH whose git and gh are stand ins that only write their arguments to a log (nothing but
+# those, echo, true and cat is ever run), and a row's expectation must be what every shell did
+# before the library is asked. Then the whole chain a hook runs answers the row's question.
+# In the texts below J is the pair: a backslash and then a line break.
+J=$'\\\n'
+asked() { # asked <predicate> <command text>: the predicate's answer through ps_parse_payload, as a hook asks
+  local parsed
+  parsed="$(ps_parse_payload "$(payload_for "$2")" segmented)" || return 2
+  "$1" "${parsed%%$'\x1f'*}"
+}
+flat_of() { # flat_of <command text> [cwd]: the segmented form, the command and the folder after it
+  ps_parse_payload "$(payload_for "$1" "${2:-}")" segmented
+}
+J3470="$(mktemp -d "${TMPDIR:-/tmp}/psjoined.XXXXXXXX")" || J3470=""
+case "${J3470%/}" in ''|/|"${HOME%/}") echo "$(basename "${BASH_SOURCE[0]}"): refusing to run: throwaway directory came back as '$J3470'." >&2; exit 2 ;; esac
+mkdir -p "$J3470/stub" "$J3470/empty" "$J3470/jq-only" "$J3470/py-only"
+ln -s "$(command -v jq)" "$J3470/jq-only/jq"
+ln -s "$(command -v python3)" "$J3470/py-only/python3"
+for t in git gh; do
+  printf '%s\n' '#!/bin/sh' 'printf "%s\n" "${0##*/} $*" >> "$J3470_LOG"' > "$J3470/stub/$t"
+  chmod +x "$J3470/stub/$t"
+done
+J3470_SHELLS="bash"
+command -v zsh >/dev/null 2>&1 && J3470_SHELLS="bash zsh"
+shell_ran() { # shell_ran <shell> <command text> <words the stand in's log line starts with>
+  : > "$J3470/log"
+  case "$1" in
+    bash) ( cd "$J3470/empty" && PATH="$J3470/stub:/usr/bin:/bin" J3470_LOG="$J3470/log" bash --noprofile --norc -c "$2" ) >/dev/null 2>&1 ;;
+    zsh)  ( cd "$J3470/empty" && PATH="$J3470/stub:/usr/bin:/bin" J3470_LOG="$J3470/log" zsh -f -c "$2" ) >/dev/null 2>&1 ;;
+  esac
+  grep -q "^$3" "$J3470/log"
+}
+joined_row() { # joined_row <yes|no> <predicate> <log words> <command text> <description>
+  local want="$1" pred="$2" words="$3" text="$4" desc="$5" sh ran rc=0
+  for sh in $J3470_SHELLS; do
+    ran=no; shell_ran "$sh" "$text" "$words" && ran=yes
+    [ "$ran" = "$want" ] && check "#3470 ($sh) the row is the shell's own reading: $desc" ok \
+      || check "#3470 ($sh) the row is the shell's own reading: $desc" "$sh ran it: $ran, the row says $want"
+  done
+  # 0 is yes and 1 is no; anything else is the parse or the predicate failing, and fails the row.
+  asked "$pred" "$text" || rc=$?
+  case "$rc" in
+    0) ran=yes ;;
+    1) ran=no ;;
+    *) check "#3470 $desc" "the check failed with exit $rc, which is neither yes (0) nor no (1)"; return ;;
+  esac
+  [ "$ran" = "$want" ] && check "#3470 $desc" ok || check "#3470 $desc" "read as $ran, the shell says $want"
+}
+# What every shell runs and no hook saw.
+joined_row yes ps_is_git_push "git push" "echo ok && ${J}git push origin main" "a push on the line after && and the pair is a push"
+joined_row yes ps_is_git_push "git push" "git ${J}push origin main" "git, the pair, push is a push"
+joined_row yes ps_is_git_push "git push" "git ${J}    push --force" "git, the pair, an indented push is a push"
+joined_row yes ps_is_git_push "git push" "git pu${J}sh origin main" "push written across the pair is a push"
+joined_row yes ps_is_git_push "git push" "gi${J}t push" "git written across the pair is still git"
+joined_row yes ps_is_git_push "git push" "echo a${J}#b && git push" "a hash inside a word the pair joined starts no comment, and the push after it is read"
+joined_row yes ps_is_git_push "git push" "echo a${J}#b;git push" "the same with the push after a ; and no space"
+joined_row yes ps_is_git_push "git push" "git add x && ${J}git commit -m y && ${J}git push" "three commands chained over two pairs end in a push"
+joined_row yes ps_is_git_commit "git commit" "git add x && ${J}git commit -m y && ${J}git push" "and hold a commit"
+joined_row yes ps_is_git_push "git push" "x=\$(git ${J}push)" "a push across the pair inside a substitution is a push"
+joined_row yes ps_is_git_push "git push" "bash -c \"git ${J}push\"" "a push across the pair in a wrapper's double quoted string is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF"$'\n'"\$(git ${J}push)"$'\n'"EOF" "a push across the pair in a substitution of an unquoted heredoc body is a push"
+joined_row yes ps_is_git_commit "git commit" "git ${J}commit -m x" "git, the pair, commit is a commit"
+joined_row yes ps_is_git_add "git add" "git ${J}add -A" "git, the pair, add is an add"
+joined_row yes ps_is_gh_pr_create "gh pr create" "gh pr ${J}create --fill" "gh pr, the pair, create is a pull request creation"
+joined_row yes ps_is_gh_pr_create "gh pr create" "gh ${J}pr create --fill" "gh, the pair, pr create is a pull request creation"
+# What was read before and still is.
+joined_row yes ps_is_git_push "git push" "git push ${J}origin main" "control: a push whose arguments follow the pair is a push"
+joined_row yes ps_is_git_push "git push" "echo 'a${J}#b' && git push" "control: the pair inside single quotes joins nothing, and the push after the string is read"
+joined_row yes ps_is_git_push "git push" "echo a\\\\"$'\n'"git push" "control: two backslashes and a line break join nothing, and the push on the next line is read"
+joined_row yes ps_is_git_push "git push" "# note ${J}git push" "control: a backslash that ends a comment joins nothing, and the push on the next line is read"
+# The quiet twins: no shell runs the action, and nothing was fixed by reading one everywhere.
+joined_row no ps_is_git_push "git push" "echo a ${J}#b && git push" "quiet twin: a hash that starts a word after the pair starts a comment, and its push is not one"
+joined_row no ps_is_git_push "git push" "git ${J}status" "quiet twin: git, the pair, status is no push"
+joined_row no ps_is_git_push "git push" "echo a${J}#b && echo done" "quiet twin: the joined hash word with no push after it is no push"
+joined_row no ps_is_git_push "git push" "echo git ${J}push" "quiet twin: git and push joined as the arguments of another command are no push"
+joined_row no ps_is_git_push "git push" "cat <<'EOF'"$'\n'"git ${J}push"$'\n'"EOF" "quiet twin: the pair in a quoted heredoc's body is text, and so is its push"
+joined_row no ps_is_git_add "git add" "git ${J}commit -m x" "quiet twin: git, the pair, commit is no add"
+
+# A CHECK THAT ERRORS IS NEITHER ANSWER. asked returns 2 when ps_parse_payload fails, and a predicate
+# can exit with anything; a row reading every exit but 0 as no passed each row that expects no on a
+# crash. These run joined_row itself, with check replaced inside a subshell so its verdict comes back
+# as text instead of being counted, and hold that verdict.
+exits_two() { return 2; }
+exits_three() { return 3; }
+row_verdict() { # row_verdict <joined_row arguments>: the verdict joined_row gave its own question
+  ( check() { printf '%s\n' "$2"; }; joined_row "$@" ) | tail -n 1
+}
+v3470="$(row_verdict no exits_two "git push" "git ${J}status" "a check that exits 2")"
+case "$v3470" in
+  *"exit 2,"*) check "#3470 a check that exits 2 fails a row that expects no, and the failure names the exit" ok ;;
+  *) check "#3470 a check that exits 2 fails a row that expects no, and the failure names the exit" "joined_row gave [$v3470]" ;;
+esac
+v3470="$(row_verdict yes exits_three "git push" "git ${J}push" "a check that exits 3")"
+case "$v3470" in
+  *"exit 3,"*) check "#3470 a check that exits 3 fails a row that expects yes, and the failure names the exit" ok ;;
+  *) check "#3470 a check that exits 3 fails a row that expects yes, and the failure names the exit" "joined_row gave [$v3470]" ;;
+esac
+v3470="$(row_verdict no false "git push" "git ${J}status" "a check that exits 1")"
+[ "$v3470" = ok ] && check "#3470 control: a check that exits 1 still passes a row that expects no" ok \
+  || check "#3470 control: a check that exits 1 still passes a row that expects no" "joined_row gave [$v3470]"
+
+# NO HOOK IS HANDED FEWER COMMANDS THAN BEFORE. The plain flattening names commands no shell runs,
+# and a hook refused on them: the joined text may not lose one. Neither text is run here (the
+# first would run sudo); what the shells do with each was measured once, 2026-11-25: sudo is run
+# with -u, git and push as its arguments, and the wrapper's shell runs echo alone.
+if asked ps_is_git_push "sudo -u ${J}git push"; then check "#3470 a push the plain flattening named and no shell runs is still named: sudo -u, the pair, git push" ok
+else check "#3470 a push the plain flattening named and no shell runs is still named: sudo -u, the pair, git push" "no longer seen as a push"; fi
+if asked ps_is_git_push "bash -c \"echo a #x ${J}git push\""; then check "#3470 and so is one after a comment the pair joins it to, in a wrapper's string" ok
+else check "#3470 and so is one after a comment the pair joins it to, in a wrapper's string" "no longer seen as a push"; fi
+
+# The text itself: joined where the shell joins, and written as it always was everywhere else.
+flat_is() { # flat_is <command text> <expected segmented command> <description>
+  local got; got="$(flat_of "$1")"; got="${got%%$'\x1f'*}"
+  [ "$got" = "$2" ] && check "#3470 $3" ok || check "#3470 $3" "got [$got], expected [$2]"
+}
+flat_is "git ${J}push" "git push" "the pair is gone from the segmented form, as it is gone from what the shell reads"
+flat_is "echo one"$'\n'"git ${J}push"$'\n'"echo two" "echo one; git push; echo two" "and every other line break is still written as a separator"
+flat_is "echo 'a${J}b' && git ${J}push" "echo 'a\\; b' && git push" "a pair inside single quotes is written as it always was, beside one that is joined"
+flat_is "# note ${J}git ${J}push" "# note \\; git push" "a pair that ends a comment is written as it always was"
+flat_is "cat <<'EOF'"$'\n'"a${J}b"$'\n'"EOF"$'\n'"git ${J}push" "cat <<'EOF'; a\\; b; EOF; git push" "a pair in a quoted heredoc's body is written as it always was"
+flat_is "cat <<EOF"$'\n'"a${J}b"$'\n'"EOF"$'\n'"git ${J}push" "cat <<EOF; a\\; b; EOF; git push" "and so is one in the text of an unquoted heredoc's body"
+flat_is "x=\`git ${J}push\`" "x=\`git \\; push\`" "a pair inside backquotes, which read a backslash first themselves, is written as it always was"
+flat_is "cat <<EOF"$'\n'"x${J}EOF"$'\n'"EOF"$'\n'"git ${J}push" "cat <<EOF; x\\; EOF; EOF; git \\; push" "where the reader names a line it is unsure of (a heredoc's marker after a joined line), nothing is joined"
+flat_is "echo \"a${J}b" "echo \"a\\; b" "where the reader cannot read the text to its end (a quote never closed), nothing is joined"
+flat_is "cat <<EOF; echo \"x"$'\n'"EOF"$'\n'"git ${J}push" "cat <<EOF; echo \"x; EOF; git \\; push" "and nothing is joined where only the text as typed cannot be read (a quote opened on a heredoc's opening line), though the flattened text can"
+flat_is "sudo -u ${J}git push" "sudo -u git push; sudo -u \\; git push" "where the joined text would lose a command and name another, both are given, the joined one first"
+flat_is "bash -c \"echo a #x ${J}git push\"" "bash -c \"echo a #x \\; git push\"" "where it would lose one and name nothing new, the plain flattening is given"
+flat_is "echo a${US:-$'\x1f'}b && ${J}git push" "echo a"$'\xef\xbf\xbd'"b && git push" "#2055 a unit separator in a joined command is still written as U+FFFD"
+flat_is "printf 'a\\\\nb'"$'\n'"echo two" "printf 'a\\\\nb'; echo two" "two backslashes and the letter n, which the first look at the payload takes for the pair, are read as they always were"
+got="$(flat_of "git ${J}push" /tmp/somewhere)"
+[ "$got" = "git push"$'\x1f'"/tmp/somewhere" ] && check "#3470 the folder still follows the one separator" ok \
+  || check "#3470 the folder still follows the one separator" "got [$got]"
+got="$(ps_parse_payload "$(payload_for "git ${J}push")" raw)"
+[ "${got%%$'\x1f'*}" = "git ${J}push" ] && check "#3470 raw mode still hands the command over as typed, the pair in it" ok \
+  || check "#3470 raw mode still hands the command over as typed, the pair in it" "got [${got%%$'\x1f'*}]"
+# JSON can spell the backslash and the line break as escapes of their code points, and a payload
+# spelled that way is the same command. Each escape is put together here from two halves, so this
+# file holds none.
+ESC_BS='\u00''5c'; ESC_BS_UP='\u00''5C'; ESC_NL='\u00''0a'; ESC_NL_UP='\u00''0A'
+spelled_case() { # spelled_case <the command as written inside the JSON string> <description>
+  local got; got="$(ps_parse_payload '{"tool_input":{"command":"'"$1"'"},"cwd":""}' segmented)"
+  [ "${got%%$'\x1f'*}" = "git push" ] && check "#3470 the pair spelled as JSON escapes is joined too: $2" ok \
+    || check "#3470 the pair spelled as JSON escapes is joined too: $2" "got [${got%%$'\x1f'*}]"
+}
+spelled_case "git ${ESC_BS}${ESC_NL}push" "both as escapes of their code points"
+spelled_case "git \\\\${ESC_NL_UP}push" "the line break as an escape, in capitals"
+spelled_case "git ${ESC_BS_UP}\\npush" "the backslash as an escape, in capitals"
+# Under each reader alone. The join is the shared reader's, which is python3: a machine holding only
+# jq flattens the text as it always did, and so does one whose copy of the reader is missing, where
+# the hooks that read commands say they could not (L490).
+joined_payload="$(payload_for "git ${J}push")"
+got="$(PATH="$J3470/py-only" ps_parse_payload "$joined_payload" segmented)"
+[ "${got%%$'\x1f'*}" = "git push" ] && check "#3470 (python3 alone) the pair is joined" ok \
+  || check "#3470 (python3 alone) the pair is joined" "got [${got%%$'\x1f'*}]"
+got="$(PATH="$J3470/jq-only" ps_parse_payload "$joined_payload" segmented)"
+[ "${got%%$'\x1f'*}" = "git \\; push" ] && check "#3470 (jq alone) with no python3 nothing can make the join, and the text is what it was" ok \
+  || check "#3470 (jq alone) with no python3 nothing can make the join, and the text is what it was" "got [${got%%$'\x1f'*}]"
+got="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_parse_payload "$joined_payload" segmented)"
+[ "${got%%$'\x1f'*}" = "git \\; push" ] && check "#3470 with the reader's file missing the text is what it was" ok \
+  || check "#3470 with the reader's file missing the text is what it was" "got [${got%%$'\x1f'*}]"
+# The reader's mode on its own: it prints nothing and exits 4 where there is no join to make, so the
+# readers ps_parse_payload always had go on to read the payload.
+got="$(payload_for "echo one"$'\n'"echo two" | python3 "$PS_SHELL_WORDS" flatten)"; rc=$?
+[ "$rc" = 4 ] && [ -z "$got" ] && check "#3470 the flatten mode leaves a command holding no pair to the other readers (exit 4, nothing printed)" ok \
+  || check "#3470 the flatten mode leaves a command holding no pair to the other readers (exit 4, nothing printed)" "exit $rc, printed [$got]"
+got="$(printf 'not json at all \\\n' | python3 "$PS_SHELL_WORDS" flatten)"; rc=$?
+[ "$rc" = 4 ] && [ -z "$got" ] && check "#3470 and a payload that is no JSON (exit 4, nothing printed)" ok \
+  || check "#3470 and a payload that is no JSON (exit 4, nothing printed)" "exit $rc, printed [$got]"
+rm -rf "$J3470"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
