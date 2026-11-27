@@ -364,6 +364,19 @@ dcs_floor_ref() {
   DCS_FLOOR_REF="$f"
 }
 
+# Sets DCS_UT to the user temp folder's physical path, or DCS_UT_WHY to why it is not known. Outside
+# test mode the folder is TMPDIR only when it is under /private/var/folders; otherwise which folder is
+# the user's is not known. The one reading of it, for every kind that reads that folder (#3235).
+dcs_user_temp() {
+  DCS_UT=""; DCS_UT_WHY=""
+  [ -n "${TMPDIR:-}" ] || { DCS_UT_WHY="TMPDIR is not set, so the user temp folder is not known"; return; }
+  DCS_UT="$(CDPATH= cd -P "$TMPDIR" 2>/dev/null && pwd -P)" || DCS_UT=""
+  [ -n "$DCS_UT" ] || { DCS_UT_WHY="the user temp folder $TMPDIR could not be read"; return; }
+  if [ -z "$DCS_TEST_ROOT" ]; then
+    case "$DCS_UT" in /private/var/folders/?*) ;; *) DCS_UT_WHY="TMPDIR is $TMPDIR, not a folder under /var/folders, so the user temp folder is not known"; DCS_UT=""; return ;; esac
+  fi
+}
+
 # Physical path of a folder, or of a file's folder plus its name.
 dcs_phys() { dc_resolve "$1"; }
 # Succeeds when <path> is an entry directly inside the folder whose physical path is <folder>. The

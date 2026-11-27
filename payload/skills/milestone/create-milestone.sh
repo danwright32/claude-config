@@ -17,6 +17,8 @@
 #     "priority": "p2",                   # optional default for every issue below
 #     "labels": ["enhancement"],          # optional default for every issue below
 #     "design": "/abs/path/settled.html", # REQUIRED when the feature has a settled design file
+#     "announce": "unasked",              # REQUIRED where the repository announces to agents:
+#                                         # "yes", "no" (Dan's own recorded answer) or "unasked"
 #     "issues": [                         # optional, one GitHub issue each
 #       { "title": "Phase 1: ...", "body": "...", "priority": "p1",
 #         "labels": ["tech-debt", "accessibility"] }
@@ -32,6 +34,13 @@
 # the build at 100% on both halves of the design match score, and hooks/design-score-gate.sh refuses
 # to close that issue or the milestone below it. Every other issue is told its pull request posts the
 # current score, and the milestone's description carries the design mark (claude-config#1290, #1364).
+#
+# With "announce", in a repository whose entry in this Mac's dev update registry names an
+# announcements channel, the milestone's description carries Dan's decision about announcing the
+# feature to agents as one line, read back from GitHub before any issue is filed. A plan there with
+# no "announce", a "yes" or "no" this Mac's record does not hold as his own answer, a title that
+# lands in an existing milestone titled differently, or a line GitHub did not keep, files nothing
+# (exit 12). The section below says why (claude-config#3669).
 #
 # Every issue needs a priority AND at least one category label, either its own or the
 # plan-level default. Priority accepts "p2" or "priority-p2". Categories are not
@@ -181,6 +190,125 @@ due_on="$(jq -r '.due_on // empty' "$plan")"
 
 dry="${DRY_RUN:-}"
 
+# --- a repository that announces carries Dan's answer about announcing (claude-config#3669) ---
+# Where this Mac's dev update registry names an announcements channel for the repository, a change
+# whose agents must or can act differently is announced to them under the changelog/announce label.
+# Whether a FEATURE is announced is Dan's decision (2026-11-25: "it should ask me before applying
+# the label. It can be part of the new feature discovery"), so the plan carries it and the
+# milestone's description records it as one line, which the merge gate reads when a pull request
+# closes the milestone's last open issue (hooks/require-changelog-tag.sh).
+#
+# "yes" and "no" put a decision in his name, so they are taken only when
+# hooks/lib/announce-approval.py finds his own answer to the discovery picker on this Mac's record,
+# and the line quotes the option he chose and the day. "unasked" needs nothing and says he was not
+# asked yet, so a milestone made for alert fixes or an audit never carries a decision he did not
+# make. The line holds no name: the answer, his option's words and a date.
+#
+# Refused before anything is written, like every other refusal here, with a code of its own (12).
+# Cannot tell whether the repository announces is never "it does not" (L98).
+HOOKS_LIB="$HERE/../../hooks/lib"
+announce_given="$(jq -r 'has("announce")' "$plan")"
+announce="$(jq -r 'if has("announce") then (.announce | if type == "string" then . else tojson end) else "" end' "$plan")"
+# One name only (Dan, by picker, 2026-11-26): his answer about a feature counts for a milestone only
+# when the picker named the feature exactly as the milestone is titled, letter case and spacing
+# aside, because the merge gate looks his answers up by the title. So the plan's title is the one
+# name the library is asked about, and a plan that still names the feature a second way is refused.
+# The title it must equal is the MILESTONE's own on GitHub, which announce_title_holds checks below:
+# on the title the plan would resolve to before any label is made (when a label is missing and the
+# run is not a dry run), and on the title it did resolve to, in every run.
+announce_feature_given="$(jq -r 'has("announce_feature")' "$plan")"
+announces=0
+announce_line=""
+abort_announce() {
+  echo "ABORTED: no issues were filed, and the milestone was not touched." >&2
+  exit 12
+}
+# announce_line_for <description> [<the milestone's own title>]: asks the library for the line and
+# the description carrying it. Sets line_json; the library reads the record only, and its standard
+# input is not read. The feature asked about is always the plan's title. The title it is held to is
+# the plan's where no second argument is given (the first question, before any milestone is
+# known), and otherwise the milestone's own, which announce_title_holds passes, because
+# ensure-milestone.sh reuses a milestone whose title is the plan's once everything but letters and
+# digits is dropped, while the record keeps spaces and punctuation in a feature's name.
+announce_line_for() {
+  local held ms_title="${2:-$title}"
+  held="$(mktemp)"
+  printf '%s' "$1" >"$held"
+  line_json="$(python3 -B "$HOOKS_LIB/announce-approval.py" milestone-line --repo "$repo" --feature "$title" --title "$ms_title" --answer "$announce" --description-file "$held" </dev/null 2>/dev/null)"
+  rm -f "$held"
+  [[ "$(printf '%s' "$line_json" | jq -r '.ok // false' 2>/dev/null)" == true ]]
+}
+# announce_title_holds <the milestone's own title>: one name only, held to the milestone's OWN
+# title. The plan's title is checked against the record before anything is written; the milestone it
+# resolves to can be titled differently (the comment above), and the merge gate looks Dan's answers
+# up under the milestone's title. So the library is asked again under that title, and a plan whose
+# title is not its milestone's own by the record's key stops here with exit 12. Called twice: on the
+# title the plan WOULD resolve to, before any label is made, and on the one it did resolve to.
+announce_title_holds() {
+  local ms_title="$1"
+  announce_line_for "$description" "$ms_title" && return 0
+  if [[ -z "$line_json" ]]; then
+    echo "ANNOUNCE-UNREAD hooks/lib/announce-approval.py, which python3 runs and which holds Dan's answers about announcing a feature, gave no answer, so the plan's \"announce\": \"$announce\" could not be checked against the milestone \"$ms_title\". Reinstall the hooks with claude-sync pull." >&2
+  elif [[ "$announce" == unasked && "$ms_title" != "$title" ]]; then
+    # Nobody put the question to him about an unasked plan, and the plan says so. The library's
+    # words are about an answer of his, so this refusal says the one remedy, the title, instead.
+    echo "ANNOUNCE-TITLE-APART the plan is titled \"$title\" and its milestone on GitHub is \"$ms_title\". The milestone's line about announcing is kept under the milestone's own title, so title the plan exactly as the milestone is titled, letter case and spacing aside, and run this again. The plan says nobody put the question to Dan, and nothing here changes that." >&2
+  else
+    echo "ANNOUNCE-NOT-HIS-ANSWER $(printf '%s' "$line_json" | jq -r '.why // ""')" >&2
+    if [[ "$ms_title" != "$title" ]]; then
+      echo "The plan is titled \"$title\" and its milestone on GitHub is \"$ms_title\". The merge gate looks his answers up under the milestone's own title, so title the plan exactly as the milestone is titled, letter case and spacing aside, and ask him again with a picker that names the feature that way." >&2
+    fi
+  fi
+  echo "ABORTED: no issues were filed, and the milestone's description was not changed." >&2
+  exit 12
+}
+if ! command -v node >/dev/null 2>&1; then
+  echo "ANNOUNCE-UNREAD whether $repo announces to agents could not be told: node is not on PATH, and it reads this Mac's dev update registry. Install node, then run this again." >&2
+  abort_announce
+fi
+reg_args=(announce-channel "$repo")
+[[ -n "${CHANGELOG_REGISTRY:-}" ]] && reg_args+=("$CHANGELOG_REGISTRY")
+reg_json="$(node "$HOOKS_LIB/dev-update-registry.js" "${reg_args[@]}" 2>/dev/null)"
+if [[ "$(printf '%s' "$reg_json" | jq -r '.state // ""' 2>/dev/null)" != ok || "$(printf '%s' "$reg_json" | jq -r '.bad // false' 2>/dev/null)" == true ]]; then
+  reg_why="$(printf '%s' "$reg_json" | jq -r '.why // ""' 2>/dev/null)"
+  echo "ANNOUNCE-UNREAD whether $repo announces to agents could not be told: ${reg_why:-hooks/lib/dev-update-registry.js gave no answer that could be read} Cannot tell is never \"does not announce\", so nothing is filed until this Mac's dev update registry can say." >&2
+  abort_announce
+fi
+if [[ -n "$(printf '%s' "$reg_json" | jq -r '.channel // ""' 2>/dev/null)" ]]; then
+  announces=1
+  if [[ "$announce_feature_given" == true ]]; then
+    echo "ANNOUNCE-FEATURE-GONE the plan carries \"announce_feature\", which is no longer read: Dan's answer about a feature counts for a milestone only when the picker named the feature exactly as the milestone is titled, letter case and spacing aside (claude-config#3669)." >&2
+    echo "Take \"announce_feature\" out of the plan. If his picker named the feature in other words than the plan's \"title\", either title the milestone as the picker named it, or ask him again with a picker that names the feature as the title." >&2
+    abort_announce
+  fi
+  if [[ "$announce_given" != true ]]; then
+    echo "MISSING-ANNOUNCE $repo announces to agents, so the plan must carry \"announce\": \"yes\", \"no\" or \"unasked\"." >&2
+    echo "\"yes\" and \"no\" are Dan's own answer to the picker feature discovery asks (metadata source announce-discovery), and are taken only when this Mac's record holds that answer. \"unasked\" is for a milestone nobody asked him about (alert fixes, an audit): it needs nothing, and the milestone then says he was not asked yet." >&2
+    abort_announce
+  fi
+  case "$announce" in
+    yes|no|unasked) ;;
+    *)
+      echo "BAD-ANNOUNCE the plan's \"announce\" is $announce, and it must be \"yes\", \"no\" or \"unasked\"." >&2
+      abort_announce ;;
+  esac
+  if ! announce_line_for "$description"; then
+    if [[ -z "$line_json" ]]; then
+      echo "ANNOUNCE-UNREAD hooks/lib/announce-approval.py, which python3 runs and which holds Dan's answers about announcing a feature, gave no answer, so the plan's \"announce\": \"$announce\" could not be checked. Reinstall the hooks with claude-sync pull." >&2
+    else
+      echo "ANNOUNCE-NOT-HIS-ANSWER $(printf '%s' "$line_json" | jq -r '.why // ""')" >&2
+      line_how="$(printf '%s' "$line_json" | jq -r '.how // ""')"
+      [[ -n "$line_how" ]] && echo "$line_how" >&2
+      echo "His answer is read into this Mac's record when a Bash call runs create-milestone.sh by name in the session that asked him, so run this as a command of its own there. His answer counts for this milestone only when the picker named the feature exactly as the plan's \"title\", letter case and spacing aside: asked under another name, he is asked again under the title." >&2
+    fi
+    abort_announce
+  fi
+  announce_line="$(printf '%s' "$line_json" | jq -r '.line')"
+  description="$(printf '%s' "$line_json" | jq -r '.description')"
+elif [[ "$announce_given" == true ]]; then
+  echo "ANNOUNCE-NOT-IN-USE $repo names no announcements channel in this Mac's dev update registry, so the plan's \"announce\" was not used and the milestone carries no line about it."
+fi
+
 # --- every issue needs a priority, checked BEFORE anything is written ----------
 # Refusing beats defaulting. A silent default is how the priority labels became
 # meaningless in the first place, and this runs before the milestone is touched so a
@@ -324,6 +452,16 @@ if [[ -z "$dry" && -n "$missing_labels" ]]; then
     echo "ABORTED: no issues were filed, and nothing was created, because the milestone could not be resolved."
     exit "$pre_rc"
   fi
+  # The same holds for the refusal of a plan whose title is not its milestone's own
+  # (claude-config#3669): the classification names the milestone the plan would resolve to, so that
+  # title is checked here, before any label exists. A classification that names no title leaves the
+  # check to the one after the real resolution.
+  if [[ "$announces" -eq 1 ]]; then
+    pre_title="$(printf '%s\n' "$pre_out" | sed -n 's/^MILESTONE-TITLE //p' | awk 'NR <= 1')"
+    if [[ -n "$pre_title" ]]; then
+      announce_title_holds "$pre_title"
+    fi
+  fi
 fi
 
 # --- create the labels the repo is missing ----------------------------------
@@ -386,6 +524,51 @@ esac
 if [[ -z "$ms_ref" ]]; then
   echo "ABORTED: the resolved milestone has no usable reference. No issues were filed." >&2
   exit 6
+fi
+
+# --- the line about announcing is in the milestone before any issue is filed (claude-config#3669) ---
+# A milestone just created was handed its description with the line. One that was already there
+# keeps its own description, with the line written into it: in place of a line it already carries,
+# else as a last paragraph. Either way the description is read back from GitHub, since the merge
+# gate reads it from there, and a line that is not in it stops the plan here, with nothing filed:
+# written is not kept (L3). Re-running reuses the milestone.
+if [[ "$announces" -eq 1 ]]; then
+  # One name only is held to the title of the milestone the plan DID resolve to, in a dry run too
+  # (announce_title_holds, above). The check before the labels reads the title the plan would
+  # resolve to and runs only when a label is missing, so this one is the check every plan passes.
+  announce_title_holds "$ms_ref"
+  if [[ -n "$dry" ]]; then
+    echo "WOULD-WRITE-ANNOUNCE-LINE $announce_line"
+  else
+    # ms_err holds what GitHub said on a failed read or write. Each message below has read it
+    # before unwritten is called, so unwritten removes it: no refusal leaves it behind.
+    ms_err=""
+    unwritten() {
+      if [[ -n "$ms_err" ]]; then rm -f "$ms_err"; fi
+      echo "$1" >&2
+      echo "ABORTED: no issues were filed. The milestone exists, so re-running this will reuse it." >&2
+      exit 12
+    }
+    ms_num="$(printf '%s\n' "$verdict" | awk '{ print $2 }')"
+    [[ "$ms_num" =~ ^[0-9]+$ ]] || unwritten "ANNOUNCE-LINE-UNREAD the milestone's number could not be told from the helper's answer ($verdict), so its description could not be read."
+    ms_err="$(mktemp)"
+    ms_json="$(gh api "repos/$repo/milestones/$ms_num" 2>"$ms_err")" \
+      || unwritten "ANNOUNCE-LINE-UNREAD GitHub did not give the description of milestone $ms_num ($(tr '\n' ' ' <"$ms_err")), so the line about announcing could not be written into it or read back."
+    current="$(printf '%s' "$ms_json" | jq -r '.description // ""' 2>/dev/null)"
+    announce_line_for "$current" "$ms_ref" \
+      || unwritten "ANNOUNCE-LINE-UNWRITTEN hooks/lib/announce-approval.py gave no line for milestone $ms_num's description ($(printf '%s' "$line_json" | jq -r '.why // "no answer"' 2>/dev/null))."
+    announce_line="$(printf '%s' "$line_json" | jq -r '.line')"
+    wanted="$(printf '%s' "$line_json" | jq -r '.description')"
+    if [[ "$wanted" != "$current" ]]; then
+      gh api -X PATCH "repos/$repo/milestones/$ms_num" -f "description=$wanted" >/dev/null 2>"$ms_err" \
+        || unwritten "ANNOUNCE-LINE-UNWRITTEN GitHub refused the description of milestone $ms_num ($(tr '\n' ' ' <"$ms_err")), so it does not carry the line about announcing."
+      back="$(gh api "repos/$repo/milestones/$ms_num" 2>"$ms_err" | jq -r '.description // ""' 2>/dev/null)"
+      [[ "$back" == *"$announce_line"* ]] \
+        || unwritten "ANNOUNCE-LINE-UNWRITTEN the line about announcing was written to milestone $ms_num, and its description, read back from GitHub, does not carry it. The merge gate reads the line from there."
+    fi
+    rm -f "$ms_err"
+    echo "ANNOUNCE-LINE $announce_line"
+  fi
 fi
 
 # --- make sure the priority labels exist before referencing one -----------
