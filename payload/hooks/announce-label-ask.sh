@@ -6,8 +6,15 @@
 # the library that writes that record in any form but the two that only read (claude-config#3703).
 #
 # The rule, the commands it reads and its messages live in announce_label_gate.py. This is only the
-# wrapper: leave at once on a call naming neither the label nor the record, run the gate, and refuse
-# when the gate itself fails, since a gate that did not run is not one that found nothing (L98).
+# wrapper: leave at once on a call naming none of the label, the record's folder, the library that
+# writes the record or the milestone helper (the comment above judged_call, below, says each in
+# full), run the gate, and refuse when the gate itself fails, since a gate that did not run is not
+# one that found nothing (L98).
+#
+# One more call is read, and never refused for what it is (claude-config#3669): a Bash call that runs
+# the milestone helper, create-milestone.sh. Before it runs, Dan's answers about whether a feature is
+# announced to agents are read from this session's pickers into the record, where the helper's own
+# question, which reads the record only, finds them.
 #
 # This is the EARLY refusal, for the ordinary routes. A label put on by a route it cannot read (a
 # name built at run time, a script, GitHub's own page) is not seen here and still cannot merge: the
@@ -26,10 +33,12 @@ set -uo pipefail
 payload="$(cat)"
 
 # Every Bash call and every file edit reaches this hook, so the commonest call leaves here, before
-# anything is loaded: only one naming the label, the record's folder, or the library that writes the
-# record (lib/announce-approval.py, by its file name) is judged. The library's name was missing
-# here, so a command running it to write an approval from a made up transcript named none of the
-# three and left at this test (claude-config#3703). Matched in the C
+# anything is loaded: only one naming the label, the record's folder, the library that writes the
+# record (lib/announce-approval.py, by its file name), or the milestone helper (create-milestone.sh,
+# by its file name, claude-config#3669: the case below says what such a call is judged for) is
+# judged. The library's name was missing here, so a command running it to write an approval from a
+# made up transcript named none of the three there were then and left at this test
+# (claude-config#3703). Matched in the C
 # locale, so a byte that is not UTF-8 cannot hide the words after it, and in any letter case, since
 # GitHub matches a label's name in either. A slash JSON wrote as an escape is matched too.
 # The match in any letter case is this test's alone: it is switched off again before returning, so
@@ -39,6 +48,11 @@ judged_call() {
   shopt -s nocasematch
   case "$1" in
     *changelog/announce*|*'changelog\/announce'*|*announce-approvals*|*announce-approval.py*) found=0 ;;
+    # The milestone helper (claude-config#3669). Its plan may carry Dan's answer about announcing
+    # the feature, which the helper takes only from the record, and only a hook writes his answer
+    # there: so the call that runs the helper is where this hook reads his picker in. It is judged
+    # for nothing else, and it is refused only when this hook itself cannot run.
+    *create-milestone.sh*) found=0 ;;
   esac
   shopt -u nocasematch
   return "$found"
@@ -49,7 +63,7 @@ judged_call "$payload" || exit 0
 case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
 HERE="$(cd "${HERE:-/}" && pwd)"
 
-JUDGES="one that puts the changelog/announce label on a pull request, or writes the record of the announcement wording Dan approved, or runs the library that writes it"
+JUDGES="one that puts the changelog/announce label on a pull request, or writes the record of the announcement wording Dan approved, or runs the library that writes it, or runs the milestone helper, before which Dan's answer about announcing the feature is read into that record"
 
 # The shared reader cleans the payload before python3 parses it (claude-config#1944). Past the test
 # above this may be a call it judges, so a library that will not load is refused, naming the file
@@ -62,7 +76,10 @@ JUDGES="one that puts the changelog/announce label on a pull request, or writes 
 payload="$(ps_clean_payload "$payload")"
 # A payload nothing can read as a call is judged by its words (#1922, #2057): refused when it names
 # the label, the record or the library, naming the payload, and passed otherwise. It looks for the
-# same four spellings judged_call above does, in any letter case: GitHub reads a label's name so, and a Mac's
+# four spellings judged_call above knows those three by, and not for the milestone helper's name,
+# which is read for and never refused over (claude-config#3669): a call running the helper whose
+# payload cannot be read goes ahead, and the helper refuses in its own words when the record holds
+# no answer of Dan's. They are matched in any letter case: GitHub reads a label's name so, and a Mac's
 # disk reads the record's folder so. The words are looked for in a lower case copy of the payload,
 # so the refusal names what it found as a person writes it and never as a pattern.
 ps_parse_payload "$payload" raw >/dev/null \

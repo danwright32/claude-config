@@ -3,9 +3,11 @@
 # GitHub is not what the repository says it is meant to be (claude-config#3582).
 #
 # On 2026-11-24 this repository was private for some hours and nobody was told. Its workflow is
-# sized for a public repository's free 4 core runners, and the work names publish gate judges only
-# text posted to a public repository, so the cost was suites running past their limits on billed 2
-# core runners and posted text nothing judged. This suite holds:
+# sized for a public repository's free 4 core runners, and the work names publish gate then judged
+# only text posted to a public repository, so the cost was suites running past their limits on
+# billed 2 core runners and posted text nothing judged. (Since Dan's decision of 2026-11-25 the gate
+# judges a repository whose file says public even while it is private, through the same reader.)
+# This suite holds:
 #   1. A repository that states no expectation is never asked about: no call, no line.
 #   2. A repository that is what it says it is meant to be costs one call and says nothing.
 #   3. One that is not gets one notice naming the repository, what it is, what that costs and the
@@ -111,7 +113,9 @@ check "it says it is private: $out" has "$out" "PRIVATE"
 check "it says what it is meant to be: $out" has "$out" "says public"
 check "it says the runners are 2 core: $out" has "$out" "2 core"
 check "it says their minutes are billed: $out" has "$out" "bills"
-check "it says the publish gate does not judge text posted to it: $out" has "$out" "publish gate"
+check "it says the publish gate goes on judging the gh commands a session runs: $out" has "$out" "publish gate goes on judging the gh commands a session runs"
+check "and that nothing judges text that reaches it any other way: $out" has "$out" "nothing judges text that reaches it any other way"
+check "it no longer says the gate does not judge text posted to it, which stopped being true: $out" lacks "$out" "does not judge text posted to it"
 check "it names the command to run before it turns public again: $out" has "$out" "lib/posted-text-scan.py danwright-test/notes --since"
 check "the command it names is shipped beside the hook" [ -f "$HERE/lib/posted-text-scan.py" ]
 check "it says to tell Dan: $out" has "$out" "Tell Dan"
@@ -206,6 +210,91 @@ cannot "an origin that is not GitHub"
 repo noremote "" "public"
 start "$R"
 cannot "no origin at all"
+# Something at the file's path that is not a file is a declaration that cannot be read, never a
+# repository that states nothing: the publish gate reads the same file through the same reader and
+# refuses there (claude-config#3582).
+repo afolder "https://github.com/danwright-test/afolder.git" ""
+mkdir -p "$R/.github/expected-visibility"
+start "$R"
+cannot "a folder where the expectation file should be"
+check "a folder where the expectation file should be: GitHub is not asked: $(asked)" [ "$(asked)" = "0" ]
+# An empty copy on origin's default branch is judged as an empty file in the checkout is. Read by
+# the hook's own lines it was taken as no file at all, and nothing was said.
+repo emptybehind "https://github.com/danwright-test/emptybehind.git" ""
+commit --allow-empty -m "before the file"
+mkdir -p "$R/.github"; : > "$R/.github/expected-visibility"
+git -C "$R" add .github/expected-visibility
+commit -m "an expectation file holding nothing"
+git -C "$R" update-ref refs/remotes/origin/main HEAD
+git -C "$R" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+git -C "$R" reset -q --hard HEAD~1
+check "(the fixture) the checkout itself does not hold the empty file" [ ! -e "$R/.github/expected-visibility" ]
+start "$R"
+cannot "an empty expectation file on origin's default branch"
+# git not answering is said as that, never as a repository with no origin or no file (the lessons
+# review of 3a7131c). The stand in is git itself, except that a call holding the word
+# FAKE_GIT_SILENT names sleeps past the reader's bound, which a test run shortens.
+REAL_GIT="$(command -v git)"
+mkdir -p "$WORK/gitbin"
+cat > "$WORK/gitbin/git" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_GIT_CALLS"
+if [ -n "${FAKE_GIT_SILENT:-}" ]; then
+  for a in "$@"; do [ "$a" = "$FAKE_GIT_SILENT" ] && exec sleep 8; done
+fi
+exec "$FAKE_REAL_GIT" "$@"
+SH
+chmod +x "$WORK/gitbin/git"
+GITCALLS="$WORK/git-calls"
+silent(){   # $1 = the word of the git call that does not answer, $2 = the folder the session starts in
+  : > "$GITCALLS"
+  FAKE_GIT_SILENT="$1" FAKE_REAL_GIT="$REAL_GIT" FAKE_GIT_CALLS="$GITCALLS" EXPECTED_VISIBILITY_GIT_SECONDS=1 BIN="$BIN:$WORK/gitbin" start "$2"
+}
+answer PRIVATE
+silent no-such-word "$WORK/notes"
+check "(control) through the stand in git, with every call answered, the notice is given: $out" has "$out" "danwright-test/notes is PRIVATE"
+check "(control) and the origin was asked for" grep -q 'get-url' "$GITCALLS"
+silent get-url "$WORK/notes"
+cannot "git not answering for the origin"
+check "git not answering for the origin: it says git did not answer, not that there is no origin: $out" has "$out" "git did not answer"
+silent show "$WORK/behind"
+cannot "git not answering for origin's copy of the file"
+check "git not answering for origin's copy of the file: it says git did not answer: $out" has "$out" "git did not answer"
+# One bound covers every git read of one start, so two calls that do not answer cannot together
+# outlast the hook's own timeout and leave a session with no line at all, which reads as checked
+# and as expected (the lessons review of cce2f6f). Judged by the calls made, never by the clock:
+# once the read of origin's copy has used the whole bound, the origin is not asked for.
+check "(control) the read that did not answer was made" grep -q 'show' "$GITCALLS"
+check "one bound covers every read: after origin's copy used it all, git is not asked for the origin" \
+  bash -c '! grep -q "get-url" "$1"' _ "$GITCALLS"
+# One reader for the notice and the publish gate, so the two cannot come to read the file
+# differently: neither holds a reading of its own.
+check "the notice reads the expectation through lib/expected-visibility.py" grep -q 'lib/expected-visibility.py' "$HOOK"
+check "and holds no awk reading of its own" bash -c '! grep -q "awk" "$1"' _ "$HOOK"
+check "the publish gate reads it through the same file" grep -q '"expected-visibility.py"' "$HERE/work_names_publish_gate.py"
+agree(){   # $1 = the file's text; the reader's own answer for it, run as the notice runs it
+  local d="$WORK/agree"; rm -rf "$d"; mkdir -p "$d/.github"; git -C "$d" init -q
+  printf '%s' "$1" > "$d/.github/expected-visibility"
+  python3 -B "$HERE/lib/expected-visibility.py" "$d" | sed -n '1,2p' | tr '\n' ' '
+}
+check "the reader: a plain word is stated: $(agree 'public
+')" [ "$(agree 'public
+')" = "stated public " ]
+check "the reader: capitals, an indent, a blank line and words after it are still that word: $(agree '
+   PRIVATE   for now
+')" [ "$(agree '
+   PRIVATE   for now
+')" = "stated private " ]
+check "the reader: a word that is none of the three is unknown: $(agree 'sometimes
+')" [ "$(agree 'sometimes
+')" = "unknown  " ]
+check "the reader: an empty file is unknown, never no file: $(agree '')" [ "$(agree '')" = "unknown  " ]
+check "the reader: a commented out word is not read: $(agree '# public
+')" [ "$(agree '# public
+')" = "unknown  " ]
+check "the reader: a word ending in a carriage return is not one of the three: $(agree "$(printf 'public\r')
+")" [ "$(agree "$(printf 'public\r')
+")" = "unknown  " ]
 # The longer bound is a test setting: a real session's environment cannot hold the hook past its timeout.
 answer PUBLIC
 : > "$CALLS"
@@ -232,7 +321,7 @@ check "a payload that cannot be read still judges the folder the hook runs in: $
 if ROOT="$(bash "$HERE/lib/checkout-root.sh" "$HERE/.." 2>/dev/null)" && [ -n "$ROOT" ]; then
   EXPECT="$ROOT/.github/expected-visibility"
   check "this repository states what it is meant to be" [ -f "$EXPECT" ]
-  check "and it is meant to be public" [ "$(awk '!/^[[:space:]]*#/ && NF && !seen { seen = 1; print $1 }' "$EXPECT" 2>/dev/null)" = "public" ]
+  check "and it is meant to be public, by the one reader" [ "$(python3 -B "$HERE/lib/expected-visibility.py" "$ROOT" 2>/dev/null | sed -n '1,2p' | tr '\n' ' ')" = "stated public " ]
   check "the workflow's comment about free runners points at that file, the assumption's one home" \
     grep -q "expected-visibility" "$ROOT/.github/workflows/tests.yml"
 else
@@ -245,8 +334,18 @@ check "the file holding the hooks block is beside the hooks: ${SETTINGS:-none fo
 holds(){ jq -e "$1" "$SETTINGS" >/dev/null 2>&1; }   # $1 = a jq test of the hooks block
 check "the hook is wired to SessionStart" \
   holds '[.hooks.SessionStart[].hooks[].command] | any(endswith("/hooks/repo-visibility-notice.sh"))'
-check "once, with a timeout longer than its own bound" \
-  holds '[.hooks.SessionStart[].hooks[] | select(.command | endswith("/hooks/repo-visibility-notice.sh")) | .timeout] | length == 1 and all(. >= 10)'
+# The hook can spend two bounds back to back before it speaks: the reader's one bound for all of its
+# git reads, then gh's. Its timeout has to outlast their sum, with room to start bash, Python twice
+# and git (3 seconds, a setting, not measured), or the hook is cut off before it can say it could
+# not tell, and no line reads as checked and as expected (the lessons review of e1fc74a). Both
+# bounds are read from where they are set, so raising either one fails here until the timeout follows.
+gh_bound="$(sed -n 's/^BOUND_SECONDS=\([0-9][0-9]*\)$/\1/p' "$HOOK")"
+git_bound="$(sed -n 's/^GIT_SECONDS = \([0-9][0-9]*\)$/\1/p' "$HERE/lib/expected-visibility.py")"
+check "the hook's bound on gh is a whole number of seconds where this can read it: '${gh_bound}'" [ -n "$gh_bound" ]
+check "the reader's bound on git is a whole number of seconds where this can read it: '${git_bound}'" [ -n "$git_bound" ]
+timeout_needed=$(( ${gh_bound:-999} + ${git_bound:-999} + 3 ))
+check "once, with a timeout that outlasts both bounds and 3 seconds more (gh $gh_bound + git $git_bound + 3 = $timeout_needed)" \
+  holds '[.hooks.SessionStart[].hooks[] | select(.command | endswith("/hooks/repo-visibility-notice.sh")) | .timeout] | length == 1 and all(. >= '"$timeout_needed"')'
 check "and to no other event, where it would be a network call on every prompt or tool call" \
   holds '[.hooks | to_entries[] | select(.key != "SessionStart") | .value[].hooks[].command] | all(endswith("/hooks/repo-visibility-notice.sh") | not)'
 check "(control) the same test of the hooks block can fail: a hook that is not there is not found" \
