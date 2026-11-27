@@ -12,25 +12,72 @@
 # is to run `claim` before dispatching a builder for an issue and to dispatch only on exit 0.
 #
 # claim does three reads, and refuses when any of them shows another session holds the issue:
-#   1. the claims on the issue: a live claim posted by this script from another Mac or branch;
+#   1. the claims on the issue: a live claim posted by this script by any other session, on this
+#      Mac or the other, and this session's own claim under another branch name;
 #   2. open pull requests built for it: a branch or a title that names it, or a body that names it
 #      straight after a closing keyword, "Part of" or "Refs". A pull request that only mentions the
 #      number is printed as a note and holds nothing (claude-config#3788);
 #   3. remote branches that name it.
+# A pull request or a remote branch under the very name being claimed holds as well, unless this
+# session's own claim accounts for it (see "Whose a branch is" below).
 # Which issues a branch names is read by hooks/lib/branch-issues.mjs, the one shared reader.
 # When none does, it posts a claim naming the Mac (as Dan names them), the time in ET and the
 # branch, then reads the issue back. Two sessions that both found the issue free both post; the
 # claim GitHub shows first wins, and the later one posts its own release and exits 1.
 #
-# check does the same reads and posts nothing. release posts that this Mac's claim on that branch
-# has ended, with the reason, so the claim does not block the next session; it posts nothing when
-# there is no live claim of ours to release.
+# check does the same reads and posts nothing. release posts that this session's claim on that
+# branch has ended, with the reason, so the claim does not block the next session; it posts nothing
+# when there is no live claim of this session's to release, and never ends another session's.
 #
 # A claim is held by a hidden marker line, never by the prose around it:
-#   <!-- orchestrate-claim branch=<branch> host=<host> -->
-#   <!-- orchestrate-release branch=<branch> host=<host> -->
+#   <!-- orchestrate-claim branch=<branch> host=<host>,session=<session> -->
+#   <!-- orchestrate-release branch=<branch> host=<host>,session=<session> -->
 # A claim with no release goes stale after CLAIM_STALE_HOURS (default 24) and stops blocking; it is
 # still printed. The open pull request and remote branch reads block whatever a claim's age.
+#
+# Which session a claim belongs to (claude-config#3804). Until 2026-11-27 a claim was told from
+# another session's by the Mac and the branch name alone. Branch names are written from the issue's
+# title, so two sessions on one Mac reach the same name, and on 2026-11-26 `claim` answered ALREADY
+# CLAIMED, exit 0, for #3674 under a claim that was another session's, with that session's pull
+# request open on the branch. So a claim names the session that made it:
+#   - The session is the one Claude Code names in CLAUDE_CODE_SESSION_ID, which it gives every
+#     command and hook a session runs, the commands of the agents it dispatches included (so a
+#     session and its builders are one claimant). It is the id the session's transcript and its
+#     notes folder are named by. Measured on the personal MacBook on 2026-11-27, Claude Code
+#     2.1.332: a transcript holding two compactions carried that one id on every line that names
+#     a session (9,491 of them, before, between and after), and the variable in a command run
+#     after both compactions was that same id; one transcript written by two versions of Claude
+#     Code (2.1.327, then 2.1.332), which only a restart of the process can produce, carried one
+#     id on all 121,546 such lines. So a session is the same session after a compaction and after
+#     a restart (claude --resume or --continue of that session). The variable itself was not read
+#     in a restarted session, only the id its transcript went on under. Not the same session: a
+#     /clear, which starts a new conversation under a new id (measured on 2.1.292, see
+#     mods/session-registry/hooks/register.ts, claude-config#751), and a fork of a session.
+#   - What is posted is a short name made from the id, the first 12 hex digits of its SHA-256, never
+#     the id itself: the issue is public, and the id is the name of the session's transcript file.
+#     The short name says nothing about the person, the Mac's folders or where the session can be
+#     read, and the id cannot be worked back from it.
+#   - It rides inside the host word, and the marker stays the six words it always was, because every
+#     earlier version of this script reads a marker only when it has exactly those six. A Mac still
+#     on an earlier version therefore reads the claim as another Mac's and holds; a seventh word
+#     would have hidden the claim from it altogether.
+#   - A claim whose host word names no session was posted before this change. Nothing says whose it
+#     is, so it is never taken for the caller's: it holds, like any other session's. The session
+#     that knows such a claim is its own takes it over on purpose with a release, then a claim: the
+#     release ends it in the words it was posted in and names the session that did so.
+#   - A session id that cannot be read (the variable missing or not an id, or the short name not
+#     made) stops the script with exit 2 before it reads or posts anything.
+#
+# Whose a branch is. The builder pushes the claimed branch and opens its pull request, so a session
+# resuming its own claim finds both on GitHub, and must not be held by them. Nothing GitHub records
+# says which session pushed a branch (every session pushes as the same GitHub user), so the claims
+# on the issue are the only evidence there is. A pull request or a remote branch under the name
+# being claimed is this session's when the last claim on that name that held the issue (one posted
+# while no other session's live claim stood on it, so never one that lost a race) is this session's
+# own, live, stale or released; a claim with no session recorded that this session took over counts
+# as its own. Anything else under that name, such as a branch another session pushed and left with
+# no claim (#3546, 2026-11-26, answered CLAIMED), is not this session's, or cannot be told to be,
+# and holds.
 #
 # Exit codes: 0 claimed by us (or free, for check, or released); 1 held by someone else or closed,
 # do not start it; 2 could not check, or bad arguments: do not start it. After exit 2 nothing was
@@ -41,6 +88,7 @@
 #
 # Test seams: CLAIM_NOW (epoch seconds) and CLAIM_HOST stand in for the clock and the hostname, and
 # CLAIM_READBACK_WAIT (seconds, default 2) and CLAIM_READBACK_TRIES (default 3) for the read back.
+# The session is read from CLAUDE_CODE_SESSION_ID itself, which a test sets.
 set -uo pipefail
 
 STALE_HOURS="${CLAIM_STALE_HOURS:-24}"
@@ -86,6 +134,34 @@ et_time() { # epoch seconds to "11:25 AM ET on 2026-11-19", on macOS date or GNU
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+# ---- which session is calling ----
+# The short name this session's claims carry (see "Which session a claim belongs to" above). Read
+# before anything is read from GitHub or posted there: with no session the script can neither claim
+# as anybody nor tell a claim of its own from another session's, so it stops.
+no_session() { # no_session <why>
+  if [ "$mode" = release ]; then
+    echo "COULD NOT RELEASE: this session's id could not be read ($1), so which claim on $repo#$issue is its own is unknown. Nothing was posted, and any claim of this session's still stands."
+  else
+    echo "COULD NOT CHECK: this session's id could not be read ($1), so a claim of its own on $repo#$issue could not be told from another session's. Do not start it, and nothing was claimed."
+  fi
+  [ -s "$tmp/session.err" ] && sed 's/^/  /' "$tmp/session.err"
+  exit 2
+}
+session_id="${CLAUDE_CODE_SESSION_ID:-}"
+[ -n "$session_id" ] || no_session "CLAUDE_CODE_SESSION_ID is not set, which Claude Code sets for every command a session runs"
+[[ "$session_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{7,}$ ]] || no_session "CLAUDE_CODE_SESSION_ID does not hold a session id"
+# One tool is chosen and its exit status read. Falling through from a tool that failed to another
+# would hash the empty input the first one left, and that is one name for every session.
+if command -v shasum >/dev/null 2>&1; then
+  session="$(printf '%s' "$session_id" | shasum -a 256 2>"$tmp/session.err")" || no_session "shasum could not make its short name"
+elif command -v sha256sum >/dev/null 2>&1; then
+  session="$(printf '%s' "$session_id" | sha256sum 2>"$tmp/session.err")" || no_session "sha256sum could not make its short name"
+else
+  no_session "neither shasum nor sha256sum is here to make its short name"
+fi
+session="${session:0:12}"
+[[ "$session" =~ ^[0-9a-f]{12}$ ]] || no_session "its short name came out as something other than 12 hex digits"
+
 # ---- the reads ----
 # The issue's state, then every marker line in its comments, each prefixed with its comment's time.
 issue_jq='"STATE " + .state, (.comments[] | (.createdAt | fromdateiso8601 | tostring) as $t | .body | gsub("\r"; "") | split("\n")[] | select(startswith("<!-- orchestrate-")) | $t + " " + .)'
@@ -100,49 +176,94 @@ read_issue() { # fills $tmp/issue; returns non zero, with the reason in $tmp/iss
   fi
 }
 
-# Live claims, in the order GitHub shows them: "epoch branch host" per line. A release ends the
-# claim with the same branch and host. awk, not a bash associative array, which the bash 3.2 macOS
-# ships does not have.
+# The claims on the issue, read out of its marker lines in the order GitHub shows them. Two kinds of
+# line come out:
+#   LIVE <epoch> <branch> <host> <session>   a claim no release has ended, stale or not
+#   NAME <branch> <host> <session>           whose that branch name is (see "Whose a branch is")
+# <session> is "-" for a claim posted before claims named their session. A claim is one branch, host
+# and session; a release ends the claim with the same three. A host word that is not a Mac's name
+# alone, or a Mac's name and ",session=" and 12 hex digits, is read whole as a Mac nobody here is.
+# A branch name passes to the session whose claim on it held the issue: one posted while no other
+# claim stood live on it (within the stale window of its own time). And it passes from a claim with
+# no session recorded to the session that took that claim over: a release that ended it, followed
+# in the same comment by the release naming the session.
+# awk, not a bash associative array, which the bash 3.2 macOS ships does not have.
 live_claims() {
-  awk '
+  awk -v window="$((STALE_HOURS * 3600))" '
     NF == 6 && $2 == "<!--" && $6 == "-->" &&
       $1 ~ /^[0-9]+$/ &&
       $4 ~ /^branch=/ && $5 ~ /^host=/ {
-      key = substr($4, 8) " " substr($5, 6)
+      b = substr($4, 8); h = substr($5, 6); s = "-"
+      if (h ~ /^[^,]+,session=[0-9a-f]+$/ && length(h) - index(h, ",session=") - 8 == 12) {
+        s = substr(h, index(h, ",session=") + 9); h = substr(h, 1, index(h, ",session=") - 1)
+      }
+      key = b " " h " " s
       if ($3 == "orchestrate-claim") {
+        held = 1
+        for (k in when) if (k != key && $1 - when[k] <= window) held = 0
+        if (held) { if (!(b in name)) { m++; names[m] = b }; name[b] = h " " s }
         if (!(key in when)) { n++; order[n] = key; pos[key] = n }
         when[key] = $1
+        ended = ""
       } else if ($3 == "orchestrate-release") {
+        if (s == "-") {
+          ended = (key in when) ? b " " h " " $1 : ""
+        } else {
+          if (ended == b " " h " " $1 && name[b] == h " -") name[b] = h " " s
+          ended = ""
+        }
         delete when[key]
       }
     }
-    END { for (i = 1; i <= n; i++) { k = order[i]; if ((k in when) && pos[k] == i) print when[k], k } }
+    END {
+      for (i = 1; i <= n; i++) { k = order[i]; if ((k in when) && pos[k] == i) print "LIVE", when[k], k }
+      for (i = 1; i <= m; i++) print "NAME", names[i], name[names[i]]
+    }
   ' "$tmp/issue"
 }
 
-# Prints nothing. Fills three globals from the live claims: blocking (one line per claim held by
-# another session), stale (one line per claim past the stale window, which does not block) and
-# first_holder ("ours" or "other" for whoever holds the first live claim GitHub lists, "" for none).
+# Prints nothing. Fills these globals from the claims: blocking (one line per claim that holds the
+# issue against this call), stale (one line per claim past the stale window, which does not block),
+# first_holder ("ours" or "other" for whoever holds the first live claim GitHub lists, "" for none),
+# takeover (the branch of each unreleased claim from this Mac with no session recorded, which this
+# session can take over if it is its own) and name_is_ours (yes when the branch name being claimed
+# is this session's, so a pull request or a remote branch under it is its own).
 blocking=()
 stale=()
+takeover=()
 first_holder=""
+name_is_ours=no
 # Returns non zero, with the reason in $tmp/live.err, when the claims could not be read out of the
 # issue: no claim seen is then not the same as no claim there (claude-config#3788).
 judge_claims() {
-  local t b h
-  blocking=(); stale=(); first_holder=""
+  local kind t b h s who
+  blocking=(); stale=(); takeover=(); first_holder=""; name_is_ours=no
   live_claims >"$tmp/live" 2>"$tmp/live.err" || return 1
-  while read -r t b h; do
-    [ -n "$t" ] || continue
-    local who="$(mac_name "$h") claimed it at $(et_time "$t"), branch $b"
+  while read -r kind t b h s; do
+    if [ "$kind" = NAME ]; then # NAME <branch> <host> <session>, read here as t, b and h
+      [ "$t" = "$branch" ] && [ "$b" = "$host" ] && [ "$h" = "$session" ] && name_is_ours=yes
+      continue
+    fi
+    [ "$kind" = LIVE ] || continue
+    who="$(mac_name "$h") claimed it at $(et_time "$t"), branch $b"
+    if [ "$h" = "$host" ] && [ "$s" = - ]; then
+      who="$who, with no session recorded"
+      takeover+=("$b")
+    elif [ "$h" = "$host" ] && [ "$s" != "$session" ]; then
+      who="another session on $who"
+    fi
     if [ $((now - t)) -gt $((STALE_HOURS * 3600)) ]; then
       stale+=("stale claim, older than $STALE_HOURS hours with no release, so not counted: $who")
       continue
     fi
-    if [ "$b" = "$branch" ] && [ "$h" = "$host" ]; then
+    if [ "$b" = "$branch" ] && [ "$h" = "$host" ] && [ "$s" = "$session" ]; then
       [ -n "$first_holder" ] || first_holder=ours
+    elif [ "$h" = "$host" ] && [ "$s" = "$session" ]; then
+      [ -n "$first_holder" ] || first_holder=other
+      blocking+=("claim: this session's own claim, under another branch name, posted at $(et_time "$t"), branch $b: claim under that name, or release that claim first")
     else
       [ -n "$first_holder" ] || first_holder=other
+      [ "$s" = - ] && [ "$h" = "$host" ] && who="$who, so it is not taken for this session's own"
       blocking+=("claim: $who")
     fi
   done <"$tmp/live"
@@ -163,34 +284,58 @@ post() { # post <body file>
   gh issue comment "$issue" --repo "$repo" --body-file "$1" >/dev/null 2>"$tmp/post.err"
 }
 
-release_body() { # release_body <reason> <file>
+claim_marker="<!-- orchestrate-claim branch=$branch host=$host,session=$session -->"
+release_marker="<!-- orchestrate-release branch=$branch host=$host,session=$session -->"
+# release_body <reason> <file> [unnamed]: with "unnamed", the release also ends a claim from this
+# Mac that names no session, in the words that claim was posted in. That line comes first and the
+# line naming this session straight after it, which is how a later read knows who took it over.
+release_body() {
   {
     echo "Released by the session on $(mac_name "$host") at $(et_time "$now"): work on branch \`$branch\` stopped ($1). Another session may take this issue."
     echo ""
-    echo "<!-- orchestrate-release branch=$branch host=$host -->"
+    [ "${3:-}" = unnamed ] && echo "<!-- orchestrate-release branch=$branch host=$host -->"
+    echo "$release_marker"
   } >"$2"
 }
 
 read_issue || fail_read "the issue's comments" "$tmp/issue.err"
 
 # ---- release ----
+# Ends this session's claim on the branch, and a claim from this Mac on it that names no session
+# (the take over, see the header). Never another session's: only that session can release its own.
 if [ "$mode" = release ]; then
   ours=no
+  unnamed=no
+  others=no
   live_claims >"$tmp/live" 2>"$tmp/live.err" || fail_read "the claims on the issue" "$tmp/live.err"
-  while read -r t b h; do
-    [ "$b" = "$branch" ] && [ "$h" = "$host" ] && ours=yes
+  while read -r kind t b h s; do
+    [ "$kind" = LIVE ] && [ "$b" = "$branch" ] && [ "$h" = "$host" ] || continue
+    case "$s" in
+      "$session") ours=yes ;;
+      -) unnamed=yes ;;
+      *) others=yes ;;
+    esac
   done <"$tmp/live"
-  if [ "$ours" = no ]; then
-    echo "NOTHING TO RELEASE: $repo#$issue has no live claim from $(mac_name "$host") on branch $branch. Nothing posted."
+  if [ "$ours" = no ] && [ "$unnamed" = no ]; then
+    echo "NOTHING TO RELEASE: $repo#$issue has no live claim of this session's from $(mac_name "$host") on branch $branch. Nothing posted."
+    [ "$others" = yes ] && echo "  another session on $(mac_name "$host") holds a claim on that branch, and only that session can release it"
     exit 0
   fi
-  release_body "$reason" "$tmp/release"
+  if [ "$unnamed" = yes ]; then
+    release_body "$reason" "$tmp/release" unnamed
+  else
+    release_body "$reason" "$tmp/release"
+  fi
   if ! post "$tmp/release"; then
     echo "COULD NOT RELEASE: the release was not posted on $repo#$issue, so the claim still stands."
     sed 's/^/  /' "$tmp/post.err"
     exit 2
   fi
-  echo "RELEASED: $repo#$issue, branch $branch."
+  if [ "$unnamed" = yes ]; then
+    echo "RELEASED: $repo#$issue, branch $branch. The claim had no session recorded, and the release names this session as the one that took it over, so a claim it posts on that branch next counts the branch and its pull request as its own."
+  else
+    echo "RELEASED: $repo#$issue, branch $branch."
+  fi
   exit 0
 fi
 
@@ -249,10 +394,24 @@ built_for() { # built_for <body>: does the body say its pull request is built fo
   shopt -u nocasematch
   return "$found"
 }
+# A pull request or a remote branch under the very name being claimed is this session's only when
+# its own claim accounts for it (name_is_ours, see "Whose a branch is" in the header). Then it is
+# said as a note. Otherwise it holds, whether or not the name carries the issue's number: a name
+# already on GitHub that this session did not make is no name to start a builder on
+# (claude-config#3804; until then both were passed over as the caller's own, whoever made them).
+own_note="this session's own, by its claim on the issue"
+not_ours="the branch name being claimed, which no claim of this session's accounts for"
 notes=()
 while IFS=$'\t' read -r n head title body; do
   [ -n "$n" ] || continue
-  [ "$head" = "$branch" ] && continue
+  if [ "$head" = "$branch" ]; then
+    if [ "$name_is_ours" = yes ]; then
+      notes+=("$own_note: pull request #$n ($head)")
+    else
+      blocking+=("pull request: #$n ($head) $title ($not_ours)")
+    fi
+    continue
+  fi
   if names_it "$head" || [[ "$title" =~ $ref_re ]] || built_for "$body"; then
     blocking+=("pull request: #$n ($head) $title")
   elif [[ "$body" =~ $ref_re ]]; then
@@ -261,27 +420,43 @@ while IFS=$'\t' read -r n head title body; do
 done <"$tmp/prs"
 while IFS= read -r b; do
   [ -n "$b" ] || continue
-  [ "$b" = "$branch" ] && continue
+  if [ "$b" = "$branch" ]; then
+    if [ "$name_is_ours" = yes ]; then
+      notes+=("$own_note: remote branch $b")
+    else
+      blocking+=("remote branch: $b ($not_ours)")
+    fi
+    continue
+  fi
   names_it "$b" && blocking+=("remote branch: $b")
 done <"$tmp/branches"
 
 print_list() { local l; for l in "$@"; do echo "  $l"; done; }
-# What was seen and does not hold the issue, printed under every outcome: stale claims, and the
-# pull requests that only mention it.
+# What was seen and does not hold the issue, printed under every outcome: stale claims, the pull
+# requests that only mention it, and what is up on GitHub under this session's own claim.
 print_unheld() {
   print_list "${stale[@]+"${stale[@]}"}"
   print_list "${notes[@]+"${notes[@]}"}"
+}
+# Under a held outcome: how to take over a claim from this Mac that names no session, which only
+# the session that posted it before claims named their session can know to be its own.
+print_takeover() {
+  local b
+  for b in "${takeover[@]+"${takeover[@]}"}"; do
+    echo "  only if the claim on branch $b with no session recorded is this session's own, posted before claims named their session, take it over on purpose: claim-issue.sh release $repo $issue $b \"<reason>\", then claim again"
+  done
 }
 
 if [ "${#blocking[@]}" -gt 0 ]; then
   echo "HELD: $repo#$issue is held by another session, so do not start it."
   print_list "${blocking[@]}"
+  print_takeover
   print_unheld
   exit 1
 fi
 
 if [ "$first_holder" = ours ]; then
-  echo "ALREADY CLAIMED: $repo#$issue already carries this Mac's claim on branch $branch. Nothing posted."
+  echo "ALREADY CLAIMED: $repo#$issue already carries this session's claim on branch $branch. Nothing posted."
   print_unheld
   exit 0
 fi
@@ -296,7 +471,7 @@ fi
 {
   echo "Claimed for building by an orchestrating session on $(mac_name "$host") at $(et_time "$now"), on branch \`$branch\`. Another session should not start on this issue while the claim stands. If the work is dropped or handed back unfinished, a release is posted here; a claim with no release stops counting after $STALE_HOURS hours."
   echo ""
-  echo "<!-- orchestrate-claim branch=$branch host=$host -->"
+  echo "$claim_marker"
 } >"$tmp/claim"
 # A post that errored (a timeout, a 5xx) may still have landed, and GitHub's read path can lag its
 # write, so the issue is read back after a pause, up to READBACK_TRIES times, whatever the post said.

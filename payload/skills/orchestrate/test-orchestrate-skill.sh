@@ -217,6 +217,17 @@ check "#3317 a read only item needs no claim" "$(holds "$claiming" 'needs no cla
 # which pull requests those are, and that a `mentioned, not held` line is no reason to hold back.
 check "#3788 the skill says which pull requests hold an issue" "$(holds "$claiming" 'the open pull requests built for it' 'no built for wording')"
 check "#3788 the skill says a mention is a note that holds nothing" "$(holds "$claiming" '`mentioned, not held`' 'no mentioned, not held wording')"
+# claude-config#3804: two sessions on one Mac are two claimants. The skill says what a session is
+# to the script and that it is the same one after a compaction or a restart, that ALREADY CLAIMED
+# means this session's own claim, what makes a branch under the claimed name this session's, and
+# how a claim that names no session is taken over on purpose.
+check "#3804 the skill says what identifies the claiming session" "$(holds "$claiming" 'CLAUDE_CODE_SESSION_ID' 'no word of what identifies a session')"
+check "#3804 the skill says a session is the same after a compaction and a restart" "$(holds "$claiming" 'the same after a compaction and after a restart' 'no word of a compaction and a restart')"
+check "#3804 the skill says ALREADY CLAIMED is this session's own claim" "$(holds "$claiming" "\`ALREADY CLAIMED\` is this session's own claim" 'no word that ALREADY CLAIMED is this session alone')"
+check "#3804 the skill says another session on the same Mac is held" "$(holds "$claiming" 'another session on the same Mac' 'no word of two sessions on one Mac')"
+check "#3804 the skill says what makes a branch under the claimed name this session's" "$(holds "$claiming" 'accounts for it' 'no word of what makes a branch this session own')"
+check "#3804 the skill says how a claim with no session recorded is taken over" "$(holds "$claiming" 'no session recorded' 'no word of a claim with no session recorded')"
+check "#3804 the skill says a session id that cannot be read stops the claim" "$(holds "$claiming" 'cannot read its session' 'no word of an unreadable session id')"
 check "#3317 the board states include held by" "$(holds "$(section "## 4. While agents run")" '`held by <who>`' 'no held by state')"
 check "#3317 Finish releases claims left standing" "$(holds "$finish" 'claim-issue.sh release' 'Finish does not release claims')"
 check "#3317 the script the skill names is there and executable" "$([ -x "$DIR/claim-issue.sh" ] && echo ok || echo "$DIR/claim-issue.sh missing or not executable")"
