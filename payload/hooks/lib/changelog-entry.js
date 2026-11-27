@@ -474,11 +474,33 @@ function blockRefusal(block) {
 // A wording FILE's text judged as the block it becomes once it is under the heading of a pull
 // request: read by extractAnnouncement, the reader of that block, so the line endings, the spaces
 // at the ends of lines and the blank lines around the wording count for exactly what they count for
-// there, and judged by blockRefusal. A file holding a heading line is judged by the lines above it,
-// as the block would be: that the block could then never hold the file whole is not asked here.
+// there, and judged by blockRefusal.
+//
+// Before that, what is true of a FILE and of no block is refused here, each with a code of its own
+// (the review of #3846 found each as wording that "refused nothing" and then could not merge):
+//   WORDING_FILE_HEADING   a line of the file is a heading. The block of a pull request ends at the
+//                          next heading, so the block could hold only the lines above it: the lines
+//                          below were judged by nothing, and the block's hash could never be the
+//                          hash of the file Dan approved. The --body form is right as it is, since
+//                          there the heading really does end the block.
+// A line of the file is a line as the hash reads one (normalizeAnnouncement's own line ends).
 const WORDING_HEADING = '## Announcement';
+const FILE_LINE_END = /\r\n?|\n/;
 function wordingRefusal(text) {
-  return blockRefusal(extractAnnouncement(WORDING_HEADING + '\n' + (typeof text === 'string' ? text : '')));
+  const raw = typeof text === 'string' ? text : '';
+  const lines = raw.split(FILE_LINE_END);
+  for (let i = 0; i < lines.length; i += 1) {
+    if (ANY_HEADING.test(lines[i]) || ANNOUNCEMENT_HEADING.test(lines[i])) {
+      return gateRefuse('WORDING_FILE_HEADING',
+        'The wording file holds a heading on line ' + (i + 1) + ': "' + lines[i].replace(/\s+$/, '') + '". The '
+        + 'Announcement block of a pull request ends at the next heading, so the block could hold only the '
+        + 'lines above that one and could never be the wording Dan approves in this file. '
+        + (ANNOUNCEMENT_HEADING.test(lines[i])
+          ? 'The file is the post alone: leave the Announcement heading out of it.'
+          : 'Write that line without the # signs in front, in bold for example.'));
+    }
+  }
+  return blockRefusal(extractAnnouncement(WORDING_HEADING + '\n' + raw));
 }
 
 // What the MERGE GATE refuses, beyond what parseEntry refuses on every Mac (the head of this file).

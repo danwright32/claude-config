@@ -396,10 +396,16 @@ check "#3846 the refusal says his Approve of that file does not count, with the 
 check "#3846 and holds the merge gate's own words about the opener, whole" "$([ -n "$WORDS" ] && [[ "$r" == *"$WORDS"* ]] && echo ok || echo "$r")"
 check "#3846 and says what to do: judge the file with the command, then open it and ask him again" "$([[ "$r" == *"changelog-entry.js announcement-refusal"*"open the file for him and ask him again"* ]] && echo ok || echo "$r")"
 check "R2 #3846 nothing was written to the record as an approval of it" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
-# The rule of the markdown that was never measured to arrive, and the rule of his own voice.
+# The rule of the markdown that was never measured to arrive, and the rule of his own voice. And
+# (the review of this change, B) a file holding a heading: a pull request's block ends at the next
+# heading, so that file could never be a block whole and the lines below it were judged by nothing.
 for each in 'code|ANNOUNCEMENT_MARKDOWN|code (a backtick)|@here
 Run `the thing` now.' 'dash|ANNOUNCEMENT_DASHES|dash as punctuation|@here
-Hand back - then pick a reason.'; do
+Hand back - then pick a reason.' 'heading|WORDING_FILE_HEADING|holds a heading on line 4|@here
+Something changed.
+
+## What to do
+- Do this'; do
   name="${each%%|*}"; rest="${each#*|}"; code="${rest%%|*}"; rest="${rest#*|}"; needle="${rest%%|*}"; wording="${rest#*|}"
   STORE_USED="$WORK/store-rule-$name"
   F="$(shown_as "rule-$name" "$wording")"; T="$WORK/rule-$name.jsonl"

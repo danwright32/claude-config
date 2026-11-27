@@ -796,6 +796,40 @@ check(Array.isArray(entry.UNMEASURED_MARKDOWN_NAMES) && entry.UNMEASURED_MARKDOW
   check(RULE_CASES.some(function (rc) { return rc[2] === 'ANNOUNCEMENT_MARKDOWN' && rc[3] === ruleName; }),
     '#3846 the markdown rule "' + ruleName + '" has no case feeding the merge gate and the command line the same wording');
 });
+// What is refused of a wording FILE alone, each with a code or with words of its own (the review of
+// this change, round 2). The gate has no such case: a pull request's block cannot hold what these
+// files hold, or the words the gate gives a block are not true of a file. Each entry: what the file
+// holds, its text, the code, and words the sentence must hold.
+const FILE_CASES = [
+  // B: the block of a pull request ends at the next heading, so a file holding one can never be a
+  // block whole, and the lines below the heading were judged by nothing.
+  ['B a heading below the post', '@here\nSomething changed.\n\n## What to do\n- Do this\n', 'WORDING_FILE_HEADING', 'line 4'],
+  ['B a heading with formatting the gate forbids below it', '@here\nSomething changed.\n### Steps\n> quoted -- twice\n', 'WORDING_FILE_HEADING', '"### Steps"'],
+  ['B the file beginning with its own Announcement heading', '## Announcement\n@here\nSomething changed.\n', 'WORDING_FILE_HEADING', 'line 1'],
+  ['B a heading ended as GitHub ends a line', '@here\r\nSomething changed.\r\n# Title\r\nMore.\r\n', 'WORDING_FILE_HEADING', 'line 3'],
+];
+FILE_CASES.forEach(function (fc) {
+  const name = fc[0], text = fc[1], code = fc[2], needle = fc[3];
+  const w = wordingRefusal(text);
+  check(w !== null && w.code === code && typeof w.reason === 'string' && w.reason.indexOf(needle) !== -1,
+    '#3846 ' + name + ': wordingRefusal did not refuse the file as ' + code + ' saying ' + JSON.stringify(needle) + ': ' + JSON.stringify(w));
+  // A sentence about a file says nothing of a pull request or its label, which the reader has not got yet.
+  check(w !== null && !/in this pull request|relabel/.test(w.reason || ''), '#3846 ' + name + ': the sentence for a file speaks of a pull request or its label: ' + JSON.stringify(w));
+  const byFile = cliIn(['announcement-refusal', wordingFile(text)]);
+  check(byFile.status === 1 && JSON.stringify(saidOf(byFile)) === JSON.stringify(w === null ? null : [w.code, w.reason]),
+    '#3846 ' + name + ': the command line, asked of the file, did not refuse it as wordingRefusal does and exit 1: ' + JSON.stringify(byFile).slice(0, 600));
+  const byInput = cliIn(['announcement-refusal', '-'], text);
+  check(byInput.status === 1 && JSON.stringify(saidOf(byInput)) === JSON.stringify(saidOf(byFile)),
+    '#3846 ' + name + ': the command line asked on standard input (-) did not answer as it does of the file: ' + JSON.stringify(byInput).slice(0, 600));
+});
+// B: the --body form stays as it was. A description's block ends at the next heading, as it does at
+// the merge, so a heading after the post refuses nothing there.
+c = cliIn(['announcement-refusal', '--body', '-'], 'Why.\n\n' + SENTENCE + '\n## Announcement\n@here\nSomething changed.\n\n## What to do\n- Do this\n');
+check(c.status === 0 && c.json && c.json.refused === false, '#3846 B a description whose block ends at the next heading was refused in the --body form: ' + JSON.stringify(c));
+// B: a line that only looks like a heading (no space after the signs, or the signs inside a line) is none.
+c = cliIn(['announcement-refusal', '-'], '@here\nSee issue #12 and the tag #urgent.\n#nospace\n');
+check(c.status === 0 && c.json && c.json.refused === false, '#3846 B a line that is no heading was refused as one: ' + JSON.stringify(c));
+
 // The refusal of that day's wording quotes the line, so the session can see what to split.
 c = cliIn(['announcement-refusal', wordingFile(SHARED_LINE)]);
 check(c.json && c.json.refused === true && c.json.reason.indexOf('"@here Calls can now be handed back to the queue."') !== -1,
