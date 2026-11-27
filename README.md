@@ -6542,6 +6542,38 @@ line he approved passes, and says so when the record could not take one (below).
   largest: the libraries are compiled on every run (about 19 ms), because `-B` keeps python3 from
   writing bytecode into the synced hooks folder, and a cache elsewhere would be a file no hook asks
   about that the hook then runs. Nothing was added: the hook is not started after a call.
+  Since #3472 the database call library loads for every commit again, because the command is read
+  a second time whatever it holds (below): 60 runs a side taken turn about on 2026-11-26, at a load
+  average of 35 to 36, gave a median of 127.5 ms before and 139.8 after, least 101.3 and 118.6.
+
+What it refuses (`deny`), the one thing, since #3472: a Bash command holding a line the shared
+reader (`lib/shell-words.py`) names as one it cannot vouch for. The reader takes a `#` for a comment
+by a rule the shell does not always follow, and closes a heredoc at a line where some shells do
+not, so a command the shell runs there was in nothing the hook judged. Asked which lines it is
+unsure of, the reader reads on where every shell does and names the rest: a `#` it cannot tell from
+a comment, a `#` it read on past and then could not read to the end, and a heredoc it cannot find
+the end of (its marker follows a body line ending in a backslash, or no line ends it; its opener
+line ends in a backslash; its quoted marker holds a line break; its marker holds a dollar quote; or
+it is typed on one line). The hook asks the reader about every command naming a database client and
+every command holding `commit` or the test project list's name, whatever else the command holds. It
+used to ask only about one holding a `#`, and a heredoc holds none, so a write or a commit run out
+of such a heredoc was not asked about (each kind reproduced at the hook). A command with a named
+line is refused as one the hook could not check, where one holding a `#` used to be asked about: an
+answer to a question about the part that was read lets the rest run with it. The refusal says which
+line, in a sentence true of the mark the reader named it with (`UNSURE` in
+`lib/db-write-calls.py`), and how to write the command so that it can be read. A refusal is printed
+whatever state `lib/hook-notice.sh` is in beside the hook, since a hook that prints nothing passes
+the command: when the library is missing, is a copy with no `_hn_decision_json` (the private builder
+a refusal is made with), or that builder prints anything but one whole refusal, the hook writes the
+refusal itself, without the characters that need escaping, and says which of the three it found.
+A refusal written that way is the decision alone: a notice the library would have put beside it
+(the one about pre-allowed Salesforce writes) is said inside the refusal's reason, since only the
+library builds a notice (#1906).
+`read-only-query-allow.sh` approves no such command either. A reader that cannot be asked at all is
+still asked about, since no rewriting helps, and so is a push whose earlier dry run held such a
+line. Over 105,627 Bash calls recorded on the personal MacBook (86,010 distinct commands, 2026-11-26)
+the change refuses none, asks about none more and lets through none more: the reader names a line
+in none of them. Suite: `test-db-write-ask-unsure-line.sh`.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
@@ -11018,7 +11050,12 @@ command itself with nothing built or loaded as it runs, never a file run by name
 opens, while everything else on the list keeps "Do not look for another way", and a write through
 `&>`, which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
-file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
+file handed it as its argument included, #1592), write tools under claude.ai and PostHog, since
+#3740 a tool on any other MCP server (a plugin's own, one added by hand) whose own name holds
+delet, remov or paus in any case, since the list named only those two families and a worker's
+prompt for a delete on any other server was answered yes (reproduced in the mod's tests on
+2026-11-26, never seen on a real night; a read whose name holds one of the three is refused too,
+on every server, and every other tool on a server outside the two families still goes ahead), any
 Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
 #3099 it may also close, and only close, a tab first listed in its tab group after its own click,
 typing, form fill or script in a tab it created, since a clicked link can open one, and never a tab
@@ -12229,7 +12266,8 @@ overnight with a changelog sentence you have not read, as you chose on 2026-11-2
 merge or deploy anywhere the list below says wait, or anywhere it has no
 answer for; push straight to a default branch; force push or delete branches; switch branches in
 your main checkout; write to a database (Supabase, psql); use claude.ai, Chrome or PostHog tools that
-write; run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
+write; use a tool on any other connector whose name says it deletes, removes or pauses (#3740);
+run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
 work an issue someone else opened. Nor does any session hand you a result while you sleep, a
 worker or not: a page published or opened for you (the Artifact tool) or a Claude doc is held in
 that session, and when sleep mode ends, by any route, the noon end included, every session that
