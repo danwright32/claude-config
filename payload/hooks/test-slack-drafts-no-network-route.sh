@@ -15,8 +15,10 @@
 #     file written out, each form of that by name;
 #   * the refusal of a file whose imports reach code that posts names the route, and so does the
 #     refusal of a shell script the gate judged by a name in it and did not read as commands
-#     (claude-config#3476), and no other refusal does: not a script that posts, a request, or a file
-#     that is not a shell script and names the send call. Where no wrapper is installed none does;
+#     (claude-config#3476), and no other refusal does: not a script whose commands the gate read, a
+#     request, or a file that is not a shell script and names the send call. A script that posts,
+#     reached too deep to be read, is judged by the name in it like any other, so its refusal names
+#     the route as well. Where no wrapper is installed none does;
 #   * every other call is judged as it was before the rule, which for each case here is a refusal:
 #     a copy elsewhere, a variable, a tilde, a program, an assignment, a redirection or a word of
 #     the shell's own in front of the wrapper, such as time or if, any command before it but the one
