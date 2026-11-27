@@ -200,7 +200,13 @@ def print_uncovered(u, window):
     if u["rows"]:
         print(NEXT_STEP)
     else:
-        print("UNCOVERED NONE: every lesson PR reviews cited carries a CHECK: or NO CHECK: line")
+        print("UNCOVERED NONE: every lesson PR reviews cited carries a CHECK: or NO CHECK: line" + none_caveat(u))
+
+
+def none_caveat(u):
+    """A cited lesson whose line is malformed carries no line anyone can read, so the clean day's
+    sentence must not claim it (L11)."""
+    return ", apart from the malformed ones named here" if any(r > 0 for _n, r, _d in u["bad"]) else ""
 
 
 def core_ids(path):
@@ -625,7 +631,8 @@ def uncovered_section(u, lines, sections, window):
                 f'<p class="alert">This list was not made: {e(u["error"])}. The moves above stand.</p></section>')
     out = [f"<section><h2>{e(title)}"]
     if u["rows"]:
-        out.append(f' <span class="meta">the {len(u["rows"])} PR reviews cited most over {window} days, both Macs</span></h2>'
+        k = len(u["rows"])
+        out.append(f' <span class="meta">{k} lesson{"" if k == 1 else "s"}, most cited by PR reviews over {window} days on both Macs</span></h2>'
                    "<p>Each entry carries neither a CHECK: nor a NO CHECK: line. To settle them, tell Claude: for each "
                    "one it asks the question #3245 asks of a new lesson, can a lint or a test catch it, and brings you "
                    "the answer in the lesson picker, as a CHECK: line naming the check (with an issue in the project "
@@ -637,7 +644,7 @@ def uncovered_section(u, lines, sections, window):
                        f'<td class="n">{r}</td></tr>')
         out.append("</tbody></table></div>")
     else:
-        out.append("</h2><p>Every lesson PR reviews cited carries a CHECK: or NO CHECK: line.</p>")
+        out.append(f"</h2><p>Every lesson PR reviews cited carries a CHECK: or NO CHECK: line{e(none_caveat(u))}.</p>")
     for n, r, d in u["bad"]:
         out.append(f'<p class="alert"><b>L{n}</b> is cited by {r} review{"" if r == 1 else "s"} and its check line is '
                    f"malformed: claude-sync says it {e(d)}. It counts neither as held nor as unheld until it is "

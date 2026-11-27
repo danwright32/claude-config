@@ -11,7 +11,7 @@ the ranking live here once: two copies of a rule's code drift even while they sh
   read_bands(dir)        each Mac's lesson number band start, from lesson-bands/
   band_owner(n, bands)   which Mac wrote lesson n, so only that Mac tags it (#566)
   line_chars(line)       a lesson's size in the core, the unit `claude-sync core-set` caps (L81)
-  read_counts(path)      one Mac's counts from tools/lesson-citations.py: host, window, stamp, rows
+  read_counts(path)      one Mac's counts from tools/lesson-citations.py: host, window, stamp, ledger, rows
   review_class(...)      disputed, unreviewable or diff: whether a PR review can stand in for it
   rate(...)              citations per 30 days of exposure, so a young lesson is not ranked against
                          sixty days of its elders (L478)

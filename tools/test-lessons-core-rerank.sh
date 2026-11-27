@@ -490,6 +490,10 @@ counts mac-a "2026-10-05T09:00:00Z" $'L3\t30\t40\t9'
 counts mac-b "2026-10-01T11:00:00Z" $'L10\t0\t0\t4'
 out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL")"
 check "when every lesson reviews cited carries a line, it says so" "UNCOVERED NONE: every lesson PR reviews cited carries a CHECK: or NO CHECK: line" "$out"
+check_not "with no caveat when no cited lesson's line is malformed" "apart from the malformed" "$out"
+counts mac-a "2026-10-05T09:00:00Z" $'L3\t30\t40\t9' $'L4\t0\t0\t10'
+out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL")"
+check "a cited malformed line keeps the clean day's sentence from claiming it" "line, apart from the malformed ones named here" "$out"
 fresh_counts
 
 # ---------------------------------------------------------------------------------------------------
@@ -569,6 +573,8 @@ check "the page is left in the state folder, by month" "rerank-2026-10.html" "$p
 check "and the list to apply beside it" "core-2026-10.txt" "$(ls "$STATE" 2>/dev/null)"
 check "and the seats to commit with it" "seats-2026-10.txt" "$(ls "$STATE" 2>/dev/null)"
 check "the job asks for the most cited lessons no check holds (#3744)" "Most cited lessons no check holds" "$(cat "$page" 2>/dev/null)"
+check_not "and the list is made, from the claude-sync beside the tool and the repo's lessons file" "This list was not made" "$(cat "$page" 2>/dev/null)"
+check "listing the one fixture lesson reviews cited that carries no line" "1 lesson, most cited by PR reviews over 60 days on both Macs" "$(cat "$page" 2>/dev/null)"
 out="$(job "2026-10-10T15:00:00Z")"
 check "a second run in the same month does not notify again" "0" "$(notices)"
 
