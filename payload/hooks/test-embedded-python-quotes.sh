@@ -504,8 +504,11 @@ faults="$(printf '%s\n' "$tree" | grep -E '^(HIT|UNCLOSED|UNREAD|UNPARSED|UNMAPP
 # A scan that judged fewer programs than are there is reading less than the tree (L98). On
 # 2026-11-27 it judged 753 python3 -c programs and 5 variables in 697 shell files, and skipped 117
 # inside strings or heredoc bodies, all of them in suites; main as it stood then held 764. The floor
-# is that day's count, so a drop fails here: a change that really removes programs lowers it in the
-# same change, saying why (claude-config#3818).
+# is 753, the branch's count on 2026-11-27 before main was merged in. With main merged in the scan
+# judged 789, so today a drop of up to 36 programs does not fail here and shows only in the counts
+# line the suite prints. The floor is left below the count on purpose, because open pull requests
+# that remove a program would otherwise turn main red after both merged. A change that takes the
+# count below 753 lowers the floor in the same change and says why (claude-config#3818).
 JUDGED_FLOOR=753
 nprog="$(printf '%s\n' "$tree" | sed -n 's/^READ files=[0-9]* programs=\([0-9]*\) .*/\1/p')"
 # Printed on every run, so a drop in how many were judged is seen (claude-config#3818).
