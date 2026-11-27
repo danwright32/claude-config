@@ -75,6 +75,17 @@ export const reviewRead = (r: { exitCode: number; stdout: string; stderr: string
   return state ? { state } : { unread: `the read of the review's record answered ${JSON.stringify(r.stdout.trim().slice(0, 80))}, which names no state` }
 }
 
+/**
+ * Whether a tool call, as it arrives, is read at all for making this a turn whose end of turn
+ * review is to come. Only the main conversation's: a subagent's call is not in the transcript the
+ * review hooks read. Never the picker, which asks Dan and changes nothing. And never the box's own
+ * tool, which the review's test would count by its name, so that a box refused for something else
+ * would hold its own next call. The box's own hook answers that call and passes nothing on, so the
+ * hook that reads every call does not see it today; this is what keeps the rule true if the two
+ * ever change places. What is read is then put to the review's own test, by its name.
+ */
+export const canBeTurnWork = (call: { tool: string; agentId?: unknown }): boolean => call.agentId === undefined && call.tool !== TOOL && call.tool !== 'AskUserQuestion'
+
 /** Whether this turn has had a call the review hooks' test counts, or why that could not be read. */
 export type TurnWork = { worked: boolean; unread?: string }
 

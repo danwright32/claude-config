@@ -4,7 +4,7 @@ import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
 import { WORK_TEST_MS, alreadyShownText, answered, workRead, workTestArgv, type WorkRead } from './request.ts'
-import { REVIEWS_OFF_SUFFIX, REVIEW_STATE_MS, answeredCommand, askAgainText, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, type ReviewRead, type ReviewWait } from './review.ts'
+import { REVIEWS_OFF_SUFFIX, REVIEW_STATE_MS, answeredCommand, askAgainText, canBeTurnWork, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, type ReviewRead, type ReviewWait } from './review.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { askPr } from './mod-kit/prmerged.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
@@ -868,9 +868,18 @@ export const register: Register = on => {
   // The same calls, as they arrive and whatever becomes of them, are read for making this a turn
   // whose end of turn review is to come (noteTurnWork): that question is the review hooks', who
   // count a tool named in the transcript, where the picker's is whether anything was changed.
+  // That reading can cost one run of the review's own test (the first call of each tool's name in a
+  // session), so it is started as the call arrives and runs beside the call, never ahead of it: no
+  // tool waits on it to start. The call comes back only once the reading has landed, however the
+  // call ended, so the next call, which may be the box's, finds the turn noted.
   on('tool.call', async ($, e, next) => {
-    if (e.agentId === undefined && e.tool !== TOOL && e.tool !== 'AskUserQuestion') await noteTurnWork($, e.tool)
-    const r = await next(e)
+    const noted = canBeTurnWork(e) ? noteTurnWork($, e.tool) : undefined
+    let r: Awaited<ReturnType<typeof next>>
+    try {
+      r = await next(e)
+    } finally {
+      await noted
+    }
     if (e.agentId !== undefined || e.tool === TOOL) return r
     if (e.tool === 'AskUserQuestion') {
       if (answered(r)) await $.state.set(pickerRef, {})

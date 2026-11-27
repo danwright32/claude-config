@@ -4,7 +4,7 @@ import { pipeline } from './mod-kit/hooks/commands.ts'
 import type { On, Register } from 'claude-code'
 import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
 import { CLOSE_HEADING, CLOSE_TITLE, PROCESS_TIMEOUT_MS, QUIET_MS } from '../hooks/close.ts'
-import { answeredCommand, reviewRead } from '../hooks/review.ts'
+import { answeredCommand, canBeTurnWork, reviewRead } from '../hooks/review.ts'
 
 // The Goal accomplished box (claude-config#1563) in a session: shown once when a /goal is met (the
 // session is sent a prompt of its own asking for it once the turn has ended, since the met record
@@ -279,6 +279,14 @@ type World = {
    * `state`); absent answers that no review was handed over this turn.
    */
   review?: Gh
+  /**
+   * #3843: the run of the end of turn review's own test answers only once `releaseWorkTest` is
+   * called; and each tool call that reached the bottom, where the tool itself starts, by its
+   * tool_use_id, in order.
+   */
+  workTestWaits?: boolean
+  releaseWorkTest: () => void
+  began: string[]
 }
 // manual steps' four reasons for not showing a step it was handed (addStep, word for word).
 const NOT_SHOWN = {
@@ -315,7 +323,9 @@ const reviewSays = (state: 'none' | 'handed' | 'answered'): Gh => ({ exitCode: 0
 const REVIEWED = { review: reviewSays('answered') }
 
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), stepsCard: null, compactQueued: false, compactFollowUp: null, holds: [], jobs: [], jobsFail: '', procs: { exitCode: 0, stdout: '{"found":[]}' }, reader: () => [], pinned: [], pinAnswer: 'shown', pinCalls: 0, releasePin: () => undefined, withdrawFails: '', withdrawn: [], written: {}, ...init }
+  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), stepsCard: null, compactQueued: false, compactFollowUp: null, holds: [], jobs: [], jobsFail: '', procs: { exitCode: 0, stdout: '{"found":[]}' }, reader: () => [], pinned: [], pinAnswer: 'shown', pinCalls: 0, releasePin: () => undefined, withdrawFails: '', withdrawn: [], written: {}, releaseWorkTest: () => undefined, began: [], ...init }
+  // Made before any run can ask for it, so letting go works whenever the test does it.
+  const workTestOut = new Promise<void>(open => (w.releaseWorkTest = open))
   const runs: string[][] = []
   const reviewAsks: string[][] = []
   const views: { pr: string; repo?: string; cwd?: string; token?: string; fields?: string }[] = []
@@ -333,7 +343,8 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (e.argv[0] === 'python3' && e.argv[e.argv.length - 2] === WORK_TEST_FILE) {
       if (w.workTest) return ok(w.workTest.stdout, w.workTest.exitCode, w.workTest.stderr ?? '')
       const said = WORK_TEST_SAYS[e.argv[e.argv.length - 1] as string]
-      return said === undefined ? ok('', 1, `the stand in for the review's test has no answer for ${e.argv[e.argv.length - 1]}`) : ok(`${said}\n`)
+      const answer = said === undefined ? ok('', 1, `the stand in for the review's test has no answer for ${e.argv[e.argv.length - 1]}`) : ok(`${said}\n`)
+      return w.workTestWaits ? (workTestOut.then(() => answer) as never) : answer
     }
     // #3843: the read of the end of turn review's record, run from its file by path.
     if (e.argv[0] === 'python3' && e.argv.includes(REVIEW_FILE)) {
@@ -454,7 +465,11 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
   on('classic.Stop', () => ({}) as never)
   // Every other tool runs and answers nothing of note (#3770: the Bash calls the card reads).
-  on('tool.call', ($, e) => (w.toolAnswers?.[String((e as { tool_use_id?: unknown }).tool_use_id)] ?? { result: '', text: '' }) as never)
+  on('tool.call', ($, e) => {
+    const id = String((e as { tool_use_id?: unknown }).tool_use_id)
+    w.began.push(id)
+    return (w.toolAnswers?.[id] ?? { result: '', text: '' }) as never
+  })
   on('fs.write', ($, e) => {
     w.written[e.path] = e.text
     return { value: undefined } as never
@@ -2057,6 +2072,41 @@ test("the box's own tool is never the turn's work: a call refused for something 
   expect((await box($, ASKED)).deny).toMatch(/still running/)
   w.agents = []
   expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+})
+
+// The test above passes whether or not the box's own tool is left out, because the box's own hook
+// answers its call and passes nothing on, so the hook that reads every call never sees it. Leaving
+// it out is the second guard, for the day the two hooks change places, and it is held here on the
+// rule itself (review.ts canBeTurnWork), which is what that hook asks before it reads a call.
+const CAN_BE_WORK_ROWS: [string, { tool: string; agentId?: string }, boolean][] = [
+  ["an edit of the main conversation's", { tool: 'Edit' }, true],
+  ["a read of the main conversation's, which the review's own test then says no to", { tool: 'Read' }, true],
+  ["the box's own tool, which the review's own test would count by its name", { tool: TOOL }, false],
+  ['the picker', { tool: 'AskUserQuestion' }, false],
+  ["a subagent's edit", { tool: 'Edit', agentId: 'a1' }, false],
+]
+for (const [what, call, read] of CAN_BE_WORK_ROWS)
+  test(`${what} is ${read ? 'read' : 'never read'} for being the turn's work (#3843)`, async () => {
+    expect(canBeTurnWork(call)).toBe(read)
+  })
+
+test("the review's own test of a tool's name runs beside the call, never ahead of it: the tool starts while that test is still out, the call comes back only once the turn is noted, and the box then waits (#3843)", withKit, async ($, on) => {
+  const { w, clock } = world(on, { workTestWaits: true })
+  await start($)
+  await says($, 'Run the monthly sync')
+  let back = false
+  const call = edits(w, $).then(r => {
+    back = true
+    return r
+  })
+  try {
+    await clock.settle()
+    expect({ began: w.began, back }).toEqual({ began: ['e1'], back: false })
+  } finally {
+    w.releaseWorkTest()
+    await call
+  }
+  expect((await box($, ASKED)).deny).toMatch(/its end of turn review is still to come/)
 })
 
 test('work in an earlier turn does not hold this turn: the hold ends with the turn it began in (#3843)', withKit, async ($, on) => {

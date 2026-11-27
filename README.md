@@ -12033,7 +12033,9 @@ the `promptId` of the transcript's last user line, so the next prompt of any ori
 review nobody answered holds no later turn. The mod runs its `state` command before it shows a box:
 handed over and not answered refuses the box and names the command; nothing handed over refuses it
 only in a turn that has had a main conversation call the review's test counts, whatever became of
-the call, since that turn's review is still to come; answered shows it. A box refused this way and
+the call, since that turn's review is still to come; answered shows it. That test runs beside the
+call it reads, never ahead of it, so no tool waits on it to start, and the box's own tool is never
+read for it. A box refused this way and
 not shown by the turn's end is asked for once more, once per request, by a message the mod sends
 in place of the turn end's other question, because the hooks do not hand a review over at every
 such turn's end. A record that cannot be read never holds the box: the box shows, with a line in
