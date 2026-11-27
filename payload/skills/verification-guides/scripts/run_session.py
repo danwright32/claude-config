@@ -973,7 +973,7 @@ def leave_now():
     os._exit(1)
 
 
-def cut_off_and_leave(rdir, reason, why, proc=None, monitor=None, limit_s=None, leave=leave_now):
+def cut_off_and_leave(rdir, reason, why, proc=None, monitor=None, limit_s=None, leave=None):
     """cut_off from a thread other than the supervisor's main one, and then the end of the process:
     the main thread is stuck in the stop, so nothing else would ever end it.
 
@@ -995,6 +995,8 @@ def cut_off_and_leave(rdir, reason, why, proc=None, monitor=None, limit_s=None, 
     and signals, which touch no file. So a disk that hangs delays the end by seconds and cannot
     prevent it. What no code here can outwait is the system itself refusing to end a process that
     is stuck inside it: that was not produced, and a stand in cannot show it."""
+
+    leave = leave or leave_now
 
     def out():
         if end_held(rdir, proc, monitor) is None:
@@ -1035,7 +1037,7 @@ def wake_main():
     signal.pthread_kill(threading.main_thread().ident, signal.SIGTERM)
 
 
-def watch_lifeline(rdir, fd, gone, finished, limit_s, holding, wake=wake_main, leave=leave_now):
+def watch_lifeline(rdir, fd, gone, finished, limit_s, holding, wake=wake_main, leave=None):
     """End this supervisor's run once every holder of its caller's lifeline is gone (claude-config#3682).
 
     The read ends only when the kernel ends the pipe, which it does when the last holder of the

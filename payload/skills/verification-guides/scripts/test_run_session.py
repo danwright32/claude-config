@@ -1340,6 +1340,15 @@ class CutOffTests(RunFixture):
         quiet = contextlib.redirect_stderr(io.StringIO())  # a cut off says so on stderr, the supervisor's log
         self.said = quiet.__enter__()
         self.addCleanup(quiet.__exit__, None, None, None)
+        # These tests run a supervisor's stop inside this process, and a supervisor that leaves ends
+        # its own process and its process group. Here leaving is a stand in that says it was asked
+        # for, so a stop that leaves where no test expected it fails that test and ends nothing.
+        self.really_leave_now, self.left_this_process = run_session.leave_now, []
+        leaving = mock.patch.object(run_session, "leave_now", lambda: self.left_this_process.append(True))
+        leaving.start()
+        self.addCleanup(leaving.stop)
+        self.addCleanup(lambda: self.assertEqual(self.left_this_process, [], "a supervisor's stop run inside this"
+                                                 " test left, which would have ended the test process"))
 
     def child(self, program=TIED_CHILD):
         p = subprocess.Popen([sys.executable, "-c", program], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -2102,14 +2111,12 @@ class CutOffTests(RunFixture):
 
     def test_the_cut_offs_limit_ends_the_supervisor_when_removing_the_file_never_returns(self):
         # The state the limit is for: the main thread stuck in its stop for good, holding the lock an
-        # ending is decided under. The limit's own way out must not wait on the disk either. The lock
-        # is taken before the children are started, so that the end of the test lets go of it last.
-        let_go, left = self.stuck_in_its_stop(), threading.Event()
+        # ending is decided under. The limit's own way out must not wait on the disk either.
+        hung, let_go, left = self.removal_never_returns(), self.stuck_in_its_stop(), threading.Event()
         serve, stream = self.child(), self.child()
         rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
                                   egress_monitor_pgid=stream.pid)
-        with self.short_disk_wait(), self.removal_never_returns(), \
-                self.no_signal_reaches(serve.pid, stream.pid) as asked:
+        with self.short_disk_wait(), hung, self.no_signal_reaches(serve.pid, stream.pid) as asked:
             cut = self.on_a_thread(run_session.cut_off_and_leave, rdir, "caller_gone", "its caller was gone",
                                    proc=serve, monitor=MonitorHoldingAStream(rdir, stream), limit_s=0.05,
                                    leave=left.set)
@@ -2122,12 +2129,12 @@ class CutOffTests(RunFixture):
             self.assert_left_with_nothing_ended(rdir, asked, serve, stream)
 
     def test_a_cut_off_that_cannot_confirm_the_removal_leaves_and_signals_nothing(self):
+        hung = self.removal_never_returns()
         serve, stream = self.child(), self.child()
         rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
                                   egress_monitor_pgid=stream.pid)
         left = threading.Event()
-        with self.short_disk_wait(), self.removal_never_returns(), \
-                self.no_signal_reaches(serve.pid, stream.pid) as asked:
+        with self.short_disk_wait(), hung, self.no_signal_reaches(serve.pid, stream.pid) as asked:
             cut = self.on_a_thread(run_session.cut_off_and_leave, rdir, "caller_gone", "its caller was gone",
                                    proc=serve, monitor=MonitorHoldingAStream(rdir, stream),
                                    limit_s=IN_PROCESS_LIMIT_S, leave=left.set)
@@ -2137,12 +2144,12 @@ class CutOffTests(RunFixture):
         self.assert_left_with_nothing_ended(rdir, asked, serve, stream)
 
     def test_an_ordinary_stop_that_cannot_confirm_the_removal_leaves_and_signals_nothing(self):
+        hung = self.removal_never_returns()
         serve, stream = self.child(), self.child()
         rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
                                   egress_monitor_pgid=stream.pid)
         monitor, left = MonitorHoldingAStream(rdir, stream), threading.Event()
-        with self.short_disk_wait(), self.removal_never_returns(), \
-                self.no_signal_reaches(serve.pid, stream.pid) as asked:
+        with self.short_disk_wait(), hung, self.no_signal_reaches(serve.pid, stream.pid) as asked:
             stop = self.on_a_thread(run_session.do_stop, rdir, "stop", proc=serve, monitor=monitor, leave=left.set)
             self.assertTrue(left.wait(LEAVES_WITHIN_S), "the stop waited on a removal that does not return")
             stop.join(LEAVES_WITHIN_S)
@@ -2196,9 +2203,9 @@ class CutOffTests(RunFixture):
     def test_a_log_that_never_returns_does_not_keep_a_supervisor_that_must_leave(self):
         # The log is a file on the same disk. The lines a leaving supervisor says are waited for no
         # longer than the removal was.
+        hangs, left = self.never_returns(), threading.Event()
         serve = self.child()
         rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
-        hangs, left = self.never_returns(), threading.Event()
 
         class Log:
             write = flush = staticmethod(hangs)
@@ -2220,7 +2227,7 @@ class CutOffTests(RunFixture):
 
         with self.short_disk_wait(), contextlib.redirect_stderr(Log()), \
                 mock.patch.object(os, "getpgrp", lambda: -1), mock.patch.object(os, "_exit", lambda code: exits.set()):
-            self.on_a_thread(run_session.leave_now)
+            self.on_a_thread(self.really_leave_now)
             self.assertTrue(exits.wait(LEAVES_WITHIN_S), "leaving waited on a log that does not flush")
         self.assertEqual(asked, [])
 
