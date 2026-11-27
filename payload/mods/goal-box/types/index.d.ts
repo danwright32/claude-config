@@ -25,6 +25,19 @@ declare module 'claude-code' {
       shown: GoalBoxShown[]
       /** The met goals the session has already been told to show the box for, by judgement id. */
       asked: string[]
+      /**
+       * #3770: counts every turn start and every message of any origin, so a quiet period armed at a
+       * turn's end knows a later one began.
+       */
+      closeSeq: number
+      /** #3770: what the main conversation's last stop carried, under the closeSeq it came in. */
+      closeStop: { seq: number; tasks: unknown; crons: unknown }
+      /** #3770: the answer the last main turn ended with, under its closeSeq. */
+      closeAnswer: { seq: number; text: unknown }
+      /** #3770: the request (Dan's message count) the close card was last pinned for, and whether it still shows. */
+      closed: { prompts: number; pinned: boolean }
+      /** #3770: what a command this session ran did that may leave a process behind; once set, for the session. */
+      leftBehind: string
     }
   }
 }

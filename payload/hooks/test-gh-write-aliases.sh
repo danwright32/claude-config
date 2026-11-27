@@ -91,6 +91,12 @@ case "$1 $2" in
     case "$*" in *contents/repos.json*)
       cat "$FAKE_LIST"; exit 0 ;;
     esac ;;
+  "api graphql")
+    # What a repository's default branch holds at .github/expected-visibility, as GitHub's GraphQL
+    # API hands it over (claude-config#3582): no repository here has such a file.
+    o=""; n=""
+    for a in "$@"; do case "$a" in owner=*) o="${a#owner=}" ;; name=*) n="${a#name=}" ;; esac; done
+    printf '{"data":{"repository":{"nameWithOwner":"%s/%s","object":null}}}\n' "$o" "$n"; exit 0 ;;
   "api gists/"*)
     # A gist's own record, from the gist table: its id and whether it is public (#2412).
     id="${2#gists/}"
@@ -573,6 +579,12 @@ check "#2412 (control) and a secret gist edited in an editor: $out" passed
 hook "gh repo edit danwright-test/private-notes --visibility public --accept-visibility-change-consequences"
 check "#2412 making a private repository public is refused: $out" refused
 check "#2412 and says why: $out" has "$out" "makes danwright-test/private-notes public"
+# The refusal said to check the repository and named no way to (claude-config#3582): it names the
+# one command that reads what was posted to it, with the repository already in it.
+check "#3582 and names the command to run first, the repository in it: $out" has "$out" "lib/posted-text-scan.py danwright-test/private-notes --since"
+check "#3582 the command it names is the one shipped beside the gate" [ -f "$HERE/lib/posted-text-scan.py" ]
+check "#3582 and says what that command leaves unread: $out" has "$out" "not its files"
+check "#3582 and still leaves the change to the person: $out" has "$out" "change its visibility yourself"
 hook "gh repo edit danwright-test/private-notes --visibility=PUBLIC --accept-visibility-change-consequences"
 check "#2412 the --visibility=value form is read too: $out" refused
 hook "GH_REPO=danwright-test/private-notes gh repo edit --visibility public --accept-visibility-change-consequences"
@@ -585,6 +597,22 @@ hook "gh repo edit danwright-test/public-notes --visibility public --accept-visi
 check "#2412 (control) a repository already public publishes nothing new and passes: $out" passed
 hook "gh repo edit Acme-Corp/quiet-tools --visibility public --accept-visibility-change-consequences"
 check "#2412 (control) a work owner's own repository made public passes, as its text does today: $out" passed
+# #3582 changed that refusal's words and nothing it decides. The seven forms above, in one line, as
+# #2412 decided them: R refused, P passed. A change to this line is a change to what the gate
+# refuses, which is not a wording change.
+decisions=""
+for form in \
+  "gh repo edit danwright-test/private-notes --visibility public --accept-visibility-change-consequences" \
+  "gh repo edit danwright-test/private-notes --visibility=PUBLIC --accept-visibility-change-consequences" \
+  "GH_REPO=danwright-test/private-notes gh repo edit --visibility public --accept-visibility-change-consequences" \
+  "gh repo edit danwright-test/private-notes --visibility private --accept-visibility-change-consequences" \
+  "gh repo edit danwright-test/private-notes --visibility internal --accept-visibility-change-consequences" \
+  "gh repo edit danwright-test/public-notes --visibility public --accept-visibility-change-consequences" \
+  "gh repo edit Acme-Corp/quiet-tools --visibility public --accept-visibility-change-consequences"; do
+  hook "$form"
+  if refused; then decisions="${decisions}R"; elif passed; then decisions="${decisions}P"; else decisions="${decisions}?"; fi
+done
+check "#3582 what gh repo edit --visibility refuses did not move with its words: $decisions" [ "$decisions" = "RRRPPPP" ]
 
 # A body or notes file given inside clustered short flags is read (claude-config#2412): gh reads
 # `-dF body.md` as --draft then --body-file body.md, and `-dFbody.md` the same.

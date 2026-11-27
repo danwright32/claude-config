@@ -171,6 +171,769 @@ PY
 scan
 [ "$rc" -eq 0 ] && ok || bad "the corrected helper passes the scan (rc=$rc)" "$out"
 quiet "no line of the corrected helper is flagged"
+rm -f "$S/helper.py"
+
+# --- P1 across methods: a long lived process must have its ENDING read (#3650) ----------------
+# A process held on an attribute outlives the method that started it, so a poll() made right after
+# it starts says nothing about how it ended. The check follows the attribute through every method of
+# the class (directly, through a local taken from it, and into a method or function of the same file
+# it is handed to), and a read in the starting method counts only when it waits for the end, on every
+# path out of that method since #3663 (the blind.py block below). A local
+# process checked only by poll() and then used again has had only its start checked. Where the
+# process is handed to something the check cannot follow, it says so (U1) rather than passing quietly.
+FILE="fixture/monitor.py"
+cat > "$S/monitor.py" <<'PY'
+import subprocess
+from shutil import which as stop_group
+
+
+class EndsRead:
+    def start(self):
+        self.p = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        status = self.p.wait(timeout=5)
+        return status == 0
+
+
+class EndsReadThroughAlias:
+    def start(self):
+        proc = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+        self.beat = proc
+        if proc.poll() is not None:
+            raise RuntimeError("ended at once")
+
+    def end(self):
+        proc, self.beat = self.beat, None
+        if proc is not None:
+            proc.stdin.close()
+            if proc.wait(timeout=5) != 0:
+                raise RuntimeError("ended badly")
+
+
+class EndsReadByAHelper:
+    def start(self):
+        self.q = subprocess.Popen(["sleep", "9"])
+
+    def end(self):
+        proc = self.q
+        return self._exit(proc, 5)
+
+    def _exit(self, proc, within):
+        return proc.wait(timeout=within)
+
+
+class EndsReadAsState:
+    def start(self):
+        self.r = subprocess.Popen(["sleep", "9"])
+
+    def state(self):
+        if self.r.poll() is not None:
+            return "exited %s" % self.r.returncode
+        return ""
+
+
+class EndsReadWhereItStarts:
+    def run(self):
+        self.s = subprocess.Popen(["true"])
+        return self.s.wait()
+
+
+class CheckedOnlyAtItsStart:
+    def start(self):
+        proc = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+        self.beat = proc
+        if proc.poll() is not None:
+            raise RuntimeError("ended at once")
+
+    def end(self):
+        self.beat.stdin.close()
+
+
+class NeverRead:
+    def start(self):
+        self.e = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        self.e.terminate()
+
+
+class StatusDropped:
+    def start(self):
+        self.f = subprocess.Popen(["sleep", "9"])
+        self.g = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        self.f.wait()
+
+    def state(self):
+        return self.g.returncode
+
+
+class HandedAway:
+    def start(self):
+        self.h = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        stop_group(self.h)
+
+
+def polled_then_fed(lines):
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    for line in lines:
+        p.stdin.write(line)
+    p.stdin.close()
+    return 0
+
+
+def polled_then_handed(lines):
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    stop_group(p)
+    return 0
+
+
+def polled_in_a_loop():
+    p = subprocess.Popen(["cat"], stdout=subprocess.PIPE)
+    while p.poll() is None:
+        p.stdout.readline()
+    return 0
+
+
+def polled_then_waited_by_a_helper():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    p.stdin.close()
+    return _finish(p)
+
+
+def _finish(proc):
+    return proc.wait(timeout=5)
+
+
+def polled_then_waited():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    p.stdin.close()
+    return p.wait(timeout=5)
+
+
+class Holder:
+    pass
+
+
+def held_elsewhere(holder):
+    holder.proc = subprocess.Popen(["sleep", "9"])
+
+
+class EndedWithoutAReadOnItsOwnPath:
+    def start(self):
+        proc = subprocess.Popen(["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.beat = proc
+        if proc.poll() is not None:
+            raise RuntimeError("ended at once")
+
+    def one_beat(self):
+        if not self.beat.stdout.readline():
+            raise RuntimeError("it ended: %s" % self.beat.wait(timeout=1))
+
+    def end(self):
+        self.beat.stdin.close()
+
+
+class EndedAndReapedByAnotherMethod:
+    def start(self):
+        self.t = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        self.t.terminate()
+        return self._reap()
+
+    def _reap(self):
+        return self.t.wait(timeout=5)
+PY
+scan
+[ "$rc" -eq 1 ] && ok || bad "#3650 a class whose processes' endings go unread fails the scan (rc=$rc)" "$out"
+has "$out" "$FILE:7:" && bad "#3650 a process held on an attribute and waited on in another method passes" "$out" || ok
+has "$out" "$FILE:16:" && bad "#3650 a process whose ending is read through a local taken from the attribute passes" "$out" || ok
+has "$out" "$FILE:31:" && bad "#3650 a process handed to a method of its class that waits on it passes" "$out" || ok
+has "$out" "$FILE:43:" && bad "#3650 a poll() whose result is used and a returncode after it, in another method, pass" "$out" || ok
+has "$out" "$FILE:53:" && bad "#3650 a process waited on in the method that starts it passes" "$out" || ok
+fires P1 59 "#3650 a process held on an attribute and checked only at its start"
+has "$out" "$FILE:59: P1 proc = subprocess.Popen(...) is held on self.beat" && has "$out" "only asked whether it is still running, at line 61" && ok \
+  || bad "#3650 #3663 the finding names the attribute and the start check it rests on" "$out"
+fires P1 70 "#3650 a process held on an attribute that no method reads"
+fires P1 78 "#3650 a wait() in another method whose result is dropped is no read"
+fires P1 79 "#3650 a returncode read with nothing before it asking for the status is no read"
+fires P1 90 "#3650 a process held on an attribute and handed to a call the check cannot follow"
+has "$out" "$FILE:90:" && has "$out" "handed to stop_group(...) at line 93" && ok \
+  || bad "#3650 the finding says which hand off it could not follow" "$out"
+fires P1 97 "#3650 a local process checked only by poll() at its start and then used for longer"
+fires U1 107 "#3650 a local process polled and then handed to a call the check cannot follow is reported as not judged"
+fires P1 115 "#3663 a loop that only asks whether the process is still running never reads how it ended"
+has "$out" "$FILE:122:" && bad "#3650 a local process handed to a function of the file that waits on it passes" "$out" || ok
+has "$out" "$FILE:134:" && bad "#3650 a local process polled at its start and waited on at its end passes" "$out" || ok
+fires P1 146 "#3650 a process held on another object's attribute is still a finding"
+fires P1 151 "#3650 a process whose ending is read only on an error path, and not where the code ends it"
+has "$out" "$FILE:151:" && has "$out" "EndedWithoutAReadOnItsOwnPath.end() ends it at line 161" && ok \
+  || bad "#3650 the finding names the method that ends the process without reading it" "$out"
+has "$out" "$FILE:166:" && bad "#3650 a process ended in one method and waited on by a method it calls passes" "$out" || ok
+has "$out" "findings=9 unjudged=1" && ok || bad "#3650 #3663 exactly the nine findings and the one not judged" "$out"
+
+# A process the check could not judge is said, and counted, but does not by itself fail the scan.
+cat > "$S/monitor.py" <<'PY'
+import subprocess
+from shutil import which as stop_group
+
+
+def polled_then_handed(lines):
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    stop_group(p)
+    return 0
+PY
+scan
+[ "$rc" -eq 0 ] && has "$out" "$FILE:6: U1" && has "$out" "findings=0 unjudged=1" && ok \
+  || bad "#3650 a helper the check could only partly judge passes and says so (rc=$rc)" "$out"
+
+# A local process whose status is read once at its start and then waited on with what that returns
+# dropped, or with communicate(), which only sets a returncode, has had only its start read: the
+# same process with no start read is refused, so the start read must not excuse it (PR #3659 review).
+cat > "$S/monitor.py" <<'PY'
+import subprocess
+
+
+def polled_then_waited_dropped():
+    p = subprocess.Popen(["sleep", "1"])
+    if p.poll():
+        return 1
+    p.wait()
+    return 0
+
+
+def polled_then_communicated():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    out, err = p.communicate(b"x")
+    return out
+
+
+def polled_then_waited_and_read():
+    p = subprocess.Popen(["sleep", "1"])
+    if p.poll():
+        return 1
+    p.wait()
+    return p.returncode
+
+
+def polled_then_communicated_and_read():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    p.communicate(b"x")
+    return p.returncode
+PY
+scan
+[ "$rc" -eq 1 ] && ok || bad "#3650 a process waited on after its start read with nothing reading the end fails (rc=$rc)" "$out"
+fires P1 5 "#3650 a wait() whose result is dropped after a start read is no read of the end"
+has "$out" "$FILE:5:" && has "$out" "p.wait() at line 8 waits for its end" && ok \
+  || bad "#3650 the finding names the dropped wait() and its line" "$out"
+fires P1 13 "#3650 a communicate() after a start read, with no returncode read, is no read of the end"
+has "$out" "$FILE:13:" && has "$out" "p.communicate() at line 16 waits for its end" && ok \
+  || bad "#3650 the finding names the communicate() and its line" "$out"
+has "$out" "$FILE:21:" && bad "#3650 a returncode read after a dropped wait() passes" "$out" || ok
+has "$out" "$FILE:29:" && bad "#3650 a returncode read after communicate() passes" "$out" || ok
+has "$out" "findings=2 unjudged=0" && ok || bad "#3650 exactly the two waits with nothing reading the end" "$out"
+
+# A process handed to a function of the file counts as having its ending read only when that
+# function waits for the end. One that only polls it once is a start read, and must not excuse the
+# rules above (PR #3659 review at 4f31de6).
+cat > "$S/monitor.py" <<'PY'
+import subprocess
+
+
+class StartedByAPoller:
+    def start(self):
+        self.p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+        self._check(self.p)
+
+    def _check(self, proc):
+        if proc.poll() is not None:
+            raise RuntimeError("ended at once")
+
+    def stop(self):
+        self.p.stdin.close()
+
+
+def handed_to_a_poller():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    _check_started(p)
+    p.stdin.close()
+    return 0
+
+
+def _check_started(proc):
+    if proc.poll() is not None:
+        raise RuntimeError("ended at once")
+
+
+def handed_to_a_waiter():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    p.stdin.close()
+    return _finish(p)
+
+
+def _finish(proc):
+    return proc.wait(timeout=5)
+
+
+def handed_to_a_looping_poller():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    p.stdin.close()
+    return _drain(p)
+
+
+def _drain(proc):
+    while proc.poll() is None:
+        pass
+    return proc.returncode
+
+
+def handed_to_a_communicator():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    p.stdin.close()
+    return _talk(p)
+
+
+def _talk(proc):
+    proc.communicate()
+    return proc.returncode
+
+
+def handed_to_a_feeder():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    _feed(p, b"x")
+    return 0
+
+
+def _feed(proc, data):
+    proc.stdin.write(data)
+    proc.stdin.close()
+PY
+scan
+[ "$rc" -eq 1 ] && ok || bad "#3650 a process handed only to a function that polls it once fails (rc=$rc)" "$out"
+fires P1 71 "#3650 a local process polled, then handed to a function that feeds and ends it and reads nothing"
+fires P1 6 "#3650 a held process whose starting method hands it to a poll-only method is checked only at its start"
+fires P1 18 "#3650 a local process handed to a poll-only function and then ended has had only its start read"
+has "$out" "$FILE:32:" && bad "#3650 a local process handed to a function that waits on it passes" "$out" || ok
+has "$out" "$FILE:44:" && bad "#3650 a local process handed to a function whose loop polls it passes" "$out" || ok
+has "$out" "$FILE:58:" && bad "#3650 a local process handed to a function that reads returncode after communicate() passes" "$out" || ok
+has "$out" "findings=3 unjudged=0" && ok || bad "#3650 exactly the three processes whose helpers never read the end" "$out"
+
+# Uses are ordered as the code runs them, never by line: two on one line keep their order, a
+# helper's uses run at its hand off in the helper's own order, and a turn of a loop runs a helper's
+# poll before its write every time. A read that follows a use only on some paths is said (U1), and a
+# read on the other branch of an if does not follow it at all (PR #3659 review at 1a6083d).
+cat > "$S/monitor.py" <<'PY'
+import subprocess
+
+
+def read_then_used_on_one_line():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    rc = p.poll(); p.stdin.close()
+    return rc
+
+
+def read_in_a_test_then_used_on_one_line():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll(): p.stdin.close()
+    return 0
+
+
+def used_then_read_on_one_line():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    p.stdin.close(); rc = p.poll()
+    return rc
+
+
+def handed_to_poll_then_feed():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    _poll_then_feed(p)
+    return 0
+
+
+def _poll_then_feed(proc):
+    if proc.poll():
+        raise RuntimeError("ended at once")
+    proc.stdin.write(b"x")
+    proc.stdin.close()
+
+
+def handed_to_feed_then_poll():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    return _feed_then_poll(p)
+
+
+def _feed_then_poll(proc):
+    proc.stdin.close()
+    return proc.poll()
+
+
+def handed_in_a_loop(chunks):
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    for chunk in chunks:
+        _poll_then_write(p, chunk)
+    return 0
+
+
+def _poll_then_write(proc, data):
+    if proc.poll():
+        raise RuntimeError("ended")
+    proc.stdin.write(data)
+
+
+def handed_in_a_loop_to_write_then_poll(chunks):
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    for chunk in chunks:
+        rc = _write_then_poll(p, chunk)
+    return rc
+
+
+def _write_then_poll(proc, data):
+    proc.stdin.write(data)
+    return proc.poll()
+
+
+def read_after_only_on_one_path(flag):
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    p.stdin.close()
+    if flag:
+        return p.poll()
+    return 0
+
+
+def read_only_on_the_other_branch(flag):
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    if flag:
+        p.stdin.close()
+    else:
+        rc = p.poll()
+        return rc
+    return 0
+
+
+def closed_then_handed_to_a_poller():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    p.stdin.close()
+    return _look(p)
+
+
+def _look(proc):
+    return proc.poll()
+PY
+scan
+[ "$rc" -eq 1 ] && ok || bad "#3650 uses judged in the order the code runs them fail where a use follows the last read (rc=$rc)" "$out"
+fires P1 5 "#3650 a read and then a use on one line is a use after the read"
+fires P1 11 "#3650 a use in the body of an if on the line of its read is a use after the read"
+has "$out" "$FILE:17:" && bad "#3650 a use and then a read on one line passes" "$out" || ok
+fires P1 23 "#3650 a caller's poll, then a helper that polls and then writes, is a use after the last read"
+has "$out" "$FILE:38:" && bad "#3650 a helper that writes and then polls passes" "$out" || ok
+fires P1 50 "#3650 a helper handed the process in a loop that polls and then writes leaves the last write unread"
+has "$out" "$FILE:65:" && bad "#3650 a helper handed the process in a loop that writes and then polls passes" "$out" || ok
+has "$out" "$FILE:79: U1" && has "$out" "line 84" && ok \
+  || bad "#3650 a read after the use that runs only on some paths is said, naming that read" "$out"
+fires P1 89 "#3650 a read on the other branch of an if does not follow the use"
+has "$out" "$FILE:101:" && bad "#3650 a helper's read runs on every path after the caller's use that hands it on" "$out" || ok
+has "$out" "findings=5 unjudged=1" && ok || bad "#3650 exactly the five uses after the last read and the one not judged" "$out"
+rm -f "$S/monitor.py"
+
+# --- the three blind spots #3650 left (#3663) -------------------------------------------------
+# (a) A poll() whose result is only compared with None asks whether the process is still running,
+#     never how it ended, whether it is written `while p.poll() is None`, `None is p.poll()`, or
+#     through a name that is only ever compared with None.
+# (b) Inside a method, both branches are followed: a method that ends a held process must read how
+#     it ended on every path after the end, and the method that starts one settles it only when
+#     every path out of it has waited for the end.
+# (c) A hand off that goes on to a further function of the file is followed to any depth (the rule
+#     #3650 merged with), never dropped in silence; the deeper.py block below runs such a helper
+#     along the paths of the method that hands it on.
+FILE="fixture/blind.py"
+cat > "$S/blind.py" <<'PY'
+import subprocess
+import time
+
+
+def waits_by_asking_if_running():
+    p = subprocess.Popen(["sleep", "1"])
+    while p.poll() is None:
+        time.sleep(0.1)
+    return 0
+
+
+def asked_through_a_name():
+    p = subprocess.Popen(["sleep", "1"])
+    exited = p.poll()
+    if exited is not None:
+        return 1
+    time.sleep(1)
+    return 0
+
+
+def asked_the_other_way_round():
+    p = subprocess.Popen(["sleep", "1"])
+    if None is p.poll():
+        return 1
+    return 0
+
+
+def waits_by_asking_then_reads():
+    p = subprocess.Popen(["sleep", "1"])
+    while p.poll() is None:
+        time.sleep(0.1)
+    return p.returncode
+
+
+def read_through_a_name():
+    p = subprocess.Popen(["sleep", "1"])
+    while True:
+        rc = p.poll()
+        if rc is not None:
+            return rc
+        time.sleep(0.1)
+
+
+class AskedOnlyWhetherRunning:
+    def start(self):
+        self.p = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        if self.p.poll() is None:
+            self.p.terminate()
+            self.p.wait()
+
+
+class ReadOnOneBranchOfItsEnd:
+    def start(self):
+        self.q = subprocess.Popen(["sleep", "9"])
+
+    def stop(self, quick):
+        self.q.terminate()
+        if quick:
+            return 0
+        return self.q.wait(timeout=5)
+
+
+class ReadBeforeItsEnd:
+    def start(self):
+        self.r = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        if self.r.poll() is not None:
+            return self.r.returncode
+        self.r.kill()
+
+
+class WaitedOnOneBranchWhereItStarts:
+    def run(self, block):
+        self.s = subprocess.Popen(["sleep", "9"])
+        if block:
+            return self.s.wait()
+        return None
+
+    def pid(self):
+        return self.s.pid
+
+
+class ReadOnEveryBranchOfItsEnd:
+    def start(self):
+        self.t = subprocess.Popen(["sleep", "9"])
+
+    def stop(self, quick):
+        self.t.terminate()
+        if quick:
+            return self.t.wait(timeout=1)
+        try:
+            return self.t.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.t.kill()
+            return self.t.wait()
+
+
+class WaitedOnEveryBranchWhereItStarts:
+    def run(self, block):
+        if not block:
+            return None
+        self.u = subprocess.Popen(["sleep", "9"])
+        if block > 1:
+            return self.u.wait(timeout=1)
+        return self.u.wait()
+
+
+class EndedThroughTwoHelpers:
+    def start(self):
+        self.v = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        self.v.terminate()
+        return self._settle(self.v)
+
+    def _settle(self, proc):
+        return self._reap(proc)
+
+    def _reap(self, proc):
+        return proc.wait(timeout=5)
+
+
+def checked_then_handed_down():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    rc = p.poll()
+    if rc is not None:
+        return rc
+    return _feed(p)
+
+
+def _feed(proc):
+    return _write(proc)
+
+
+def _write(proc):
+    proc.stdin.write(b"x")
+    return 0
+
+
+class ReadInAFinallyAfterItsEnd:
+    def start(self):
+        self.w = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        try:
+            self.w.terminate()
+            return 0
+        finally:
+            self.status = self.w.wait(timeout=5)
+
+
+class ReadInAFinallyOnABreak:
+    def start(self):
+        self.x = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        for _ in range(3):
+            try:
+                self.x.terminate()
+                break
+            finally:
+                self.status = self.x.wait(timeout=5)
+        return 0
+PY
+scan
+[ "$rc" -eq 1 ] && ok || bad "#3663 a helper with the three blind spots fails the scan (rc=$rc)" "$out"
+has "$out" "$FILE:145:" && bad "#3663 (b) a read in a finally runs before the method returns, so it passes" "$out" || ok
+has "$out" "$FILE:157:" && bad "#3663 (b) a read in a finally runs before a break leaves the loop, so it passes" "$out" || ok
+fires P1 6 "#3663 (a) a loop asking only whether the process still runs never reads how it ended"
+fires P1 13 "#3663 (a) a poll() result held in a name only compared with None is no read"
+fires P1 22 "#3663 (a) None compared with poll() the other way round is no read"
+has "$out" "$FILE:6:" && has "$out" "only asked whether it is still running" && ok \
+  || bad "#3663 (a) the finding says the process was only asked whether it still runs" "$out"
+has "$out" "$FILE:29:" && bad "#3663 (a) a loop that asks and then reads returncode passes" "$out" || ok
+has "$out" "$FILE:36:" && bad "#3663 (a) a poll() result that is returned, not only compared with None, passes" "$out" || ok
+fires P1 46 "#3663 (a) a method ending the process after asking only whether it runs reads nothing"
+has "$out" "$FILE:46:" && has "$out" "AskedOnlyWhetherRunning.stop() ends it at line 50" && ok \
+  || bad "#3663 (a) the finding names the method that ends it" "$out"
+fires P1 56 "#3663 (b) a method ending the process reads how it ended on one branch only"
+has "$out" "$FILE:56:" && has "$out" "ReadOnOneBranchOfItsEnd.stop() ends it at line 59" && ok \
+  || bad "#3663 (b) the finding names the method and the end on the unread branch" "$out"
+fires P1 67 "#3663 (b) a read made before the end, on another branch, is no read of the end"
+fires P1 77 "#3663 (b) a process waited on only on one branch of the method that starts it"
+has "$out" "$FILE:88:" && bad "#3663 (b) a method reading the end on every branch, its except included, passes" "$out" || ok
+has "$out" "$FILE:105:" && bad "#3663 (b) a start method that waits on every path after the start passes" "$out" || ok
+# (c) Since #3650 merged, a hand off is followed to any depth: _reap() waits on the process after
+# stop() ends it, on every path, so that class is read; and the write two helpers down after the only
+# read at its start is a use with nothing reading the end after it.
+has "$out" "$FILE:113:" && bad "#3663 (c) a process ended and reaped two helpers down, on every path, passes" "$out" || ok
+fires P1 127 "#3663 (c) a write two helpers down after the only read at the start is a use after the read"
+has "$out" "$FILE:127:" && has "$out" "used again at line 131" && ok \
+  || bad "#3663 (c) the finding names the hand off the write is made through" "$out"
+has "$out" "findings=8 unjudged=0" && ok || bad "#3663 exactly the eight findings and none not judged" "$out"
+rm -f "$S/blind.py"
+
+# A helper the process is handed to is run along the paths of the method that hands it on, from the
+# state at the hand off: a helper two levels down that waits on one branch only leaves the other
+# path unread, and a dropped wait() there reads nothing (#3663, after the merge with #3650).
+FILE="fixture/deeper.py"
+cat > "$S/deeper.py" <<'PY'
+import subprocess
+
+
+class ReapedOnOneBranchTwoHelpersDown:
+    def start(self):
+        self.v = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        self.v.terminate()
+        return self._settle(self.v)
+
+    def _settle(self, proc):
+        if proc.pid:
+            return self._reap(proc)
+        return 0
+
+    def _reap(self, proc):
+        return proc.wait(timeout=5)
+
+
+class WaitDroppedTwoHelpersDown:
+    def start(self):
+        self.w = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        self.w.terminate()
+        return self._settle(self.w)
+
+    def _settle(self, proc):
+        return self._reap(proc)
+
+    def _reap(self, proc):
+        proc.wait(timeout=5)
+        return 0
+PY
+scan
+[ "$rc" -eq 1 ] && ok || bad "#3663 a helper two levels down that leaves the end unread fails the scan (rc=$rc)" "$out"
+fires P1 6 "#3663 a helper two levels down that waits on one branch only leaves the other path unread"
+fires P1 23 "#3663 a dropped wait() two helpers down is no read of the end"
+has "$out" "findings=2 unjudged=0" && ok || bad "#3663 exactly the two helpers that leave the end unread" "$out"
+rm -f "$S/deeper.py"
 
 # --- S1: a script filing an issue the field gate never sees -------------------------------------
 rm -f "$S/helper.py"
