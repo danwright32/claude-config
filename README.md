@@ -6248,6 +6248,16 @@ what is on this Mac:
 - Any other prefixed name passes only when the skill is found on disk, under the install folder
   of a plugin of that name (`~/.claude/plugins/installed_plugins.json`) or, for a directory's
   own skill such as `apps/web:deploy`, under that directory of the working directory.
+- Inside a plugin's folder only the places Claude Code reads a plugin's skills and commands from
+  count (its plugin pages, read 2026-11-26): `skills/<name>/SKILL.md` at the plugin's root, named
+  by the folder or in the file's own text; the same under a directory the manifest's `skills` key
+  lists; a `SKILL.md` at the root when there is no `skills/` and no `skills` key; and `commands/`
+  at the root, a subfolder adding a part to the name, or what the manifest's `commands` key lists
+  there in its place. A file anywhere else in the plugin, such as a `SKILL.md` among its examples
+  or a page under another folder named `commands`, does not make a name the plugin's.
+- Asked about although a plugin may hold them, each costing one question: a command the manifest
+  lists outside `commands/` or writes inline, a skill or command a marketplace entry adds, and
+  anything in a plugin whose manifest is there and cannot be read, which the question says.
 - Everything else prefixed is asked about, and so is any name starting `mcp__`, a name holding
   punctuation the hook cannot place, a Skill call naming no skill, and a payload it cannot read.
 
@@ -6260,7 +6270,9 @@ Dan's own skills takes 8.2 and 8.8 ms at the median, against 6.7 and 7.4 ms for 
 reads its input, and python3 never starts. A prefixed name starts python3: 41 and 42 ms at the
 median for an installed plugin's skill, 38 and 41 ms for one synced from claude.ai, and 68 and
 67 ms when it asks. The 37 prefixed skill names this Mac's sessions list or have called were run
-through the hook in each run, and all 37 passed in silence both times.
+through the hook in each run, and all 37 passed in silence both times. After the rule was narrowed
+to the places listed above, later that day, the 37 passed in silence again in one run; the times
+were not taken again.
 
 Not established: no server skill has loaded on either Mac, since the feature is off for the
 account, so the name forms are the documentation's (read 2026-11-26) and no real payload for one

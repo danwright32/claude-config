@@ -65,8 +65,40 @@ printf -- '---\nname: fancy\ndescription: named apart from its folder\n---\nbody
 printf 'a command\n' > "$PLUGIN/commands/build.md"
 printf 'a nested command\n' > "$PLUGIN/commands/deep/dive.md"
 printf -- '---\nname: deploy\n---\nbody\n' > "$PROJECT/apps/web/.claude/skills/deploy/SKILL.md"
-python3 -c 'import json, sys; json.dump({"version": 2, "plugins": {"kit@a-marketplace": [{"scope": "user", "installPath": sys.argv[1], "version": "1.0.0"}]}}, open(sys.argv[2], "w"))' \
-  "$PLUGIN" "$FAKE_HOME/.claude/plugins/installed_plugins.json"
+# Files inside the same plugin that are NOT where Claude Code reads a plugin's skills or commands
+# from (its plugin pages, read 2026-11-26: skills/<name>/SKILL.md and commands/ at the plugin's
+# root, and what its manifest lists). A name found only in one of these is not the plugin's.
+mkdir -p "$PLUGIN/docs/commands" "$PLUGIN/skills/brainstorming/commands" "$PLUGIN/examples/nested" \
+  "$PLUGIN/docs/elsewhere" "$PLUGIN/skills/group/deeper"
+printf 'a page about commands\n' > "$PLUGIN/docs/commands/stray.md"
+printf 'a file inside a skill\n' > "$PLUGIN/skills/brainstorming/commands/inner.md"
+printf -- '---\nname: nested\n---\nbody\n' > "$PLUGIN/examples/nested/SKILL.md"
+printf -- '---\nname: hidden\n---\nbody\n' > "$PLUGIN/docs/elsewhere/SKILL.md"
+printf -- '---\nname: deeper\n---\nbody\n' > "$PLUGIN/skills/group/deeper/SKILL.md"
+# A second plugin whose manifest names where its skills and commands are: the skills key adds to
+# skills/, and the commands key replaces the scan of commands/.
+LISTED="$WORK/plugins-cache/listed/2.0.0"
+mkdir -p "$LISTED/.claude-plugin" "$LISTED/extra-skills/alpha" "$LISTED/skills/beta" "$LISTED/commands" "$LISTED/elsewhere"
+printf '{"name": "listed", "skills": ["./extra-skills/"], "commands": ["./commands/only.md", "./elsewhere/far.md"]}\n' > "$LISTED/.claude-plugin/plugin.json"
+printf -- '---\nname: alpha\n---\nbody\n' > "$LISTED/extra-skills/alpha/SKILL.md"
+printf -- '---\nname: beta\n---\nbody\n' > "$LISTED/skills/beta/SKILL.md"
+printf 'the one command the manifest lists\n' > "$LISTED/commands/only.md"
+printf 'a file in commands the manifest does not list\n' > "$LISTED/commands/other.md"
+printf 'a command the manifest lists outside commands\n' > "$LISTED/elsewhere/far.md"
+# A third whose one skill is a SKILL.md at its root, and a fourth whose manifest cannot be read.
+SOLO="$WORK/plugins-cache/solo/1.0.0"
+BROKEN="$WORK/plugins-cache/broken/1.0.0"
+mkdir -p "$SOLO" "$BROKEN/.claude-plugin" "$BROKEN/skills/gamma" "$BROKEN/commands"
+printf -- '---\nname: only-skill\n---\nbody\n' > "$SOLO/SKILL.md"
+printf 'not json' > "$BROKEN/.claude-plugin/plugin.json"
+printf -- '---\nname: gamma\n---\nbody\n' > "$BROKEN/skills/gamma/SKILL.md"
+printf 'a command\n' > "$BROKEN/commands/run.md"
+python3 -c 'import json, sys
+entry = lambda path, version: [{"scope": "user", "installPath": path, "version": version}]
+json.dump({"version": 2, "plugins": {"kit@a-marketplace": entry(sys.argv[1], "1.0.0"), "listed@a-marketplace": entry(sys.argv[2], "2.0.0"),
+                                     "solo@a-marketplace": entry(sys.argv[3], "1.0.0"), "broken@a-marketplace": entry(sys.argv[4], "1.0.0")}},
+          open(sys.argv[5], "w"))' \
+  "$PLUGIN" "$LISTED" "$SOLO" "$BROKEN" "$FAKE_HOME/.claude/plugins/installed_plugins.json"
 
 # Awake is a sleep record that is not there, asleep a real one judged by lib/sleep.sh, never a
 # stand in flag. Named on every run, so the Mac really being asleep cannot decide a case.
@@ -168,6 +200,23 @@ expect "an installed plugin's command passes" none "$(skill kit:build)"
 expect "an installed plugin's nested command passes" none "$(skill kit:deep:dive)"
 expect "a directory's own skill, on disk under the working directory, passes" none "$(skill apps/web:deploy)"
 expect "a directory form with no such skill on disk is asked about" ask "$(skill apps/api:deploy)"
+
+echo "only what sits where Claude Code reads a plugin's skills and commands from makes a name the plugin's"
+expect "a file under a folder named commands that is not the plugin's commands folder is asked about" ask "$(skill kit:stray)"
+expect "a file under a commands folder inside one of the plugin's skills is asked about" ask "$(skill kit:inner)"
+expect "a SKILL.md outside the plugin's skills folder, named by its folder, is asked about" ask "$(skill kit:nested)"
+expect "a SKILL.md outside the plugin's skills folder, named in its own text, is asked about" ask "$(skill kit:hidden)"
+expect "a SKILL.md two folders down inside skills is asked about" ask "$(skill kit:deeper)"
+expect "a skill in a folder the manifest lists passes" none "$(skill listed:alpha)"
+expect "a skill in skills/ still passes when the manifest lists another folder" none "$(skill listed:beta)"
+expect "a command the manifest lists inside commands/ passes" none "$(skill listed:only)"
+expect "a file in commands/ that the manifest's own list leaves out is asked about" ask "$(skill listed:other)"
+expect "a command the manifest lists outside commands/ is asked about, as it was before" ask "$(skill listed:far)"
+expect "a plugin's one skill, a SKILL.md at its root, passes by its own name" none "$(skill solo:only-skill)"
+expect "a skill of a plugin whose manifest cannot be read is asked about" ask "$(skill broken:gamma)"
+expect "a command of a plugin whose manifest cannot be read is asked about" ask "$(skill broken:run)"
+r="$(run "$HOOK" "$(skill broken:gamma)")"
+says "and the question says the manifest could not be read, never that the plugin holds no such skill" "$r" 'plugin\.json.* could not be read'
 # The same plugin skill under a home holding no record of installed plugins: nothing says it is on
 # this Mac, so it is asked about.
 EMPTY_HOME="$WORK/empty-home"
@@ -212,6 +261,10 @@ says "and the question names the payload" "$r" 'payload'
 expect "a Skill call inside a list is asked about" ask "[$whole]"
 expect "a Skill call cut short inside its name is asked about" ask "${whole%%:pdf*}"
 expect "text that is no JSON and names no tool is asked about" ask 'not json at all'
+# Another tool's name read whole does not vouch for the rest of a text that cannot be read: the
+# call's own name may be the one cut short after it (an input can hold a tool_name key of its own).
+expect "a payload holding another tool's name whole, then cut short inside the Skill tool's name, is asked about" ask '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_input": {"tool_name": "Bash", "skill": "docs:pdf"}, "tool_name": "Ski'
+expect "a payload holding another tool's name whole, then cut short inside a name that cannot be Skill, is passed" none '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_input": {"tool_name": "Bash", "skill": "docs:pdf"}, "tool_name": "Rea'
 expect "a local Skill call holding a second skill key is read by its own skill, not the first found" none "$(python3 -c 'import json; print(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Skill", "tool_input": {"skill": "next-issue", "args": "x"}, "note": {"skill": "also"}}))')"
 expect "a Skill call whose own skill is a server's, behind another skill key, is asked about" ask "$(python3 -c 'import json; print(json.dumps({"note": {"skill": "next-issue"}, "hook_event_name": "PreToolUse", "tool_name": "Skill", "tool_input": {"skill": "docs:pdf"}}))')"
 expect "a Skill call carrying a field this hook does not know that names a server is asked about" ask "$(payload Skill '{"skill": "pdf", "source": "mcp__docs__pdf"}')"

@@ -25,19 +25,23 @@ for one was ever seen. The forms above are the documentation's, not a measuremen
 
 THE RULE. A server's skill and a plugin's carry the same form, so the form alone cannot tell them
 apart. A name with a prefix passes only when the skill it names is found on this Mac: under the
-install folder of a plugin of that name (~/.claude/plugins/installed_plugins.json), as a skill
-folder, a SKILL.md whose own name it is, or a command file; or, for a directory's own, under that
-directory of the working directory. Everything else with a prefix is asked about, which is the
-side it fails to: a plugin skill this cannot find costs Dan one question, and a server skill it
-took for local would load unread. A name starting mcp__ is asked about whatever follows.
+install folder of a plugin of that name (~/.claude/plugins/installed_plugins.json), in one of the
+places Claude Code reads a plugin's skills and commands from, which plugin_holds lists (a skill
+folder under skills/ or under a directory the manifest lists, named by the folder or in the
+SKILL.md's own text, or a command file under commands/); or, for a directory's own, under that
+directory of the working directory. A file anywhere else inside the plugin does not make a name
+the plugin's. Everything else with a prefix is asked about, which is the side it fails to: a
+plugin skill this cannot find costs Dan one question, and a server skill it took for local would
+load unread. A name starting mcp__ is asked about whatever follows.
 
 A name is read the way the documentation says Claude Code compares names: compatibility forms
 (a fullwidth colon) as their plain ones, spacing and invisible characters ignored. Punctuation
 this cannot place is asked about too.
 
 What it cannot read is asked about: a Skill call naming no skill, a payload that does not parse
-and names the Skill tool or no tool whole, and a field of the input it does not know that names
-an MCP server. A payload naming another tool is never this hook's.
+and names the Skill tool or no tool whole, or is cut short inside a tool name that could still be
+Skill, and a field of the input it does not know that names an MCP server. A payload naming
+another tool is never this hook's.
 """
 import json
 import os
@@ -113,24 +117,156 @@ def own_name(skill_file):
     return None
 
 
-def plugin_holds(folder, skill):
-    """Whether a plugin's install folder holds a skill or a command of this name."""
-    want = skill.lower()
-    base = folder.rstrip(os.sep).count(os.sep)
-    for root, dirs, files in os.walk(folder):
-        if root.count(os.sep) - base >= WALK_DEPTH:
-            dirs[:] = []
-        dirs[:] = [d for d in dirs if d not in SKIPPED_DIRS]
-        if "SKILL.md" in files:
-            if os.path.basename(root).lower() == want or own_name(os.path.join(root, "SKILL.md")) == want:
+def manifest_of(folder):
+    """A plugin's manifest: {} when it has none, None when it has one this could not read."""
+    path = os.path.join(folder, ".claude-plugin", "plugin.json")
+    if not os.path.lexists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def listed(value):
+    """The paths a manifest key lists: one path or a list of them."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, str)]
+    return []
+
+
+def placed(folder, rel, root_too=False):
+    """A manifest's path as a path inside the plugin's folder, or None. The documentation: every
+    such path "is relative to the plugin root and must start with ./", and skills also takes "."
+    for the root itself."""
+    if root_too and rel in (".", "./"):
+        return folder
+    if not rel.startswith("./"):
+        return None
+    path = os.path.normpath(os.path.join(folder, rel))
+    top = os.path.normpath(folder)
+    return path if path != top and path.startswith(top + os.sep) else None
+
+
+def reached(folder, path):
+    """Whether a directory in a plugin's folder is one a walk down from that folder comes to: no
+    more than WALK_DEPTH folders down, under no skipped folder and through no link. This rule
+    replaced such a walk, and nothing the walk did not find may pass now."""
+    rel = os.path.relpath(path, folder)
+    parts = [] if rel == "." else rel.split(os.sep)
+    if ".." in parts or len(parts) > WALK_DEPTH:
+        return False
+    at = folder
+    for p in parts:
+        at = os.path.join(at, p)
+        if p in SKIPPED_DIRS or os.path.islink(at):
+            return False
+    return os.path.isdir(at)
+
+
+def skill_at(folder, want, by_folder=True):
+    """Whether a folder holds a SKILL.md that names this skill, in its own text or by its folder."""
+    f = os.path.join(folder, "SKILL.md")
+    if not os.path.isfile(f):
+        return False
+    return own_name(f) == want or (by_folder and os.path.basename(os.path.normpath(folder)).lower() == want)
+
+
+def holds_skill(folder, manifest, want):
+    default = os.path.join(folder, "skills")
+    if "skills" not in manifest and not os.path.isdir(default):
+        # "A plugin with SKILL.md at its root, no skills/, and no skills key loads as a single
+        # skill", named in its own text, or after the plugin's folder when it names itself nowhere.
+        f = os.path.join(folder, "SKILL.md")
+        return os.path.isfile(f) and skill_at(folder, want, by_folder=own_name(f) is None)
+    scanned = [default]
+    for rel in listed(manifest.get("skills")):
+        path = placed(folder, rel, root_too=True)
+        if path and path not in scanned:
+            scanned.append(path)
+    for d in scanned:
+        if not reached(folder, d):
+            continue
+        # A listed directory is "a directory of <name>/SKILL.md folders or one folder holding
+        # SKILL.md directly"; the default skills/ is the first kind only.
+        if d != default and skill_at(d, want, by_folder=os.path.normpath(d) != os.path.normpath(folder)):
+            return True
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for n in names:
+            sub = os.path.join(d, n)
+            if reached(folder, sub) and skill_at(sub, want):
                 return True
-        parts = [p.lower() for p in os.path.relpath(root, folder).split(os.sep)]
-        if "commands" in parts:
-            under = parts[parts.index("commands") + 1:]
-            for f in files:
-                if f.lower().endswith(".md") and ":".join(under + [f[:-3].lower()]) == want:
-                    return True
     return False
+
+
+def command_under(folder, top, want):
+    """Whether commands/ holds this command: "commands/<file>.md" is <file>, and "a subdirectory
+    adds a segment", so commands/db/migrate.md is db:migrate."""
+    if not reached(folder, top):
+        return False
+    for root, dirs, files in os.walk(top):
+        dirs[:] = [d for d in dirs if reached(folder, os.path.join(root, d))]
+        rel = os.path.relpath(root, top)
+        under = [] if rel == "." else [p.lower() for p in rel.split(os.sep)]
+        for f in files:
+            if f.lower().endswith(".md") and ":".join(under + [f[:-3].lower()]) == want:
+                return True
+    return False
+
+
+def holds_command(folder, manifest, want):
+    default = os.path.join(folder, "commands")
+    if "commands" not in manifest:
+        return command_under(folder, default, want)
+    # A manifest's commands key "replaces the default commands/ scan": only what it lists is a
+    # command. Of that, this passes what sits in commands/ itself, which is all the walk this rule
+    # replaced could find: the folder when it is listed, a file listed straight inside it, and a
+    # name mapped to such a file of the same name. A command listed anywhere else, or written
+    # inline in the manifest, is asked about, as it was before.
+    def flat(path):
+        return (os.path.dirname(path) == default and path.lower().endswith(".md")
+                and os.path.basename(path)[:-3].lower() == want and os.path.isfile(path) and reached(folder, default))
+    value = manifest["commands"]
+    if isinstance(value, dict):
+        for key, entry in value.items():
+            source = entry.get("source") if isinstance(entry, dict) else None
+            path = placed(folder, source) if isinstance(source, str) else None
+            if isinstance(key, str) and key.lower() == want and path and flat(path):
+                return True
+        return False
+    for rel in listed(value):
+        path = placed(folder, rel)
+        if path and (flat(path) or (path == default and command_under(folder, default, want))):
+            return True
+    return False
+
+
+def plugin_holds(folder, skill):
+    """Whether a plugin's install folder holds a skill or a command of this name, in one of the
+    places Claude Code reads a plugin's skills and commands from. None when the plugin's manifest
+    is there and could not be read, since it is what says where they are.
+
+    The places, from Claude Code's plugin pages (the manifest reference, "Add components to a
+    plugin" and the skills page, read 2026-11-26): skills/<name>/SKILL.md at the plugin's root; the
+    directories the manifest's skills key lists, which add to skills/; a SKILL.md at the root when
+    there is no skills/ and no skills key; and commands/ at the root with its subdirectories, or
+    what the manifest's commands key lists in its place. A file anywhere else in the plugin (a
+    SKILL.md among its examples, a page under a folder that happens to be named commands) is not
+    the plugin's skill, so a name found only there is asked about. Not read: components a
+    marketplace entry adds to a plugin, which are asked about."""
+    want = skill.lower()
+    folder = os.path.normpath(folder)
+    manifest = manifest_of(folder)
+    if manifest is None:
+        return None
+    return holds_skill(folder, manifest, want) or holds_command(folder, manifest, want)
 
 
 def server_words(prefix):
@@ -172,12 +308,21 @@ def judge(raw_name, cwd, home):
         return (text_of(skill, server_words(prefix))
                 + " No skill " + shown(skill) + " is on disk under " + shown(prefix) + " in the working directory.")
     plugins, unread = installed_plugins(home)
+    no_manifest = False
     for folder in plugins.get(prefix.lower(), []):
-        if plugin_holds(folder, skill):
+        held = plugin_holds(folder, skill)
+        if held:
             return None
+        if held is None:
+            no_manifest = True
     also = " " + shown(prefix) + ":" + shown(skill) + " is also the form a plugin's skill takes, and "
     if unread:
         return text_of(skill, server_words(prefix)) + also + unread + ", so whether a plugin holds it could not be told."
+    if no_manifest:
+        # Never "no plugin holds it": nothing was looked for (L11).
+        return (text_of(skill, server_words(prefix)) + also + "the manifest of the installed plugin " + shown(prefix)
+                + " (.claude-plugin/plugin.json in its folder) could not be read, so where its skills are, and "
+                "whether it holds this one, could not be told.")
     return (text_of(skill, server_words(prefix)) + also + "no installed plugin named "
             + shown(prefix) + " holds a skill " + shown(skill) + " on this Mac.")
 
@@ -212,9 +357,15 @@ def verdict(raw, home):
     # A payload that is not a tool call is judged by its text. Every tool it names whole is read,
     # never the first alone: one naming only other tools is not this hook's, and one naming the
     # Skill tool, or no tool whole, is a Skill call nobody could read.
-    whole = re.findall(r"\"tool_name\"\s*:\s*\"([^\"\\]*)\"", raw)
+    whole_key = r"\"tool_name\"\s*:\s*\"([^\"\\]*)\""
+    whole = re.findall(whole_key, raw)
     if whole and "Skill" not in whole:
-        return None
+        # Another tool's name read whole does not vouch for the rest of the text: the call's own
+        # name may be one the text is cut short inside, after them. One that could still be Skill
+        # is a Skill call nobody could read.
+        cut = re.search(r"\"tool_name\"\s*:\s*\"([^\"\\]*)$", re.sub(whole_key, " ", raw))
+        if not cut or not "Skill".startswith(cut.group(1)):
+            return None
     return "the payload could not be read as a Skill call, so whether the skill is a server's could not be told."
 
 
