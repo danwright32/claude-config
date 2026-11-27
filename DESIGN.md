@@ -1978,9 +1978,10 @@ that refuses more.
 
 ### Text posted while a repository was private (#3582)
 
-The publish gate's rule is that a private repository is passed without its lists being read. That
-leaves a hole in time, not in the rule: text posted while a repository is private is judged by
-nothing, and turning the repository public publishes it unjudged. On 2026-11-24 this repository
+The publish gate's rule was that a private repository is passed without its lists being read (it
+still is, unless the repository declares itself public, the last part below). That
+left a hole in time, not in the rule: text posted while a repository is private was judged by
+nothing, and turning the repository public published it unjudged. On 2026-11-24 this repository
 was private for some hours, 83 texts were posted, and a scan written by hand that night found 8
 lines in two issues naming a work organisation or repository. Three things were missing, and each
 is now a tested part.
@@ -2041,11 +2042,63 @@ what it refuses did not: `test-gh-write-aliases.sh` holds the seven forms' decis
   yet, is judged by origin's copy as last fetched, since a session started in a stale checkout
   is the one that most needs telling. Silence means checked and as expected, so every way of not knowing
   is said as not knowing (L98). One `gh repo view` per session start, bounded at 4 seconds inside
-  the hook's 10 second timeout, both settings, not measured.
+  the hook's 10 second timeout, both settings, not measured. Since the file is read through
+  `lib/expected-visibility.py`, its git reads share one bound of 3 seconds before that, also a
+  setting, and the suite holds the timeout above the two bounds and 3 seconds more, read from
+  where each is set, so a hook cut off mid wait cannot leave a session with no line at all.
 
-Still open, and Dan's to decide (#3582): whether the publish gate should judge text posted to this
-repository even while it is private, since it is meant to be public. The scan is the remedy after
-the fact; that rule would be the prevention.
+**A repository that declares itself public is judged while it is private.** Decided by Dan, by
+picker on 2026-11-25, as the comment of that date on #3582 records it: "Yes, check it anyway
+(Recommended)". The scan is the remedy after the fact; this rule is the prevention. Ruled out in
+that comment: leaving the gate as it was and relying on the notice and the scan, and judging
+posted text in every private repository, which would refuse work names in the work repositories'
+own pull requests and issues, where they belong. How it is built, and what was weighed:
+
+- **The gate's one decision point, `published()`, gained one question.** For a repository GitHub
+  says is not public it asks `declared()` what the repository says it is meant to be; `public`
+  goes on to exactly the judging a public repository gets, the work owner exception included, and
+  anything else returns as before. Nothing a public repository meets changed, and no path now
+  passes that refused before, so the rule can only judge and refuse more.
+- **One reader, `lib/expected-visibility.py`, for the gate and the notice.** The notice held the
+  reading in its own shell lines. Two readings of one file drift (L370), and they already had: read
+  by those lines, an empty copy on origin's default branch was taken as no file while an empty
+  file in the working tree was said as one that could not be understood, and a folder at the path
+  was taken as no file. The reader says both as a declaration that is there and cannot be read,
+  and the notice now says it could not tell for each. The reading itself is unchanged: the first
+  word of the first line that is not a comment, in any letter case, split on spaces and tabs as
+  before, so a word ending in a carriage return is still none of the three.
+- **The declaration belongs to the repository the text goes to, never to the folder.** The gate
+  already asks GitHub which repository a command posts to. A checkout is read on disk only when
+  its `origin` names that same repository, letter case aside, from the checkout's root, so a
+  folder inside it and a worktree read their own copy. For any other target the folder's file is
+  another repository's declaration, so GitHub is asked for the target's own.
+- **GitHub is asked in one GraphQL read that names the repository back**, through each signed in
+  account in turn. A REST read of the file answers 404 both for no such file and for a private
+  repository the account cannot see, and reading the second as the first would pass a declared
+  repository unjudged. Measured on 2026-11-26, one read each: the answer is a `Blob` with its
+  `text`, a `Tree` for a folder at that path, `null` for no such path, and a `null` repository with
+  an error for one that cannot be resolved. A `Blob` cut short or binary, a `Tree` and an answer
+  naming another repository are each refused.
+- **Cannot tell is refused, whatever the text** (L98, L345): that comment's own words are that the
+  gate "must say it could not tell, and refuse, when it cannot read the declaration of a repository
+  it is about to post to". An empty file and a file of comments alone are refused too: a file that
+  is there has been written to say something. So is git not answering which checkout the command
+  runs in, or what its origin is: read as no checkout, that sent the question to GitHub in the
+  place of a checkout whose own file can say public where GitHub's copy does not, and the text
+  passed (found by the lessons review of the first commit, reproduced with a stand in git that
+  sleeps past the reader's bound, then fixed).
+- **Asked of GitHub only when the checkout cannot answer** (weighed, not built: asking GitHub
+  every time). GitHub's copy on the default branch cannot be changed by a branch's working tree
+  and is never stale, but asking it for every post to a private repository adds a call, 0.39 to
+  0.50 seconds over five runs on 2026-11-26, to every `gh` write in every private repository on
+  both Macs, almost all of which declare nothing, and a new way for each of them to be refused
+  when that call fails. Reading the checkout costs 0.020 to 0.023 seconds and no call. What that
+  leaves open is said in the README: a checkout holding no file that has not fetched since its
+  origin gained one, and a branch whose working tree changes the file, are each read as that
+  checkout has them.
+- **Not closed by this**: text that reaches GitHub without a `gh` command a session runs. The
+  notice's wording changed to say so, since "the publish gate does not judge text posted to it"
+  stopped being true.
 
 ## One watcher, and a leftover loop stops itself (#604)
 

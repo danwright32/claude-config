@@ -93,6 +93,9 @@ REFUSING=(
   # It asks before a connector tool deletes or changes something live, and refuses that call while
   # Dan is asleep (#3618): a crash or a timeout must stop the call, never let it through unasked.
   connector-change-ask.sh
+  # It asks before a skill shipped by an MCP server loads, and refuses that load while Dan is
+  # asleep (#3615): a crash or a timeout must stop the load, never let it through unasked.
+  server-skill-ask.sh
   require-tests-before-push.sh
   simplify-before-push.sh
   check-public-assets.sh
@@ -211,6 +214,9 @@ samples = {
     "mcp__claude_ai_SFDC_USE__createSobjectRecord": {"sobjectType": "Account", "fields": {}},
     # For the builder model gate (#2027) an ordinary Agent call is a read only one, which it passes.
     "Agent": {"description": "probe", "prompt": "find it", "subagent_type": "Explore"},
+    # For the server skill question (#3615) an ordinary Skill call is one of Dan's own skills, which
+    # it passes in silence.
+    "Skill": {"skill": "next-issue", "args": "probe"},
 }
 def top_level_alternatives(rx):
     # Split on the bars outside any group, so "a|b_(c|d)" is two alternatives, not three.
@@ -315,7 +321,8 @@ no-session-link-in-comments.sh Bash,mcp__plugin_slack_slack__slack_send_message
 announce-label-ask.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 slack-drafts-only-gate.sh Bash,mcp__claude_ai_Slack__slack_read_channel
 db-write-ask.sh Bash,Edit,Write,MultiEdit,mcp__claude_ai_Supabase__execute_sql,mcp__claude_ai_SFDC_USE__createSobjectRecord,mcp__playwright__browser_snapshot
-connector-change-ask.sh mcp__playwright__browser_snapshot"
+connector-change-ask.sh mcp__playwright__browser_snapshot
+server-skill-ask.sh Skill"
 if [ -s "$WORK/received.tsv" ]; then
   received_gates="$(cut -f1 "$WORK/received.tsv" | awk '!seen[$0]++')"
   while IFS= read -r script; do

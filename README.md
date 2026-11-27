@@ -284,7 +284,9 @@ merge. The file scan is unchanged and still leaves repository names out.
 Pull request and issue text goes further (#2105). `check-work-names-publish.sh` judges every
 `gh pr create`, `pr edit`, `pr comment`, `pr review`, `issue create`, `issue edit` and
 `issue comment`, and every `gh api` write to a repository's issues, pulls or comments endpoints, in
-any repository GitHub reports as public; a private one passes without the list being read, and so
+any repository GitHub reports as public, and since #3582 in one that declares itself public while
+GitHub reports it private (see "A repository that declares itself public is judged while it is
+private" below); any other private one passes without the list being read, and so
 does a public repository a work owner holds. It reads the whole command, a heredoc body included,
 and every body file it names, and refuses text naming a work organisation OR a work repository,
 showing the name it matched so the text can be rewritten. The names are read live on each judged
@@ -356,9 +358,50 @@ shell feeds that stage only the last; the issue field gate still reads such a fi
 command, as before. Still not covered: gh run by
 its absolute path, a script that rewrites PATH, and curl or an API library.
 
-**Text posted while a repository was private (#3582).** The publish gate judges text posted to a
-public repository and lets a private one through without reading its lists, so nothing judges text
-posted while a repository is private, and it is still unjudged when the repository turns public.
+**A repository that declares itself public is judged while it is private (#3582).** A repository
+whose `.github/expected-visibility` says `public` is judged by the publish gate exactly as a public
+one is, whatever GitHub says its visibility is today (Dan, by picker on 2026-11-25: "Yes, check it
+anyway (Recommended)"). A repository that is not public and has no such file, or whose file says
+`private` or `internal`, passes as before, without the lists being read. This only ever makes the
+gate judge and refuse more.
+
+- **Whose declaration is read**: the one of the repository the text goes to. When the command runs
+  in a checkout whose `origin` is that repository, it is the checkout's own file, read through
+  `hooks/lib/expected-visibility.py`, the reader the session start notice uses, so the two cannot
+  read the file differently: the working tree's copy from the checkout's root (a worktree's own,
+  from any folder inside it), and with nothing at that path the copy on origin's default branch as
+  last fetched. For any other repository (`--repo`, `GH_REPO` or a `gh api` path naming one the
+  folder is no checkout of, a folder in no checkout, an origin that is not a GitHub address) the
+  folder's own file says nothing about it, so GitHub is asked for the copy on that repository's
+  default branch, in one GraphQL read that names the repository back.
+- **What the file may hold**: its first line that is not a comment or blank, that line's first
+  word, in any letter case: `public`, `private` or `internal`.
+- **Cannot tell is refused**, whatever the text: a file that is there and cannot be read, an empty
+  one, one of comments alone, a word that is none of the three, a folder at that path, GitHub
+  failing to hand it over, an answer about another repository, or git not answering which
+  checkout the command runs in, what its origin is or what origin's copy of the file holds (never
+  read as no checkout, no origin or no file, each of which would ask GitHub in the checkout's
+  place). The refusal says which, and says
+  the repository is judged because of its own declaration.
+- **A work owner's repository** that declares itself public may still name its own work, as a
+  public one may.
+- **What it costs**, measured on the personal MacBook on 2026-11-26 over five runs each at a load
+  average near 40: 0.020 to 0.023 seconds to read a checkout's own declaration, with no call, and
+  0.39 to 0.50 seconds for the one call to GitHub about a repository the folder is no checkout
+  of. A public repository is never asked for its declaration.
+- **What it does not close**: text that reaches the repository without a `gh` command a session
+  runs (the website, another program) is still judged by nothing, so the scan below is still the
+  check to run before a repository turns public again. A checkout is read as it stands: one that
+  holds no file and has not fetched since its origin gained one reads as stating nothing, and a
+  branch whose working tree changes the file is read as changed.
+
+Tests: `hooks/test-work-names-publish.sh` (the command hook), `hooks/test-work-names-scripts.sh`
+(the guard on `gh`) and `hooks/test-repo-visibility-notice.sh` (the reader).
+
+**Text posted while a repository was private (#3582).** Until that rule the publish gate let every
+private repository through without reading its lists, and it still does for one that does not
+declare itself public, and for text no `gh` command posts. So text posted while a repository is
+private can be unjudged when the repository turns public.
 On 2026-11-24 this repository was private for some hours and 8 lines naming a work organisation or
 repository were posted to it meanwhile. One command rechecks such a window, and the gate's refusal
 of `gh repo edit --visibility public` names it:
@@ -456,8 +499,10 @@ password, so it is made by hand once per Mac. Both Macs have had it since 2026-1
 Why it is needed: on a Team or Enterprise account (Dan's is one), or on any Mac with managed
 settings, Claude Code's built-in security default seats itself ahead of every plugin and sends
 every `classic.*`, `prompt.section` and `prompt.context` hook (and, since 2.1.299, every
-`session.compact` and `prompt.attachment` hook, and since 2.1.331 every `session.info` and
-`session.redact` hook) past the user tier our mods load in,
+`session.compact` and `prompt.attachment` hook, since 2.1.331 every `session.info` and
+`session.redact` hook, and on every build read since #3697 the `session.append` rows of the
+attachment, hook-context and compaction doors, `telemetry.log` and `session.identity`) past the
+user tier our mods load in,
 so those hooks never run and only a debug log line says so (#875). A managed `prependPlugins` list
 that leaves it out moves it to last, where it still loads. Without the file, the mod hooks listed
 in `tools/sec-default-bypassed-hooks.tsv` (scope-modes and manual-steps refusing a turn end, the
@@ -3581,15 +3626,21 @@ Reading an old checkout is the other half, and that one is said rather than refu
   and the account's minutes ran out, and the publish gate judged none of the text posted meanwhile.
   The expectation has one home, the first line of `.github/expected-visibility` that is not a
   comment (`public`, `private` or `internal`), which this repository carries and
-  `.github/workflows/tests.yml` points at. A checkout that does not hold the file yet, being behind
+  `.github/workflows/tests.yml` points at, and one reader, `hooks/lib/expected-visibility.py`,
+  which the publish gate reads it through as well (it judges a repository whose file says public
+  even while GitHub says private, see "A repository that declares itself public is judged while it
+  is private"). A checkout that does not hold the file yet, being behind
   its origin, is judged by the copy on origin's default branch as last fetched, and a repository
-  with no such file in either place is never asked about.
+  with no such file in either place is never asked about. Something at that path that is not a
+  file, and an empty copy on origin's default branch, are said as a file that could not be read or
+  understood, never taken as no file.
   When GitHub agrees the hook says nothing; when it does not, one notice names the repository, what
   it is, what that costs and the command to run before it turns public again; when it cannot tell
   (gh failed, answered something else or outlasted its 4 second bound, the file or the origin could
   not be read) it says it could not tell, never that all is well. It costs one `gh repo view` per
-  session start in a repository that carries the file, measured on 2026-11-25 at 0.51 to 0.80
-  seconds over five runs, against 0.10 in a repository with no file and 0.05 to 0.06 outside one.
+  session start in a repository that carries the file, measured on the personal MacBook on
+  2026-11-26 at 0.52 to 0.56 seconds over five runs, against 0.13 to 0.24 over five in a repository
+  with no file and 0.05 over three outside one, at a load average near 40.
   It is wired to SessionStart only, never to a prompt.
   Tests: `hooks/test-repo-visibility-notice.sh`.
 
@@ -6661,6 +6712,67 @@ names and the date and run the suite. Not established: Better Stack's tool names
 server name Regal is reached under, which are on the work MacBook only, so for them the hook rests
 on the name parts and the verbs; and no live question has been exercised, since no connector was
 called.
+
+## A skill shipped by an MCP server asks Dan first
+
+An MCP server can ship skills beside its tools. In auto mode such a skill loads with no prompt:
+Claude Code's documentation says "The classifier decides whether the skill loads, without reading
+it", and "Servers can change skills at any time." Dan accepted on 2026-11-25 "Ask before a
+server's skill loads" (#3615). `hooks/server-skill-ask.sh` runs before every Skill call Claude
+makes and asks first when the skill is a server's. The question names the skill and the server and
+says that its text is the server's and can change at any time. While sleep mode is on the load is
+refused with the reason, and it is refused when the hook cannot tell whether Dan is asleep; that
+rule is `hooks/lib/ask-awake.sh`.
+
+It is a hook and not the `permissions.ask` rule the documentation gives (`Skill(mcp__docs__*)`),
+because the sync carries no ask rule to either Mac. The one permission setting it shares is
+`permissions.deny`, for a fixed list of rules (#3686), and an ask rule in `settings.shared.json`
+makes the pull refuse that whole file, saying such a rule stays each Mac's own (read in
+`claude-sync` on 2026-11-26; the section above holds the measurement, taken before the deny rules
+were shared). A hook also needs no list of server names, so a server connected later is covered the
+day it is connected.
+
+Which skill is a server's is `hooks/lib/server-skills.py`'s rule. The documentation names a
+server's skill `<server>:<skill>`, with `claude_ai_<name>:` for a claude.ai connector and
+`plugin_<plugin>_<server>:` for a plugin's server, which is the same form an installed plugin's
+own skill takes (`<plugin>:<skill>`). So the form cannot tell them apart, and the hook goes by
+what is on this Mac:
+
+- A name with no prefix passes: Dan's own skills and the bundled ones.
+- `anthropic-skills:` passes: Claude Code reserves it for skills synced from claude.ai.
+- Any other prefixed name passes only when the skill is found on disk, under the install folder
+  of a plugin of that name (`~/.claude/plugins/installed_plugins.json`) or, for a directory's
+  own skill such as `apps/web:deploy`, under that directory of the working directory.
+- Inside a plugin's folder only the places Claude Code reads a plugin's skills and commands from
+  count (its plugin pages, read 2026-11-26): `skills/<name>/SKILL.md` at the plugin's root, named
+  by the folder or in the file's own text; the same under a directory the manifest's `skills` key
+  lists; a `SKILL.md` at the root when there is no `skills/` and no `skills` key; and `commands/`
+  at the root, a subfolder adding a part to the name, or what the manifest's `commands` key lists
+  there in its place. A file anywhere else in the plugin, such as a `SKILL.md` among its examples
+  or a page under another folder named `commands`, does not make a name the plugin's.
+- Asked about although a plugin may hold them, each costing one question: a command the manifest
+  lists outside `commands/` or writes inline, a skill or command a marketplace entry adds, and
+  anything in a plugin whose manifest is there and cannot be read, which the question says.
+- Everything else prefixed is asked about, and so is any name starting `mcp__`, a name holding
+  punctuation the hook cannot place, a Skill call naming no skill, and a payload it cannot read.
+
+A skill Dan types as a command is never asked about: by the documentation a typed command does
+not reach a PreToolUse hook, and needs no approval under an ask rule either.
+
+What it costs on a Skill call (personal MacBook, 2026-11-26, two runs of 30 samples a case, one
+process per call, the one minute load average 99 for the first run and 11 for the second): one of
+Dan's own skills takes 8.2 and 8.8 ms at the median, against 6.7 and 7.4 ms for a bash that only
+reads its input, and python3 never starts. A prefixed name starts python3: 41 and 42 ms at the
+median for an installed plugin's skill, 38 and 41 ms for one synced from claude.ai, and 68 and
+67 ms when it asks. The 37 prefixed skill names this Mac's sessions list or have called were run
+through the hook in each run, and all 37 passed in silence both times. After the rule was narrowed
+to the places listed above, later that day, the 37 passed in silence again in one run; the times
+were not taken again.
+
+Not established: no server skill has loaded on either Mac, since the feature is off for the
+account, so the name forms are the documentation's (read 2026-11-26) and no real payload for one
+has been seen. The first real one should be checked against `lib/server-skills.py`. If a server
+ships a skill under the exact name of a plugin skill that is on disk, the hook passes it.
 
 ## A trusted path that has gone is said
 
@@ -11918,7 +12030,16 @@ It also fails a mod whose hook is on an event Claude Code's built-in security de
 the user tier every mod loads in (#875): every `classic.*` event, `prompt.section`, `prompt.context`,
 `prompt.compose`, `skill.prompt`, `attribution.text` and `settings.read`, and since Claude Code
 2.1.299 `prompt.attachment` and `session.compact` too (#1185), and since 2.1.331 `session.info`
-and `session.redact` (#3508). Seated outermost for a
+and `session.redact` (#3508). Some routes carry a matcher, written as Claude Code writes it
+(#3697): `session.append{door=attachment}`, `{door=hook-context}` and `{door=compaction}`, and
+`telemetry.log{to=collector}`; and `session.identity` is refused to a mod's caller and routed for
+every other, so no call of it reaches a mod either. A hook with a matcher is keyed by the part a
+route reads (`session.append{door=hook-context}`), and a hook hears a route unless the two name one
+field with different values, so a `session.append` hook with no door is reported for the doors it
+is passed over on. A second list holds the routes passed over for some calls only (the Skill tool's
+`session.append{door=tool-message}` rows, `{door=note}` and a few engine reads made by the guard
+or the prepend and append tiers); a hook on one is reported too, saying "for some of its calls".
+Seated outermost for a
 Team or Enterprise organization, it routes each of those straight past our mods, so such a hook
 never runs and only a debug log line says so (`bypassed by cc-plugin-sec-default`). Both Macs keep
 it out of first place with the managed settings file in "Setting up a new Mac" above, so these
@@ -11932,7 +12053,13 @@ on a Mac still running an older one. Where a `claude` binary is found, its route
 the ones listed for that build (each route is listed with the first build known to route it, read
 from `claude --version`, every route when the version cannot be read), and a difference fails, so
 the next build that adds or drops a route fails on the first Mac to install it while the other Mac
-and CI stay as they were.
+and CI stay as they were. The reading finds each registration in three shapes, with or without a
+matcher: a handler that routes every call, one that refuses or routes (every call), and one that
+routes or passes on (some calls); a handler with a body in braces is not read. Each list is
+compared on its own. A route the documentation names (the admin page's table of hooks that do not
+run, read on 2026-11-25, and the guard's readme) that the reading does not find in any shape fails
+on a line of its own, since it means either a shape the reading does not know or a build that no
+longer routes it.
 It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` says, with the
 TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed on CI before the
 suites; `TSC_BIN` overrides it, and `tsc` on the path is the last resort). A checkout without it, as
