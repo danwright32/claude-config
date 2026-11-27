@@ -20,6 +20,10 @@
 # here against the unchanged hook, and where it did ask it said of every mark that the command
 # held a # the reader could not tell from a comment.
 #
+# A refusal is printed whatever state the notice library is in beside the hook (section 7): beside
+# one that loaded and had no builder for a refusal, the hook printed nothing and left with 0, which
+# passes the command. The hook's other broken states still ask, on that same command.
+#
 # Every command here is only ever text in a payload handed to the hook: nothing a case names runs.
 # The only programs started are the hook, python3 and, for the commit cases, git in a checkout this
 # suite makes in its own temporary folder. Every project ref and path is invented.
@@ -479,6 +483,176 @@ print("%s\t%s" % ("ok" if got == "deny rc=0" and SAYS["close"] in reason and "li
                   else "got %s: %s" % (got, reason[:400]),
                   "a hook with no lib/hook-notice.sh beside it still refuses a heredoc the reader cannot find the end of"))
 
+# ---- 7. a refusal the notice library cannot build is still a refusal ------------------------------
+# The hook builds a refusal with the notice library's private decision builder, _hn_decision_json.
+# Beside a library that loads and has no such function (a copy from before 2026-11-16 that the sync
+# held back, or one in which that private name changed), the hook printed nothing and left with 0,
+# so the command ran with no decision at all, where the hook before #3472 asked about it. Each
+# stand in here is a copy of the real library, changed in this suite's own folder and put beside a
+# copy of the hook; the real library is never touched.
+LIB = os.path.join(os.path.dirname(hook), "lib")
+with open(os.path.join(LIB, "hook-notice.sh")) as f:
+    NOTICE = f.read()
+GONE = object()
+# The library as it would be with the private builder under another name: it loads, and its ask
+# and its allow are built as before.
+RENAMED = NOTICE.replace("_hn_decision_json", "_hn_decision_built")
+# The builder is there and prints nothing.
+SILENT = NOTICE + "\n_hn_decision_json() { return 0; }\n"
+# The builder is there and prints a refusal cut short, which no JSON reader takes.
+CUT = (NOTICE + "\n_hn_decision_json() { printf '%s' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", "
+       "\"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"cut sh'; }\n")
+# The builder is there and prints a whole object that is no refusal.
+ASKS = (NOTICE + "\n_hn_decision_json() { printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", "
+        "\"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"r\"}}'; }\n")
+# A copy of lib/db-write-calls.py whose advice on rewriting holds what JSON must escape: both
+# quotes, a backslash, a tab and a line break.
+ODD = 'Write "it" as \'a\\b\' \tso,\non two lines'
+ODD_TAIL = "\n\ndef unsure_fix(told):\n    return %r if isinstance(told, (Unsure, UnsureFinding)) else None\n" % ODD
+NO_BUILDER = "lib/hook-notice.sh beside this hook has no _hn_decision_json"
+NO_REFUSAL = "_hn_decision_json in lib/hook-notice.sh beside this hook printed no refusal"
+
+
+def beside(name, notice=None, calls_tail=None, broken=()):
+    """A copy of the hook in a folder of its own, beside a copy of lib/ in which hook-notice.sh
+    holds the text notice (GONE: the file is left out), lib/db-write-calls.py ends in calls_tail,
+    and each file of broken is one python3 cannot load."""
+    folder = os.path.join(work, name)
+    os.makedirs(folder)
+    shutil.copy(hook, folder)
+    shutil.copytree(LIB, os.path.join(folder, "lib"), ignore=shutil.ignore_patterns("__pycache__"))
+    if notice is GONE:
+        os.remove(os.path.join(folder, "lib", "hook-notice.sh"))
+    elif notice is not None:
+        write(os.path.join(folder, "lib", "hook-notice.sh"), notice)
+    if calls_tail is not None:
+        with open(os.path.join(folder, "lib", "db-write-calls.py"), "a") as f:
+            f.write(calls_tail)
+    for file in broken:
+        write(os.path.join(folder, "lib", file), "def (\n")
+    return os.path.join(folder, os.path.basename(hook))
+
+
+def loaded(by, name):
+    """0 when the notice library beside the hook by loads and then has a function called name,
+    1 when it loads and has none, 3 when it does not load."""
+    return subprocess.run(["bash", "-c", '. "$1" 2>/dev/null || exit 3; declare -F "$2" >/dev/null', "-",
+                           os.path.join(os.path.dirname(by), "lib", "hook-notice.sh"), name], env=env).returncode
+
+
+def shown(by, command, cwd, t=None, home_dir=None, sent=None):
+    """(what the hook by left with, the reason it gave, the notice beside it, all it printed), for
+    command, or for the bytes sent when the payload is to be one that is no JSON."""
+    d = {"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": cwd, "tool_name": "Bash",
+         "tool_input": {"command": command, "description": "d"}}
+    if t is not None:
+        d["transcript_path"] = t
+    p = subprocess.run(["bash", by], input=json.dumps(d).encode() if sent is None else sent, stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL, env=env if home_dir is None else dict(env, HOME=home_dir), cwd=work)
+    out = p.stdout.decode("utf-8", "replace")
+    if not out.strip():
+        return "none rc=%d" % p.returncode, "", "", out
+    try:
+        whole = json.loads(out)
+        h = whole.get("hookSpecificOutput") or {}
+    except (ValueError, AttributeError):
+        return "badjson rc=%d" % p.returncode, "", "", out
+    return ("%s rc=%d" % (h.get("permissionDecision", "none"), p.returncode), h.get("permissionDecisionReason", ""),
+            whole.get("systemMessage", ""), out)
+
+
+stood = []
+
+
+def refused(label, by, command, cwd, t, holds, lacks=(), home_dir=None, notice=()):
+    """One case: the hook by refuses command, in one JSON object that holds every text of holds in
+    its reason and none of lacks, and every text of notice in the notice beside it."""
+    got, reason, message, out = shown(by, command, cwd, t, home_dir)
+    if got != "deny rc=0":
+        verdict = "wanted deny rc=0, got %s: %s" % (got, (reason or out)[:400])
+    elif [w for w in holds if w not in reason]:
+        verdict = "the refusal does not say %s: %s" % ([w for w in holds if w not in reason], reason[:700])
+    elif [w for w in lacks if w in reason]:
+        verdict = "the refusal holds %s: %s" % ([w for w in lacks if w in reason], reason[:700])
+    elif [w for w in notice if w not in message]:
+        verdict = "the notice beside the refusal does not say %s: %s" % ([w for w in notice if w not in message], message[:500])
+    else:
+        verdict = "ok"
+    stood.append((verdict, label))
+
+
+def asked(label, by, command, cwd, t, holds, sent=None):
+    """One case: the hook by asks, and its question holds every text of holds."""
+    got, reason, _, out = shown(by, command, cwd, t, sent=sent)
+    if got != "ask rc=0":
+        verdict = "wanted ask rc=0, got %s: %s" % (got, (reason or out)[:400])
+    elif [w for w in holds if w not in reason]:
+        verdict = "the question does not say %s: %s" % ([w for w in holds if w not in reason], reason[:700])
+    else:
+        verdict = "ok"
+    stood.append((verdict, label))
+
+
+CLOSE = behind(WRITES[0][1])[1][2]
+SAID = (SAYS["close"], HOW["close"], "could not check", "claude-config#3472")
+renamed, silent = beside("renamed", RENAMED), beside("silent", SILENT)
+got = (loaded(renamed, "hook_ask_json"), loaded(renamed, "_hn_decision_json"))
+stood.append(("ok" if got == (0, 1) else "got %s" % (got,),
+              "(control) the stand in library with its builder renamed loads, names an ask and has no _hn_decision_json"))
+got = (loaded(silent, "hook_ask_json"), loaded(silent, "_hn_decision_json"))
+stood.append(("ok" if got == (0, 0) else "got %s" % (got,),
+              "(control) the stand in library whose builder prints nothing loads and has a _hn_decision_json"))
+asked("(control) beside a notice library with no _hn_decision_json, a delete in plain sight is asked about as it always was",
+      renamed, WRITES[0][1], work, None, (WRITES[0][2],))
+refused("beside a notice library with no _hn_decision_json, a delete behind a heredoc the reader cannot find the end of is "
+        "refused, never passed in silence", renamed, CLOSE, work, None, SAID + (NO_BUILDER,),
+        ("lib/hook-notice.sh is missing", NO_REFUSAL))
+refused("beside a notice library with no _hn_decision_json, a commit of an unapproved list line behind a # that cannot be "
+        "told is refused, never passed in silence", renamed, "printf a(b)# c; " + COMMIT + "\n", listed, NONE_T,
+        (UNSURE, "could not check", NO_BUILDER))
+refused("beside a notice library whose _hn_decision_json prints nothing, the same delete is refused, never passed in silence",
+        silent, CLOSE, work, None, SAID + (NO_REFUSAL,), ("lib/hook-notice.sh is missing", NO_BUILDER))
+refused("beside a notice library whose _hn_decision_json prints a refusal cut short, the same delete is refused in an "
+        "object that can be read", beside("cut", CUT), CLOSE, work, None, SAID + (NO_REFUSAL,))
+refused("beside a notice library whose _hn_decision_json prints an ask where a refusal was meant, the same delete is "
+        "refused", beside("asks", ASKS), CLOSE, work, None, SAID + (NO_REFUSAL,))
+# A refusal whose words hold what JSON must escape. Beside the real library every character of
+# them arrives (which is also what shows the stand in advice reaches the refusal); in the form
+# built without it they are taken out, and the object is still one a JSON reader takes.
+refused("(control) beside the real notice library, a refusal whose advice holds quotes, a backslash, a tab and a line "
+        "break arrives whole", beside("odd", calls_tail=ODD_TAIL), CLOSE, work, None, (SAYS["close"], ODD))
+for name, text, why in (("odd-renamed", RENAMED, NO_BUILDER), ("odd-gone", GONE, "lib/hook-notice.sh is missing")):
+    refused("with the notice library %s, a refusal whose advice holds quotes, a backslash, a tab and a line break is "
+            "still one JSON object, with those characters taken out"
+            % ("left out" if text is GONE else "holding no _hn_decision_json"),
+            beside(name, text, ODD_TAIL), CLOSE, work, None,
+            (SAYS["close"], "Write it as ab so,on two lines", why), ('"', "'", "\\", "\t", "\n"))
+# The notice a question carries beside it is carried by a refusal built this way too.
+sf_home = os.path.join(work, "sf-home")
+os.makedirs(os.path.join(sf_home, ".claude"))
+write(os.path.join(sf_home, ".claude", "settings.local.json"),
+      json.dumps({"permissions": {"allow": ["mcp__claude_ai_SFDC_USE__createSobjectRecord"]}}))
+refused("beside a notice library with no _hn_decision_json, a refusal carries the notice about pre-allowed Salesforce "
+        "writes", renamed, CLOSE, work, None, SAID + (NO_BUILDER,), home_dir=sf_home,
+        notice=("SALESFORCE WRITES SKIP AUTO MODE", "mcp__claude_ai_SFDC_USE__createSobjectRecord", NO_BUILDER))
+# The hook's other broken states, on that same command: each asks, as it did before #3472 and
+# after it, since no rewriting of the command mends any of them. None passes it in silence.
+asked("with lib/db-write-calls.py one python3 cannot load, a delete behind a heredoc the reader cannot find the end of "
+      "is asked about, naming the file", beside("no-calls", broken=("db-write-calls.py",)), CLOSE, work, None,
+      ("lib/db-write-calls.py could not be loaded beside the hook",))
+asked("with lib/shell-words.py one python3 cannot load, the same delete is asked about, naming the file",
+      beside("no-reader", broken=("shell-words.py",)), CLOSE, work, None,
+      ("lib/shell-words.py could not be loaded beside the hook", "could not be read"))
+NAMED_PAYLOAD = json.dumps({"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": work, "tool_name": "Bash",
+                            "tool_input": {"command": CLOSE, "description": "d"}})
+asked("with its payload cut short, the same delete is asked about, as a payload that could not be read",
+      hook, CLOSE, work, None, ("the hook payload could not be read as a tool call",),
+      sent=NAMED_PAYLOAD[:NAMED_PAYLOAD.index("delete from runs") + len("delete from runs")].encode())
+# The same payload whole, for the case with no python3, which the shell below runs.
+write(os.path.join(work, "named-line-payload.json"), NAMED_PAYLOAD)
+for verdict, label in stood:
+    print("%s\t%s" % (verdict, label))
+
 # ---- 5. the library's own answers ----------------------------------------------------------------
 
 
@@ -611,7 +785,7 @@ fact("the reader reads as it did after the dry run readings", sw.commands is rea
 
 for label, ok, got in facts:
     print("%s\t%s" % ("ok" if ok else "got %s" % (str(got)[:400],), label))
-print("ran\t%d" % (len(rows) + len(marked) + 1 + len(facts)))
+print("ran\t%d" % (len(rows) + len(marked) + 1 + len(stood) + len(facts)))
 PY
 rows="$(python3 -B "$WORK/cases.py" "$HOOK" "$WORK" 2>&1)"
 ran=""
@@ -620,8 +794,25 @@ while IFS=$'\t' read -r verdict label; do
   if [ -n "$label" ]; then check "#3472 $label" "$verdict"; elif [ -n "$verdict" ]; then check "#3472 the cases program said something that is not a case" "${verdict:0:300}"; fi
 done <<< "$rows"
 # A program that stopped early checks nothing and would read as a pass (L288).
-WANT_RAN=208
+WANT_RAN=223
 [ "$ran" = "$WANT_RAN" ] && check "#3472 all $WANT_RAN cases ran" ok || check "#3472 all $WANT_RAN cases ran" "ran: ${ran:-none}; ${rows: -300}"
+
+# With no python3 on PATH nothing can be read at all, so the same command, a delete behind a
+# heredoc the reader cannot find the end of, is asked about and never passed in silence.
+. "$DIR/lib/no-python-path.sh"
+NOPY="$WORK/nopy/bin"
+npp_build_bin "$NOPY"
+if npp_reaches_python3 "$NOPY"; then
+  check "#3472 the bare directory reaches no python3" "it found one, so nothing here measures its absence"
+elif [ ! -s "$WORK/named-line-payload.json" ]; then
+  check "#3472 with no python3, a delete behind a heredoc the reader cannot find the end of is asked about, naming python3" "the cases program left no payload to send"
+else
+  r="$(cd "$WORK" && env -u CLAUDE_HOME HOME="$WORK/home" PATH="$NOPY" "$NOPY/bash" "$HOOK" < "$WORK/named-line-payload.json" 2>/dev/null; printf '\nrc=%s' "$?")"
+  case "$r" in
+    *'"permissionDecision": "ask"'*"python3 is not on PATH"*$'\nrc=0') check "#3472 with no python3, a delete behind a heredoc the reader cannot find the end of is asked about, naming python3" ok ;;
+    *) check "#3472 with no python3, a delete behind a heredoc the reader cannot find the end of is asked about, naming python3" "${r:0:400}" ;;
+  esac
+fi
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

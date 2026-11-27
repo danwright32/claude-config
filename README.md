@@ -6363,7 +6363,11 @@ of such a heredoc was not asked about (each kind reproduced at the hook). A comm
 line is refused as one the hook could not check, where one holding a `#` used to be asked about: an
 answer to a question about the part that was read lets the rest run with it. The refusal says which
 line, in a sentence true of the mark the reader named it with (`UNSURE` in
-`lib/db-write-calls.py`), and how to write the command so that it can be read.
+`lib/db-write-calls.py`), and how to write the command so that it can be read. A refusal is printed
+whatever state `lib/hook-notice.sh` is in beside the hook, since a hook that prints nothing passes
+the command: when the library is missing, is a copy with no `_hn_decision_json` (the private builder
+a refusal is made with), or that builder prints anything but one whole refusal, the hook writes the
+refusal itself, without the characters that need escaping, and says which of the three it found.
 `read-only-query-allow.sh` approves no such command either. A reader that cannot be asked at all is
 still asked about, since no rewriting helps, and so is a push whose earlier dry run held such a
 line. Over 105,627 Bash calls recorded on the personal MacBook (86,010 distinct commands, 2026-11-26)
