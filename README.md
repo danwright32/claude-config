@@ -3410,7 +3410,7 @@ move. A case measured in only one of the two runs is named, never dropped silent
 
 The defects and the known wrong findings are tested apart, each at 5%, and either can give a
 verdict, so a run with no real change is still called a regression or an improvement up to about 1
-time in 10; the output says so. That is said rather than corrected for: splitting the level between
+time in 10; the output says so. The level stays at 5% for each side, because splitting it between
 the two would raise the fewest changes that can clear it from six to seven on a case set where most
 comparisons already say CANNOT TELL, and would give the verdict a different level from the ranges
 printed beside it. A REGRESSION already asks for a second run before acting on it. Every verdict is
