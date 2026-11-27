@@ -40,7 +40,12 @@ fi
 WORK="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 REAL_STORE="${CLAUDE_HOME:-$HOME/.claude}/state/announce-approvals"
-real_before="$(ls -la "$REAL_STORE" 2>/dev/null | cksum)"
+# This Mac's real record as it stood before any case ran, and what a line of this suite's names: a
+# path under its temporary folder, or one of its two repositories. The last check holds the suite
+# to it: aaf_record_untouched, in lib/announce-approval-fixture.sh, which says what that check can
+# and cannot see, and whose own cases are in test-announce-approval.sh (#3669).
+OWN_MARKS=("path:$WORK" "repo:acme/" "repo:other/repo")
+real_before="$(aaf_record_mark "$REAL_STORE")"
 # Named as the real one is, so a shell command naming the record names it here too.
 STORE="$WORK/state/announce-approvals"
 REPO="$WORK/repo"
@@ -591,7 +596,7 @@ r="$(broken "$HELPER_CALL")"
 check "with its rule file gone, a call running the helper is refused, saying the hook did not run" "$([[ "$r" == *"announce-label-ask.sh failed"*" rc=2" ]] && echo ok || echo "$r")"
 
 echo "the record is this suite's own"
-check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
+check "no case wrote to this Mac's real record" "$(aaf_record_untouched "$REAL_STORE" "$real_before" "${OWN_MARKS[@]}")"
 
 echo "  $pass passed, $fail failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

@@ -32,10 +32,12 @@ if [ ! -f "$LIB" ]; then
 fi
 
 WORK="$(cd "$(mktemp -d)" && pwd -P)"
-trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
+# A second temporary folder, which plays this Mac's real record in the cases about the check that
+# ends this suite: a stand in, so those cases never write the real one.
+STAND="$(cd "$(mktemp -d)" && pwd -P)"
+trap 'chmod -R u+rwx "$WORK" "$STAND" 2>/dev/null; rm -rf "$WORK" "$STAND"' EXIT
 STORE="$WORK/store"
 REAL_STORE="${CLAUDE_HOME:-$HOME/.claude}/state/announce-approvals"
-real_before="$(ls -la "$REAL_STORE" 2>/dev/null | cksum)"
 POST='@here
 **Handing a call back**
 
@@ -51,6 +53,11 @@ You can now hand a call back to the queue.
   exit 1
 }
 BBEDIT="$AAF_BBEDIT"
+# This Mac's real record as it stood before any case ran, and what a line of this suite's names: a
+# path under its temporary folder, or a repository of the owner every repository here is under. The
+# last check holds the suite to it (aaf_record_untouched, which has cases of its own there).
+OWN_MARKS=("path:$WORK" "repo:acme/")
+real_before="$(aaf_record_mark "$REAL_STORE")"
 talk() { aaf_talk "$@"; }
 new_talk() { aaf_new "$1"; }
 # hash_file <file>, hash_text <text>: the one hash, asked of the library that owns it.
@@ -2001,7 +2008,111 @@ JUNK="$WORK/store-f-junk"; mkdir -p "$JUNK/record.jsonl"
 check "R9 a record that cannot be read is unread, never clear" "$([[ "$(finishes "$JUNK" "$(closing "$SAYS_YES" "12" "12")")" == "unread|"* ]] && echo ok || echo no)"
 
 echo "the record is this suite's own"
-check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
+# aaf_record_untouched (lib/announce-approval-fixture.sh, which says what it can and cannot see) is
+# the check that ends this suite, the merge gate's, the label hook's and the answer note hook's:
+# every line this Mac's record gained while the suite ran must be one the suite could not have
+# written. Until #3669 each compared a listing of the record's folder before and after. Since the
+# installed hook notes every picker any session has answered (#3795), that failed whenever one was
+# answered while a suite ran, nine times on 2026-11-26 with every other case green: a before and
+# after comparison of shared state blames whatever it brackets (L375). The cases here run on the
+# stand in, whose lines are invented; this Mac's own record is read only by the last check below.
+ZEROS="$(printf '%064d' 0)"
+OTHER_SESSION="3f0c9d52-7a41-4e86-b5d0-9c1e2a7f6b38"
+OTHER_PICKER="toolu_01Qx7RmT4vKc2ZbN9sWdLh5E"
+# What another session's hook writes when a picker of its own is answered: its ids, and its
+# transcript under the projects folder.
+OTHERS_NOTE="{\"at\": \"2026-11-27T03:10:56Z\", \"held\": false, \"kind\": \"answered\", \"picker\": \"$OTHER_PICKER\", \"session\": \"$OTHER_SESSION\", \"transcript\": \"$HOME/.claude/projects/invented-project/$OTHER_SESSION.jsonl\"}"
+# And a merge another session makes through the helper, whose session id is no session's.
+OTHERS_MERGE="{\"at\": \"2026-11-27T03:11:02Z\", \"claim\": true, \"closes\": null, \"hash\": \"$ZEROS\", \"kind\": \"used\", \"pr\": 41, \"repo\": \"someone/thing\", \"session\": \"merge-when-ready\"}"
+OLD_ONE="{\"answered\": \"2026-11-20T15:00:00.000Z\", \"at\": \"2026-11-20T15:00:04Z\", \"file\": \"$HOME/notes/post.md\", \"hash\": \"$ZEROS\", \"kind\": \"approved\", \"picker\": \"toolu_01Aa1Bb2Cc3Dd4Ee5Ff6Gg7H\", \"repo\": \"someone/thing\", \"session\": \"$OTHER_SESSION\"}"
+OLD_TWO="{\"at\": \"2026-11-21T09:30:00Z\", \"held\": true, \"kind\": \"answered\", \"picker\": \"toolu_01Zz9Yy8Xx7Ww6Vv5Uu4Tt3S\", \"session\": \"$OTHER_SESSION\", \"transcript\": \"$HOME/.claude/projects/invented-project/$OTHER_SESSION.jsonl\"}"
+# stand_holds <line>...: the stand in holding exactly those lines, each written as the library
+# appends one (a blank line in front of it).
+stand_holds() {
+  rm -rf "$STAND/record.jsonl"; mkdir -p "$STAND"; : > "$STAND/record.jsonl"
+  local l; for l in "$@"; do printf '\n%s\n' "$l" >> "$STAND/record.jsonl"; done
+}
+# stand_gains <line>...: the check's answer when the stand in, which held its two old lines as the
+# run began, gains those lines during it.
+stand_gains() {
+  stand_holds "$OLD_ONE" "$OLD_TWO"
+  local l mark; mark="$(aaf_record_mark "$STAND")"
+  for l in ${1+"$@"}; do printf '\n%s\n' "$l" >> "$STAND/record.jsonl"; done
+  aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}"
+}
+check "#3669 real record: a record that gained nothing while the suite ran is untouched" "$(stand_gains)"
+check "#3669 real record: another session's note of a picker answered while the suite ran is not this suite's" "$(stand_gains "$OTHERS_NOTE")"
+check "#3669 real record: nor is a merge another session made then, through the helper, in a repository of its own" "$(stand_gains "$OTHERS_NOTE" "$OTHERS_MERGE")"
+r="$(stand_gains "$OTHERS_NOTE" "{\"held\": false, \"kind\": \"answered\", \"picker\": \"$OTHER_PICKER\", \"session\": \"$OTHER_SESSION\", \"transcript\": \"$WORK/talk.jsonl\"}")"
+check "#3669 real record: a line naming a path under this suite's temporary folder is one the suite could have written" "$([[ "$r" == "the record gained 2 lines while the suite ran, and 1 of them could be this suite's own: gained line 2 (kind answered) names a path under the suite's temporary folder" ]] && echo ok || echo "$r")"
+r="$(stand_gains "{\"claim\": true, \"closes\": null, \"hash\": \"$ZEROS\", \"kind\": \"used\", \"pr\": 7, \"repo\": \"acme/widget\"}")"
+check "#3669 real record: so is a line naming a fixture repository and no path" "$([[ "$r" == "the record gained 1 line while the suite ran, and 1 of them could be this suite's own: gained line 1 (kind used) names the fixture repository acme/widget" ]] && echo ok || echo "$r")"
+r="$(stand_gains "{\"closes\": [{\"issue\": 12, \"milestone\": \"Hand back\", \"repo\": \"Acme/Other\"}], \"hash\": \"$ZEROS\", \"kind\": \"used\", \"pr\": 9, \"repo\": \"someone/thing\"}")"
+check "#3669 real record: a fixture repository counts in any letter case, wherever the line names it" "$([[ "$r" == *"gained line 1 (kind used) names the fixture repository Acme/Other" ]] && echo ok || echo "$r")"
+r="$(stand_gains "{\"kind\": \"settled\", \"picker\": \"toolu_ask1764212345678901234\", \"session\": \"$OTHER_SESSION\"}")"
+check "#3669 real record: so is a line naming nothing but a picker id shaped as the fixture's are" "$([[ "$r" == *"gained line 1 (kind settled) names a picker id shaped as the fixture's are" ]] && echo ok || echo "$r")"
+r="$(stand_gains "not a line the library writes, and naming $WORK/talk.jsonl")"
+check "#3669 real record: a gained line that is no JSON is searched as text" "$([[ "$r" == *"gained line 1 (no kind) names a path under the suite's temporary folder" ]] && echo ok || echo "$r")"
+# Lines the record lost, or a line changed in place, fail as they did before the check read lines.
+stand_holds "$OLD_ONE" "$OLD_TWO"; mark="$(aaf_record_mark "$STAND")"
+stand_holds "$OLD_TWO" "$OTHERS_NOTE"
+r="$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+check "#3669 real record: a line the record lost fails, though it holds as many lines as before" "$([[ "$r" == *"a line the record held before the suite ran is gone or was changed in place"* ]] && echo ok || echo "$r")"
+stand_holds "$OLD_ONE"
+r="$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+check "#3669 real record: and so does a record left holding fewer lines" "$([[ "$r" == *"a line the record held before the suite ran is gone or was changed in place"* ]] && echo ok || echo "$r")"
+stand_holds "${OLD_ONE/someone/somebody}" "$OLD_TWO" "$OTHERS_NOTE"
+r="$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+check "#3669 real record: a line changed in place fails" "$([[ "$r" == *"a line the record held before the suite ran is gone or was changed in place"* ]] && echo ok || echo "$r")"
+rm -rf "$STAND/record.jsonl"
+r="$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+check "#3669 real record: a record that is gone altogether fails" "$([[ "$r" == *"a line the record held before the suite ran is gone or was changed in place"* ]] && echo ok || echo "$r")"
+# What cannot be read proves nothing, before the run or after it, and is said as that.
+mkdir -p "$STAND/record.jsonl"
+r="$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+check "#3669 real record: a record that cannot be read after the run is not untouched, in those words" "$([[ "$r" == *"could not be read after the suite ran"* ]] && echo ok || echo "$r")"
+mark="$(aaf_record_mark "$STAND")"
+stand_holds "$OLD_ONE" "$OLD_TWO"
+r="$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+check "#3669 real record: nor is one that could not be read before it" "$([[ "$r" == *"could not be read before the suite ran"* ]] && echo ok || echo "$r")"
+r="$(aaf_record_untouched "$STAND" "" "${OWN_MARKS[@]}")"
+check "#3669 real record: a mark that was never taken proves nothing" "$([[ "$r" == *"no mark of the record was taken before the suite ran"* ]] && echo ok || echo "$r")"
+mark="$(aaf_record_mark "$STAND")"
+r="$(aaf_record_untouched "$STAND" "$mark")"
+check "#3669 real record: a check told nothing of the suite's own proves nothing" "$([[ "$r" == *"names nothing of the suite's own"* ]] && echo ok || echo "$r")"
+r="$(aaf_record_untouched "$STAND" "$mark" "path:" "repo:acme/")"
+check "#3669 real record: nor does one whose folder is no folder, which every line would name" "$([[ "$r" == *"names nothing of the suite's own"* ]] && echo ok || echo "$r")"
+# A Mac with no record yet, and one whose first line arrives while the suite runs.
+rm -rf "$STAND"; mark="$(aaf_record_mark "$STAND")"
+check "#3669 real record: no record before and none after is untouched" "$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+stand_holds "$OTHERS_NOTE"
+check "#3669 real record: a record another session began while the suite ran is not this suite's" "$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+# A line the record held as the run began is not this run's, whatever it names.
+stand_holds "{\"kind\": \"used\", \"pr\": 7, \"repo\": \"acme/widget\"}"; mark="$(aaf_record_mark "$STAND")"
+printf '\n%s\n' "$OTHERS_NOTE" >> "$STAND/record.jsonl"
+check "#3669 real record: a line the record held before the suite ran is not held against this run" "$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+# And the suites still catch a case that writes the record: this suite's own writes, each through
+# the library as its cases make them, pointed at the stand in and never at the real record.
+rm -rf "$STAND"; mkdir -p "$STAND"; STORE_USED="$STAND"
+mark="$(aaf_record_mark "$STAND")"
+F="$(shown standin)"; T="$WORK/standin.jsonl"; HS="$(hash_file "$F")"
+talk "$T" ask acme/widget "$F"
+asked "$T" acme/widget "$HS" >/dev/null
+r="$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+check "#3669 real record: an approval a case of this suite wrote into the stand in is caught" "$([ "$(kinds approved)" = 1 ] && [[ "$r" == *"could be this suite's own: gained line 1 (kind approved) names a path under the suite's temporary folder and the fixture repository acme/widget and a picker id shaped as the fixture's are" ]] && echo ok || echo "$r")"
+check "#3669 real record: by its folder alone" "$([[ "$(aaf_record_untouched "$STAND" "$mark" "path:$WORK")" == *"(kind approved) names a path under the suite's temporary folder"* ]] && echo ok || echo no)"
+check "#3669 real record: and by its repository alone" "$([[ "$(aaf_record_untouched "$STAND" "$mark" "repo:acme/widget")" == *"(kind approved) names the fixture repository acme/widget"* ]] && echo ok || echo no)"
+mark="$(aaf_record_mark "$STAND")"
+used --repo acme/widget --hash "$HS" --pr 7 >/dev/null
+r="$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+check "#3669 real record: a use a case wrote there, which names no path, is caught by its repository" "$([ "$(kinds used)" = 1 ] && [[ "$r" == *"gained line 1 (kind used) names the fixture repository acme/widget" ]] && echo ok || echo "$r")"
+mark="$(aaf_record_mark "$STAND")"
+P="$(talk "$T" put acme/widget "$F" plain)"
+note "$T" payload "$P" acme/widget "$F" "" plain >/dev/null
+r="$(aaf_record_untouched "$STAND" "$mark" "${OWN_MARKS[@]}")"
+check "#3669 real record: a note by ids alone a case wrote there, which names no repository, is caught by its transcript's path" "$([ "$(kinds answered)" = 1 ] && [[ "$r" == *"gained line 1 (kind answered) names a path under the suite's temporary folder and a picker id shaped as the fixture's are" ]] && echo ok || echo "$r")"
+
+check "no case wrote to this Mac's real record" "$(aaf_record_untouched "$REAL_STORE" "$real_before" "${OWN_MARKS[@]}")"
 
 echo "  $pass passed, $fail failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

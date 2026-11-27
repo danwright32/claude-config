@@ -32,8 +32,17 @@ MERGE="gh pr me""rge"
 passed=0
 failed=0
 # This Mac's real record of approved announcement wording, as it stood before any case ran: every
-# run below keeps its own (run_hook), and the last check here holds the suite to that (#3666).
-REAL_RECORD_BEFORE="$(ls -la "${CLAUDE_HOME:-$HOME/.claude}/state/announce-approvals" 2>/dev/null | cksum)"
+# run below keeps its own (run_hook), and the last check here holds the suite to that (#3666). The
+# check is aaf_record_untouched, in lib/announce-approval-fixture.sh, which says what it can and
+# cannot see and whose own cases are in test-announce-approval.sh (#3669): no line the record gained
+# while the suite ran may name a path under GATE_WORK, the one folder every fixture of this suite
+# is made in, or a fixture repository. The library is sourced here for that check, and again where
+# the announcement cases begin, which is where a missing one is counted as a failure; with it
+# missing the mark is empty and the last check fails.
+GATE_WORK="$(mktemp -d)"
+REAL_RECORD="${CLAUDE_HOME:-$HOME/.claude}/state/announce-approvals"
+. "$HOOK_DIR/lib/announce-approval-fixture.sh" 2>/dev/null
+REAL_RECORD_BEFORE="$(aaf_record_mark "$REAL_RECORD" 2>/dev/null)"
 
 fail() { echo "  FAIL: $1"; failed=$((failed + 1)); }
 pass() { passed=$((passed + 1)); }
@@ -64,7 +73,7 @@ echo "changelog record: the merge gate"
 # The fake gh is written by a plain heredoc, never one inside $(...): macOS ships
 # bash 3.2, which mis-parses that and the whole suite fails to parse.
 make_repo() {  # $1 = owner/name ; $2 = pr view json ; $3 = registry json, or MISSING
-  local dir; dir=$(mktemp -d)
+  local dir; dir=$(mktemp -d "$GATE_WORK/XXXXXXXX")
   mkdir -p "$dir/repo" "$dir/bin"
   ( cd "$dir/repo" && git init -q && git remote add origin "https://github.com/$1.git" )
   if [ "$3" = "MISSING" ]; then
@@ -379,7 +388,7 @@ echo "changelog record: the repository the merge names, not the session's folder
 # of the directory it runs in. It answers a pull request only for a repository with a file under
 # prs/, and gh's own not found otherwise.
 make_repo_pair() {  # $1 = registry json ; prints a fixture dir holding repo/ and other/
-  local dir; dir=$(mktemp -d)
+  local dir; dir=$(mktemp -d "$GATE_WORK/XXXXXXXX")
   mkdir -p "$dir/repo" "$dir/other" "$dir/bin" "$dir/prs"
   ( cd "$dir/repo" && git init -q && git remote add origin "https://github.com/acme/widget.git" )
   ( cd "$dir/other" && git init -q && git remote add origin "https://github.com/other/repo.git" )
@@ -1930,9 +1939,12 @@ if denied "$out" && says "$out" "Cannot tell" && says "$out" "pull request 7"; t
 else fail "#3669 the pull request the record holds as the announcement was not asked of GitHub before it covered the milestone: $out"; fi
 rm -rf "$dir"
 
-# No case above wrote this Mac's real record.
-if [ "$(ls -la "${CLAUDE_HOME:-$HOME/.claude}/state/announce-approvals" 2>/dev/null | cksum)" = "$REAL_RECORD_BEFORE" ]; then pass
-else fail "#3666 this Mac's real record of approved wording changed while the suite ran"; fi
+# No case above wrote this Mac's real record: no line it gained while the suite ran names a path
+# under GATE_WORK or a repository the fixtures use, and none it held before is gone or changed.
+real_said="$(aaf_record_untouched "$REAL_RECORD" "$REAL_RECORD_BEFORE" "path:$GATE_WORK" "repo:acme/" "repo:other/repo" 2>&1)"
+if [ "$real_said" = ok ]; then pass
+else fail "#3666 a case of this suite may have written this Mac's real record of approved wording: $real_said"; fi
+rm -rf "$GATE_WORK"
 
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"

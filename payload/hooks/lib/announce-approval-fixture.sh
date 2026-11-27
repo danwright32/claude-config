@@ -91,6 +91,9 @@
 #                                    the library's answer, as JSON, to a hook asking without a claim
 #                                    (the hook payload on standard input), asked in process
 #   AAF_BBEDIT                       the helper a session opens a file in BBEdit with
+#   aaf_record_mark <record folder>, aaf_record_untouched <record folder> <mark> <what is the suite's> ...
+#                                    the check that ends each suite: whether the suite wrote this
+#                                    Mac's real record while it ran (said in full above them, below)
 
 AAF_BBEDIT=/Applications/BBEdit.app/Contents/Helpers/bbedit_tool
 
@@ -349,4 +352,158 @@ aaf_shown() {  # <folder> <transcript> <wording>
   aaf_talk "$2" write "$1/announcement.md"
   aaf_talk "$2" bash "$AAF_BBEDIT --front-window $1/announcement.md"
   printf '%s' "$1/announcement.md"
+}
+
+# aaf_record_mark and aaf_record_untouched: whether a suite wrote this Mac's real record
+# (claude-config#3666, #3669).
+#
+# A suite keeps its record in a folder of its own through ONE environment variable
+# (ANNOUNCE_APPROVALS_DIR), which isolates it only while every call honours the variable (L322). So
+# each suite here marks the real record before its first case and asks, after its last, whether the
+# suite wrote it. Until #3669 that was a listing of the record's folder compared before and after,
+# which blames the suite for whatever else wrote in between (L375): the installed hook notes every
+# picker any session on this Mac has answered (#3795), so the check failed whenever one was
+# answered while a suite ran, nine times on 2026-11-26 with every other case green. What the check
+# is for is narrower, and this says that and nothing more:
+#
+#   - every line the record held at the mark is still there, unchanged and in place. A line lost
+#     or changed in place fails whoever did it: the record is only ever added to.
+#   - no line GAINED since the mark is one the suite could have written. A line is the suite's
+#     when it names anything of the suite's own, and each suite says what that is:
+#       path:<folder>   the suite's temporary folder: a line holding that path anywhere, as the
+#                       path of a transcript or a wording file under it is. A fixture session is
+#                       called s1, a name too plain to look for, and every fixture transcript
+#                       sits under the folder, so the folder stands for the session.
+#       repo:<name>     a fixture repository, in any letter case: <owner>/<name>, or <owner>/ for
+#                       every repository of that owner.
+#     One more thing is the fixture's own and is looked for whatever the suite says: a picker id
+#     shaped as aaf_talk and the cases shape theirs, `toolu_`, then lower case letters, then
+#     digits or nothing. Claude Code's own ids go on from `toolu_` with `01`: 1,403 of the 1,403
+#     in one session's transcript, read on 2026-11-26.
+#     Every other gained line is taken as another session's. Its note of a picker answered while
+#     the suite ran names its own session, picker and transcript, and none of the above.
+#
+# It reads the record's own file, keeps no copy of it (the mark is a count and one hash) and prints
+# no line of it: a line held against the suite is said by its place among the gained lines, its
+# kind and what it names.
+#
+# WHAT IT CANNOT SEE. A line of the suite's that names none of the above: the fixture writes none
+# today, since a line of its with no repository carries a transcript's path or a fixture picker id,
+# and a case that sends a picker id shaped as Claude Code's own, with a transcript kept outside the
+# suite's folder, would write one. A file other than the record's own, made or changed in the
+# record's folder. A line the suite wrote and took out again before it ended. And a record that
+# could not be read, before or after, proves nothing: that is said as unread and is never `ok`.
+#
+#   aaf_record_mark <record folder>            prints the mark of the record as it stands
+#   aaf_record_untouched <record folder> <mark> <path:... or repo:...> ...
+#                                              prints `ok`, or in one line why not
+aaf_record_mark() { _aaf_record mark "$@"; }
+aaf_record_untouched() { _aaf_record untouched "$@"; }
+_aaf_record() {
+  python3 - "$@" <<'PY'
+import hashlib, json, os, re, sys
+verb, folder, rest = sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "", sys.argv[3:]
+FIXTURE_PICKER = re.compile(r"toolu_[a-z]+[0-9]*")
+def held():
+    """(the record's lines that hold anything, as bytes, None), or (None, why it could not be
+    read). No record yet is an empty one, as the library reads it."""
+    try:
+        with open(os.path.join(folder, "record.jsonl"), "rb") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return [], None
+    except OSError as e:
+        return None, type(e).__name__
+    return [l for l in raw.split(b"\n") if l.strip()], None
+def digest(lines):
+    return hashlib.sha256(b"\n".join(lines)).hexdigest()
+def say(words):
+    sys.stdout.reconfigure(errors="replace")
+    sys.stdout.write(words)
+    sys.exit(0)
+if not folder:
+    say("no record folder was named, so nothing was compared")
+lines, why = held()
+if verb == "mark":
+    say("unread:" + why if lines is None else "%d:%s" % (len(lines), digest(lines)))
+mark, own = (rest[0] if rest else ""), rest[1:]
+if mark.startswith("unread:"):
+    say("the record could not be read before the suite ran (" + mark[7:] + "), so whether the suite wrote it is not known")
+at = re.fullmatch(r"([0-9]+):([0-9a-f]{64})", mark)
+if not at:
+    say("no mark of the record was taken before the suite ran, so nothing was compared")
+# What the suite says is its own. A folder is looked for without a leading /private, the spelling
+# both /var/... and /private/var/... hold, and one that is no folder at all is in every line.
+needles = []
+for o in own:
+    kind, _, value = o.partition(":")
+    if kind == "path":
+        value = value.rstrip("/")
+        value = value[len("/private"):] if value.startswith("/private/") else value
+    if kind not in ("path", "repo") or len(value.strip("/")) < 2:
+        needles = []
+        break
+    needles.append((kind, value.casefold() if kind == "repo" else value))
+if not needles:
+    say("the check was given " + (json.dumps(own) if own else "nothing") + ", which names nothing of the suite's own "
+        "(path:<its temporary folder>, repo:<owner>/<name> or repo:<owner>/), so no line could be told as the suite's")
+if lines is None:
+    say("the record could not be read after the suite ran (" + why + "), so whether the suite wrote it is not known")
+count = int(at.group(1))
+if len(lines) < count or digest(lines[:count]) != at.group(2):
+    say("a line the record held before the suite ran is gone or was changed in place: it held %d then, and "
+        "the first %d it holds now are not those" % (count, count))
+def texts(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from texts(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from texts(v)
+def names(raw):
+    """(the line's kind, what of the suite's own it names)."""
+    text = raw.decode("utf-8", "replace")
+    try:
+        entry = json.loads(text)
+    except ValueError:
+        entry = None
+    if isinstance(entry, (dict, list)):
+        said = list(texts(entry))
+        pickers = [t for t in said if FIXTURE_PICKER.fullmatch(t)]
+    else:
+        # No line the library writes: searched as the text it is.
+        said = [text]
+        pickers = re.findall(r"(?<![A-Za-z0-9_])" + FIXTURE_PICKER.pattern + r"(?![A-Za-z0-9_])", text)
+    whole = isinstance(entry, (dict, list))
+    found = []
+    for kind, value in needles:
+        if kind == "path" and any(value in t for t in said):
+            found.append("a path under the suite's temporary folder")
+        if kind == "repo":
+            for t in said:
+                low = t.casefold()
+                if whole and (low == value or (value.endswith("/") and low.startswith(value))):
+                    found.append("the fixture repository " + t)
+                    break
+                if not whole and value in low:
+                    found.append("the fixture repository " + value)
+                    break
+    if pickers:
+        found.append("a picker id shaped as the fixture's are")
+    kind = entry.get("kind") if isinstance(entry, dict) else None
+    return ("kind " + kind if isinstance(kind, str) and kind else "no kind"), found
+gained = lines[count:]
+ours = []
+for n, raw in enumerate(gained, 1):
+    kind, found = names(raw)
+    if found:
+        ours.append("gained line %d (%s) names %s" % (n, kind, " and ".join(found)))
+if ours:
+    say("the record gained %d line%s while the suite ran, and %d of them could be this suite's own: %s"
+        % (len(gained), "" if len(gained) == 1 else "s", len(ours), "; ".join(ours[:5])
+           + ("; and %d more" % (len(ours) - 5) if len(ours) > 5 else "")))
+say("ok")
+PY
 }
