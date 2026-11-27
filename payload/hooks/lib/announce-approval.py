@@ -2097,8 +2097,10 @@ def milestone_line(repo, feature, answer, description):
     feature, and the line quotes the option he chose and the day. "unasked" needs nothing, writes
     that he was not asked yet, never replaces a yes or a no the description already carries, and is
     refused where the record holds his answer: a milestone never says he was not asked when he
-    was. This reads the record only. The line holds nothing but the answer, his option's words and
-    a date, so it never writes a name the milestone did not already carry."""
+    was. This reads the record only, and a record that could not be read refuses every value in
+    the record's own unread words, "unasked" included: unread is not "he was not asked". The line
+    holds nothing but the answer, his option's words and a date, so it never writes a name the
+    milestone did not already carry."""
     out = {"ok": False, "line": "", "description": "", "why": "", "how": ""}
     description = description if isinstance(description, str) else ""
     if answer not in PLAN_VALUES:
@@ -2110,7 +2112,16 @@ def milestone_line(repo, feature, answer, description):
         out["why"] = got["why"]
         return out
     about = json.dumps(" ".join(feature.split())) + " in " + key
-    his = ("he answered `" + got["said"] + "`" + (" on " + got["day"] if got["day"] else ""))
+    # What could not be read is never an answer (L98): not his yes or his no, and not "he was not
+    # asked" either, which the record may contradict. So every value is refused in the record's own
+    # unread words, with no line and no description, and the helper files nothing. decision() says
+    # an unread record as no answer with why, which is right for a question and wrong for a writer.
+    entries, unreadable = read_record()
+    if entries is None:
+        out["why"] = (unreadable + ", so what Dan last answered about announcing " + about + " could not be told, "
+                      "and a milestone's line is written only from a record that was read")
+        return out
+    his =("he answered `" + got["said"] + "`" + (" on " + got["day"] if got["day"] else ""))
     if answer == "unasked":
         if got["answer"] in ("yes", "no"):
             out["why"] = ("this Mac's record holds Dan's answer about announcing " + about + ": " + his + ". A milestone "

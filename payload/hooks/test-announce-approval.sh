@@ -1673,6 +1673,21 @@ r="$(milestone_line "$WORK/store-d-none" unasked "Hand over" "Rework."$'\n\n'"$N
 check "unasked never replaces an answer the description already carries" "$([[ "$r" == "yes|$NO_LINE|Rework."'\n\n'"$NO_LINE|" ]] && echo ok || echo "$r")"
 r="$(milestone_line "$WORK/store-d-none" maybe "Hand back" "")"
 check "any other value is refused, naming the three" "$([[ "$r" == "no|||"*'"yes", "no" or "unasked"'* ]] && echo ok || echo "$r")"
+# What could not be read is never an answer (#3669, the lessons review of d50de0862): with the
+# record unreadable the helper used to be handed the line saying he was not asked yet, and filed a
+# milestone carrying it, where the record may hold his yes. Every value is refused in the record's
+# own unread words, with no line and no description for the helper to file.
+mkdir -p "$WORK/store-d-junk/record.jsonl"
+r="$(milestone_line "$WORK/store-d-junk" unasked "Hand back" "Rework the hand back.")"
+check "R9 #3669 unread: unasked is refused while the record cannot be read, and no line says he was not asked yet" "$([[ "$r" == "no|||"*"store-d-junk/record.jsonl, could not be read (IsADirectoryError)"*'"Hand back" in acme/widget'* && "$r" != *"not asked yet"* ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-junk" unasked "Hand over" "Rework."$'\n\n'"$NO_LINE")"
+check "R9 #3669 unread: nor is an answer the description already carries handed back as one the record was asked about" "$([[ "$r" == "no|||"*"could not be read (IsADirectoryError)"* ]] && echo ok || echo "$r")"
+for value in yes no; do
+  r="$(milestone_line "$WORK/store-d-junk" "$value" "Hand back" "")"
+  check "R9 #3669 unread: a $value is refused in the same words, never as a record that holds no answer" "$([[ "$r" == "no|||"*"could not be read (IsADirectoryError)"* && "$r" != *"holds no answer"* ]] && echo ok || echo "$r")"
+done
+r="$(milestone_line "$WORK/store-d-junk" maybe "Hand back" "")"
+check "#3669 unread: a value that is none of the three is still refused as that, with no record read" "$([[ "$r" == "no|||"*'"yes", "no" or "unasked"'* && "$r" != *"could not be read"* ]] && echo ok || echo "$r")"
 # The helper writes the description it is handed back into the milestone, so one read short or not
 # at all is refused in its own words, never cut or taken as empty. The library reads 2097152 bytes
 # (WORDING_BYTES * 8) of a file at most.
