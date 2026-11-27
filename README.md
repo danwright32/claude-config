@@ -3704,9 +3704,14 @@ written as text in a double quoted message, the commonest named line): that libr
 backslash or a closing parenthesis stands before the `#` and to write it inside quotes, where it
 stands after a space and already is. The door tells that kind by three things, a backquote before
 the `#`, another after it on its line, and the reader's own `word_starts()` answering that a word
-starts there, and says to write a backslash before each backquote or to use single quotes. The
-reader has no function that says why it named a line, so this rests on how it reads today: a `#`
-at the start of a word is named only between such backquotes. The sentences that library holds
+starts there when asked as the reader asks it of text inside backquotes (`layered`), and says to
+write a backslash before each backquote or to use single quotes. The reader has no function that
+says why it named a line, so this rests on how it reads today: a `#` that `word_starts()` answers
+True for when asked that way is named only between such backquotes. A `#` inside backquotes that
+the reader names for a backslash before it (two backslashes and a space, or a backslash and a line
+break) keeps that library's sentence. Two rewritings do not clear the line, and are named again in
+the same words: single quotes put inside the double quotes, which quote nothing there, and a
+comment moved to a line of its own that itself holds a backquote. The sentences that library holds
 for the other kinds are shown as they are. Beside a library folder with
 no door, no `lib/db-write-calls.py`, or a reader that cannot be asked, each gate still refuses what
 it always did, and a command it can then read only once goes to what the gate already does with a

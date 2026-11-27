@@ -62,8 +62,9 @@ BETWEEN = ("the command holds a # with a backquote before it and another after i
            "%s: the shared reader reads a comment from that # to the end of the line, and bash ends "
            "backquotes at the next backquote whether or not a comment stands before it, so what runs after "
            "that backquote could not be read",
-           "Where those backquotes are text and run nothing, write a backslash before each of them or put "
-           "the text in single quotes; where they run a command, put the comment on a line of its own")
+           "Where those backquotes are text and run nothing, write a backslash before each of them, or put "
+           "the whole text in single quotes with no double quotes around them; where they run a command, put "
+           "the comment on a line of its own that holds no backquote")
 # How much of the line a sentence shows, as lib/db-write-calls.py's LINE_SHOWN.
 LINE_SHOWN = 120
 
@@ -138,11 +139,19 @@ def _can_be_asked(lib, sw):
 def _between_backquotes(sw, s, at):
     """Whether the # the reader named at s[at] is one BETWEEN's sentence is true of. Three things,
     each read from the text or asked of the reader: a backquote stands before the #; another
-    stands after it on its line; and the reader's own word_starts() answers that a word starts
-    there, so the reader reads a comment from it, and neither a closing parenthesis it cannot place
-    nor a backslash stands before it (it answers None and False for those, and they keep that
-    library's sentences). The reader has no function that says why it named a mark. As it reads
-    today (commands(), its comment_end()), a # at the start of a word is named only between
+    stands after it on its line; and the reader's own word_starts(), asked as the reader asks it
+    of text inside backquotes (layered), answers that a word starts there. So the reader reads a
+    comment from it, and neither a closing parenthesis it cannot place nor a backslash stands
+    before it (it answers None and False for those, and they keep that library's sentences).
+
+    Asked without layered it answered True for a # inside backquotes after two backslashes and a
+    space, and after a backslash and a line break, both of which the reader names for the
+    backslash, and bash reads the first of them inside a word, so the sentence's advice about a
+    comment was untrue of it. Asked this way, every # between backquotes that follows a line
+    ending in a backslash keeps that library's sentence, whichever reason the reader had.
+
+    The reader has no function that says why it named a mark. As it reads today (commands(), its
+    comment_end()), a # it is asked about this way and answers True for is named only between
     backquotes that close on its line, so the three together are that mark and no other."""
     starts = getattr(sw, "word_starts", None)
     if not callable(starts) or not s.startswith("#", at):
@@ -151,7 +160,7 @@ def _between_backquotes(sw, s, at):
     if "`" not in s[:at] or "`" not in s[at:len(s) if end < 0 else end]:
         return False
     try:
-        return starts(s, at) is True
+        return starts(s, at, layered=True) is True
     except Exception:  # noqa: BLE001  a mark the reader's rule cannot be asked about keeps the other sentence
         return False
 

@@ -188,7 +188,7 @@ SAYS = {
     "backquotes": "holds a # with a backquote before it and another after it on its line",
 }
 HOW = {
-    "backquotes": "write a backslash before each of them or put the text in single quotes",
+    "backquotes": "write a backslash before each of them, or put the whole text in single quotes with no double quotes around them",
     "comment": "Write that # inside quotes, or put the comment on a line of its own",
     "close": "End the heredoc with its marker alone on a line that follows no backslash",
     "joined": "Write the << and its whole end marker on one line",
@@ -453,6 +453,17 @@ fact("(control) a # after an escaped space, past which the text cannot be read, 
 got, fault = door.asked(sw, lambda: sw.every_command("echo `echo a # c\n`\nprintf done\n"))
 fact("(control) a comment between backquotes that close on a later line is read, and no fault",
      fault is None and any(r[1].strip() == "printf done" for r in got or ()), (got, fault))
+# Inside backquotes the reader also names a # for the backslashes before it: two and a space (bash
+# hands the inner shell one backslash and the space, so the # is inside a word there and no
+# comment), and a backslash and a line break. A backquote stands each side of both, and the door
+# gave them the sentence for a # between backquotes, whose advice about a comment is untrue of the
+# first. Both keep the rule library's own sentence.
+for shape, text in (("two backslashes and a space", "echo `echo a\\\\ # c`\nprintf done\n"),
+                    ("a backslash and a line break", "echo `echo a \\\n# c`\nprintf done\n")):
+    got, fault = door.asked(sw, lambda: sw.every_command(text))
+    fact("a # inside backquotes after %s, which the reader names for the backslash, keeps the rule library's words" % shape,
+         got is None and getattr(fault, "kind", None) in ("comment", "unread") and SAYS["backquotes"] not in str(fault),
+         (got, getattr(fault, "kind", None), fault))
 fact("the reader reads as it did after the door asked", sw.commands is reads_as, sw.commands)
 
 
@@ -523,7 +534,7 @@ while IFS=$'\t' read -r verdict label; do
   if [ -n "$label" ]; then check "#3472 $label" "$verdict"; elif [ -n "$verdict" ]; then check "#3472 the cases program said something that is not a case" "${verdict:0:300}"; fi
 done <<< "$rows"
 # A program that stopped early checks nothing and would read as a pass (L288).
-WANT_RAN=331
+WANT_RAN=333
 [ "$ran" = "$WANT_RAN" ] && check "#3472 all $WANT_RAN cases ran" ok || check "#3472 all $WANT_RAN cases ran" "ran: ${ran:-none}; ${rows: -300}"
 # The reader names an operator that a backslash and a line break split since claude-config#3504.
 # Beside a reader from before it no gate can be handed one, and that is said, never counted as a
