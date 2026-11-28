@@ -669,7 +669,7 @@ const noteEmptied = async ($: EngineInterface, card: StepsCard, at: number): Pro
     const id: unknown = await $.session.id()
     if (typeof id === 'string' && id) session = id
   } catch (err) {
-    $.ui.log(`manual-steps: could not read this session's id, so a step done on the card counts as this session's whoever pinned it: ${message(err)}`, { to: 'debug' })
+    $.ui.log(`manual-steps: could not read this session's id, so a step done on the card counts as this session's unless it is marked as an earlier session's: ${message(err)}`, { to: 'debug' })
   }
   try {
     await $.state.set(emptiedRef, emptiedBy(card, session, at))

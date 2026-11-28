@@ -11449,7 +11449,8 @@ Claude's `steps_done` verdict finishes the last open step of a card, the mod kee
 (`emptied`, #3864) when that was and how many of the card's steps were done in this session and
 were this session's own: checked or taken on Dan's word, never one taken off undone, found done
 when pinned, added by another mod, or pinned by another session (a step that names no session is
-counted). The goal box reads it to ask the session about its box. A step finished or taken off
+counted, and while this session's id cannot be read so is one that names any session but an
+earlier one). The goal box reads it to ask the session about its box. A step finished or taken off
 through the noun writes none. While
 Dan is
 away, a new card goes to the scope modes mod's held card (`$.scopeModes.hold`) instead of the Mac. A
