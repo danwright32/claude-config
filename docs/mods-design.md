@@ -1202,9 +1202,56 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   outstanding ("has new commits since Dan chose to leave it open"), so his answer never covers
   commits he was not asked about; a head GitHub did not give is outstanding and says so. With no
   record, #856's default holds. Any answer but Leave it open withdraws an earlier one. A picker
-  Claude asks itself through AskUserQuestion is never read as his choice, since which PR it was
-  about and what the answer meant would be inferred. Nothing is asked about a PR that cannot be
+  Claude asks itself through AskUserQuestion is never read as his choice to leave a PR open or
+  closed, since which PR it was about and what the answer meant would be inferred (the one answer
+  read from such a picker since, his pick to close a PR unmerged, is the next entry, #3779).
+  Nothing is asked about a PR that cannot be
   read or is not open, and while Dan is asleep the question is noted for his morning report.
+- A PR Dan himself chose to close unmerged (#3779). On 2026-11-26 Dan picked "Close it unmerged"
+  in a session's picker about a pull request, the session closed it, and an hour later winding down
+  sent it back to be reopened and finished: `leave_pr_open` found no recorded reason in his exact
+  answer, and he was asked again. This is the one answer read from a session's own picker, and it
+  keeps what #917 was guarding, that nothing is inferred. It is read only from the dialog's result
+  as the mod's hook on AskUserQuestion receives it, which no session can write (a closing comment,
+  `dan_said` and an answer the call carries itself never count); it must be an answer the picker
+  offered and he picked alone, in words he could read whole, whose whole wording closes the pull
+  request and says it is not merged ("Close it unmerged", "Close PR 31 without merging");
+  and the words he read must name exactly one pull request as a pull request, the answer if it
+  names one and otherwise the question. Another number the question names with a # may be a pull
+  request too, so his answer counts once GitHub has said it is none, waits (never sent back to be
+  reopened) while GitHub cannot say, and where it is one stays on the record marked `notKept`,
+  settling nothing. It is kept as the same
+  `leftOpen` record a "Leave it closed" answer makes, marked `picked`, so one rule decides what is
+  left as it is. "Leave it open" and "Leave it closed" in a session's picker are still never read.
+  An independent read of the first build, before it merged, changed four things. Begins "Close" and
+  says unmerged had been two separate tests, so an answer that closes an issue and says only that
+  the pull request stays unmerged was read as closing the pull request it leaves open: now any
+  other word in the answer (another thing closed, "later", "once") makes it no decision, and he is
+  asked. The record was
+  said nowhere until winding down refused a turn end, and not at all when its pull request was the
+  last thing outstanding: now it is said to the session and in the transcript the moment it is
+  made, withdrawn or cannot be made, and every turn end of a session holding one names the pull
+  request and quotes his answer, winding down or not, in the transcript unless that turn end's own
+  refusal already lists it as left closed. A later answer of his in a picker naming that pull
+  request while it is still open, other than to close it unmerged, withdraws it, where before
+  nothing did (GitHub is asked whether it is open only then; closed, his pick has been carried out,
+  so a picker that merely mentions it never has him asked twice). And a pull
+  request named by number alone is placed by the pull requests the session opened (one under that
+  number says which repository, two record nothing), with "PR 31 in owner/name" read as naming
+  that repository, where before another repository's pull request was recorded as this one's.
+  The review of the script that counts this reading then found one pull request named twice, in
+  words and by its link, read as two, so his answer recorded nothing. It is one now where the link
+  is to the repository its number alone is placed in, and that placing is made before the picker
+  is read, only for a number a link holds. A link to another repository's pull request of the same
+  number is still a second one (taking the link's word wherever the numbers match was the looser
+  reading, not taken: asking him is the harmless side).
+  That record now has three writers (his pick, `leave_pr_open`, and the finish check placing a
+  pick's other number), and the finish check waits on GitHub between reading it and writing it. So
+  every one of them changes the record as it stands at the moment of writing (`changeLeft`: a
+  write that lands only on the version read, made again on a newer one), and what GitHub said is
+  applied only to an answer that is still the one it was asked about. A list read earlier is never
+  written back whole: the first build did that, and an answer of his recorded during the wait was
+  written over (the lessons review of this change). The rules are `hooks/closedecision.ts`.
 - Whose branch it is (#1074). On 2026-10-11 winding down refused every stop of a Slate session on a
   branch whose PR had merged a month before, because the shared primary checkout sat on it, and
   Dan's "leave it as is", given twice, had nowhere to be recorded. A branch is the session's own only
@@ -2518,6 +2565,95 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   last steps call named it, finished or not; this one follows each card through its steps calls
   and verdicts and asks for an unfinished step. By the first count's rule the same 30 days give
   25.
+- **A call the permission check refused is answered by a step pinned after it, or by one line**
+  (#3842). On 2026-11-27 the permission check refused a call that set a row of Dan's to do list.
+  The session rightly did not send it again, then told him in eight replies that the row was his
+  to set, and pinned nothing: none of its five wordings was a phrase the check read, and nothing
+  tied a refused call to the card. Dan's answer that day was "Both". So the turn's end now judges
+  the refused call itself, whatever the reply says, and the two of the five wordings that caught
+  steps when counted are phrases as well.
+  The refusal is read from Claude Code's own session record, which the check already reads for the
+  turn (`hooks/turn.ts`): the record of a refused call carries `toolDenialKind`, and only
+  `automode-blocked`, the permission check's verdict, counts. `automode-unavailable` is the check
+  giving no verdict, which is sent once more by rule and leaves Dan nothing; `permission-rule` is a
+  hook's or a rule's refusal, which at 1,938 in the 30 days below cannot be held for, so a step
+  one leaves is left to the wording check (what each said in its place was not measured);
+  `user-rejected` is a prompt Dan declined himself. Measured on 2026-11-27 over the main conversations' records of 30 days on the
+  personal MacBook (Claude Code 2.1.311 to 2.1.332): 22 `automode-blocked` (Bash 20, Agent 1,
+  SendMessage 1, each result beginning with the check's own "denied" sentence), 93
+  `automode-unavailable`, 1,938 `permission-rule`, 65 `user-rejected`, 12 cancelled or
+  interrupted; 10 more `automode-blocked` sat in subagents' own records, which the main session's
+  check never reads. A turn holding one, with no call of the `steps` tool after it, is blocked
+  once and told both ways out: pin what the refusal left for Dan, or say "Nothing from the refusal
+  is yours to do." The line the check already read, "None of these steps are yours to do now.",
+  answers it as well, as it answers every ask of this check. A card pinned before the refusal
+  holds some other step and does not answer it, and neither does a step a subagent pinned.
+  The block begins with its own mark (`REFUSED_MARK`), so a turn holding it is never blocked by
+  this mod again, and a turn that could not be read names no refusal. Not built: a hook on
+  `classic.PermissionDenied`. A mod's hook there needs a line on two lists of exceptions
+  (`tools/sec-default-bypassed-hooks.tsv` and the exempt list of `tests/test-sleep-silence.sh`),
+  and what that event says of no verdict is the words "Classifier unavailable" (614 of the 619
+  refusals scope modes noted overnight on this Mac by 2026-11-27), read by scope modes alone. No
+  MCP tool was among the 22, and the refused call of 2026-11-27 was one, on the work MacBook, so
+  whether its record carries the kind is what that Mac's count shows.
+  Counted with the check's own reader and matcher (`tools/steps-phrase-count.ts`, which prints
+  counts and never a message's text) on 2026-11-27 over the personal MacBook's 7,594 session
+  records of 30 days, 10,491 turns: 19 turns held a call the permission check refused, 3 were
+  answered by a call of the `steps` tool by the turn's end, and 16 were not. The count judges a
+  turn once, at its end, and the check at every turn end inside it, so a step pinned only after a
+  first turn end was held first: between 16 and 19 turns would be held, once each, about one every
+  two days. Read one by one, 2 of the 16 left Dan a step no card held and said so in prose, 1 more
+  probably did, 9 left him nothing and would be answered by the one line, and 4 could not be told
+  from the turn. A hold costs Dan more than Claude's one line, since a Stop hook's block is printed
+  to him as well. As first built the hold for a refusal alone was 127 words (644 characters), and
+  1,836 characters when a typed command, a prose step and two refusals were asked about together
+  (measured in the review of pull request 3854, 2026-11-27).
+  The work MacBook's count, 2026-11-27, at `d768c69e67` over 16,643 session records of 30 days,
+  24,148 turns: a refused call in 102 turns, 23 answered by a call of the `steps` tool by the
+  turn's end and 79 not, so between 78 and 102 held. The 79 were read one by one there, each given
+  one label from a fixed list: 7 left Dan a step, and in all 7 the reply said so in prose with no
+  card; 70 left him nothing (in 56 the session did it another allowed way, in 14 it gave it up or
+  it was not needed); 2 could not be told. 118 refused calls carried the kind, 25 of them calls of
+  an MCP tool, and the cross check found 118 results by the sentence with none unread, so a
+  refused MCP call is read like any other. Dan's decision on those figures, 2026-11-27: "Merge
+  with a shorter hold". The check stays, since it catches every one of the 7, and the hold's words
+  for a refusal alone were cut to 41 (229 characters): what happened, that a refusal is final, and
+  both ways out. How a step is written, and that pinning replaces the card, are left to the
+  `steps` tool's own description, which says both.
+  The kind is a field Claude Code does not document, and the reader finds it by its exact text, so
+  a release that renamed or respaced it would stop the hold with nothing said. The count's last
+  line therefore finds refused calls a second way, by the "denied" sentence their result begins
+  with, and says both directions. On the personal MacBook on 2026-11-27 (7,779 session records of
+  30 days, 10,688 turns): 20 such results, 0 of them not read by the check, and of the 20 refused
+  calls the check read, 0 whose result begins otherwise. It takes a record kept under two project
+  folders once; the 22 above was counted over every folder, and whether its two extra are such
+  copies was not checked.
+  A phrase stays only if what it catches are steps for Dan, so the five wordings were counted twice
+  that day: as first written, and again (7,603 records, 10,501 turns) after two were narrowed to
+  leave out what they had wrongly caught. Counts are turns, and "newly held" is the most it could
+  be, since the card as it stood is not in the record:
+
+  | Wording | First: said in, newly held | What those turns were | Then: said in, newly held | Read by the check |
+  |---|---|---|---|---|
+  | "step left for you" | 3, 1 | 1 said no step was left, 1 was an issue's title, 1 a step for Dan already on the card | 1, 0 (narrowed to a step counted or singled out) | yes, as "One step left for you", "The one step left for you" |
+  | "the one only you can do" | 2, 2 | both steps for Dan (an app only he can quit and reopen, a command only he can type) | 2, 2 | yes |
+  | "Still yours:" | 1, 1 | two open questions, no step | 0, 0 (narrowed to where a step follows it) | no: it caught no step |
+  | "needs you to set" | 0, 0 | never said | 0, 0 | no: never said |
+  | "because my (call) was refused by the permission check" | 0, 0 | never said | 0, 0 | no: never said |
+
+  The three not read were all said on the work MacBook in the replies of 2026-11-27, which this
+  count cannot see. The turn a call is refused in is held for the refusal whatever its words, and
+  those replies also said "One step left for you", which is read. Counted on the work MacBook the
+  same day (16,650 session records, 24,159 turns, at the commit that reads all five): each of the
+  three was said in 1 turn, all three in that one session, so Dan's decision was "Leave all three
+  out" (2026-11-27). The two that are read, counted there at `d768c69e67`: "step left for you"
+  said in 12 turns and newly held in 1, "the one only you can do" said in 10 and newly held in 2,
+  and all 3 were steps for Dan. "the one thing only you can do" also fires when the thing is a
+  decision, which the older phrases leave out; every turn it caught on either Mac was a step (2 on
+  each), and Dan's decision was "Leave it as it is" (2026-11-27).
+
+  "Set" did not join the words that begin a numbered step (Dan, 2026-11-27): it also leads
+  Claude's own plans, and the same list decides what a page of steps is.
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On
