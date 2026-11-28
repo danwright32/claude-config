@@ -289,12 +289,13 @@ printf '// x\\\\n' >> \"\$dir/fine/hooks/register.ts\"
 NAMES=""
 
 # ---- The rule, on the real reader and real git ----
-# How many checks must run is set here, not measured: 65 of the run's shape and its text (31 before
+# How many checks must run is set here, not measured: 77 of the run's shape and its text (31 before
 # #3093, 19 of settings, runners and changes of folder it added, one of a reader that says less
 # than the rule asks, two of a change of folder that leads nowhere, three of one written with
-# `..`, two of a variable naming a program it runs written before it, #3154, and seven of names of
-# mods after the folder, #3856), one for each of the four libraries, and one for the other script
-# let through by name.
-named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 70
+# `..`, two of a variable naming a program it runs written before it, #3154, and nineteen of names
+# of mods after the folder, #3856: seven of what a name may be, seven of words judged as typed and
+# five of the rule's other conditions with names given), one for each of the four libraries, and
+# one for the other script let through by name.
+named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 82
 
 finish

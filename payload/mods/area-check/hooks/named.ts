@@ -37,11 +37,16 @@ type Run = NonNullable<ModKitWrites['runs']>[number]
  * `mods` lets the folder be followed by names of mods in it (#3856), the form that checks only those
  * (`bash tools/check-mods.sh <mods folder> <mod> [<mod> ...]`). A name is no path the script opens:
  * it reads `<folder>/<name>`, and refuses, before it checks anything, a name holding a slash,
- * starting with a dot or that is no mod there. Such a run writes what a whole folder's run writes,
- * less the record of the build the mods last passed on; with CHECK_MODS_ROUND in the environment it
- * keeps its round's files beside that record, under the home folder's state, and no setting given in
- * the command is let through. The same suite runs the real script in that form, with and without a
- * round, and is red when the checkout changes.
+ * starting with a dot or that is no mod there. Every word after the script is judged as typed
+ * (typedAfter), so a word the reader of commands leaves out or works out is no name either. Such a
+ * run writes what a whole folder's run writes, less the record of the build the mods last passed
+ * on. With CHECK_MODS_ROUND already in the environment a run that passes also writes under the home
+ * folder's state, and nothing in the checkout: it adds its round's file beside that record
+ * (`<record>.rounds/<round>/`), removes the folders of other rounds there more than a day old, and,
+ * once its round names every mod of the folder, writes the record and removes its own round's
+ * folder; CHECK_MODS_LAST_PASSED in the environment too moves the record and the rounds with it. No
+ * command can set either, since no setting given in the command is let through. The same suite runs
+ * the real script in that form, with and without a round, and is red when the checkout changes.
  */
 export const CHECK_MODS = {
   repo: 'danwright32/claude-config',
@@ -166,6 +171,90 @@ const plainCd = (c: Read): boolean => c.words.length === 2 && FROM_A_FIXED_PLACE
 // A word that can only be the name of a folder directly inside the folder a script is handed (#3856):
 // no slash, no leading dot or dash, and nothing the shell expands or matches against files.
 const MOD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+const NOT_NAMES = 'after its folder it is handed a word that is no plain name of a mod in it (letters, digits, dots, dashes and underscores, starting with a letter or a digit)'
+const NOT_AS_TYPED = 'the command as typed cannot be read as the script handed its one folder and then only plain names of mods in it (a word the reader of commands leaves out or works out, an expansion, a backslash, a pattern, or a quote before the script, cannot)'
+
+// The reader of commands hands on, as a run's arguments, only the words that may name a file: it
+// leaves out an option, a dash alone, an empty word, an address and a path on another machine, and
+// gives a sum of whole numbers worked out. Its list of a command's words keeps each of those, with
+// the quotes taken off, so a quoted `>` reads there as a redirect does and the word after it as its
+// file. So what a script taking names is handed is read here from the command's own text, and only
+// a text this reading can follow to the end of the script's words lets a run through.
+//
+// A character a word may be written with: nothing the shell expands, matches against files or
+// reads as an operator.
+const PLAIN = /[A-Za-z0-9._\/-]/
+// What may stand between a pair of quotes. A blank there is part of the word in every shell.
+const QUOTED = /^[A-Za-z0-9._\/~ -]*$/
+// A redirect's operator where a word could begin. Digits before it name what it redirects, but for
+// `&>`, which takes none: bash hands the script the 2 of `2&>file`.
+const REDIRECT = /^(?:\d*(?:>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)|&>>|&>)/
+// What may stand in the command before the script's path: words written plainly, blanks, and what
+// joins or negates commands. A quote, a backslash, a comment or a heredoc there could hold the path
+// as text the shell never runs, and the path this reading starts from would be no word of the run.
+const BEFORE_IT = /^(?:[A-Za-z0-9._\/~ \t\n&;!-]*[ \t\n])?$/
+
+// One word starting at `i` of `text`, its quotes taken off, and where it ends; null where the text
+// there is no word written with plain characters, whole pairs of quotes, and a ~ only at its start.
+const plainWord = (text: string, i: number): { word: string; end: number } | null => {
+  let word = ''
+  let end = i
+  if (text[end] === '~') word += text[end++]
+  for (;;) {
+    const c = text[end]
+    if (c !== undefined && PLAIN.test(c)) word += text[end++]
+    else if (c === '"' || c === "'") {
+      const close = text.indexOf(c, end + 1)
+      const inside = close < 0 ? null : text.slice(end + 1, close)
+      if (inside === null || !QUOTED.test(inside)) return null
+      word += inside
+      end = close + 1
+    } else break
+  }
+  return end > i ? { word, end } : null
+}
+
+// Every word the shell hands a script whose path is written once in the command, read from the text
+// after that path up to where the script's own command ends (`;`, `|`, `&`, a new line, a comment):
+// each word with its quotes taken off, and no redirect or its file among them. Null where the text
+// holds anything this reading does not follow, so a caller holds the run: the path written twice or
+// not as one plain word, an expansion, a backslash, a pattern, a brace, a colon, a quote holding
+// anything but plain characters and blanks, a redirect with no file, or anything joined to a
+// redirect's file (zsh matches `<1-3>` against files as a range of numbers, where bash reads two
+// redirects).
+const typedAfter = (command: string, script: string): string[] | null => {
+  const at = command.indexOf(script)
+  if (at < 0 || command.indexOf(script, at + 1) >= 0 || !BEFORE_IT.test(command.slice(0, at))) return null
+  const text = command.slice(at + script.length)
+  if (text !== '' && !/^[ \t\n;|&]/.test(text)) return null
+  const blank = (c: string | undefined): boolean => c === ' ' || c === '\t'
+  const words: string[] = []
+  let i = 0
+  for (;;) {
+    const from = i
+    while (blank(text[i])) i++
+    const c = text[i]
+    if (c === undefined || c === '\n' || c === ';' || c === '|') return words
+    if (c === '&' && text[i + 1] !== '>') return words
+    // A # starts a comment only where a word could begin. Inside a word it is part of the word.
+    if (c === '#' && i > from) return words
+    const op = REDIRECT.exec(text.slice(i, i + 8))
+    if (op) {
+      i += op[0].length
+      while (blank(text[i])) i++
+      const file = plainWord(text, i)
+      if (!file) return null
+      i = file.end
+      const next = text[i]
+      if (next !== undefined && !blank(next) && !'\n;|&'.includes(next)) return null
+      continue
+    }
+    const w = plainWord(text, i)
+    if (!w) return null
+    words.push(w.word)
+    i = w.end
+  }
+}
 
 // A path that backs out of a folder it names: a `..` after a named part (`./a/../b`, `../a/../b`,
 // `~/a/..`, `/a/..`). The reader works out where such a change of folder ends from the text alone,
@@ -240,7 +329,7 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
   if (!handed.path) return `${handed.word} cannot be read as the one folder it is handed`
   // The reason names no word, as the one for a name that is no mod, further down, names none: it
   // goes into the area check's log, and an argument can carry a credential.
-  if (more.some(a => !MOD_NAME.test(a.word))) return 'after its folder it is handed a word that is no plain name of a mod in it (letters, digits, dots, dashes and underscores, starting with a letter or a digit)'
+  if (more.some(a => !MOD_NAME.test(a.word))) return NOT_NAMES
   const program = byValueNamed(command, n)
   if (program) return program
   // Each named script takes the programs it runs, and where it keeps its copies and logs, from the
@@ -301,6 +390,15 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
   if (r.path !== `${at.root}/${n.script}`) return `it is not ${n.script} at the root of its checkout`
   if (at.github?.toLowerCase() !== n.repo) return `it is in a checkout of ${at.github ?? 'no GitHub repository'}, never ${n.repo}`
   if (!(await facts.isFolder(handed.path))) return `${handed.word} is no folder on the disk`
+  // Names are judged as they are typed, never only as the reader hands them on (typedAfter): every
+  // word after the script must be the folder and then a plain name, and the same words, in the same
+  // order, as the reader gave. Neither reason names a word, for the log's sake.
+  if (more.length) {
+    const typed = typedAfter(command, r.script)
+    if (!typed || typed[0] !== handed.word) return NOT_AS_TYPED
+    if (typed.slice(1).some(w => !MOD_NAME.test(w))) return NOT_NAMES
+    if (typed.length !== r.args.length || typed.some((w, i) => w !== r.args[i]?.word)) return NOT_AS_TYPED
+  }
   for (const a of more) {
     if (!(await facts.isFile(`${handed.path}/${a.word}/.claude-plugin/plugin.json`))) return 'after its folder it is handed a name that is no mod there (no .claude-plugin/plugin.json in a folder of that name directly inside it)'
   }
@@ -315,7 +413,7 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
  * What a command writes, without the folder a named script only reads. A run is let through when it
  * is the named script itself: run by bash or directly, at its path from the root of a checkout of its
  * repository, handed one folder that is on the disk (followed, where the script takes them, only by
- * names of mods in it, NamedScript.mods, #3856), in a command that names none of the variables
+ * names of mods in it, each judged as typed, NamedScript.mods, #3856), in a command that names none of the variables
  * its programs are named by before it (byValue, #3154) and gives it no setting (#3093,
  * whySet: for tools/check-mods.sh an equals sign may stand only in a reader of its output, or a
  * comment; for every other named script the command holds no equals sign at all), runs it behind no

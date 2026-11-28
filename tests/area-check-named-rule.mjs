@@ -108,6 +108,16 @@ await judged('handed a mod and then a file by its path, both are judged', `bash 
 await judged('handed a mod named by a pattern, it is judged', `bash ${S} payload/mods ${MOD.slice(0, 2)}*`, [MODS], NAMES)
 await judged('handed a name built as the command runs, it is judged', `bash ${S} payload/mods "$MOD"`, [MODS], NAMES)
 await judged('handed a mod with its round set in front of it, it is judged', `CHECK_MODS_ROUND=r1 bash ${S} payload/mods ${MOD}`, [MODS], TAKES_NAMES ? 'it is run with CHECK_MODS_ROUND set' : NAMES)
+// What is handed after the folder is judged as typed: a word the reader of commands does not hand
+// on, or hands on worked out, holds the run as any other word that is no name of a mod does.
+const TYPED = TAKES_NAMES ? 'the command as typed cannot be read as the script handed its one folder' : 'more than the one folder'
+await judged('handed a mod and then an option, it is judged', `bash ${S} payload/mods ${MOD} --fix`, [MODS], NAMES)
+await judged('handed two dashes and then a mod, it is judged', `bash ${S} payload/mods -- ${MOD}`, [MODS], NAMES)
+await judged('handed a mod and then a dash alone, it is judged', `bash ${S} payload/mods ${MOD} -`, [MODS], NAMES)
+await judged('handed a mod and then an empty word, it is judged', `bash ${S} payload/mods ${MOD} ''`, [MODS], NAMES)
+await judged('handed a mod and then a word holding a colon, it is judged', `bash ${S} payload/mods ${MOD} a:b`, [MODS], TYPED)
+await judged('handed a mod and then an address, it is judged', `bash ${S} payload/mods ${MOD} https://example.com/x`, [MODS], TYPED)
+await judged('handed a mod whose name ends in a sum, it is judged', `bash ${S} payload/mods ${MOD}$((1-1))`, [MODS], TYPED)
 // A reader that leaves out any of what #3093 added answers as one loaded before it, and says nothing
 // of a setting or a runner. Here the real reader is not asked for the commands that only set a
 // value, so the line the rule knows the reading of comes back short and no run is let through.
@@ -150,6 +160,13 @@ const NOT_PLAIN_CD = 'the change of folder before it is not a cd to one folder w
 await judged('after a change of folder by a bare name, it is judged', `cd payload && bash ../${S} mods`, [MODS], NOT_PLAIN_CD)
 await judged('after a change of folder with an option, it is judged', `cd -P ./payload && bash ../${S} mods`, [MODS], NOT_PLAIN_CD)
 await through('after a change of folder written from the root, it is let through', `cd ${repo}/payload && bash ../${S} mods`)
+// Handed names of mods, the script is held by each of the rule's other conditions as it is when
+// handed its folder alone.
+const NAMED_RUN = `bash ${S} payload/mods ${MOD}`
+await judged('handed a mod, in a clone of another repository it is judged', NAMED_RUN, [MODS], TAKES_NAMES ? `never ${ME.repo}` : NAMES, 'someone/else')
+await judged('handed a mod, with another command after it, it is judged', `${NAMED_RUN} && echo done`, [MODS], TAKES_NAMES ? `echo ${BEFORE}` : NAMES)
+await judged('handed a mod, behind a runner, it is judged', `nice ${NAMED_RUN}`, [MODS], TAKES_NAMES ? `it is run behind nice, ${BEHIND}` : NAMES)
+await judged('handed a mod, after a change of folder by a bare name, it is judged', `cd payload && bash ../${S} mods ${MOD}`, [MODS], TAKES_NAMES ? NOT_PLAIN_CD : NAMES)
 // A change of folder that fails leaves the shell where it was, and joined by `;` or `||` the script
 // still runs, from there: the file one folder above the one the reader placed, which nobody
 // compared, handed a folder written from the root. The reader does not say what joins two commands,
@@ -202,6 +219,7 @@ for (const other of NAMED.filter(n => n !== ME)) {
 const CHANGED = 'has changed since this checkout left origin/main'
 appendFileSync(`${repo}/${S}`, '# changed\n')
 await judged('the script edited and not committed is judged', RUN, [MODS], CHANGED)
+await judged('the script edited and not committed, handed a mod, is judged', NAMED_RUN, [MODS], TAKES_NAMES ? CHANGED : NAMES)
 git('commit', '-q', '-a', '-m', 'change the script')
 await judged('the script changed in a commit on the branch is judged', RUN, [MODS], CHANGED)
 git('checkout', '-q', 'origin/main', '--', S)

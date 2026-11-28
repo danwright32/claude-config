@@ -1053,8 +1053,8 @@ const howToDecide = (h: Held): string => {
  * What a hold on a subagent's Bash command says last (#3856). The hold is the agent's own to decide
  * (decision 8), but a brief may keep a hold on a command for the main session, and the decide tool
  * takes a decision only from the agent the call was held for. So the main session can only run the
- * command itself, where the hold is its own, or say the agent may decide, and needs the command and
- * this call's id handed over to do either. An edit's hold is always the agent's to decide, so it
+ * command itself, where the hold is its own, or say the agent may decide: it needs the command to
+ * run it, and this call's id to say which hold the agent may decide. An edit's hold is always the agent's to decide, so it
  * gets no such sentence, nor does the main session's own command.
  */
 export const handBack = (h: Held): string =>

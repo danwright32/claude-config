@@ -1709,21 +1709,25 @@ const notesWorld = ($: unknown, on: Parameters<typeof world>[1]) => {
   w.files[`${NOTES}/plant.py`] = PLANT_PY
   return w
 }
-const CANNOT_NAME = 'This command writes a file whose name cannot be read before it runs'
+// Why each was held is read from the log, which says it of the checkout the script is handed
+// whatever words the hold puts it in.
+const heldForCheckout = (w: ReturnType<typeof world>) => w.records().filter(x => x.kind === 'unread').map(x => [x.word, x.decision])
 
 test("a subagent's script handed a checkout to read and a scratch folder to write into is held, and told what to hand back to the main session (#3856)", KIT, async ($, on) => {
   const w = notesWorld($, on)
   for (const [i, command] of [COUNT, MEASURE_RUN].entries()) {
     const why = refusal(await bash($ as never, w, command, { agentId: 'a1' }, `b${i + 1}`))
-    expect(why).toContain(CANNOT_NAME)
+    expect(why).toContain('The area check held this Bash command')
     expect(why.endsWith(`Then send the Bash command again, unchanged.${handBackFor(`b${i + 1}`)}`)).toBe(true)
   }
+  expect(heldForCheckout(w)).toEqual([[APP, 'held'], [APP, 'held']])
   // The hold is still the agent's own to decide where its brief lets it, and the command then runs.
   expect((await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON }, { agentId: 'a1' })).deny).toBeUndefined()
   expect((await bash($ as never, w, COUNT, { agentId: 'a1' }, 'b3')).result).toBe('done')
   // The main session's own run of the same command is held for itself, with nothing to hand back.
   const mine = refusal(await bash($ as never, w, MEASURE_RUN, {}, 'b4'))
-  expect(mine).toContain(CANNOT_NAME)
+  expect(mine).toContain('The area check held this Bash command')
+  expect(heldForCheckout(w).at(-1)).toEqual([APP, 'held'])
   expect(mine).not.toContain('hand back')
   expect(mine.endsWith('Then send the Bash command again, unchanged.')).toBe(true)
 })
