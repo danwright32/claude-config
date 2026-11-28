@@ -57,17 +57,12 @@
 # After the move, with that lock held throughout, the gate passed in 60 seconds at a load average
 # of 160 on 2026-11-01, its slowest scanner 51, so the budget below was left where it was.
 #
-# A SUITE THAT LISTS THE TREE BY ANOTHER ROUTE IS NOT SEEN (claude-config#3859). The mark is one
-# spelling, so a suite that walks the tree some other way is run by CI only, until its own code
-# lists the repository's files. test-settings-file.sh, which reads every suite the payload ships,
-# was one: it now asks lib/repo-files.sh for the repository's suites, to check its scan read them
-# all, and so carries the mark. Measure a suite against the budget before giving it the mark. That
-# one, alone on 2026-11-28 at nice 15 on 12 cores: 0.67 to 0.84 seconds before that check (5 runs,
-# load averages 27 to 33); with it, 0.98 to 1.04 at a load average just under 10 (5 runs), 1.06 to
-# 1.14 at load averages of 48 to 52 (5 runs), and one run of 6.6 as the load rose from 43 to 58.
-# Inside this gate, on the push that added it (2026-11-28, a load average of 10 as the push began),
-# it was recorded at 4 seconds, with the slowest scanner at 115. The gate was not timed as a whole
-# with and without it.
+# A SUITE THAT LISTS THE TREE BY ANOTHER ROUTE IS NOT SEEN (claude-config#3859). A suite is selected
+# by what its code lines name (SCANS, below), and one reading the tree through a helper of its own,
+# such as lib/synced-trees.sh, is not, so a suite that carries neither that mark nor the walker's
+# (claude-config#3183, below) is run by CI only. Every suite this gate selects runs on every push
+# inside the gate's budget, so measure a suite against that budget before giving it the mark;
+# README.md holds the measurement for test-settings-file.sh, in the paragraph that names it.
 #
 # It is repo-agnostic by construction: a repository with no payload/hooks/run-all-tests.sh is not
 # this one, and the hook does nothing at all there rather than running suites it knows nothing

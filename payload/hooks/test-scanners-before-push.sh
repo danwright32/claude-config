@@ -128,8 +128,7 @@ checkout_parts(){
     && check "#1734 and the home path check is among them" ok \
     || check "#1734 and the home path check is among them" "got=$_sel"
   # The settings file suite reads every suite the payload ships for a second copy of the settings
-  # lookup, and until it listed the repository's files only CI ran it, so a push carrying such a
-  # copy went through this gate and cost a red check and a fix round (claude-config#3859).
+  # lookup, so a push carrying one is refused only while the gate selects it (claude-config#3859).
   grep -q '^SUITE payload/hooks/test-settings-file\.sh$' <<< "$_sel" \
     && check "#3859 and the settings file suite, which reads every suite for a copy of the settings lookup, is among them" ok \
     || check "#3859 and the settings file suite, which reads every suite for a copy of the settings lookup, is among them" "got=$_sel"
