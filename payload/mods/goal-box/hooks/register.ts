@@ -345,8 +345,12 @@ const sendHeld = async ($: EngineInterface, id: string, what: string, text: stri
   }
 }
 
-/** What a turn end's question about shipped work came to: it entered, it was tried and did not enter, or there was nothing to ask. */
-type AskedDone = 'sent' | 'failed' | 'none'
+/**
+ * What one of a turn end's prompts about the box came to: it entered, it was tried and did not
+ * enter, or there was nothing to ask. One that did not enter is tried again at the next turn end,
+ * so the prompt about a steps card is not sent behind it: that would be two prompts for one call.
+ */
+type AskOutcome = 'sent' | 'failed' | 'none'
 
 /**
  * #2523: with no /goal, asks the session once per request of Dan's (a message he typed, or since
@@ -361,7 +365,7 @@ type AskedDone = 'sent' | 'failed' | 'none'
  * The end of turn review's record is asked first, through `record` (endRecord): a review handed
  * over this turn that Dan has not answered spends the request's question unsent.
  */
-const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<AskedDone> => {
+const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<AskOutcome> => {
   const since = (await $.state.get(requestAtRef)).value
   if (since === undefined) return 'none'
   const prompts = (await $.state.get(promptsRef)).value ?? 0
@@ -724,25 +728,25 @@ const noteReviewHeld = async ($: EngineInterface, prompts: number): Promise<void
  * session is asked once to call again (Dan's yes to this message is his answer of 2026-11-27 on the
  * issue). Once per request: claimed before it is sent, so two turn ends at once send one, and
  * released when it did not enter, so a passing failure is asked again at the next turn end (L368).
- * It asks what the turn end's other question asks, so that one is marked asked too. True when sent.
+ * It asks what the turn end's other question asks, so that one is marked asked too.
  *
  * The record is asked first, through `record` (endRecord). A review handed over this turn that Dan has not
  * answered sends nothing, and the request's one message is spent there without being sent, so no
  * later turn end of the same request sends it either: his own next message starts the new request.
  */
-const askAfterReview = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<boolean> => {
+const askAfterReview = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<AskOutcome> => {
   const held = (await $.state.get(reviewHeldRef)).value
-  if (typeof held !== 'number') return false
+  if (typeof held !== 'number') return 'none'
   const asked = await $.state.get(reviewAskedRef)
-  if (asked.value !== undefined && asked.value >= held) return false
-  if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= held)) return false
-  if ((await boxHolds($)).length) return false
+  if (asked.value !== undefined && asked.value >= held) return 'none'
+  if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= held)) return 'none'
+  if ((await boxHolds($)).length) return 'none'
   const prompts = (await $.state.get(promptsRef)).value ?? 0
   const end = await record()
-  if (!(await $.state.set(reviewAskedRef, prompts, { ifVersion: asked.version })).isSet) return false
+  if (!(await $.state.set(reviewAskedRef, prompts, { ifVersion: asked.version })).isSet) return 'none'
   if (end.unanswered) {
     debug($, `${UNANSWERED}, so the session is not asked to call the Goal accomplished box again for this request`)
-    return false
+    return 'none'
   }
   const failed = await sendHeld($, 'ask-after-review', 'the prompt asking for the Goal accomplished box again', askAgainText())
   if (failed === undefined) {
@@ -752,7 +756,7 @@ const askAfterReview = async ($: EngineInterface, record: () => Promise<EndRecor
       if (done.value !== undefined && done.value >= prompts) break
       if ((await $.state.set(askedDoneRef, prompts, { ifVersion: done.version })).isSet) break
     }
-    return true
+    return 'sent'
   }
   for (let i = 0; i < 10; i++) {
     const now = await $.state.get(reviewAskedRef)
@@ -760,7 +764,7 @@ const askAfterReview = async ($: EngineInterface, record: () => Promise<EndRecor
     if ((await $.state.set(reviewAskedRef, asked.value ?? -1, { ifVersion: now.version })).isSet) break
   }
   $.ui.log(`The session could not be asked to call the Goal accomplished box again (${failed}); it is asked again at the next turn end.`)
-  return false
+  return 'failed'
 }
 
 // ---- The close this session card (#3770) ----
@@ -1156,10 +1160,14 @@ export const register: Register = on => {
     // so this one stands in for the two below, which ask for the same call.
     // #3864: one prompt a turn end. Where this one or the question about shipped work is sent, it
     // stands in for the prompt about a steps card worked through, which asks for the same call.
-    if (await askAfterReview($, record)) {
+    const askedAgain = await askAfterReview($, record)
+    if (askedAgain === 'sent') {
       await spendCardNow($)
       return r
     }
+    // One that was tried and did not enter is tried again at the next turn end, and the card's
+    // record waits for that one, as it waits for a question about shipped work that did not enter.
+    const cardWaits = askedAgain === 'failed'
     const goal = await goalNow($)
     // #3864: a card worked through under a /goal still set asks nothing, then or once the goal is
     // cleared: the goal's own check is what asks. One that could not be read leaves the card's
@@ -1171,7 +1179,7 @@ export const register: Register = on => {
       // card's record waits for that one: a second prompt for the same call is not sent behind it.
       const askedDone = await askIfDone($, record)
       if (askedDone === 'sent') await spendCardNow($)
-      else if (askedDone === 'none') await askAfterCard($, record)
+      else if (askedDone === 'none' && !cardWaits) await askAfterCard($, record)
       return r
     }
     // A met goal's prompt is not spent by an unanswered review, as the other two are: its box is the
@@ -1182,7 +1190,7 @@ export const register: Register = on => {
     const isMetShown = ((await $.state.get(shownRef)).value ?? []).some(s => s.key === `goal:${metId}`)
     // #3864: with the met goal's box shown no /goal is set and none is owed a box, so a steps card
     // worked through since is asked about as it is with no goal at all.
-    if (isMetShown) await askAfterCard($, record)
+    if (isMetShown && !cardWaits) await askAfterCard($, record)
     if (isMetShown || ((await $.state.get(askedRef)).value ?? []).includes(metId)) return r
     const end = await record()
     if (end.unanswered) {

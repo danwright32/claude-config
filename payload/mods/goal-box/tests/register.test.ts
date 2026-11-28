@@ -3375,6 +3375,45 @@ test('a steps card that cannot be read: nothing is asked and the debug log says 
   expect(cardAsks(submitted)).toHaveLength(1)
 })
 
+test("one prompt a turn end: the message after a refused call that could not be sent is not followed by the card's prompt, and stands in for it once it is sent (#3864, #3843)", withAll, async ($, on) => {
+  const { w, submitted, logs } = world(on, { submitFails: ['drop'] })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/its end of turn review is still to come/)
+  w.stepsEmptied = EMPTIED
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toEqual([])
+  expect(cardAsks(submitted)).toEqual([])
+  expect(logs.filter(l => /could not be asked to call the Goal accomplished box again/.test(l))).toHaveLength(1)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  expect(cardAsks(submitted)).toEqual([])
+  await turnStarts($, 't3')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+})
+
+test("the same once a met /goal's box has been shown: the message that could not be sent is not followed by the card's prompt (#3864, #3843)", withAll, async ($, on) => {
+  const { w, submitted } = world(on, { goal: MET })
+  await start($)
+  await says($, 'Finish issue 1563')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  await says($, 'Now run the one off test')
+  await edits(w, $)
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/its end of turn review is still to come/)
+  w.stepsEmptied = EMPTIED
+  w.submitFails = ['drop']
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toEqual([])
+  expect(cardAsks(submitted)).toEqual([])
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  expect(cardAsks(submitted)).toEqual([])
+})
+
 // A record that waits is asked about only under the request it emptied under.
 const PR_OPEN = { links: [link('danwright32/claude-config', 1700)], open: { 'danwright32/claude-config': { exitCode: 0, stdout: '[{"number":1700}]' } } }
 
