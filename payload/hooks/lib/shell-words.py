@@ -31,6 +31,13 @@ hook that slow is killed and the command goes unscreened.
       break the shell removes taken out, then each line break left written as "; ", then 0x1f and
       the payload's cwd. Exit 4, printing nothing, when the command holds no backslash and line
       break or the payload is not one this reads (claude-config#3470); see flattened().
+  shell-words.py second     stdin: a hook payload
+      what that flattened form still hides, as a text of its own in the same shape: each heredoc's
+      body moved up to follow the command that opens it where a command stands after the opener
+      on its line, and a wrapper's single quoted string and backquotes written as the shell that
+      reads them reads them. Exit 4, printing nothing, when there is none (claude-config#3739);
+      see second_reading(). Exit 5, with OPENER_LINE_LIMIT alone on standard error, when one
+      line holds more commands after its openers than that many rounds of rewrites settle.
   shell-words.py tool       stdin: one command
       the gh or git subcommand it runs, as gh and git themselves find it past the options written in
       front (tool_field), else rtk's own subcommand (rtk_field, claude-config#1468), or nothing when
@@ -926,8 +933,30 @@ def heredoc_close(s, j, word, strip_tabs, quoted, line_break="\n"):
         pos = m.end()
 
 
-def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None, joined=None):
+def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None, joined=None, lines=None, typed=False, reread=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
+
+    reread, when a list, is given the text another shell may read differently from this one
+    (claude-config#3739), for inner_typed(): ("'", start, end) for the text between each pair of
+    single quotes, which a wrapper hands a shell as it is written, and ("`", i, width) for each
+    run of backslashes and the line break after it inside backquotes that joins the next line
+    for the shell reading the backquotes, s[i:i + width] being what to take out so that this
+    reading makes the same words of what is left.
+
+    typed says s is the command as typed even where it holds no line break, so a "; " in it is
+    never read as one (claude-config#3739): a command of one line is otherwise taken for the
+    flattened form, where the ; after a heredoc's opener starts the body.
+
+    lines, when a list, is given what the reading as typed meets on a line that opens a heredoc,
+    in the order it meets them (claude-config#3739), for opener_lines(): ("after", i, n) for each
+    "; " at s[i] that separates two commands while n heredocs opened before it wait for their
+    bodies, which is what the flattened form cannot tell from the line break that starts them;
+    then, where that line ends, ("bodies", i, [(start, end), ...]) with one span for each waiting
+    heredoc, in the order they were opened, from the line break before its body to the end of its
+    closing line, or ("open", i, [at, ...]) where one of them never closes, with the << of each
+    heredoc waiting there; and ("end", len(s), [at, ...]) with the << of each heredoc still
+    waiting when the text ends, which no shell gives a body, for a text read to its end. Nothing
+    is given for a text read as the flattened form.
 
     joined, when a list, is given the index of each backslash this reading goes past with a line
     break right after it where the shell takes the two for a join and removes them before it reads
@@ -1030,7 +1059,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     (claude-config#2076).
     """
     n = len(s)
-    line_break = "\n" if "\n" in s else "; "
+    line_break = "\n" if typed or "\n" in s else "; "
     out, pending = [], []
     frames = [{"k": "top", "start": 0, "cwd": cwd, "old": None, "id": 0, "inner": [], "openers": []}]
     ids = [0]
@@ -1221,6 +1250,8 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
         nx = s[i + 1] if i + 1 < n else ""
         if k == "'":
             frames.pop()  # c is the closing quote: anything else was gone past above
+            if reread is not None:
+                reread.append(("'", f["at"] + 1, i))
             i += 1
             continue
         if k == "ansi":
@@ -1236,6 +1267,25 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
                 held = next(g["k"] for g in reversed(frames) if g["k"] == "hd" or g["k"] in COMMAND_FRAMES)
                 if held != "hd" and not any(g["k"] == "tick" for g in frames):
                     joined.append(i)
+            if reread is not None and any(g["k"] == "tick" for g in frames):
+                # The shell around backquotes takes a backslash and the line break after it out
+                # of their text, and the backquotes halve what is left of the run before the
+                # shell inside reads it. So the next line joins this one after every run of
+                # backslashes but a multiple of four, which leaves that shell whole backslashes
+                # and a line break (bash 3.2.57 and zsh 5.9). Counted in fours, with one over
+                # the pair goes; with two over the shell inside is left the pair and removes it,
+                # so both backslashes go; with three over it is left one backslash, which
+                # escapes the next line's first character, so the pair goes and one backslash
+                # more, leaving this reading one to escape that character with.
+                width = 2 if nx == "\n" else 3 if s.startswith("\\\n", i + 1) else 0
+                if width:
+                    over = (i + width - 1 - len(s[:i + width - 1].rstrip("\\"))) % 4
+                    if width == 3 and over == 2:
+                        reread.append(("`", i, 3))
+                    elif width == 2 and over == 1:
+                        reread.append(("`", i, 2))
+                    elif width == 2 and over == 3:
+                        reread.append(("`", i - 1, 3))
             if unsure is not None and i and escaped != i - 1 and nx in ("\n", "\\"):
                 # An operator this backslash and the line break after it split: the shells do not
                 # agree on whether the two characters either side are joined, so it is named
@@ -1394,6 +1444,10 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             else:
                 i += 2
             continue
+        if lines is not None and pending and line_break == "\n" and s.startswith(FLAT_BREAK, i):
+            # A separator the flattened form reads as the line break that starts the waiting
+            # bodies (claude-config#3739). It is read here as the separator it is, just below.
+            lines.append(("after", i, len(pending)))
         if pending and s.startswith(line_break, i):
             # The bodies start on the next line: find the closing line of each in turn. One that never
             # closes is not skipped, so nothing after it is hidden. Where the shells do not close an
@@ -1421,6 +1475,9 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
                 heredocs.extend(skipped)
             if j is not None and spans is not None:
                 spans.extend(where)
+            if lines is not None and line_break == "\n":
+                lines.append(("open", i, [at for _, _, _, _, at, _ in pending]) if j is None else
+                             ("bodies", i, [(start, end) for (_, start, _), end in zip(where, closes)]))
             pending.clear()
             if j is not None:
                 # A closing line is read as it is written, so a backslash that ends one (an end
@@ -1507,6 +1564,8 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
         i += 1
     if len(frames) > 1:
         raise unreadable(next((f["at"] for f in frames if "at" in f), None))
+    if lines is not None and pending and line_break == "\n":
+        lines.append(("end", n, [at for _, _, _, _, at, _ in pending]))
     cut(frames[0], n, "end")
     return out
 
@@ -1695,6 +1754,10 @@ def crude_inner(text):
     return out
 
 
+# Where the crude cut cuts: every separator, quotes and all.
+CRUDE_CUT = re.compile(r"&&|\|\||;|\||\n")
+
+
 def crude_commands(s, cwd=""):
     """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all,
     and after the pieces of that cut the commands that may be written inside one (crude_inner).
@@ -1712,7 +1775,7 @@ def crude_commands(s, cwd=""):
     (claude-config#3473).
     """
     out, found, old = [], [], None
-    for text in re.split(r"&&|\|\||;|\||\n", s):
+    for text in CRUDE_CUT.split(s):
         if text.strip():
             found.extend((cwd, inner) for inner in crude_inner(text))
             out.append((cwd, text))
@@ -3175,38 +3238,324 @@ def flattened(s):
     would lose one of those and name nothing new, the plain flattening is given, and where it
     would lose one and name another, both are given, the joined text first, so a hook reads every
     command either holds.
+
+    What this text still hides is never written into it (claude-config#3739): it is a reading of
+    its own, second_reading(), which a hook judges apart from this one.
     """
     plain = s.replace("\n", FLAT_BREAK)
-    if "\\\n" not in s:
-        return plain
+    return _pairs_joined(s, plain)[1] if "\\\n" in s else plain
+
+
+def second_reading(s):
+    """What flattened(s) still hides from a hook, as a text of its own, or None where it hides
+    nothing this can read (claude-config#3739). Two readings of the command as typed:
+      * after a heredoc's opener, on its line. Written as "; " the line break that starts a
+        body cannot be told from a ; after the opener: `cat <<EOF; git push`, the body and its
+        closing line ran the push in bash and zsh, and the push was the body's first line to
+        every hook reading the flattened form. So each body is moved up to follow the command
+        that opens it (opener_lines);
+      * in a string a wrapper hands a shell, and inside backquotes, which are read by a shell
+        of their own: `bash -c 'git`, the pair and `push'` ran the push, and so did the same
+        inside backquotes. So those are written as that shell reads them (inner_typed).
+
+    THE TWO TEXTS ARE NEVER WRITTEN INTO ONE, because a gate reads the folder, the range and the
+    repository of a push from the whole text it is handed, so a command either text holds would
+    change how the gate reads the other's. flattened() holds nothing of this reading, a hook
+    judges it alone, and this text is judged by a second run of the same hook that can only
+    refuse (lib/push-scope.sh, ps_both_readings).
+
+    The first of the rewritings (_reread) that names a command flattened(s) does not. Either
+    text may be one only the crude cut reads: a quoted word that runs over the lines after an
+    opener makes the flattened form one, and a line left open after a later opener makes the
+    rewriting one, and the shell runs what each hides all the same. A hook reads such a text
+    with the crude cut, as it reads any other text nothing can vouch for."""
+    plain = s.replace("\n", FLAT_BREAK)
+    typed, flat = _pairs_joined(s, plain) if "\\\n" in s else (s, plain)
+    was = _held(flat)
+    for other in _reread(typed):
+        text = other.replace("\n", FLAT_BREAK)
+        if _named_more(_held(text), was):
+            return text
+    return None
+
+
+def _reread(typed):
+    """The command as typed written as the shells that read it read it (claude-config#3739), for
+    second_reading(): with its opener lines rewritten and its wrappers' strings and backquotes
+    read as their shell reads them, and then with the opener lines alone, for where the first
+    names nothing more. Nothing where neither changes the text."""
+    out = []
+    moved = opener_lines(typed) if "<<" in typed else None
+    base = typed if moved is None else moved
+    if ("\\\n" in base or "<<" in base) and ("'" in base or "`" in base):
+        inner = inner_typed(base)
+        if inner is not None:
+            out.append(inner)
+    if moved is not None:
+        out.append(moved)
+    return out
+
+
+def _held(text):
+    """A count of every command the reading of a flattened text gives a hook, a wrapper's
+    commands with it, each as (directory, text, wrapper, depth), whether the whole text was read
+    or the crude cut made the reading. Every field read mode prints is made from those four.
+    The blanks in front of a command's text say where it stood, not what it is."""
+    records, _ = _records(text, "", 0, fields=False)
+    held = {}
+    for d, t, wrap, _, _, _, depth in records:
+        key = (d, t.lstrip(), wrap, depth)
+        held[key] = held.get(key, 0) + 1
+    return held
+
+
+# What ends a word either side of a join, for _joined_at(), besides a blank: an operator or a
+# quote. And a word ps_has_override reads as a skip word, where it stands as that pattern asks.
+WORD_END = ";&|()<>'\"`"
+SKIP_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=1")
+
+
+def _joined_at(text, at, end):
+    """text with text[at:end] taken out, a backslash and line break (or, inside backquotes, the
+    run commands() names) that the shell reading this part of the command removes.
+
+    Except where that would put a skip word together (claude-config#3739). A hook honours
+    NAME=1 wherever it stands in the text it is handed, after a blank or a separator and before
+    a blank or the end, and a join made here could assemble one the command as typed never
+    held: `bash -c 'true; SKIP_STYLE_`, the pair and `CHECK=1 true'`, beside a push the old text
+    names, stood the style gate down. There the pair is not dropped but written after the word,
+    which is then followed by a backslash and is no skip word to any hook, while the command
+    behind it is still read with an assignment in front."""
+    a = at
+    while a and not text[a - 1].isspace() and text[a - 1] not in WORD_END:
+        a -= 1
+    b = end
+    while b < len(text) and not text[b].isspace() and text[b] not in WORD_END:
+        b += 1
+    stands = (a == 0 or text[a - 1].isspace() or text[a - 1] in ";&|") and (b == len(text) or text[b].isspace())
+    if stands and SKIP_WORD.fullmatch(text[a:at] + text[end:b]):
+        return text[:at] + text[end:b] + text[at:end] + text[b:]
+    return text[:at] + text[end:]
+
+
+def _wrapper_strings(cut, depth=0, out=None):
+    """The strings the wrappers among cut, a reading of a command as typed, hand on to be read as
+    commands (wrapped), and the strings the wrappers in those hand on in turn."""
+    out = set() if out is None else out
+    for _, t in cut:
+        found = wrapped(command_rest(t)[0])
+        if found is None or found[1] is None or found[1] in out or depth >= MAX_DEPTH:
+            continue
+        out.add(found[1])
+        try:
+            inner = commands(found[1], typed=True)
+        except Unreadable:
+            inner = crude_commands(found[1])
+        _wrapper_strings(inner, depth + 1, out)
+    return out
+
+
+def inner_typed(s, depth=0):
+    """s, the command as typed, with the text another shell reads written as that shell reads it
+    (claude-config#3739), or None where that changes nothing:
+      * a single quoted string that is the whole of what a wrapper hands on to be read as
+        commands (`bash -c`, `eval`, `watch` and the rest of wrapped()), and stands in that
+        wrapper's own command (_wrapper_spans), is written as _string_read() writes it. Any
+        other single quoted string (an argument of `echo`, a commit message, though it hold
+        the very text a wrapper beside it is handed) is read by no shell and is left as typed;
+      * inside backquotes, each run of backslashes and line break that joins the next line for
+        their shell is taken out (commands()'s `reread`).
+    No join puts a skip word together (_joined_at). A text that cannot be read to its end has
+    its backquotes rewritten as far as it was read, and the strings of the wrappers the crude
+    cut finds."""
+    found, parts = [], []
+    try:
+        cut = commands(s, parts=parts, reread=found, typed=True)
+        held = [(p["start"], p["end"], [(x[0], x[1]) for x in p["inner"]], [c]) for c, p in zip(cut, parts)]
+    except Unreadable:
+        held = _crude_pieces(s)
+    spans = _wrapper_spans(held) if any(kind == "'" for kind, _, _ in found) else ()
+    text = s
+    for kind, at, end in sorted(found, key=lambda e: e[1], reverse=True):
+        if kind == "`":
+            text = _joined_at(text, at, at + end)
+        elif any(start <= at and end <= stop and text[at:end] in strings
+                 and not any(a <= at and end <= b for a, b in inner) for start, stop, inner, strings in spans):
+            text = text[:at] + _string_read(text[at:end], depth) + text[end:]
+    return text if text != s else None
+
+
+def _crude_pieces(s):
+    """The pieces crude_commands() cuts s into, each as (start, end, [], commands): s[start:end]
+    is the piece, and commands the piece and the commands that may be written inside it
+    (crude_inner). For inner_typed(), which must know where in the text a command stands."""
+    held, at = [], 0
+    for m in list(CRUDE_CUT.finditer(s)) + [None]:
+        end = len(s) if m is None else m.start()
+        if s[at:end].strip():
+            held.append((at, end, [], [("", s[at:end])] + [("", t) for t in crude_inner(s[at:end])]))
+        at = end if m is None else m.end()
+    return held
+
+
+def _wrapper_spans(held):
+    """(start, end, inner, strings) for each of held, the commands of a text as typed with where
+    each stands, that hands a string on to be read as commands: strings is what it and the
+    wrappers inside that string hand on (_wrapper_strings), and inner the stretches of
+    s[start:end] that are substitutions, whose commands are among held themselves. A single
+    quoted string is a wrapper's only where it stands in that wrapper's own command: the same
+    text as an argument of `echo` beside it is read by no shell."""
+    spans = []
+    for start, end, inner, cut in held:
+        strings = _wrapper_strings(cut)
+        if strings:
+            spans.append((start, end, inner, strings))
+    return spans
+
+
+def _string_read(s, depth):
+    """s, a string a wrapper hands on to be read as commands, written so that its flattened form
+    is read as the shell reading s reads it (claude-config#3739). Each backslash and line break
+    that shell removes is taken out, and only those: which they are is that string's own reading
+    (_joins), as it is for the text around it, so one that ends a comment or stands in a quoted
+    heredoc's body stays. Taken out of there it made the next line part of the comment or of
+    the body, and hid a command both shells run. Then the string's opener lines are rewritten
+    (opener_lines), and its own backquotes and wrappers' strings (inner_typed)."""
+    text = s
+    if "\\\n" in text:
+        for i in reversed(_joins(text)):
+            text = _joined_at(text, i, i + 2)
+    if "<<" in text:
+        text = opener_lines(text) or text
+    if depth < MAX_DEPTH and ("\\\n" in text or "<<" in text) and ("'" in text or "`" in text):
+        text = inner_typed(text, depth + 1) or text
+    return text
+
+
+def _joins(s):
+    """Where s, a command as typed, holds a backslash and line break the shell reading it removes
+    (commands()'s `joined`), in order; nothing where that reading cannot be vouched for: it
+    cannot read the text to its end, or names a line it is unsure of."""
     joined, unsure = [], []
     try:
         commands(s, unsure=unsure, joined=joined)
     except Unreadable:
-        return plain
+        return []
     # An operator a backslash and a line break split is named in unsure, and is no doubt here: the
-    # joined text holds it whole, as bash reads it, and the checks below keep every command the
-    # plain flattening names beside it. Flattened plain, a `$`, the pair and `(git push)` is a `$`,
-    # an escaped `;` and a parenthesis, which names no push (claude-config#3504).
-    if [m for m in unsure if not split_operator(s, m[0])] or not joined:
-        return plain
+    # joined text holds it whole, as bash reads it, and _pairs_joined's checks keep every command
+    # the plain flattening names beside it. Flattened plain, a `$`, the pair and `(git push)` is a
+    # `$`, an escaped `;` and a parenthesis, which names no push (claude-config#3504).
+    if [m for m in unsure if not split_operator(s, m[0])]:
+        return []
+    return sorted(set(joined))
+
+
+def _pairs_joined(s, plain):
+    """(typed, flat) for a text holding a backslash and a line break (claude-config#3470): flat is
+    what flattened() gives, and typed is the text as typed
+    that flat is the flattening of, s itself or s with each pair the shell removes taken out."""
+    joined = _joins(s)
+    if not joined:
+        return s, plain
     kept, at = [], 0
-    for i in sorted(set(joined)):
+    for i in joined:
         kept.append(s[at:i])
         at = i + 2
     kept.append(s[at:])
-    joint = "".join(kept).replace("\n", FLAT_BREAK)
+    typed = "".join(kept)
+    joint = typed.replace("\n", FLAT_BREAK)
     was, now = _named(plain), _named(joint)
     if was is None or now is None:
-        return plain
+        return s, plain
     if not _named_more(was, now):
-        return joint
+        return typed, joint
     if not _named_more(now, was):
-        return plain
+        return s, plain
     both = joint + FLAT_BREAK + plain
     held = _named(both)
     either = {k: max(was.get(k, 0), now.get(k, 0)) for k in set(was) | set(now)}
-    return both if held is not None and not _named_more(either, held) else plain
+    return (typed, both) if held is not None and not _named_more(either, held) else (s, plain)
+
+
+# How many rounds of rewrites opener_lines() makes of one text. One reading settles the first
+# separator after an opener on every line that has one, so the count that matters is how many
+# such separators one line holds, or how deep one such line sits inside another's body, never
+# how many such lines there are.
+OPENER_LINE_LIMIT = 64
+
+
+class Unsettled(Exception):
+    """opener_lines() made OPENER_LINE_LIMIT rounds of rewrites and the text still holds one to
+    make. A text rewritten that far and no further still hides whatever stands after the next
+    separator, so it is no reading to hand a hook, and no saying that nothing is hidden."""
+
+
+def opener_lines(s):
+    """s, the command as typed, written so that its flattened form is read as the shell reads s
+    (claude-config#3739), or None where there is nothing to rewrite.
+
+    The shell runs every command on the line that opens a heredoc and reads the body from the next
+    line. These rewrites, the first on each such line at every reading until none is left:
+      * a "; " between two commands after an opener, on a line whose heredocs all close: the
+        bodies of the heredocs opened before it, closing lines and all, are moved up to follow the
+        command that opens them, and what stood after the "; " follows on a line of its own. A
+        ; and a line break separate two commands alike, so `cat <<EOF; git push`, the body and
+        EOF is `cat <<EOF`, the body, EOF and then `git push`: the shape the flattened form has
+        always been read right in;
+      * a heredoc still waiting for its body where the text ends (a command of one line, or an
+        opener on the last line): no shell gives it one, and every command after it on the line
+        runs (bash 3.2 and zsh), where the flattened form
+        took those commands for the body up to a word that is the marker. Its << or <<- is
+        written <<<, a here string of the marker word, which opens nothing;
+      * a line one of whose heredocs never closes on a line of its own: the shell feeds it the
+        rest of the text and runs every command on the line, where the flattened form closed it
+        at a marker word standing on that same line (`cat <<EOF; git push; EOF` and a line
+        break, which is that command with nothing after it), and hid the commands between.
+        Each << on the line is written <<< as above, so the rest of the text is read as
+        commands, which is only more than the shell runs.
+    A text that cannot be read to its end has its bodies moved as far as
+    it was read, since the shell runs each line as it reads it, and no here string written, since
+    the line the text ends on is one the shell never finishes reading; second_reading() gives the
+    result to a hook only as a reading apart from the text it always had. Raises Unsettled for a
+    text that still holds a rewrite to make after OPENER_LINE_LIMIT rounds of them.
+    """
+    text = s
+    for made in range(OPENER_LINE_LIMIT + 1):
+        met = []
+        try:
+            commands(text, lines=met, typed=True)
+        except Unreadable:
+            pass
+        # One rewrite for each line: its first "after" and what the line ends in. Each is a
+        # stretch of the text of its own, so all are made from one reading, last first; one that
+        # starts inside a stretch already taken (a line read out of a body) waits for the next.
+        edits, floor, k = [], 0, 0
+        while k < len(met):
+            kind, i, n = met[k]
+            k += 1
+            if kind != "after":
+                continue
+            while k < len(met) and met[k][0] == "after":
+                k += 1
+            if k == len(met):
+                break
+            ends = met[k]
+            k += 1
+            if ends[0] in ("end", "open"):
+                group = [(at, at + (3 if text.startswith("<<-", at) else 2), "<<<") for at in sorted(ends[2])]
+            else:
+                start, end = ends[2][0][0], ends[2][n - 1][1]
+                group = [(i, end, text[start:end] + "\n" + text[i + len(FLAT_BREAK):start])]
+            if group and group[0][0] >= floor:
+                edits.extend(group)
+                floor = group[-1][1]
+        if not edits:
+            break
+        if made == OPENER_LINE_LIMIT:
+            raise Unsettled()
+        for at, end, new in reversed(edits):
+            text = text[:at] + new + text[end:]
+    return text if text != s else None
 
 
 def flattened_payload(text):
@@ -3215,17 +3564,40 @@ def flattened_payload(text):
     where the command holds no backslash and line break, or the payload is not one this reads, so
     the caller flattens it as it always has. A 0x1f in the command is written as U+FFFD, as there
     (claude-config#2055)."""
+    cmd, cwd = _payload_command(text)
+    if cmd is None or "\\\n" not in cmd:
+        return None
+    return flattened(cmd).replace("\x1f", "\ufffd") + "\x1f" + (cwd or "")
+
+
+def second_payload(text):
+    """The command of a hook payload as second_reading() gives it, then 0x1f and the payload's
+    cwd, the shape flattened_payload() prints; or None where there is no second reading, or the
+    payload is not one this reads (claude-config#3739)."""
+    cmd, cwd = _payload_command(text)
+    if cmd is None or ("\\\n" not in cmd and "<<" not in cmd):
+        return None
+    second = second_reading(cmd)
+    if second is None:
+        return None
+    return second.replace("\x1f", "\ufffd") + "\x1f" + (cwd or "")
+
+
+def _payload_command(text):
+    """(command, cwd) of a hook payload, the JSON Claude Code sends, or (None, None) where it is
+    not one this reads: not a JSON object, its command not text, or its cwd neither text nor
+    absent."""
     try:
         d = json.loads(text)
     except ValueError:
-        return None
+        return None, None
     if not isinstance(d, dict):
-        return None
+        return None, None
     ti, cwd = d.get("tool_input"), d.get("cwd")
     cmd = ti.get("command") if isinstance(ti, dict) else None
-    if not isinstance(cmd, str) or "\\\n" not in cmd or not (cwd is None or cwd is False or isinstance(cwd, str)):
-        return None
-    return flattened(cmd).replace("\x1f", "\ufffd") + "\x1f" + (cwd or "")
+    if not isinstance(cmd, str) or not (cwd is None or cwd is False or isinstance(cwd, str)):
+        return None, None
+    return cmd, cwd
 
 
 # A script whose arguments are data (claude-config#1574). `bash ./x.sh` cannot be read, since its
@@ -3450,10 +3822,17 @@ def main(argv):
         text, rc = read(data)
         sys.stdout.write(text)
         return rc
-    elif mode == "flatten":
+    elif mode in ("flatten", "second"):
         # Exit 4, printing nothing, where there is no join to make, so ps_parse_payload goes on to
-        # the readers it always had. Written once, whole, as UTF-8 whatever the locale, as they write.
-        flat = flattened_payload(data)
+        # the readers it always had; and for the second reading, where there is none. Exit 5,
+        # with the limit alone on standard error, where the second reading was not settled within
+        # it (Unsettled): that is neither a reading nor a saying that there is none.
+        # Written once, whole, as UTF-8 whatever the locale, as they write.
+        try:
+            flat = flattened_payload(data) if mode == "flatten" else second_payload(data)
+        except Unsettled:
+            sys.stderr.write(str(OPENER_LINE_LIMIT))
+            return 5
         if flat is None:
             return 4
         # This is the one mode that decodes JSON, and an escape in a payload can make a character
@@ -3491,7 +3870,7 @@ def main(argv):
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool|heredoc-markers < text, flatten < payload, or data-set-aside '<path>[ <subcommand>]'... < text\n")
+        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool|heredoc-markers < text, flatten|second < payload, or data-set-aside '<path>[ <subcommand>]'... < text\n")
         return 64
     return 0
 

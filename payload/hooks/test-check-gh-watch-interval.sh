@@ -173,6 +173,31 @@ refused "#3470 after && and the pair, gh pr checks --watch" "echo ok && ${PAIR}g
 allowed "#3470 control: gh run, the pair, view" "gh run ${PAIR}view 123456"
 allowed "#3470 control: a minute interval after the pair" "gh pr checks 12 --watch ${PAIR}--interval 60"
 
+# The same watcher written after a heredoc's opener, on the opener's own line, is the same watcher
+# (claude-config#3739): the shell runs every command on that line and reads the body from the next,
+# and the form this gate reads wrote the line break as "; ", so the ; after the opener was taken for
+# the line break that starts the body and each of these exited 0.
+NL=$'\n'
+refused "#3739 gh run watch after a heredoc's opener" "cat <<EOF; gh run watch 123456${NL}body${NL}EOF"
+refused "#3739 gh pr checks --watch after a quoted marker" "cat <<'EOF'; gh pr checks 12 --watch${NL}body${NL}EOF"
+refused "#3739 gh run watch on a command of one line" "cat <<EOF; gh run watch 123456; EOF"
+allowed "#3739 control: gh run view after a heredoc's opener" "cat <<EOF; gh run view 123456${NL}body${NL}EOF"
+allowed "#3739 control: a minute interval after a heredoc's opener" "cat <<EOF; gh pr checks 12 --watch --interval 60${NL}body${NL}EOF"
+allowed "#3739 control: a watcher written in the heredoc's body alone" "cat <<EOF${NL}x; gh run watch 123456${NL}EOF"
+
+# A word written across the pair is in the payload in two pieces, so the look for the word in
+# the payload as it arrives answers for no payload that holds the pair (claude-config#3739).
+refused "#3739 gh run wat, the pair, ch" "gh run wat${PAIR}ch 123456"
+refused "#3739 gh pr checks --wa, the pair, tch" "gh pr checks 12 --wa${PAIR}tch"
+refused "#3739 gh run wat, the pair, ch in a wrapper's string" "bash -c 'gh run wat${PAIR}ch 123456'"
+allowed "#3739 control: gh run vi, the pair, ew" "gh run vi${PAIR}ew 123456"
+# With no reader the pieces cannot be joined, so only a payload naming a watch whole is said to
+# be not judged, as it always was.
+out="$(payload "echo one ${PAIR}two" | PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1)"; rc=$?
+check_eq "#3739 with no python3 a command that holds the pair and names no watch whole passes in silence" "0|" "$rc|$out"
+json="$(payload "gh run ${PAIR}watch 123456" | PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>/dev/null)"; rc=$?
+notice_of "#3739 with no python3 a command that names a watch whole beside the pair is still said to be not judged" "DID NOT RUN"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

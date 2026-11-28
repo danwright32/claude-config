@@ -25,9 +25,14 @@
 # being off is never silent (L98, lib/hook-notice.sh, #1912).
 
 payload="$(cat)"
-# Nearly every Bash call names no comments flag at all: answer those before anything loads.
-case "$payload" in *--comments*|*-c*) ;; *) exit 0 ;; esac
-case "$payload" in *view*) ;; *) exit 0 ;; esac
+# Nearly every Bash call names no comments flag at all: answer those before anything loads. A
+# word written across a backslash and line break is in the payload in two pieces, so a payload
+# that holds that pair, by any way JSON spells it, is not answered here (claude-config#3739).
+named_whole() { case "$payload" in *--comments*|*-c*) ;; *) return 1 ;; esac; case "$payload" in *view*) ;; *) return 1 ;; esac; }
+case "$payload" in
+  *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*) ;;
+  *) named_whole || exit 0 ;;
+esac
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
@@ -36,7 +41,10 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
   printf '%s\n' "$1" >&2
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
+# A payload here only for the pair it holds names a view with comments nowhere whole, and with
+# nothing to join its pieces there is nothing to say.
 not_judged() {   # $1 = what went wrong, as a clause
+  named_whole || exit 0
   hook_allow_notice "GH VIEW COMMENTS CHECK DID NOT RUN: $1, so whether this gh view prints only the comments, or nothing, was not judged."
 }
 # shellcheck source=lib/push-scope.sh
@@ -46,6 +54,9 @@ command -v python3 >/dev/null 2>&1 \
   || not_judged "python3 is not on PATH, and the command's words are read with it"
 
 payload="$(ps_clean_payload "$payload")"
+# What the segmented form hides is judged in a run of its own, in what is left of this hook's
+# registered time limit, which is the number here (claude-config#3739).
+ps_both_readings "$payload" 10
 parsed="$(ps_parse_payload "$payload" segmented)" \
   || not_judged "it could not read the hook payload (neither jq nor python3 could parse it as JSON)"
 cmd="${parsed%%$'\x1f'*}"

@@ -69,12 +69,15 @@ payload="$(cat)"
 # cluster holding d (git push -d, gh pr merge -sd), or a refspec that is a bare :branch, or any
 # GraphQL call, whose deleteRef can sit in a query file the command only names (#1758). A backslash
 # closes a word too: in a tool input sent as one JSON string the command's last word is followed by
-# an escaped quote, and a bare :branch there passed unread (claude-config#2057).
+# an escaped quote, and a bare :branch there passed unread (claude-config#2057). A word written
+# across a backslash and line break is in the payload in two pieces, so a payload that holds that
+# pair, by any way JSON spells it, is not answered here (claude-config#3739).
 fast_re='(^|[[:space:]"'"'"'])(-[A-Za-z]*d|\+?:[A-Za-z0-9_./-]+)([[:space:]"'"'"'\\]|$)'
 # The method is matched in any case (gh api -X delete deletes just the same), and so is --delete.
 shopt -s nocasematch
 case "$payload" in
   *delete*|*graphql*) ;;
+  *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*) ;;
   *) payload_match "$payload" "$fast_re" || exit 0 ;;
 esac
 shopt -u nocasematch
@@ -109,6 +112,9 @@ command -v python3 >/dev/null 2>&1 || cannot_read "python3 is not on PATH, and t
 # Taken raw above so the commonest call leaves before anything loads, and cleaned before anything
 # parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
 payload="$(ps_clean_payload "$payload")"
+# What the segmented form hides is judged in a run of its own, in what is left of this hook's
+# registered time limit, which is the number here (claude-config#3739).
+ps_both_readings "$payload" 30
 parsed="$(ps_parse_payload "$payload" segmented)" || cannot_read "the hook payload could not be read as a call (not JSON jq or python3 could parse, or JSON without the command as text where it belongs)"
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"

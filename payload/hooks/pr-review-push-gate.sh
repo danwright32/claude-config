@@ -61,21 +61,30 @@ case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 payload="$(cat)"
 
-# It runs before EVERY Bash command, so the commonest case leaves before anything is loaded.
-case "$payload" in *push*) ;; *) exit 0 ;; esac
+# It runs before EVERY Bash command, so the commonest case leaves before anything is loaded. A
+# word written across a backslash and line break is in the payload in two pieces, so a payload
+# that holds that pair, by any way JSON spells it, is not answered here (claude-config#3739).
+named_whole() { case "$payload" in *push*) return 0 ;; esac; return 1; }
+case "$payload" in
+  *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*) ;;
+  *) named_whole || exit 0 ;;
+esac
 
 refuse() { printf '%s\n' "$1" >&2; exit 2; }
 OVERRIDE_HOW="Override for one push, explained to Dan first: SKIP_PR_REVIEW=1 <the push command>."
 
 # The libraries it reads through (merge-target.sh sources push-scope.sh and whole-number.sh).
 # Missing, it cannot tell a push from anything else, so it refuses only what could be one, by the
-# cheap filter above.
+# cheap filter above. A payload here only for the pair it holds names push nowhere whole, and with
+# nothing to join its pieces it is let through.
 if ! . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || ! declare -F ps_is_git_push >/dev/null \
   || ! declare -F mt_push_gate_scope >/dev/null || ! declare -F whole_above_zero >/dev/null; then
+  named_whole || exit 0
   case "$payload" in *SKIP_PR_REVIEW=1*) exit 0 ;; esac
   refuse "Refusing to push: lib/merge-target.sh, lib/push-scope.sh or lib/whole-number.sh is missing, so pr-review-push-gate.sh cannot tell whether this command pushes, and the lessons review of the branch cannot be asked. $OVERRIDE_HOW"
 fi
 if ps_reader_missing jq python3; then
+  named_whole || exit 0
   case "$payload" in *SKIP_PR_REVIEW=1*) exit 0 ;; esac
   refuse "Refusing to push: $(ps_reader_absent_why "neither jq nor python3 is on PATH" "pr-review-push-gate.sh reads the command with one of them, so it cannot tell a push from anything else." "jq or python3") $OVERRIDE_HOW"
 fi
@@ -84,6 +93,9 @@ fi
 # anything parses it: a lone surrogate escape made jq read nothing (claude-config#1944). A payload
 # still unreadable is judged by its words (#1922).
 payload="$(ps_clean_payload "$payload")"
+# What the segmented form hides is judged in a run of its own, in what is left of this hook's
+# registered time limit, which is the number here (claude-config#3739).
+ps_both_readings "$payload" 150
 parsed="$(ps_parse_payload "$payload" segmented)" \
   || ps_unparsed_refuse "$payload" pr-review-push-gate.sh SKIP_PR_REVIEW "a push" '*push*'
 command="${parsed%%$'\x1f'*}"

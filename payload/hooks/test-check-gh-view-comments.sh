@@ -114,6 +114,33 @@ refused "#3470 gh, the pair, pr view --comments" "gh ${PAIR}pr view 12 --comment
 refused "#3470 after && and the pair, gh issue view --comments" "echo ok && ${PAIR}gh issue view 12 --comments"
 allowed "#3470 control: gh pr, the pair, view --json title" "gh pr ${PAIR}view 12 --json title"
 
+# The same view written after a heredoc's opener, on the opener's own line, is the same view
+# (claude-config#3739): the shell runs every command on that line and reads the body from the next,
+# and the form this gate reads wrote the line break as "; ", so the ; after the opener was taken for
+# the line break that starts the body and each of these exited 0.
+NL=$'\n'
+refused "#3739 gh pr view --comments after a heredoc's opener" "cat <<EOF; gh pr view 12 --comments${NL}body${NL}EOF"
+refused "#3739 gh issue view --comments after a quoted marker" "cat <<'EOF'; gh issue view 12 --comments${NL}body${NL}EOF"
+refused "#3739 gh pr view --comments on a command of one line" "cat <<EOF; gh pr view 12 --comments; EOF"
+allowed "#3739 control: gh pr view --json title after a heredoc's opener" "cat <<EOF; gh pr view 12 --json title${NL}body${NL}EOF"
+allowed "#3739 control: a view written in the heredoc's body alone" "cat <<EOF${NL}x; gh pr view 12 --comments${NL}EOF"
+
+# A word written across the pair is in the payload in two pieces, so the look for the words in
+# the payload as it arrives answers for no payload that holds the pair (claude-config#3739).
+refused "#3739 gh issue vi, the pair, ew --comments" "gh issue vi${PAIR}ew 3 --comments"
+refused "#3739 gh pr view --com, the pair, ments" "gh pr view 12 --com${PAIR}ments"
+refused "#3739 gh issue vi, the pair, ew --comments in a wrapper's string" "bash -c 'gh issue vi${PAIR}ew 3 --comments'"
+allowed "#3739 control: gh issue vi, the pair, ew --json title" "gh issue vi${PAIR}ew 3 --json title"
+# With no reader the pieces cannot be joined, so only a payload naming a view and a comments flag
+# whole is said to be not judged, as it always was.
+LONE_PAIR="$WORKDIR/lone-pair"; mkdir -p "$LONE_PAIR/lib"
+cp "$HOOK" "$LONE_PAIR/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE_PAIR/lib" hook-notice.sh || bad "the second lone hook's hook-notice.sh could not be installed"
+out="$(payload "echo one ${PAIR}two" | bash "$LONE_PAIR/check-gh-view-comments.sh" 2>&1)"; rc=$?
+check_eq "#3739 with the reader missing a command that holds the pair and names no view whole passes in silence" "0|" "$rc|$out"
+json="$(payload "gh issue ${PAIR}view 3 --comments" | bash "$LONE_PAIR/check-gh-view-comments.sh" 2>/dev/null)"; rc=$?
+notice_of "#3739 with the reader missing a command that names a view whole beside the pair is still said to be not judged" "lib/push-scope.sh"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

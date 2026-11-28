@@ -217,6 +217,22 @@ check_eq "the review is the whole branch's, from the merge base" "$BASE_SHA" "$(
 out="$(fire_push "git push -u origin feat/sync")"; rc=$?
 check_eq "a second push without the key is refused again, the first refusal may have been hidden" "2" "$rc"
 check "carrying the findings again" "deleteEvent still swallows" "$out"
+# The word push written across a backslash and line break is in the payload in two pieces, and
+# the shell that reads the string or the backquotes runs a push all the same (claude-config#3739).
+out="$(fire_push "bash -c 'git pu\\
+sh -u origin feat/sync'")"; rc=$?
+check_eq "#3739 a push whose word is split by a backslash and line break inside a wrapper's string is refused" "2" "$rc"
+check "#3739 with the findings" "deleteEvent still swallows" "$out"
+out="$(fire_push "echo \`git pu\\
+sh -u origin feat/sync\`")"; rc=$?
+check_eq "#3739 and inside backquotes" "2" "$rc"
+out="$(fire_push "git pu\\
+sh -u origin feat/sync")"; rc=$?
+check_eq "#3739 and in the open" "2" "$rc"
+out="$(fire_push "echo one \\
+two")"; rc=$?
+check_eq "#3739 control: a command continued over a line that pushes nothing passes" "0" "$rc"
+check_eq "#3739 and says nothing" "" "$out"
 out="$(fire_push "echo PR_REVIEW_READ=$pk && git push -u origin feat/sync")"; rc=$?
 check_eq "a key only mentioned in another command does not count" "2" "$rc"
 out="$(fire_push "PR_REVIEW_READ=$pk git push -u origin feat/sync")"; rc=$?
@@ -332,6 +348,25 @@ done
 out="$(pre_payload "$REPO" "git push" | bash "$HOOKCOPY/pr-review-push-gate.sh" 2>&1)"; rc=$?
 check_eq "a push gate without its checker refuses" "2" "$rc"
 check "and says what is missing" "pr-review.sh" "$out"
+# Its libraries missing: nothing can join the pieces of a word, so only a push named whole is
+# refused, and a command continued over a line that names none passes as any other command does.
+NOLIB="$WORKDIR/nolib"; mkdir -p "$NOLIB"; cp "$PUSH_GATE" "$NOLIB/"
+out="$(pre_payload "$REPO" "git push" | bash "$NOLIB/pr-review-push-gate.sh" 2>&1)"; rc=$?
+check_eq "a push gate without its libraries refuses a push named whole" "2" "$rc"
+check "and says which are missing" "lib/merge-target.sh" "$out"
+out="$(pre_payload "$REPO" "echo one \\
+two" | bash "$NOLIB/pr-review-push-gate.sh" 2>&1)"; rc=$?
+check_eq "#3739 and passes a command continued over a line that names no push" "0" "$rc"
+check_eq "#3739 saying nothing" "" "$out"
+# Neither reader on PATH: the same.
+NOREADER="$WORKDIR/noreader"; cp -R "$NOCLAUDE" "$NOREADER"; rm -f "$NOREADER"/jq "$NOREADER"/python3*
+out="$(pre_payload "$REPO" "git push" | PATH="$NOREADER" bash "$PUSH_GATE" 2>&1)"; rc=$?
+check_eq "a push gate with neither jq nor python3 refuses a push named whole" "2" "$rc"
+check "and says a reader is missing" "neither jq nor python3" "$out"
+out="$(pre_payload "$REPO" "echo one \\
+two" | PATH="$NOREADER" bash "$PUSH_GATE" 2>&1)"; rc=$?
+check_eq "#3739 and passes a command continued over a line that names no push" "0" "$rc"
+check_eq "#3739 saying nothing" "" "$out"
 
 # 4e. the override: allowed, with a line saying it was skipped.
 reset_state

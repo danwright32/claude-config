@@ -2532,21 +2532,22 @@ shell_ran() { # shell_ran <shell> <command text> <words the stand in's log line 
   esac
   grep -q "^$3" "$J3470/log"
 }
+ROW_ISSUE=3470 # the issue a row's check is named for: this table is #3470's, and #3739's follows it
 joined_row() { # joined_row <yes|no> <predicate> <log words> <command text> <description>
   local want="$1" pred="$2" words="$3" text="$4" desc="$5" sh ran rc=0
   for sh in $J3470_SHELLS; do
     ran=no; shell_ran "$sh" "$text" "$words" && ran=yes
-    [ "$ran" = "$want" ] && check "#3470 ($sh) the row is the shell's own reading: $desc" ok \
-      || check "#3470 ($sh) the row is the shell's own reading: $desc" "$sh ran it: $ran, the row says $want"
+    [ "$ran" = "$want" ] && check "#$ROW_ISSUE ($sh) the row is the shell's own reading: $desc" ok \
+      || check "#$ROW_ISSUE ($sh) the row is the shell's own reading: $desc" "$sh ran it: $ran, the row says $want"
   done
   # 0 is yes and 1 is no; anything else is the parse or the predicate failing, and fails the row.
   asked "$pred" "$text" || rc=$?
   case "$rc" in
     0) ran=yes ;;
     1) ran=no ;;
-    *) check "#3470 $desc" "the check failed with exit $rc, which is neither yes (0) nor no (1)"; return ;;
+    *) check "#$ROW_ISSUE $desc" "the check failed with exit $rc, which is neither yes (0) nor no (1)"; return ;;
   esac
-  [ "$ran" = "$want" ] && check "#3470 $desc" ok || check "#3470 $desc" "read as $ran, the shell says $want"
+  [ "$ran" = "$want" ] && check "#$ROW_ISSUE $desc" ok || check "#$ROW_ISSUE $desc" "read as $ran, the shell says $want"
 }
 # What every shell runs and no hook saw.
 joined_row yes ps_is_git_push "git push" "echo ok && ${J}git push origin main" "a push on the line after && and the pair is a push"
@@ -2613,7 +2614,7 @@ else check "#3470 and so is one after a comment the pair joins it to, in a wrapp
 # The text itself: joined where the shell joins, and written as it always was everywhere else.
 flat_is() { # flat_is <command text> <expected segmented command> <description>
   local got; got="$(flat_of "$1")"; got="${got%%$'\x1f'*}"
-  [ "$got" = "$2" ] && check "#3470 $3" ok || check "#3470 $3" "got [$got], expected [$2]"
+  [ "$got" = "$2" ] && check "#$ROW_ISSUE $3" ok || check "#$ROW_ISSUE $3" "got [$got], expected [$2]"
 }
 flat_is "git ${J}push" "git push" "the pair is gone from the segmented form, as it is gone from what the shell reads"
 flat_is "echo one"$'\n'"git ${J}push"$'\n'"echo two" "echo one; git push; echo two" "and every other line break is still written as a separator"
@@ -2668,6 +2669,271 @@ got="$(payload_for "echo one"$'\n'"echo two" | python3 "$PS_SHELL_WORDS" flatten
 got="$(printf 'not json at all \\\n' | python3 "$PS_SHELL_WORDS" flatten)"; rc=$?
 [ "$rc" = 4 ] && [ -z "$got" ] && check "#3470 and a payload that is no JSON (exit 4, nothing printed)" ok \
   || check "#3470 and a payload that is no JSON (exit 4, nothing printed)" "exit $rc, printed [$got]"
+
+# ---------------------------------------------------------------------------
+# A command after a heredoc's opener, on the opener's own line (claude-config#3739)
+# ---------------------------------------------------------------------------
+# `cat <<EOF; git push`, then the body and its closing line: the shell runs every command on the
+# opener's line and reads the body from the line after. The segmented form writes that line break as
+# "; ", so the reader cannot tell it from the ; after the opener: it took that ; for the line break
+# that starts the body, and the push for the body's first line. No backslash is involved, and a
+# gate reading that form let through a push its shell ran.
+# The shared reader now gives a second reading of such a command, apart from the first: the same
+# program with each body moved up to follow the command that opens it, the shape the segmented
+# form has always been read right in, and a heredoc the text gives no body at all (its opener on
+# the last line) written as the here string it amounts to. A hook judges the first reading as it
+# always did and then the second in a run of its own (ps_both_readings), so a row below asks
+# what either reading says, as those two runs together do.
+# The rows are held against this machine's own shells, as #3470's above are.
+ROW_ISSUE=3739
+NL=$'\n'; TAB=$'\t'
+BODY="${NL}body${NL}EOF"
+second_of() { # second_of <command text> [cwd]: the second reading and the folder after it; fails where there is none
+  PS__READING=second ps_parse_payload "$(payload_for "$1" "${2:-}")" segmented
+}
+asked_first() { # asked_first <predicate> <command text>: the predicate's answer for the first reading alone
+  local parsed
+  parsed="$(ps_parse_payload "$(payload_for "$2")" segmented)" || return 2
+  "$1" "${parsed%%$'\x1f'*}"
+}
+asked() { # asked <predicate> <command text>: yes where the predicate holds for either reading
+  local parsed rc=0
+  asked_first "$1" "$2" || rc=$?
+  [ "$rc" = 1 ] || return "$rc"
+  parsed="$(second_of "$2")" || return 1
+  "$1" "${parsed%%$'\x1f'*}"
+}
+# What every shell runs and no hook saw.
+joined_row yes ps_is_git_push "git push" "cat <<EOF; git push origin main${BODY}" "a push after the opener by ; is a push (unquoted marker)"
+joined_row yes ps_is_git_push "git push" "cat <<'EOF'; git push${BODY}" "the same after a single quoted marker"
+joined_row yes ps_is_git_push "git push" "cat <<\"EOF\"; git push${BODY}" "the same after a double quoted marker"
+joined_row yes ps_is_git_push "git push" "cat <<\\EOF; git push${BODY}" "the same after a marker quoted by a backslash"
+joined_row yes ps_is_git_push "git push" "cat <<\$'EOF'; git push${BODY}" "the same after a dollar quoted marker"
+joined_row yes ps_is_git_push "git push" "cat << EOF; git push${BODY}" "the same with a blank before the marker"
+joined_row yes ps_is_git_push "git push" "cat <<-EOF; git push${NL}${TAB}body${NL}${TAB}EOF" "the same in the dash form, its body and closing line behind tabs"
+joined_row yes ps_is_git_push "git push" "cat <<A <<B; git push${NL}one${NL}A${NL}two${NL}B" "a push after two openers on one line is a push"
+joined_row yes ps_is_git_push "git push" "cat <<A; cat <<B; git push${NL}one${NL}A${NL}two${NL}B" "a push after a second opener that itself follows the first by ; is a push"
+joined_row yes ps_is_git_push "git push" "x=\$(cat <<EOF; git push${BODY}${NL})" "a push after an opener inside a substitution is a push"
+joined_row yes ps_is_git_push "git push" "x=\`cat <<EOF; git push${BODY}${NL}\`" "a push after an opener inside backquotes is a push"
+joined_row yes ps_is_git_push "git push" "echo \"\$(cat <<EOF; git push${BODY}${NL})\"" "a push after an opener in a substitution inside double quotes is a push"
+joined_row yes ps_is_git_push "git push" "( cat <<EOF; git push${BODY}${NL})" "a push after an opener in a subshell is a push"
+joined_row yes ps_is_git_push "git push" "{ cat <<EOF; git push; }${BODY}" "a push after an opener in a brace group is a push"
+joined_row yes ps_is_git_push "git push" "if true; then cat <<EOF; git push; fi${BODY}" "a push after an opener in an if is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF && echo a; git push${BODY}" "a push after the opener, && and another command is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF | cat; git push${BODY}" "a push after the opener, a pipe and another command is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF; echo a; git push${BODY}" "a push two commands after the opener is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF;  git push${BODY}" "a push after the opener, a ; and two blanks is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF; git push${BODY}${NL}echo done" "a push after the opener is a push with more lines after the heredoc"
+joined_row yes ps_is_git_push "git push" "cat <<EOF; git ${J}push${BODY}" "a push after the opener written across a backslash and a line break is a push"
+joined_row yes ps_is_git_push "git push" "git commit -F - <<EOF; git push${BODY}" "a push after a commit that reads its message from the heredoc is a push"
+joined_row yes ps_is_git_commit "git commit" "git commit -F - <<EOF; git push${BODY}" "and the commit is still a commit"
+joined_row yes ps_is_git_commit "git commit" "cat <<EOF; git commit -m x${BODY}" "a commit after the opener is a commit"
+joined_row yes ps_is_git_add "git add" "cat <<EOF; git add -A${BODY}" "an add after the opener is an add"
+joined_row yes ps_is_gh_pr_create "gh pr create" "cat <<EOF; gh pr create --fill${BODY}" "a pull request creation after the opener is one"
+joined_row yes ps_is_git_push "git push" "cat <<EOF; git push; EOF" "a push after an opener on a command of one line, which gives the heredoc no body, is a push"
+joined_row yes ps_is_git_push "git push" "echo a${NL}cat <<EOF; git push; EOF" "and so is one after an opener on the last line of several"
+# A heredoc the text never closes on a line of its own is fed the rest of the text, and every
+# command on its opener's line runs. The segmented form closed it at a marker word standing on
+# that same line, which is every one line command that ends in a line break.
+joined_row yes ps_is_git_push "git push" "cat <<EOF; git push; EOF${NL}" "a push after an opener on a command of one line that ends in a line break is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF; git push; EOF${NL}${NL}" "and so is one before two line breaks"
+joined_row yes ps_is_git_push "git push" "cat <<EOF; git push; EOF${NL}echo done" "and so is one with lines after it, none of them the closing line"
+joined_row yes ps_is_git_push "git push" "( cat <<EOF; git push; EOF )${NL}echo done" "and so is one in a subshell on such a line"
+joined_row yes ps_is_git_push "git push" "cat <<A <<EOF; git push; EOF${NL}one${NL}A${NL}two" "and so is one after two openers, the first closed and the second never"
+# The same line inside the string a wrapper hands a shell, which reads it as typed.
+joined_row yes ps_is_git_push "git push" "bash -c 'cat <<EOF; git push${BODY}'" "a push after the opener in a wrapper's single quoted string is a push"
+joined_row yes ps_is_git_push "git push" "bash -c 'cat <<EOF; git push; EOF'" "and so is one where that string is one line"
+joined_row yes ps_is_git_push "git push" "bash -c 'cat <<EOF; git push; EOF${NL}'" "and so is one where that string ends in a line break"
+joined_row yes ps_is_git_push "git push" "eval 'cat <<EOF; git push${BODY}'" "and so is one in a string eval reads"
+# The pair inside a wrapper's single quoted string, and inside backquotes: the outer shell keeps
+# it, and the shell that reads the string, or the backquotes, removes it.
+joined_row yes ps_is_git_push "git push" "bash -c 'git ${J}push'" "a push written across the pair in a wrapper's single quoted string is a push"
+joined_row yes ps_is_git_push "git push" "bash -c 'git${J} push origin main'" "the same with the blank after the pair"
+joined_row yes ps_is_git_push "git push" "sh -c 'echo ok && ${J}git push'" "a push on the line after && and the pair in a wrapper's string is a push"
+joined_row yes ps_is_git_push "git push" "eval 'git ${J}push'" "a push written across the pair in a string eval reads is a push"
+joined_row yes ps_is_git_push "git push" "bash -c 'bash -c \"git ${J}push\"'" "a push written across the pair two wrappers deep is a push"
+joined_row yes ps_is_git_push "git push" "x=\`git ${J}push\`" "a push written across the pair inside backquotes is a push"
+joined_row yes ps_is_git_push "git push" "echo \`git ${J}push origin main\`" "the same in the argument of another command"
+joined_row yes ps_is_git_push "git push" "echo \"\`git ${J}push\`\"" "the same inside double quotes"
+joined_row yes ps_is_git_push "git push" "x=\`git \\${J}push\`" "inside backquotes two backslashes and a line break are a pair to the shell that reads them"
+joined_row yes ps_is_git_commit "git commit" "bash -c 'git ${J}commit -m x'" "a commit written across the pair in a wrapper's string is a commit"
+joined_row no ps_is_git_push "git push" "bash -c 'git \\${J}push'" "quiet twin: two backslashes and a line break in a wrapper's string join nothing"
+joined_row yes ps_is_git_push "git push" "x=\`git \\\\${J}push\`" "inside backquotes three backslashes and a line break join the next line too, its first letter escaped (bash 3.2.57 and zsh 5.9, measured 2026-11-28)"
+joined_row yes ps_is_git_push "git push" "echo \"\`git \\\\${J}push\`\"" "the same inside double quotes"
+joined_row no ps_is_git_push "git push" "x=\`git \\\\\\${J}push\`" "quiet twin: after four backslashes inside backquotes the next line is a command of its own, and it is no git"
+joined_row no ps_is_git_push "git push" "x=\`git \\\\\\\\${J}push\`" "quiet twin: after five the next line joins as a word that keeps a backslash, which is no push"
+joined_row no ps_is_git_push "git push" "echo 'git ${J}push'" "quiet twin: the pair in a single quoted argument of echo runs nothing"
+joined_row no ps_is_git_push "git push" "bash -c 'git ${J}status'" "quiet twin: a status written across the pair in a wrapper's string is no push"
+# What was read before and still is.
+joined_row yes ps_is_git_push "git push" "cat <<EOF${BODY}${NL}git push" "control: a push on a line after the heredoc is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF && git push${BODY}" "control: a push after the opener by && is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF;git push${BODY}" "control: a push after the opener by a ; with no blank is a push"
+joined_row yes ps_is_git_push "git push" "cat <<<EOF; git push" "control: a push after a here string is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF; git push${NL}body" "control: a push after the opener of a heredoc that never closes is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF; EOF; git push${BODY}" "control: a push after the opener and the marker run as a command is a push"
+# The quiet twins: no shell runs the action, and nothing was fixed by reading one everywhere.
+joined_row no ps_is_git_push "git push" "cat <<EOF; git status${BODY}" "quiet twin: a status after the opener is no push"
+joined_row no ps_is_git_push "git push" "cat <<EOF${NL}x; git push${NL}EOF" "quiet twin: a push written in the body alone is no push"
+joined_row no ps_is_git_push "git push" "cat <<'EOF'${NL}cat <<X; git push${NL}X${NL}EOF" "quiet twin: an opener and a push that are both a quoted heredoc's body are no push"
+joined_row no ps_is_git_push "git push" "cat <<EOF # note; git push${BODY}" "quiet twin: a push in a real comment on the opener's line is no push"
+joined_row no ps_is_git_push "git push" "cat <<EOF \"a; git push\"${BODY}" "quiet twin: a push inside double quotes on the opener's line is no push"
+joined_row no ps_is_git_push "git push" "cat <<EOF 'a; git push'${BODY}" "quiet twin: a push inside single quotes on the opener's line is no push"
+joined_row no ps_is_git_push "git push" "cat <<EOF; echo git push${BODY}" "quiet twin: git and push as the arguments of another command after the opener are no push"
+joined_row no ps_is_git_push "git push" "echo \$((1<<2)); git status" "quiet twin: a shift in arithmetic opens nothing, and the status after it is no push"
+joined_row no ps_is_git_add "git add" "cat <<EOF; git commit -m x${BODY}" "quiet twin: a commit after the opener is no add"
+
+# The two texts themselves. THE FIRST READING IS WHAT IT ALWAYS WAS, and the second is a text of
+# its own, each body moved up to follow the command that opens it. Neither is ever written into
+# the other: joined, a folder, a commit, a second repository or a closing backslash in one
+# changed how a hook read the other, and a command refused on the old text passed.
+second_is() { # second_is <command text> <expected second reading, empty for none> <description>
+  local got; got="$(second_of "$1")" || got=""; got="${got%%$'\x1f'*}"
+  [ "$got" = "$2" ] && check "#$ROW_ISSUE $3" ok || check "#$ROW_ISSUE $3" "got [$got], expected [$2]"
+}
+both_are() { # both_are <command text> <first reading> <second reading, empty for none> <description>
+  flat_is "$1" "$2" "the first reading is the text as it always was: $4"
+  second_is "$1" "$3" "the second reading: $4"
+}
+OLD3739="cat <<EOF; git push; body; EOF"
+NEW3739="cat <<EOF; body; EOF; git push"
+both_are "cat <<EOF; git push${BODY}" "$OLD3739" "$NEW3739" "the body follows the command that opens it and what stood after the opener follows the body"
+both_are "cat <<EOF; git push${BODY}${NL}echo done" "cat <<EOF; git push; body; EOF; echo done" "cat <<EOF; body; EOF; git push; echo done" "and the lines after the heredoc follow in each"
+both_are "cat <<A <<B; git push${NL}one${NL}A${NL}two${NL}B" "cat <<A <<B; git push; one; A; two; B" "cat <<A <<B; one; A; two; B; git push" "two bodies opened before the ; both move up, in their order"
+both_are "cat <<A; cat <<B; git push${NL}one${NL}A${NL}two${NL}B" "cat <<A; cat <<B; git push; one; A; two; B" "cat <<A; one; A; cat <<B; two; B; git push" "each of two openers either side of a ; is followed by its own body"
+both_are "cat <<EOF; git push${BODY}${NL}cat <<X; echo \"q${NL}X" "$OLD3739; cat <<X; echo \"q; X" "cat <<EOF; body; EOF; git push; cat <<X; echo \"q; X" "a text that cannot be read to its end as typed (a quote opened on a later line and never closed) has the bodies before that line moved all the same: bash runs those lines before it reaches the quote (measured 2026-11-26; zsh reads the whole text first and runs nothing)"
+both_are "cat <<EOF; git push${BODY}${NL}true \\" "$OLD3739; true \\" "cat <<EOF; body; EOF; git push; true \\" "a backslash that ends the text ends each reading, and nothing is written after either for it to escape"
+both_are "x=\`git ${J}push\`" "x=\`git \\; push\`" "x=\`git push\`" "inside backquotes the pair is taken out as the shell reading the backquotes takes it out"
+both_are "x=\`echo a${J}b\`" "x=\`echo a\\; b\`" "x=\`echo ab\`" "and so it is where the join changes a command's words and no command's name: which words a command has is what a hook judges it by"
+if asked ps_is_git_push "cat <<EOF; git push${BODY}${NL}true \\"; then check "#3739 and the push in a text that ends in a backslash is a push" ok
+else check "#3739 and the push in a text that ends in a backslash is a push" "not seen as a push"; fi
+if asked ps_is_git_push "bash -c 'git ${J}push'${NL}true \\"; then check "#3739 and so is one written across the pair in a wrapper's string in such a text" ok
+else check "#3739 and so is one written across the pair in a wrapper's string in such a text" "not seen as a push"; fi
+# That text is not a row of the table above, because the two shells differ on it. Its push is read.
+if asked ps_is_git_push "cat <<EOF; git push${BODY}${NL}cat <<X; echo \"q${NL}X"; then check "#3739 and the push bash runs there is a push" ok
+else check "#3739 and the push bash runs there is a push" "not seen as a push"; fi
+both_are "cat <<-EOF; git push${NL}${TAB}body${NL}${TAB}EOF" "cat <<-EOF; git push; ${TAB}body; ${TAB}EOF" "cat <<-EOF; ${TAB}body; ${TAB}EOF; git push" "the dash form's body moves with its tabs"
+both_are "x=\$(cat <<EOF; git push${BODY}${NL})" "x=\$(cat <<EOF; git push; body; EOF; )" "x=\$(cat <<EOF; body; EOF; git push; )" "inside a substitution the body moves up inside it"
+both_are "cat <<EOF; git ${J}push${BODY}" "$OLD3739" "$NEW3739" "a pair the shell removes is joined first, in each, and then the body moves up"
+both_are "cat <<EOF; git push; EOF" "cat <<EOF; git push; EOF" "cat <<<EOF; git push; EOF" "a heredoc on a command of one line is given no body by any shell, and is written again as the here string it amounts to"
+both_are "echo a${NL}cat <<EOF; git push; EOF" "echo a; cat <<EOF; git push; EOF" "echo a; cat <<<EOF; git push; EOF" "and so is one opened on the last line of several"
+both_are "cat <<EOF${BODY}${NL}git push" "cat <<EOF; body; EOF; git push" "" "a heredoc with nothing after its opener has no second reading"
+both_are "cat <<EOF; # note${BODY}" "cat <<EOF; # note; body; EOF" "" "where what follows the opener names no command there is none"
+both_are "cat <<EOF \"a; b\"${BODY}" "cat <<EOF \"a; b\"; body; EOF" "" "a ; inside quotes on the opener's line moves nothing"
+both_are "cat <<EOF; EOF; git push${BODY}" "cat <<EOF; EOF; git push; body; EOF" "" "where the moved text holds no command the first reading lacks there is none"
+both_are "cat <<EOF; cd /tmp/elsewhere${BODY}${NL}git push" "cat <<EOF; cd /tmp/elsewhere; body; EOF; git push" "cat <<EOF; body; EOF; cd /tmp/elsewhere; git push" "a push in the folder a cd after the opener moves to is read there in the second reading, and in the folder it was always read in by the first"
+both_are "cat <<EOF; echo a${US:-$'\x1f'}b${BODY}" "cat <<EOF; echo a"$'\xef\xbf\xbd'"b; body; EOF" "cat <<EOF; body; EOF; echo a"$'\xef\xbf\xbd'"b" "#2055 a unit separator in a moved command is still written as U+FFFD"
+both_are "cat <<EOF; echo \"x${NL}EOF${NL}git push" "cat <<EOF; echo \"x; EOF; git push" "" "where the text as typed cannot be read to its end and names nothing more there is none"
+# A folder, a hidden command and a skip word, each in the reading that holds it and no other.
+has_style_skip() { ps_has_override "$1" SKIP_STYLE_CHECK; }
+both_are "cd a; cat <<EOF; cd b; git push${BODY}${NL}ls" "cd a; cat <<EOF; cd b; git push; body; EOF; ls" "cd a; cat <<EOF; body; EOF; cd b; git push; ls" "behind a relative cd each reading starts from the folder the command starts in, since neither is written after the other"
+both_are "bash -c 'true # c${J}git push; l${J}s'" "bash -c 'true # c\\; git push; l\\; s'" "bash -c 'true # c\\; git push; ls'" "in a wrapper's string a pair that ends a comment stays, as the shell reading the string keeps it, so the push on the next line is still read"
+both_are "echo 'x SKIP_STYLE_${J}CHECK=1 y'; bash -c 'l${J}s'" "echo 'x SKIP_STYLE_\\; CHECK=1 y'; bash -c 'l\\; s'" "echo 'x SKIP_STYLE_\\; CHECK=1 y'; bash -c 'ls'" "a single quoted string no shell reads (an argument of echo) is left as typed, so no skip word is put together in it"
+both_are "echo 'l${J}s'; bash -c 'l${J}s'" "echo 'l\\; s'; bash -c 'l\\; s'" "echo 'l\\; s'; bash -c 'ls'" "and so is one that holds the very text a wrapper beside it is handed: a string is a wrapper's by where it stands"
+both_are "bash -c 'true; SKIP_STYLE_${J}CHECK=1 git push'" "bash -c 'true; SKIP_STYLE_\\; CHECK=1 git push'" "bash -c 'true; SKIP_STYLE_CHECK=1\\;  git push'" "where a join in a wrapper's string would put a skip word together, the pair is written after the word, which is then no skip word, and the push behind it is read"
+if asked has_style_skip "bash -c 'true; SKIP_STYLE_${J}CHECK=1 git push'"; then check "#3739 and no hook reads either text as holding the skip word" "ps_has_override said it does"
+else check "#3739 and no hook reads either text as holding the skip word" ok; fi
+if asked ps_is_git_push "bash -c 'true; SKIP_STYLE_${J}CHECK=1 git push'"; then check "#3739 while its push is a push" ok
+else check "#3739 while its push is a push" "not seen as a push"; fi
+both_are "git push; cat <<EOF; ls; SKIP_STYLE_CHECK=1${BODY}" "git push; cat <<EOF; ls; SKIP_STYLE_CHECK=1; body; EOF" "git push; cat <<EOF; body; EOF; ls; SKIP_STYLE_CHECK=1" "a NAME=1 word the move leaves where the second reading ends is in that reading alone"
+if asked_first has_style_skip "git push; cat <<EOF; ls; SKIP_STYLE_CHECK=1${BODY}"; then check "#3739 and the first reading, which is judged first and alone, holds no skip word, so its push is answered for whatever the second holds" "ps_has_override said it does"
+else check "#3739 and the first reading, which is judged first and alone, holds no skip word, so its push is answered for whatever the second holds" ok; fi
+if asked has_style_skip "cat <<EOF; SKIP_STYLE_CHECK=1 git push${BODY}"; then check "#3739 control: a skip word typed whole in front of a push after the opener is one, as it was before" ok
+else check "#3739 control: a skip word typed whole in front of a push after the opener is one, as it was before" "ps_has_override said it is not"; fi
+both_are "git commit -m 'a${J}b' && bash -c 'l${J}s'" "git commit -m 'a\\; b' && bash -c 'l\\; s'" "git commit -m 'a\\; b' && bash -c 'ls'" "a commit message holding the pair is left as typed in the second reading too"
+got="$(second_of "cat <<EOF; git push${BODY}" /tmp/somewhere)"
+[ "$got" = "$NEW3739"$'\x1f'"/tmp/somewhere" ] && check "#3739 the folder still follows the one separator in the second reading" ok \
+  || check "#3739 the folder still follows the one separator in the second reading" "got [$got]"
+got="$(flat_of "cat <<EOF; git push${BODY}" /tmp/somewhere)"
+[ "$got" = "$OLD3739"$'\x1f'"/tmp/somewhere" ] && check "#3739 and in the first" ok \
+  || check "#3739 and in the first" "got [$got]"
+got="$(ps_parse_payload "$(payload_for "cat <<EOF; git push${BODY}")" raw)"
+[ "${got%%$'\x1f'*}" = "cat <<EOF; git push${BODY}" ] && check "#3739 raw mode still hands the command over as typed" ok \
+  || check "#3739 raw mode still hands the command over as typed" "got [${got%%$'\x1f'*}]"
+# JSON can spell the <, the ; and the blank as escapes of their code points, and a payload spelled
+# that way is the same command. Each escape is put together from two halves, so this file holds none.
+ESC_LT='\u00''3c'; ESC_LT_UP='\u00''3C'; ESC_SEMI='\u00''3b'; ESC_SEMI_UP='\u00''3B'; ESC_BLANK='\u00''20'
+opener_spelled() { # opener_spelled <the command as written inside the JSON string> <description>
+  local got raw='{"tool_input":{"command":"'"$1"'"},"cwd":""}'
+  if ps__may_hide "$raw"; then check "#3739 the look for a second reading sees an opener's line spelled as JSON escapes: $2" ok
+  else check "#3739 the look for a second reading sees an opener's line spelled as JSON escapes: $2" "ps__may_hide said there is nothing to look for"; fi
+  got="$(PS__READING=second ps_parse_payload "$raw" segmented)"
+  [ "${got%%$'\x1f'*}" = "$NEW3739" ] && check "#3739 the opener's line spelled as JSON escapes is read too: $2" ok \
+    || check "#3739 the opener's line spelled as JSON escapes is read too: $2" "got [${got%%$'\x1f'*}]"
+}
+opener_spelled "cat ${ESC_LT}${ESC_LT}EOF; git push\\nbody\\nEOF" "each < as an escape"
+opener_spelled "cat <${ESC_LT_UP}EOF; git push\\nbody\\nEOF" "one < as an escape, in capitals"
+opener_spelled "cat <<EOF${ESC_SEMI} git push\\nbody\\nEOF" "the ; as an escape"
+opener_spelled "cat <<EOF${ESC_SEMI_UP} git push\\nbody\\nEOF" "the ; as an escape, in capitals"
+opener_spelled "cat <<EOF;${ESC_BLANK}git push\\nbody\\nEOF" "the blank after the ; as an escape"
+opener_spelled "cat <<EOF; git push${ESC_NL}body\\nEOF" "the line break after the opener's line as an escape"
+# Under each reader alone, as for the pair above: the move is the shared reader's, which is python3.
+opener_payload="$(payload_for "cat <<EOF; git push${BODY}")"
+got="$(PATH="$J3470/py-only" ps_parse_payload "$opener_payload" segmented)"
+[ "${got%%$'\x1f'*}" = "$OLD3739" ] && check "#3739 (python3 alone) the first reading is the text as it always was" ok \
+  || check "#3739 (python3 alone) the first reading is the text as it always was" "got [${got%%$'\x1f'*}]"
+got="$(PS__READING=second PATH="$J3470/py-only" ps_parse_payload "$opener_payload" segmented)"
+[ "${got%%$'\x1f'*}" = "$NEW3739" ] && check "#3739 (python3 alone) in the second reading the body moves up" ok \
+  || check "#3739 (python3 alone) in the second reading the body moves up" "got [${got%%$'\x1f'*}]"
+got="$(PATH="$J3470/jq-only" ps_parse_payload "$opener_payload" segmented)"
+[ "${got%%$'\x1f'*}" = "$OLD3739" ] && check "#3739 (jq alone) the first reading is the text as it always was" ok \
+  || check "#3739 (jq alone) the first reading is the text as it always was" "got [${got%%$'\x1f'*}]"
+got="$(PS__READING=second PATH="$J3470/jq-only" ps_parse_payload "$opener_payload" segmented)"; rc=$?
+[ "$rc" != 0 ] && [ -z "$got" ] && check "#3739 (jq alone) with no python3 there is no second reading to hand over, and the parse says so by failing" ok \
+  || check "#3739 (jq alone) with no python3 there is no second reading to hand over, and the parse says so by failing" "exit $rc, printed [$got]"
+got="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_parse_payload "$opener_payload" segmented)"
+[ "${got%%$'\x1f'*}" = "$OLD3739" ] && check "#3739 with the reader's file missing the text is what it was" ok \
+  || check "#3739 with the reader's file missing the text is what it was" "got [${got%%$'\x1f'*}]"
+got="$(PS__READING=first ps_parse_payload "$opener_payload" segmented)"
+[ "${got%%$'\x1f'*}" = "$OLD3739" ] && check "#3739 a run told it is the first reading is handed the text as it always was" ok \
+  || check "#3739 a run told it is the first reading is handed the text as it always was" "got [${got%%$'\x1f'*}]"
+got="$(PS__READING=second ps_parse_payload "$(payload_for "cat <<EOF; git push${BODY}")" raw)"
+[ "${got%%$'\x1f'*}" = "cat <<EOF; git push${BODY}" ] && check "#3739 raw mode hands the command over as typed in the second run too" ok \
+  || check "#3739 raw mode hands the command over as typed in the second run too" "got [${got%%$'\x1f'*}]"
+# WHAT IT COSTS. Parsing a payload starts exactly what it started before any of this: the look for
+# a second reading is ps_both_readings' own, and it starts the reader only for a payload in which
+# a ; and a blank follow a << before that line ends, or a pair stands beside a quote, a backquote
+# or a <. A heredoc with nothing after its opener, which is nearly every heredoc there is, and a
+# line continued with nothing of the kind beside it, start nothing.
+mkdir -p "$J3470/counted"
+printf '%s\n' '#!/bin/sh' 'echo start >> "$J3739_STARTS"' "exec '$(command -v python3)' \"\$@\"" > "$J3470/counted/python3"
+chmod +x "$J3470/counted/python3"
+starts_for() { # starts_for <command text>: how many times python3 was started to flatten it
+  : > "$J3470/starts"
+  PATH="$J3470/counted:$PATH" J3739_STARTS="$J3470/starts" ps_parse_payload "$(payload_for "$1")" segmented >/dev/null
+  wc -l < "$J3470/starts" | tr -d ' '
+}
+starts_plain="$(starts_for "echo one${NL}echo two")"
+starts_heredoc="$(starts_for "git commit -F - <<EOF${NL}a message; with a separator in it${NL}EOF${NL}git push")"
+starts_shape="$(starts_for "cat <<EOF; git push${BODY}")"
+[ "$starts_heredoc" = "$starts_plain" ] && check "#3739 a heredoc with nothing after its opener starts no more python3 than a command with no heredoc" ok \
+  || check "#3739 a heredoc with nothing after its opener starts no more python3 than a command with no heredoc" "$starts_heredoc starts against $starts_plain"
+[ "$starts_shape" = "$starts_plain" ] && check "#3739 and neither does parsing a command after an opener: the first reading is made as it always was" ok \
+  || check "#3739 and neither does parsing a command after an opener: the first reading is made as it always was" "$starts_shape starts against $starts_plain"
+may_hide() { # may_hide <yes|no> <command text> <description>: whether the look for a second reading starts the reader
+  local got=no
+  ps__may_hide "$(ps_clean_payload "$(payload_for "$2")")" && got=yes
+  [ "$got" = "$1" ] && check "#3739 $3" ok || check "#3739 $3" "the look said $got, expected $1"
+}
+may_hide no "echo one${NL}echo two" "the look for a second reading starts nothing for a command of two plain lines"
+may_hide no "git commit -F - <<EOF${NL}a message; with a separator in it${NL}EOF${NL}git push" "nor for a heredoc with nothing after its opener, whatever its body holds"
+may_hide no "git commit -m \"one\" ${J}--no-verify" "nor for a line continued with no quote, backquote or < beside it"
+may_hide yes "cat <<EOF; git push${BODY}" "it starts the reader for a command after an opener on its line"
+may_hide yes "cat <<\"EOF\"; git push${BODY}" "and for one after a marker in double quotes, which the payload writes with an escape between the << and the ;"
+may_hide yes "cat <<\\EOF; git push${BODY}" "and for one after a marker quoted by a backslash"
+may_hide yes "bash -c 'git ${J}push'" "and for a pair beside a single quote"
+may_hide yes "x=\`git ${J}push\`" "and for a pair beside a backquote"
+may_hide yes "cat <${J}<EOF; git push${BODY}" "and for a pair beside a <, which may be half of an opener the pair splits"
+# Each mode of the reader on its own prints nothing and exits 4 where it has nothing to hand over.
+got="$(payload_for "cat <<EOF; # note${BODY}" | python3 "$PS_SHELL_WORDS" flatten)"; rc=$?
+[ "$rc" = 4 ] && [ -z "$got" ] && check "#3739 the flatten mode leaves a text with no pair to the other readers (exit 4, nothing printed)" ok \
+  || check "#3739 the flatten mode leaves a text with no pair to the other readers (exit 4, nothing printed)" "exit $rc, printed [$got]"
+got="$(payload_for "cat <<EOF; git push${BODY}" | python3 "$PS_SHELL_WORDS" flatten)"; rc=$?
+[ "$rc" = 4 ] && [ -z "$got" ] && check "#3739 and so it does a command after an opener, which is the first reading's to flatten as it always was" ok \
+  || check "#3739 and so it does a command after an opener, which is the first reading's to flatten as it always was" "exit $rc, printed [$got]"
+got="$(payload_for "cat <<EOF; # note${BODY}" | python3 "$PS_SHELL_WORDS" second)"; rc=$?
+[ "$rc" = 4 ] && [ -z "$got" ] && check "#3739 the second mode prints nothing where there is no second reading (exit 4)" ok \
+  || check "#3739 the second mode prints nothing where there is no second reading (exit 4)" "exit $rc, printed [$got]"
+ROW_ISSUE=3470
 rm -rf "$J3470"
 
 echo "passed: $pass, failed: $fail"

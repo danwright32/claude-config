@@ -288,6 +288,37 @@ for bad_out in '' 'plain words' '{"systemMessage": "a"}{"systemMessage": "b"}' '
   [ -n "$v" ] && ok || bad "#1906 hook_notice_verdict passed [$bad_out] as a notice saying DID NOT RUN"
 done
 
+# hook_notice_into, which lib/push-scope.sh uses to say a second thing through an object a hook
+# has already printed: the text goes ahead of what the object says, in both places, as one object.
+if declare -F hook_notice_into >/dev/null 2>&1; then
+  into="$(hook_notice_into "$(hook_notice_json "the first thing" PostToolUse "the first context")" 'NOTE: a "second" thing.')"
+  v="$(hook_notice_verdict "$into" '^NOTE: a "second" thing\. The hook itself said: the first thing$')"
+  [ -z "$v" ] && ok || bad "#3739 hook_notice_into did not put the text ahead of what the object says to the person: $v"
+  ctx="$(printf '%s' "$into" | python3 -c 'import json, sys
+print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])' 2>&1)"
+  [ "$ctx" = 'NOTE: a "second" thing. The hook itself said: the first context' ] && ok \
+    || bad "#3739 hook_notice_into did not put the text ahead of what the object hands the session: [$ctx]"
+  into="$(hook_notice_into '{"systemMessage": "only this"}' 'NOTE.')"
+  v="$(hook_notice_verdict "$into" '^NOTE\. The hook itself said: only this$')"
+  [ -z "$v" ] && ok || bad "#3739 hook_notice_into, handed an object with no context of its own, did not print one object saying both: $v"
+  for not_object in '' 'plain words' '{an opening brace and no more' '["a", "list"]'; do
+    into="$(hook_notice_into "$not_object" 'NOTE.')"; rc=$?
+    [ "$rc" = 1 ] && [ -z "$into" ] && ok || bad "#3739 hook_notice_into, handed [$not_object], which is no object, did not print nothing and return 1 (it returned $rc and printed [$into])"
+  done
+  long="$(head -c 9500 /dev/zero | tr '\0' x)"
+  into="$(hook_notice_into '{"systemMessage": "short"}' "$long")"
+  n="$(printf '%s' "$into" | python3 -c 'import json, sys
+print(len(json.load(sys.stdin)["systemMessage"]))' 2>&1)"
+  case "$into" in
+    *"cut short at 9000 characters"*) [ "$n" -lt 9200 ] 2>/dev/null && ok || bad "#3739 hook_notice_into said it cut a long text and printed one of $n characters" ;;
+    *) bad "#3739 hook_notice_into did not cut a text of 9500 characters and say so (it printed $n)" ;;
+  esac
+  into="$(PATH=/nonexistent; hook_notice_into '{"systemMessage": "a"}' 'NOTE.')"; rc=$?
+  [ "$rc" = 1 ] && [ -z "$into" ] && ok || bad "#3739 hook_notice_into with no python3 on PATH did not print nothing and return 1 (it returned $rc and printed [$into])"
+else
+  bad "#3739 lib/hook-notice.sh holds no hook_notice_into"
+fi
+
 # hook_decision_verdict, which db-write-ask.sh asks before it passes on a refusal that carries a
 # notice, and which a suite can ask too (claude-config#3793, the second review of its pull
 # request). It says nothing and returns 0 only for exactly one object holding a PreToolUse decision
