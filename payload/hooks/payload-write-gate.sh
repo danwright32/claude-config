@@ -1484,20 +1484,75 @@ def script_links(text, base, bare):
                 break
             add_maybe(m.group(1), base)
     for m in re.finditer(LN_STRING, text):
-        for w in m.group(1).split()[1:]:
-            if not w.startswith("-"):
-                add_placed(w, base)
+        place_link(m.group(1), base, True)
+
+# A REDIRECTION IS NO WORD OF A LINK COMMAND (claude-config#3775). The shell takes every
+# redirection out of a command before the program is given its words. Read with them left in, a
+# link command of a script file had 2>/dev/null placed as a file it writes, in the folder the
+# command runs in, so a suite run from inside a payload folder was refused for a file nothing
+# makes. The shared reader takes them out (unredirected, which tells a quoted > from the operator).
+#
+# What a redirection WRITES is still judged, because it was refused before, under the name of the
+# operator, and is a real write: the file an output redirection names. One that only reads, or
+# copies or closes a descriptor, writes no file. Where the words cannot say what is written (the
+# target holds a value, or the redirection runs a command, or it is written in a form not read
+# here) its words are placed exactly as they were before, so no refusal is dropped for those.
+def redirection_writes(r, crude):
+    """The words to place for one redirection of a link command, as it is written."""
+    m = _sw.REDIRECT_WORD.match(r)
+    if m and "(" not in r and "`" not in r:
+        op = r[:m.start(1)].lstrip("0123456789")
+        target = m.group(1).strip()
+        if op in ("<", "<<", "<<-", "<<<", "<&"):
+            return []
+        if op == ">&" and re.match(r"(?:[0-9]+-?|-)\Z", target):
+            return []
+        if target and not SHELL_VALUE.search(target):
+            try:
+                named = _sw.shell_split(target)
+            except Exception:
+                named = []
+            if len(named) == 1:
+                return named
+    if not crude:
+        try:
+            return _sw.shell_split(r)
+        except Exception:
+            pass
+    return r.split()
+
+def place_link(text, base, crude):
+    """Place what one link command writes: each word it is given that is no option, and what its
+    redirections write. text starts at the command name. crude cuts its words at blanks alone, as
+    the text of a string or of a large script was always cut."""
+    try:
+        bare, taken = _sw.unredirected(text)
+    except Exception:
+        bare, taken = text, []
+    words = None
+    if not crude:
+        try:
+            words = _sw.shell_split(bare)
+        except Exception:
+            words = None
+    if words is None:
+        words = bare.split()
+    for w in words[1:]:
+        if not w.startswith("-"):
+            add_placed(w, base)
+    for r in taken:
+        for w in redirection_writes(r, crude):
+            add_placed(w, base)
 
 def shell_links(text, base):
     """The words of one command of a shell script file when it is a link command, each placed."""
     try:
-        words = _sw.shell_split(_sw.command_rest(text)[0])
+        rest = _sw.command_rest(text)[0]
+        words = _sw.shell_split(rest)
     except Exception:
-        words = text.split()
+        rest, words = text, text.split()
     if words and words[0].rsplit("/", 1)[-1] in ("ln", "link"):
-        for w in words[1:]:
-            if not w.startswith("-"):
-                add_placed(w, base)
+        place_link(rest, base, False)
 
 def heredoc_written():
     """The files this command writes from a heredoc of its own, whose text is in the command."""
@@ -1577,11 +1632,11 @@ try:
         if head or (first.startswith("#!") and not re.search(r"(?:^|[/\s])(?:ba|z|da|k)?sh(?:\s|$)", first[2:])):
             script_links(body, b, bool(re.search(r"perl|ruby|php", head or first)))
         else:
-            # A shell script larger than the shared reader takes: its link commands, as text.
-            for m in re.finditer(r"(?:^|[\n;&|({])[ \t]*(?:ln|link)[ \t]+([^\n;&|]+)", body):
-                for w in m.group(1).split():
-                    if not w.startswith("-"):
-                        add_placed(w, b)
+            # A shell script larger than the shared reader takes: its link commands, as text. A
+            # redirection that holds an & (2>&1, >&, &>) is read to its end, never cut at the &,
+            # so it is taken out whole with the others (place_link, claude-config#3775).
+            for m in re.finditer(r"(?:^|[\n;&|({])[ \t]*(?:ln|link)[ \t]+((?:[<>]&|&>|[^\n;&|])+)", body):
+                place_link("ln " + m.group(1), b, True)
             script_links(body, b, False)
     if unread:
         # ONLY THE WORD WHERE A SCRIPT IS RUN IS TAKEN OUT (claude-config#3775, found in review
