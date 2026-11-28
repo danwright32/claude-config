@@ -80,9 +80,10 @@ SESSION_ID = re.compile(r"^[A-Za-z0-9-]+$")
 TEMP_MAX_AGE = 3600
 # What the tidy up may remove, by name: a record of a transcript (`<name>.jsonl` and one of the two
 # suffixes, nothing after), and a temp file exactly as write_record names one (the record's name,
-# `.tmp.`, the writer's process id, eight hex digits, nothing after).
-RECORD_NAME = re.compile(r"\.jsonl(?P<suffix>%s|%s)$" % (re.escape(HANDED_SUFFIX), re.escape(ANSWERED_SUFFIX)))
-TEMP_NAME = re.compile(r"\.jsonl(?:%s|%s)\.tmp\.[0-9]+\.[0-9a-f]{8}$" % (re.escape(HANDED_SUFFIX), re.escape(ANSWERED_SUFFIX)))
+# `.tmp.`, the writer's process id, eight hex digits, nothing after). Each ends in \Z, the end of
+# the name: `$` would also match before a line end closing it.
+RECORD_NAME = re.compile(r"\.jsonl(?P<suffix>%s|%s)\Z" % (re.escape(HANDED_SUFFIX), re.escape(ANSWERED_SUFFIX)))
+TEMP_NAME = re.compile(r"\.jsonl(?:%s|%s)\.tmp\.[0-9]+\.[0-9a-f]{8}\Z" % (re.escape(HANDED_SUFFIX), re.escape(ANSWERED_SUFFIX)))
 # No record this file writes comes near this size; a larger file under a record's name is not one.
 RECORD_MAX_BYTES = 65536
 
@@ -162,10 +163,15 @@ def write_record(path, obj):
         raise
 
 
-def _holds_a_record(path, size):
-    """Whether a file holds a record this file wrote: small, one JSON object, of the version written
-    here. A file that has gone raises FileNotFoundError, which the tidy up passes over. A byte that
-    is not UTF-8 is refused, so such a file is not known to be a record and stays."""
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _holds_a_record(path, size, suffix):
+    """Whether a file holds the record this file writes under that suffix: small, one JSON object,
+    of the version written here, with that record's own fields (a hand over's id, an answer's hand
+    over, each one's time). A file that has gone raises FileNotFoundError, which the tidy up passes
+    over. A byte that is not UTF-8 is refused, so such a file is not known to be a record and stays."""
     if size > RECORD_MAX_BYTES:
         return False
     try:
@@ -175,7 +181,9 @@ def _holds_a_record(path, size):
         raise
     except Exception:
         return False
-    return isinstance(obj, dict) and obj.get("v") == 1
+    if not isinstance(obj, dict) or obj.get("v") != 1 or not _is_number(obj.get("at")):
+        return False
+    return isinstance(obj.get("id" if suffix == HANDED_SUFFIX else "handed"), str)
 
 
 def sweep(folder):
@@ -212,7 +220,7 @@ def sweep(folder):
             if not named:
                 continue
             transcript = path[: len(path) - len(named.group("suffix"))]
-            if not os.path.lexists(transcript) and _holds_a_record(path, info.st_size):
+            if not os.path.lexists(transcript) and _holds_a_record(path, info.st_size, named.group("suffix")):
                 os.remove(path)
         except FileNotFoundError:
             continue

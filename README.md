@@ -12455,21 +12455,35 @@ call it reads, never ahead of it, so no tool waits on it to start, and the box's
 read for it. A box refused this way and
 not shown by the turn's end is asked for once more, once per request, by a message the mod sends
 in place of the turn end's other question, because the hooks do not hand a review over at every
-such turn's end. The mod asks the record again before it sends that message, or either of its two
-older prompts at a turn's end (the question about shipped work, the prompt for a met /goal): none
-is sent over a review that was handed over that turn and that Dan has not answered, since each
-starts a new turn, where the record reads none and the box would show behind the unanswered
-review. The message and the question are then spent for the request, and the prompt for a met /goal
-waits for a later turn end. A message Dan types drops a hold left from the request before,
-so the message is never sent under a later request. A subagent's Bash call that would record the
-main conversation's review as answered is refused, because its calls carry the main session's id.
+such turn's end. The mod asks the record again before it sends that message, or any other prompt
+about the box at a turn's end (the question about shipped work, the prompt for a met /goal, the
+later ask below): none is sent over a review that was handed over that turn and that Dan has not
+answered, since each starts a new turn, where the record reads none and the box would show behind
+the unanswered review. The message and the question are then spent for the request, the prompt
+for a met /goal waits for a later turn end, and Dan is told in one line he sees, once per request,
+that the box is waiting on the review (his choice of 2026-11-27: "One line, then one later ask").
+The record reads the same when he left a picker unanswered, when the session did the review and
+skipped its last step, and when the hand over never reached the session, and the mod cannot tell
+them apart (a question asked in prose leaves no picker either), so it guesses at none. A message
+Dan types drops a hold left from the request before, so the message is never sent under a later
+request, and the held box is not forgotten: it is asked for once, in words for an earlier
+request, at the end of the first turn after his message that has no unanswered review, nothing
+in flight and no /goal still set, in place of the mod's other prompts there. A review found
+unanswered at any turn's end in between stops that ask until he types again, so no prompt of
+anybody else's can put the box behind it. A subagent's Bash call that would record the main
+conversation's review as answered is refused, because its calls carry the main session's id.
+The call is judged by what it runs, as mod-kit's reader reads it (the record's file run as a
+script, its first operand, the transcript it names), never by how it is spelled, so a search or
+a commit message that quotes the phrase passes; a script file whose own lines run it is not seen.
 A record that cannot be read never holds the box: the box shows, with a line in
 the log and a note in the close card's reasons file, and a prompt sent at a turn's end over such
 a record is said in the log too. A hand over that names no turn is read as cannot be read, never
 as none. Each hand over also tidies the transcript's folder without asking: it removes the
-records this file wrote for transcripts that are no longer there, and its own temp files more
-than an hour old, and leaves everything else. While Dan is asleep the reviews stand down
-and nothing is held, and nothing is held in a conversation the reviews are switched off for (the
+records this file wrote for transcripts that are no longer there (told by the file's whole name
+and by a record's own fields), and its own temp files more than an hour old, and leaves
+everything else. While Dan is asleep the reviews stand down and nothing is held for a review still
+to come; one handed over before he fell asleep and not answered holds the box as it does while he
+is awake. Nothing is held in a conversation the reviews are switched off for (the
 Stop hooks' own `<transcript>.skip-stop-hooks` file), where the box shows as it did.
 `payload/hooks/test-review-record.sh` holds the record and its writers, and
 `tests/test-goal-box-review-record.sh` holds the mod's two commands, and that switch's name, to

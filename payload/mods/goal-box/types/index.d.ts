@@ -66,6 +66,21 @@ declare module 'claude-code' {
        * was not answered.
        */
       reviewAsked: number
+      /**
+       * #3843: the request whose box is held for the review with no prompt asking for it sent yet: a
+       * call was refused until the review was answered, or a prompt about the box was given up at a
+       * turn's end over an unanswered review. Null once such a prompt was sent, or a message Dan
+       * typed has moved it to `reviewOwed`.
+       */
+      reviewOwing: number | null
+      /**
+       * #3843: the earlier request whose held box was never shown when a message Dan typed began
+       * another, to be asked for once at a later turn's end. `blocked` once a turn's end since has
+       * found a review handed over and not answered: nothing is sent then until he types again.
+       */
+      reviewOwed: { request: number; blocked: boolean } | null
+      /** #3843: the request in which Dan was last told, in a line he sees, that the box waits on the review. */
+      reviewTold: number
       /** #3843: the request whose box was shown over a reading of the review that failed, and what was said of it. */
       reviewUnread: { prompts: number; text: string }
     }

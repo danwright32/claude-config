@@ -86,22 +86,94 @@ export const reviewRead = (r: { exitCode: number; stdout: string; stderr: string
  */
 export const canBeTurnWork = (call: { tool: string; agentId?: unknown }): boolean => call.agentId === undefined && call.tool !== TOOL && call.tool !== 'AskUserQuestion'
 
-/**
- * Whether a Bash command is the review's last step for the MAIN conversation's record: the record's
- * `answered` command with no transcript named (it then finds the session by CLAUDE_CODE_SESSION_ID,
- * which a subagent's Bash call carries too, as the main session's id: read in a subagent's own shell
- * on 2026-11-27), or naming this session's transcript, quoted as the refusal writes it or not. With
- * this session's transcript unknown, any `answered` is taken as the main conversation's: which
- * record it would mark cannot be told. One naming another transcript, as a test of the record does,
- * is not. Only a subagent's call is put to this (register.ts): a subagent, or a fork that inherited
- * the review's instruction, would otherwise mark the main session's review answered while Dan still
- * has its picker open.
- */
-export const answersMainReview = (command: string, transcript: string | undefined): boolean => {
-  if (!/review-record\.py["']?\s+answered(?![\w-])/.test(command)) return false
-  if (!/\s--transcript[\s=]/.test(command) || transcript === undefined) return true
-  return command.includes(transcript) || command.includes(quoted(transcript))
+const RECORD_FILE = 'review-record.py'
+
+/** The part of a word after its last slash. */
+const lastPart = (word: string): string => word.slice(word.lastIndexOf('/') + 1)
+
+/** Whether the shell may hand a word on as something the call's own text does not spell. */
+const unspelled = (word: string): boolean => /[$`*?[]/.test(word)
+
+/** A path as written, with a leading ~ or $HOME put in full and its doubled slashes and dots worked out. */
+const plainPath = (path: string, home: string | undefined): string => {
+  const full = home === undefined ? path : path.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, home.replace(/\/+$/, ''))
+  const out: string[] = []
+  for (const part of full.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') out.pop()
+    else out.push(part)
+  }
+  return `${full.startsWith('/') ? '/' : ''}${out.join('/')}`
 }
+
+/**
+ * Whether one command, as mod-kit's reader gives it, runs the record's `answered` for the MAIN
+ * conversation's record. Judged by what the command runs, never by how the call is spelled:
+ *
+ * - It must run the record's file as a script: an interpreter's script operand, or the file run by
+ *   its own name. A grep for the phrase, a commit message or an echo that quotes it, `python -m` and
+ *   inline code run no such script. A script named by a value the call does not spell could be it.
+ * - Its first operand, read as the file's own parser reads it (each option takes a value), must be
+ *   `answered`, or a value the call does not spell, or one xargs hands over.
+ * - With no transcript named it finds the session by CLAUDE_CODE_SESSION_ID, which a subagent's
+ *   Bash call carries too, as the main session's id (read in a subagent's own shell on 2026-11-27).
+ *   Naming one, it is the main conversation's when the file's name is this session's transcript's
+ *   and the folders cannot be told apart, or when the name is not spelled out; another file's name,
+ *   as a test of the record uses, is not. With this session's transcript unknown, any is.
+ * - A command the reader could not read (eval, a command a value names) is judged by its words'
+ *   text, the one place spelling decides: it answers when they hold the file's name and the word.
+ *
+ * What the call's text cannot show is not seen: a script file whose own lines run the command.
+ */
+const answersIn = (c: { words: string[]; script?: string; unread: boolean; xargs: boolean; followed: (string | null)[] }, transcript: string | undefined, home: string | undefined): boolean => {
+  const { words } = c
+  if (c.unread) return words.some(w => w.includes(RECORD_FILE)) && words.some(w => /(^|[^\w-])answered(?![\w-])/.test(w))
+  const at = c.script !== undefined ? words.indexOf(c.script, 1) : lastPart(words[0] ?? '') === RECORD_FILE ? 0 : -1
+  if (at < 0) return false
+  const said = (i: number): string => c.followed[i] ?? (words[i] as string)
+  const file = lastPart(said(at))
+  if (!unspelled(file) && file !== RECORD_FILE) return false
+  let command: string | undefined
+  let named: string | undefined
+  for (let i = at + 1; i < words.length; i++) {
+    const word = said(i)
+    if (word === '--') continue
+    if (word.startsWith('--')) {
+      const eq = word.indexOf('=')
+      const value = eq < 0 ? (++i < words.length ? said(i) : '') : word.slice(eq + 1)
+      if ('--transcript'.startsWith(eq < 0 ? word : word.slice(0, eq))) named = value
+    } else if (command === undefined) command = word
+  }
+  if (command === undefined ? !c.xargs : command !== 'answered' && !unspelled(command)) return false
+  if (!named || transcript === undefined) return true
+  const name = lastPart(named)
+  if (unspelled(name)) return true
+  if (name !== lastPart(transcript)) return false
+  if (unspelled(plainPath(named, home)) || !plainPath(named, home).startsWith('/')) return true
+  return plainPath(named, home) === plainPath(transcript, home)
+}
+
+/**
+ * Whether a Bash call would record the MAIN conversation's review as answered, from the commands
+ * mod-kit's reader read in it (`pipeline`, asked with `follow`); the rules are on answersIn. Only a
+ * subagent's call is put to this (register.ts): a subagent, or a fork that inherited the review's
+ * instruction, would otherwise mark the main session's review answered while Dan still has its
+ * picker open. A reading that is no list of commands answers by `spelled`, the call's text.
+ */
+export const answersMainReview = (commands: unknown, transcript: string | undefined, home: string | undefined, spelled = ''): boolean => {
+  if (!Array.isArray(commands)) return spelled.includes(RECORD_FILE) && /(^|[^\w-])answered(?![\w-])/.test(spelled)
+  return commands.some(raw => {
+    const c = (typeof raw === 'object' && raw !== null ? raw : {}) as { words?: unknown; script?: { files?: unknown }; unread?: unknown; xargs?: unknown; followed?: unknown }
+    const words = Array.isArray(c.words) ? c.words.filter((w): w is string => typeof w === 'string') : []
+    if (!words.length) return false
+    const files = Array.isArray(c.script?.files) ? c.script.files : []
+    const followed = Array.isArray(c.followed) ? words.map((_, i) => (typeof (c.followed as unknown[])[i] === 'string' ? ((c.followed as unknown[])[i] as string) : null)) : words.map(() => null)
+    return answersIn({ words, script: typeof files[0] === 'string' ? files[0] : undefined, unread: typeof c.unread === 'string', xargs: c.xargs === true, followed }, transcript, home)
+  })
+}
+
+/** The call's text before any reading of it: whether it is worth the reader at all. */
+export const namesRecordFile = (command: string): boolean => command.replace(/["'\\\n]/g, '').includes(RECORD_FILE)
 
 /** What a subagent is told when its Bash call would answer the main conversation's review. */
 export const notMainReviewText = (): string =>
@@ -118,10 +190,11 @@ const LAST_STEP = (command: string) => `Once Dan has answered what the review as
 
 // What a refusal says of the turn's end. The one message is sent once for a request, and not at all
 // after a review handed over for it went unanswered (register.ts askAfterReview), so a refusal made
-// after either must not promise it: the session would wait for a message that never comes.
+// after either must not promise it: the session would wait for a message that never comes. A box
+// refused so is still asked for once after Dan's next message (register.ts askOwed).
 const ASKED_ONCE = 'If no review is handed to you when the turn ends, you are asked once to call this tool again.'
 const NOT_ASKED_AGAIN =
-  'Nothing asks you to call this tool again when this turn ends: that is done once for a request, and for this one it has been done or a review handed over for it was left unanswered. The box for this request now comes only through a review that is handed to you and answered.'
+  "Nothing asks you to call this tool again when this turn ends: that is done once for a request, and for this one it has been done or a review handed over for it was left unanswered. The box for this request now comes through a review that is handed to you and answered, or is asked for once after Dan's next message."
 
 /**
  * Whether the review holds a box that would otherwise show. Handed and not answered: held, whatever
@@ -153,6 +226,29 @@ export const shownUnreadText = (why: string): string => `The Goal accomplished b
  */
 export const promptedUnreadText = (why: string): string =>
   `The session was sent a prompt about the Goal accomplished box without knowing whether an end of turn review is waiting for Dan: the end of turn review's record could not be read (${why}).`
+
+/**
+ * What Dan is told, in a line he sees, once per request, when a prompt of this mod about the box
+ * was held back at a turn's end over a review handed over that turn and not on record as answered
+ * (#3843). The record reads the same when he left a picker unanswered, when the session did the
+ * review and skipped its last step, and when the hand over was recorded and never reached the
+ * session, and nothing the mod holds tells them apart (a question asked in prose leaves no picker
+ * either), so the line says what is on record and what happens next, and guesses at none of the
+ * three. `goal` is the prompt for a met /goal, which waits
+ * for a later turn's end; any other is asked for after his next message (askOwedText).
+ */
+export const waitingText = (kind: 'request' | 'goal'): string =>
+  kind === 'goal'
+    ? 'The Goal accomplished box for the met /goal is waiting on the end of turn review, which is not on record as answered. The session is asked for it at the end of a later turn.'
+    : 'The Goal accomplished box is waiting on the end of turn review, which is not on record as answered, so the session was not asked for it. It is asked for once at the end of a turn after your next message.'
+
+/**
+ * What the session is told, once, at a turn's end after a message Dan typed, when the box of an
+ * earlier request of his was held for the review and never shown. Worded for a request that has
+ * passed: he has asked for something since, so it never says "this request".
+ */
+export const askOwedText = (): string =>
+  `GOAL ACCOMPLISHED BOX FROM AN EARLIER REQUEST. For an earlier request of Dan's in this session the Goal accomplished box was held back for the end of turn review, and no box has been shown since. He has sent a message since then. If every part of what he asked for is finished, call ${TOOL} now, with goal set to what he asked for and shipped listing what shipped, one short line each. Call it before anything else in this turn: a command or an edit first makes this a turn with a review of its own to come, and the call waits again. If part of it is still to do, or his message since has changed what he wants, do not call it and say nothing of the box.`
 
 /**
  * What the session is told, once per request, when a box was refused until the review had been

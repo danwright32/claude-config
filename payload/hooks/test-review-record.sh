@@ -430,10 +430,23 @@ kept += [os.path.basename(put(n, t, age=a)) for n, t, a in (
     # A record's ending on a file not named for a transcript, and a record's name with more after it.
     ('x.review-handed.json', A_RECORD, 2 * HOUR),
     ('lost.jsonl.review-handed.json.bak', A_RECORD, 2 * HOUR),
+    # A record's name, or a temp file's, with a line end after it: the name must end where the
+    # record's does, and each of these has its transcript there.
+    ('kept.jsonl.review-handed.json\n', A_RECORD, 2 * HOUR),
+    ('other.jsonl.review-answered.json\n', A_RECORD, 2 * HOUR),
+    ('kept.jsonl.review-handed.json.tmp.4245.0a1b2c40\n', A_RECORD, 2 * HOUR),
     # Named exactly as a record of a transcript that is gone, and holding something else.
     ('mine.jsonl.review-handed.json', 'my own notes, not a record', 2 * HOUR),
     ('mine.jsonl.review-answered.json', '{"turn": "p1"}', 2 * HOUR),
     ('list.jsonl.review-handed.json', '[1, 2]', 2 * HOUR),
+    # Another tool's file under a record's name: it carries the version, and none of a record's fields.
+    ('tool.jsonl.review-handed.json', '{"v": 1, "notes": "kept by another tool"}', 2 * HOUR),
+    ('tool.jsonl.review-answered.json', json.dumps({'v': 1, 'turn': 'p1', 'id': 'h1', 'at': 1800000000.0, 'label': ''}), 2 * HOUR),
+    # A hand over's fields with no version, with a time that is no number, and with no time.
+    ('nov.jsonl.review-handed.json', json.dumps({'turn': 'p1', 'id': 'h1', 'at': 1800000000.0, 'label': ''}), 2 * HOUR),
+    ('soon.jsonl.review-handed.json', json.dumps({'v': 1, 'turn': 'p1', 'id': 'h1', 'at': 'soon', 'label': ''}), 2 * HOUR),
+    ('when.jsonl.review-answered.json', json.dumps({'v': 1, 'turn': 'p1', 'handed': 'h1'}), 2 * HOUR),
+    ('noid.jsonl.review-handed.json', json.dumps({'v': 1, 'turn': 'p1', 'at': 1800000000.0, 'label': ''}), 2 * HOUR),
     # Reads as a record, and is far larger than any record this file writes.
     ('big.jsonl.review-handed.json', A_RECORD + ' ' * 70000, 2 * HOUR),
 )]
