@@ -1629,7 +1629,7 @@ ps_pending_files() {   # $1 = command
   paths="$(printf '%s\n' "$scope" | tail -n +2)" || true
   case "$kind" in
     UNKNOWN) verdict=WIDENED ;;
-    PATHS|TRACKED)
+    PATHS)
       while IFS= read -r pth; do
         [ -n "$pth" ] || continue
         [ -e "$pth" ] || { verdict=WIDENED; break; }

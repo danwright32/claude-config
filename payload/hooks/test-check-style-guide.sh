@@ -386,15 +386,17 @@ want_style_code 2 "#3879 a new file added by name is judged when a message only 
 want_says "app/copy.ts" "#3879 and that refusal names the new file"
 run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qm 'a b' && git push"$'\n''echo "never closed'
 want_style_code 2 "#3879 control: the same command nobody can read, its message naming no add, judges the new file"
-#     A named path that is not there, beside an add -u or a commit -a, falls back to the whole
-#     working tree and says so, as it does with neither (case 8 below).
+#     A named path that is not there, beside an add -u or a commit -a, pinned as it answers: the
+#     tracked changes are read and the stranger nobody named is not. Reading the whole working
+#     tree here would also count a stranger's untracked test as this push's test at the test gate.
 W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
 run_style_hook "$E2E" "cd $W && git add does-not-exist.txt && git add -u && git commit -qm copy && git push"
-want_style_code 2 "#3879 an unresolvable path beside an add -u falls back rather than narrowing to the tracked changes"
-want_says "could not be worked out" "#3879 an unresolvable path beside an add -u says the reading was widened"
+want_style_code 0 "#3879 pinned: an unresolvable path beside an add -u does not take an untracked file nobody named"
 run_style_hook "$E2E" "cd $W && git add does-not-exist.txt && git commit -qam copy && git push"
-want_style_code 2 "#3879 an unresolvable path beside commit -a falls back rather than narrowing to the tracked changes"
-want_says "could not be worked out" "#3879 an unresolvable path beside commit -a says the reading was widened"
+want_style_code 0 "#3879 pinned: an unresolvable path beside commit -a does not take an untracked file nobody named"
+W="$(mk_pending_repo "$CLEAN" "$CLEAN" "$BAD")"
+run_style_hook "$E2E" "cd $W && git add does-not-exist.txt && git add -u && git commit -qm copy && git push"
+want_style_code 2 "#3879 an unresolvable path beside an add -u still judges the tracked change -u takes"
 
 # 6. Content already in the INDEX is carried by a bare commit with no add at all.
 W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"

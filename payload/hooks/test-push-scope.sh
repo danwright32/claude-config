@@ -1380,19 +1380,28 @@ pending_lists "git add named.txt \$(git add -u) && git commit -qm x && git push"
   "#3879 a file named beside an add -u inside a substitution is read"
 pending_lists "git add -- -u named.txt && git commit -qm x && git push" named.txt \
   "#3879 a file named after a double dash and a -u is read"
-# A named path that is not there beside the tracked reading (claude-config#3879): the add cannot be
-# accounted for, as when it stands alone, so the whole working tree is listed and the caller says
-# so.
-want_pending "git add gone.txt && git commit -qam x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
-  "#3879 an add naming a path that is not there beside commit -a widens and says so"
-want_pending "git add gone.txt && git add -u && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
-  "#3879 an add naming a path that is not there beside an add -u widens and says so"
-want_pending "git add -u && git commit gone.txt -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
-  "#3879 a commit naming a path that is not there beside an add -u widens and says so"
+# A named path that is not there beside the tracked reading (claude-config#3879), pinned as it
+# answers: EXACT with the tracked changes, where the same add beside a plain commit widens. Listing
+# the whole working tree here would count any untracked test file in it as this push's test, and
+# the test gate then asks its judge about a push it refuses outright. A change of these answers is
+# a decision about that gate, never a tidy up.
+want_pending "git add gone.txt && git commit -qam x && git push" "EXACT|tracked.txt" \
+  "#3879 pinned: an add naming a path that is not there beside commit -a keeps the tracked reading and does not widen"
+want_pending "git add gone.txt && git add -u && git commit -qm x && git push" "EXACT|tracked.txt" \
+  "#3879 pinned: an add naming a path that is not there beside an add -u keeps the tracked reading and does not widen"
+want_pending "git add -u && git commit gone.txt -qm x && git push" "EXACT|tracked.txt" \
+  "#3879 pinned: a commit naming a path that is not there beside an add -u keeps the tracked reading and does not widen"
+want_pending "git add named.txt gone.txt && git add -u && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 pinned: a path that is there named beside one that is not, and an add -u: the one that is there is still read"
 want_pending "git add named.txt && git commit -qam x && git push" "EXACT|named.txt|tracked.txt" \
   "#3879 control: a named path that is there beside commit -a keeps the reading exact"
 want_pending "git add -u gone && git commit -qm x && git push" "EXACT|tracked.txt" \
   "#3879 control: a path that is not there named by the add -u itself widens nothing, no new file can come from it"
+# Under PATHS every named path is checked for being there, not only the first.
+want_pending "git add named.txt gone.txt && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#3879 a path that is not there named after one that is still widens and says so"
+want_pending "git add gone.txt named.txt && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#3879 control: the same with the path that is not there named first"
 got="$( cd "$PF" && ps_pending_files "git add named.txt && git commit -qm 'a \$(git add -u) b' && git push" | tr '\n' '|' )"
 [ "$got" = "EXACT|named.txt|" ] \
   && check "#3879 control: the same message in a command that can be read is no add, so the named file alone" ok \
