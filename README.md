@@ -12003,8 +12003,9 @@ no `/goal` set, the session calls the tool when it
 judges the work Dan asked for finished, reminded by the SESSION REFLECTION's last line after every
 turn that changed something (#1749). What is left for Dan alone is not work still open (#3864).
 The tool's description and that line name what does not hold the box: a step only he can take (a
-draft he sends, a command he types, a setting he changes), a check `/check-later` has put on the
-To Do list, and work he declined in a picker. A step of his on the steps card holds the box only
+draft he sends, a command he types, and in the description a setting he changes), a check
+`/check-later` has put on the To Do list, and work he declined in a picker. The description alone
+adds that a step of his on the steps card holds the box only
 while the session has work of its own waiting behind it. The tool refuses for none of these,
 since only the session can tell whose a step is. A session that holds the box back for work of
 its own says in one line what the box waits on, on the turn it first holds it and again only when
@@ -12079,10 +12080,20 @@ own. With no `/goal` set (none, or a met one whose box has been shown) the mod a
 once for each such record whether the work is finished (`askAfterCard` in `hooks/register.ts`).
 It sends nothing, for that record for good, when no step was done in this session, when the card
 emptied before Dan had asked the session for anything, when a box was already shown for the
-request, when a `/goal` is still set, when the message or the question was sent at that turn end
-in its place, or over a review handed over that turn that Dan has not answered. It waits for a
-later turn end while something the box refuses for is in flight, or the `/goal` cannot be read. A
-record the mod cannot read asks nothing and is said in the debug log. A step another mod finishes
+request, when the card emptied before his latest message or before the newest box shown (so a
+record that waited is never asked about under a later request), when a `/goal` is still set, when
+the message or the question was sent at that turn end
+in its place, over a review handed over that turn that Dan has not answered, or after one he has
+answered that was handed over once the card had emptied, since that review asked for the box
+already. It waits for a
+later turn end while something the box refuses for is in flight, while the `/goal` cannot be read,
+while the message or the question was tried at that turn end and did not enter, and while a step
+is open on the steps card or the card cannot be read: the prompt says every step on the card has
+been recorded, so the card is read when it is sent. A
+record the mod cannot read asks nothing and is said in the debug log.
+`tests/test-goal-box-card-prompt-records.sh` runs manual steps' own code and the review's record
+into the mod's readers, so a key or a field renamed on one side fails there.
+A step another mod finishes
 or takes off through manual steps' noun writes no record, so the close this session card asks
 nothing. A message Dan types drops a hold left from the request before,
 so the message is never sent under a later request. A subagent's Bash call that would record the

@@ -36,8 +36,8 @@ declare module 'claude-code' {
       /**
        * #3864: the time (`at`) of manual steps' newest record of a steps card worked through that
        * has been dealt with: the session was asked about the box for it, or it was passed over for
-       * good (no step done, a /goal set, a box already shown, no request yet, another prompt sent
-       * in its place, a review left unanswered).
+       * good, for one of the reasons askAfterCard and the turn end's wiring give in
+       * hooks/register.ts.
        */
       cardAsked: number
       /** Every box shown in this session, oldest first. */

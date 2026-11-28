@@ -6048,14 +6048,16 @@ file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.
   declined in a picker. An open step on the steps card holds the box only while the session has
   work of its own waiting behind that step; a step that is Dan's alone holds nothing. The tool
   refuses for none of this, because only the session can tell whose a step is, and its refusals
-  for what can be read stay as they are. The words are one constant (`NOT_HELD` in `hooks/box.ts`),
-  and the SESSION REFLECTION's last line says the same in Dan's voice.
+  for what can be read stay as they are. The words are one constant (`NOT_HELD` in `hooks/box.ts`).
+  The SESSION REFLECTION's last line names the same three things in Dan's voice, without the
+  setting; the rule for a step on the steps card is in the description alone.
 - **A box held back is said** (#3864). A session that holds the box for work of its own says in one
   line what the box waits on, on the turn it first holds it and again only when that changes. With
   silence, a box held on purpose and a box forgotten look the same to Dan; said every turn, the
   line would be noise. The words are one constant (`HELD_SAY` in `hooks/box.ts`) that the tool's
-  description is built from, and both end of turn review instructions ask for the line too. It is
-  a rule in a prompt: nothing reads whether the line was written.
+  description is built from, and both end of turn review instructions ask for the line too, once
+  and again on a change. It is a rule in a prompt: nothing reads whether the line was written, and
+  a session that has been compacted may say it once more.
 - **A steps card worked through** (#3864). The end of turn review asks for the box while a card's
   steps are still open, so the turn the last step is recorded on is often the one the work
   finishes on, after that review has run. Manual steps keeps a record in its state (`emptied`)
@@ -6064,13 +6066,24 @@ file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.
   conversation's turn end, with no `/goal` set, the goal box asks the session once for each such
   record whether the work is finished. The prompt is the goal box's, like every other prompt for
   the box, and it is the turn end's one prompt: where the message after a refused call or the
-  question about shipped work is sent, the record is spent with it. Nothing is sent, and the
+  question about shipped work is sent, the record is spent with it, and where either was tried
+  and did not enter, the record waits for the turn end that sends it. Nothing is sent, and the
   record is spent, when no step was done in this session (a card whose steps were all taken off
   undone finished nothing), when the card emptied before Dan asked the session for anything, when
-  a box was already shown for the request, when a `/goal` is still set (its own check asks), or
-  over an end of turn review handed over that turn that Dan has not answered. The record waits
-  for a later turn end while an agent, a merge, a deploy or an open pull request holds the box,
-  so the prompt never asks for a box the tool would refuse. Only a verdict through `steps_done`
+  a box was already shown for the request, when the card emptied before his latest message or
+  before the newest box shown (a record that waited is asked about only under the request it
+  emptied under), when a `/goal` is still set (its own check asks), over an end of turn review
+  handed over that turn that Dan has not answered, or after one he has answered that was handed
+  over once the card had emptied: that review asked for the box with the card gone, and a second
+  ask at the same turn's end gets the one line said twice. The record waits for a later turn end
+  while an agent, a merge, a deploy or an open pull request holds the box, so the prompt is not
+  sent while the tool is known to refuse; the holds are read at the turn's end and the call comes
+  a turn later, so one that appears in between still refuses it. It waits too while a step is
+  open on the steps card, or the card cannot be read: the prompt says every step on the card has
+  been recorded, so manual steps' card is read when it is sent, and a card pinned after the
+  record keeps it back. What the prompt reads of manual steps and of the review's record is held
+  to the code that writes it by `tests/test-goal-box-card-prompt-records.sh`. Only a verdict
+  through `steps_done`
   writes the record. A step another mod finishes or takes off through the noun writes none, which
   keeps the close this session card, taken off at every turn start, from asking. What this
   leaves: a card that still holds another mod's step when the session records its own last step
