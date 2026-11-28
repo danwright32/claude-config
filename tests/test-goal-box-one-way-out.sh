@@ -66,15 +66,15 @@
 #     ui.toast, ui.status, ui.notice, ui.place, ui.open): a second showing built on one is seen
 #     only through the box's text, card or heading. tool.register, which the mod calls once at a
 #     session's start, puts the tool's description before the model and is left alone.
-#   The engine calls were listed from the typings Claude Code installs beside a mod
-#     (.claude-plugin/types/claude-code/index.d.ts), 103 members of 24 nouns when this was
-#     written; the copy in tools/typescript/claude-code-types holds 85 of them. A call a later
-#     release adds is not on the list.
+#   A call a later release of Claude Code adds. The list above was made from the typings Claude
+#     Code installs beside a mod (.claude-plugin/types/claude-code/index.d.ts), which hold calls
+#     the copy in tools/typescript/claude-code-types does not.
 #
-# WHAT CLAUDE CODE REFUSES BY ITSELF. Measured in the fifth review of pull request 3869, not by
-# this suite: Claude Code would not load the mod with `$` taken apart in a parameter or by a
-# pattern, with `$[name]`, or with `$.modkit` used as a value, and would not let a tool.call hook
-# call `$.prompt.submit`. For those shapes the loader is the stronger guard.
+# WHAT CLAUDE CODE REFUSES BY ITSELF. Not measured by this suite, and seen when each was tried
+# on this mod: Claude Code does not load a mod that takes `$` apart in a parameter or by a
+# pattern, reaches it as `$[name]`, or uses `$.modkit` as a value, and does not let a tool.call
+# hook call `$.prompt.submit`. For those shapes the loader is the stronger guard, and for
+# `$.modkit` as a value it is the only one.
 #
 # The scan is then run on copies of the mod's files held in memory, each with one site planted to
 # go round leave, and the suite fails unless every plant is refused (L1).
