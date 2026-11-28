@@ -10,7 +10,7 @@
 
 import { PAGE_MARK } from './page.ts'
 
-/** The words this mod's prose block begins with, so a turn that already holds it is never blocked twice. */
+/** The words this mod's prose block begins with, so a turn that already holds it is not asked about prose twice. */
 export const PROSE_MARK = 'Your reply leaves Dan a step in prose'
 /** The words this mod's block for a call the permission check refused begins with (#3842). */
 export const REFUSED_MARK = 'The permission check refused a call of yours in this turn'
@@ -411,8 +411,9 @@ export const refusalAsk = (turn: TurnAt, said: readonly string[], isHeld: boolea
 
 /**
  * What a turn end is told when the turn could not be read to its start. It begins with
- * UNREAD_MARK, so the turn holding it is not blocked again, and asks for the same one line as the
- * block for a refused call, so one answer is read by both.
+ * UNREAD_MARK, so the turn holding it is not told this twice and is blocked again only for a call
+ * refused after it. It asks for the same one line as the block for a refused call, so one answer
+ * is read by both.
  */
 export const unreadStep = (): string =>
   `${UNREAD_MARK}, so a call the permission check refused in it may have gone unseen. If one was refused and left Dan something to do, put that on the steps card (${STEPS_TOOL}). If not, say exactly: "Nothing from the refusal is yours to do."`
