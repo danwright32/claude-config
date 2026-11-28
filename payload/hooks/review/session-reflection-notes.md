@@ -52,8 +52,9 @@ showed it, then Dan picked follow ups in the review's picker, and they finished 
 how the box is to know, "The review says so itself". So `lib/review-reason.py` records that a review
 was handed over, the line before the box request records that he answered it, by running
 `lib/review-record.py answered`, and the box asks that record. The command is here and not in the
-issue review's instruction as well because that file stands at 2,995 of the 3,000 characters
-`test-review-instructions.sh` allows it. Three things make one copy enough: the reflection is
+issue review's instruction as well because that file is at the size limit
+`test-review-instructions.sh` holds it to, with no room for the line. Three things make one copy
+enough: the reflection is
 handed over in every turn the issue review is, since the issue review's conditions are the
 reflection's plus a cooldown (`test-review-record.sh` checks it on one transcript); the line sits in
 the part that holds whether or not the reflection is folded in; and a session that skips it is told

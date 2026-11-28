@@ -514,8 +514,8 @@ const noteTurnWork = async ($: EngineInterface, tool: string): Promise<void> => 
       if (held.value?.seq === seq && held.value.worked) return
       // One failed run a turn: a test that cannot be run is not run again on every call of the turn.
       // A name the test has already answered yes for costs no run, so it still makes this a turn
-      // that changed something: before the review of pull request 3869 one failed run for the
-      // turn's first tool switched the hold off for the whole turn.
+      // that changed something: one run that failed must not switch the hold off for every later
+      // call of the turn whose answer is already known.
       const failed = held.value?.seq === seq && held.value.unread !== undefined
       if (failed && workSaid.get(tool) !== true) return
       const read: WorkRead = failed ? { changes: true } : await changesSomething($, tool)
@@ -580,12 +580,12 @@ const reviewNow = async ($: EngineInterface, prompts: number): Promise<ReviewWai
 }
 
 /**
- * What the record says at a turn's end, asked before any prompt of this mod about the box is sent
- * (the review of pull request 3869). Each of the three prompts (the one message after a refused
- * call, the question about shipped work, the prompt for a met /goal) starts a new turn, the record
- * reads none under a new prompt, and the call the prompt asks for would show the box. So where a
- * review was handed over this turn and Dan has not answered it (he closed its picker, it closed
- * while he was away, the session asked in prose and stopped), none of them is sent. A record that
+ * What the record says at a turn's end, asked before any prompt of this mod about the box is sent.
+ * Every such prompt (the one message after a refused call, the question about shipped work, the
+ * prompt for a met /goal) starts a new turn, the record reads none under a new prompt, and the call
+ * the prompt asks for would show the box. So where a review was handed over this turn and Dan has
+ * not answered it (he closed its picker, it closed while he was away, the session asked in prose
+ * and stopped), no prompt is sent, and a prompt added later must ask here first too. A record that
  * cannot be read stops nothing, since a box that never shows is the worse fault, and the prompt that
  * then goes out is said where Dan can see it. Asked once a turn end, and only when a prompt is about
  * to be sent, so a turn end that sends nothing never pays for the read.
@@ -620,7 +620,7 @@ const noteReviewHeld = async ($: EngineInterface, prompts: number): Promise<void
  * released when it did not enter, so a passing failure is asked again at the next turn end (L368).
  * It asks what the turn end's other question asks, so that one is marked asked too. True when sent.
  *
- * The record is asked first (endRecord below). A review handed over this turn that Dan has not
+ * The record is asked first, through `record` (endRecord). A review handed over this turn that Dan has not
  * answered sends nothing, and the request's one message is spent there without being sent, so no
  * later turn end of the same request sends it either: his own next message starts the new request.
  */

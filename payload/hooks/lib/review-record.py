@@ -231,8 +231,8 @@ def handed_now(transcript):
             "so which turn the hand over belongs to cannot be told" % transcript
         )
     # A hand over with no usable turn (written while the transcript named no prompt, or damaged) is
-    # never taken for one of an earlier turn: before the review of pull request 3869 it read as none,
-    # in silence. It stays unread until the next hand over replaces it.
+    # never taken for one of an earlier turn, which would read as none with nothing said. Which turn
+    # it belongs to cannot be told, so it stays unread until the next hand over replaces it.
     recorded = handed.get("turn")
     if not isinstance(recorded, str) or not recorded:
         raise Unreadable(

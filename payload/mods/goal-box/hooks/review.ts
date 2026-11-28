@@ -118,8 +118,7 @@ const LAST_STEP = (command: string) => `Once Dan has answered what the review as
 
 // What a refusal says of the turn's end. The one message is sent once for a request, and not at all
 // after a review handed over for it went unanswered (register.ts askAfterReview), so a refusal made
-// after either must not promise it: before the review of pull request 3869 it did, and the session
-// waited for a message that never came.
+// after either must not promise it: the session would wait for a message that never comes.
 const ASKED_ONCE = 'If no review is handed to you when the turn ends, you are asked once to call this tool again.'
 const NOT_ASKED_AGAIN =
   'Nothing asks you to call this tool again when this turn ends: that is done once for a request, and for this one it has been done or a review handed over for it was left unanswered. The box for this request now comes only through a review that is handed to you and answered.'

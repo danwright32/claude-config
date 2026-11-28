@@ -582,8 +582,8 @@ for name, label in (('session-reflection.sh', 'SESSION REFLECTION'), ('feature-i
 
 # ---- The last step, as the instruction gives it ----
 # The command lives in the reflection's instruction, in the part that holds whether or not the issue
-# review fired (EITHER WAY). The issue review's own instruction stands at 2,995 of the 3,000
-# characters test-review-instructions.sh allows it, so the step is not repeated there: the
+# review fired (EITHER WAY). The issue review's own instruction is at the size limit
+# test-review-instructions.sh holds it to, so the step is not repeated there: the
 # reflection is handed over in every turn the issue review is (checked below on one transcript, and
 # the issue review's conditions are the reflection's plus a cooldown), and the goal box's own
 # refusal names the command to a session that skipped it.
