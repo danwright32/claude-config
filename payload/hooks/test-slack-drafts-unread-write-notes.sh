@@ -355,9 +355,8 @@ run_s "cp post.sh b; bash -c '$(lines "${UNSURE_DIR[@]}")' ; cp -R calm.sh b; ba
 refused "#3884 the same with the text given up on a string handed to bash -c"
 run_s "cp post.sh b; eval '$(lines "${UNSURE_DIR[@]}")' ; cp -R calm.sh b; bash b"
 refused "#3884 the same with the text given up on a string handed to eval"
-# A cut of the generated table (claude-config#3878), every row refused: each form of text given up
-# on, each way it makes calm.sh a folder, and each thing that then takes from calm.sh, onto a copy
-# of the script that posts.
+# Every combination is refused: each form of text given up on, each way it makes calm.sh a folder,
+# and each thing that then takes from calm.sh, onto a copy of the script that posts.
 for form in heredoc quoted bash-c eval sourced; do
   for made in 'cp -R calmdir calm.sh' 'rm calm.sh|cp -R calmdir calm.sh'; do
     IFS='|' read -r -a made_lines <<< "$made"
@@ -365,10 +364,10 @@ for form in heredoc quoted bash-c eval sourced; do
                 'cp -R calm.sh b; . ./b' 'bash -c "cp -R calm.sh b"; bash b' 'eval "cp -R calm.sh b"; bash b' \
                 'cp -R calm.sh b; cat b | bash'; do
       run_s "cp post.sh b; $(given_up "$form" "$take" "${made_lines[@]}")"
-      refused "#3884 table: text given up on ($form) holding ${made//|/ and }, then $take"
+      refused "#3884 text given up on ($form) holding ${made//|/ and }, then $take"
     done
     run_s "cp -R postdir d; $(given_up "$form" 'cp -R calm.sh d/run.sh; bash d/run.sh' "${made_lines[@]}")"
-    refused "#3884 table: text given up on ($form) holding ${made//|/ and }, then a copy onto a script under a folder copied from one that posts"
+    refused "#3884 text given up on ($form) holding ${made//|/ and }, then a copy onto a script under a folder copied from one that posts"
   done
 done
 # What such a text removes, makes a folder or moves away is touched too, though nothing is noted
