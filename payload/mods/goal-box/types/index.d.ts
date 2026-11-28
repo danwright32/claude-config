@@ -48,6 +48,10 @@ declare module 'claude-code' {
       closeAnswer: { seq: number; text: unknown }
       /** #3770: the request (Dan's request count, `prompts` above) the close card was last pinned for, and whether it still shows. */
       closed: { prompts: number; pinned: boolean }
+      /** #3817: the value of `prompts` when the session was last asked to check the steps carried from an earlier session. */
+      askedCarried: number
+      /** #3817: a close step added to a held steps card that could not be taken back, so the next turn start tries again. */
+      closeStray: boolean
       /** #3770: what a command this session ran did that may leave a process behind; once set, for the session. */
       leftBehind: string
     }

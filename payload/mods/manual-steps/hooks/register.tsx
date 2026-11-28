@@ -49,7 +49,8 @@ const projectKeys = async ($: EngineInterface) => {
 
 // Kept for the next session in this project: written whenever the card changes, removed once
 // nothing is left to do. Never with "sent", since the turn that would answer it does not reach the
-// next session. A failure here loses only the carry over, so it is said and the action stands
+// next session, nor with either mark of a held card, since the next session has checked nothing
+// (#3817). A failure here loses only the carry over, so it is said and the action stands
 // (fail loud, not silent). A step for this session alone (#3770) is never kept: the session it is
 // about is gone by the next one.
 const persist = async ($: EngineInterface) => {
@@ -58,7 +59,7 @@ const persist = async ($: EngineInterface) => {
   try {
     const { key } = await projectKeys($)
     if (card && nextStep(card) !== undefined) {
-      const { isCarried: _carried, ...kept } = card
+      const { isCarried: _carried, isPinnedAway: _away, ...kept } = card
       await $.store.set(key, { ...kept, steps: kept.steps.map(({ isSent: _sent, heldAt: _held, toldAt: _told, ...s }) => s) })
     } else await $.store.delete(key)
   } catch (err) {
@@ -603,7 +604,17 @@ const typedStep = (commands: readonly string[]) => {
 // A step another mod hands the card (#1107), answered by the hooks on the noun's events below, which
 // have the whole engine; the noun's own methods answer only when those hooks failed, and say so.
 const NOUN_UNANSWERED = "the manual steps mod's own hook did not answer"
+// A held card's two answers (#3817), each a value with a reason of its own. A caller acts on the
+// value: the goal box asks the session to check its carried steps for the first and never for the
+// second, and says both values and both sentences again in its own files, held to these by
+// tests/test-close-card-carried-reason.sh.
+const HELD_UNCHECKED = 'unchecked'
+const HELD_AWAY = 'away'
 const CARRIED_HELD = 'the steps carried from an earlier session are held until Claude checks them again'
+const AWAY_HELD = 'the steps this session pinned while Dan was away are held until they are pinned again once he is home'
+// Which hold a card is under, or shown. The mark of a pin made while Dan was away is read only on a
+// held card: it is this session's record that it has checked and pinned the steps the card holds.
+const holdOf = (card: StepsCard) => (!card.isCarried ? ('shown' as const) : card.isPinnedAway === true ? HELD_AWAY : HELD_UNCHECKED)
 
 const addStep: Hook<'manualSteps.add'> = async ($, e) => {
   // Steps are for a person at the prompt; a -p run or the SDK has nobody to do them.
@@ -625,10 +636,11 @@ const addStep: Hook<'manualSteps.add'> = async ($, e) => {
   }
   const how = await change($, card => {
     if (!card || nextStep(card) === undefined) return { card: { ...made.card, steps: [added] }, out: 'shown' as const }
-    if (card.steps.some(s => !s.finished && s.title === added.title)) return { card, out: card.isCarried ? ('held' as const) : ('shown' as const) }
-    return { card: { ...card, steps: [...card.steps, added] }, out: card.isCarried ? ('held' as const) : ('shown' as const) }
+    if (card.steps.some(s => !s.finished && s.title === added.title)) return { card, out: holdOf(card) }
+    return { card: { ...card, steps: [...card.steps, added] }, out: holdOf(card) }
   })
-  if (how === 'held') return { value: { isShown: false, reason: CARRIED_HELD } }
+  if (how === HELD_UNCHECKED) return { value: { isShown: false, held: HELD_UNCHECKED, reason: CARRIED_HELD } }
+  if (how === HELD_AWAY) return { value: { isShown: false, held: HELD_AWAY, reason: AWAY_HELD } }
   const card = (await $.state.get(cardRef)).value ?? null
   if (!card) return { value: { isShown: false, reason: 'the card was taken away as it was added' } }
   // Where a card already shows it is drawn again; else it is placed as a new card is.
@@ -715,7 +727,9 @@ export const register: Register = on => {
         const kept = await readKept($)
         if (kept && Array.isArray(kept.steps) && nextStep(kept) !== undefined) {
           // #3770: a kept step that records no session is marked as an earlier session's, here only.
-          const set = await $.state.set(cardRef, { ...carriedIn(kept), isCarried: true }, { ifVersion: 0 })
+          // #3817: nothing kept says this session has checked them, so any such mark is dropped.
+          const { isPinnedAway: _away, ...unchecked } = carriedIn(kept)
+          const set = await $.state.set(cardRef, { ...unchecked, isCarried: true }, { ifVersion: 0 })
           if (set.isSet) await $.state.set(placeRef, null)
         }
       }
@@ -818,10 +832,11 @@ export const register: Register = on => {
     }
     // While Dan is away (#621) the steps are held for the held card he sees on coming home, not
     // shown on the Mac; kept in the store all the same. Pressing the held row asks Claude to check
-    // them again and pin them.
+    // them again and pin them. Marked as pinned by this session while he was away (#3817), so a mod
+    // adding a step is told the card waits for him and not for a check.
     const held = await holdWhileAway($, card)
     if (held) {
-      await change($, () => ({ card: { ...card, isCarried: true }, out: undefined }))
+      await change($, () => ({ card: { ...card, isCarried: true, isPinnedAway: true }, out: undefined }))
       await hide($)
       return { result: `Dan is away, so "${card.heading}" was held for when he is home rather than shown.` }
     }

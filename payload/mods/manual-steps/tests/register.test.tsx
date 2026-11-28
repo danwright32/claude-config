@@ -1923,7 +1923,7 @@ test('a card carried from an earlier session takes the step but stays held, and 
   const card: StepsCard = { heading: 'Cloudflare WAF', steps: [{ title: 'Purge the cache', url: 'https://b.example' }] }
   const w = world(on, {}, { [`card:${ROOT}`]: card })
   await start($)
-  expect(await addStep($)).toEqual({ isShown: false, reason: 'the steps carried from an earlier session are held until Claude checks them again' })
+  expect(await addStep($)).toEqual({ isShown: false, held: 'unchecked', reason: 'the steps carried from an earlier session are held until Claude checks them again' })
   expect(await band($)).toBeUndefined()
   expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Purge the cache', MORNING.title])
   // Taken off a held card too, so a review done elsewhere never leaves it behind.
@@ -1932,6 +1932,138 @@ test('a card carried from an earlier session takes the step but stays held, and 
     ['Purge the cache', undefined],
     [MORNING.title, 'checked'],
   ])
+})
+
+// #3817: what the goal box does to a held card, driven through the noun as it drives it. At each
+// quiet turn end it adds its close step, is answered held, and takes the step back; then the
+// session pins the carried steps. The close card can follow only for steps that stay the earlier
+// session's, which they do when pinned under the title and the link or location they were kept
+// with. One pinned under another title, or with a link where it was kept with a location, becomes
+// this session's own step, which the goal box counts as one Dan still has to do. Its prompt tells
+// the session to keep them (tests/test-close-card-carried-reason.sh holds the two together).
+test("a held card the goal box adds its close step to and takes it back from, twice, and the session then pins: a step pinned as it was kept stays the earlier session's, one reworded or given a link for its location becomes this session's, and no taken back step comes along (#3817)", withCaller, async ($, on) => {
+  const card: StepsCard = {
+    heading: 'Kept',
+    steps: [
+      { title: 'Rotate the key', url: 'https://a.example', pinnedBy: 's0' },
+      { title: 'Renew the certificate', location: 'The certificates page', pinnedBy: 's0' },
+      { title: 'Purge the cache', url: 'https://c.example', pinnedBy: 's0' },
+    ],
+  }
+  const w = world(on, {}, { [`card:${ROOT}`]: card })
+  await start($)
+  for (let i = 0; i < 2; i++) {
+    expect(await addClose($)).toEqual({ isShown: false, held: 'unchecked', reason: 'the steps carried from an earlier session are held until Claude checks them again' })
+    expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  }
+  expect(await band($)).toBeUndefined()
+  // The close step is for this session alone, so the kept steps are still the three carried in.
+  const kept = [
+    ['Rotate the key', 's0'],
+    ['Renew the certificate', 's0'],
+    ['Purge the cache', 's0'],
+  ]
+  expect(owners(w.mem)).toEqual(kept)
+  await hand($, [step({ title: 'Rotate the key', url: 'https://a.example' }), step({ title: 'Renew the certificate', url: 'https://certs.example' }), step({ title: 'Purge the CDN cache', url: 'https://c.example' })], 'Kept')
+  expect(owners(w.mem)).toEqual([
+    ['Rotate the key', 's0'],
+    ['Renew the certificate', 's1'],
+    ['Purge the CDN cache', 's1'],
+  ])
+  // Shown now, with neither of the two close steps taken back while it was held.
+  expect((await bandText($)).join('\n')).not.toContain(CLOSE.title)
+  expect(await addClose($)).toEqual({ isShown: true })
+})
+
+// #3817 (Dan, 2026-11-27, by picker: "Ask only if unchecked"). A card is held for one of two
+// reasons: its steps were carried from an earlier session and nobody has checked them, or this
+// session pinned it while Dan was away. A mod adding a step is told which by a value, `held`,
+// beside the reason's words, so the goal box asks the session to check only in the first case.
+// Scope modes stands in for both of its parts here: Dan away or home, and the caller of the noun.
+// Each stand in above takes its name, so the two cannot be loaded together, and a stand in is
+// loaded from its own register alone, so the hooks of both are written out again in this one.
+const awayCaller: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const hold = async ({ label, prompt }: { label: string; prompt: string }) => {
+        if ((await built.env.get('AWAY')) !== '1') return { isHeld: false }
+        built.ui.toast(`held: ${label} | ${prompt}`)
+        return { isHeld: true }
+      }
+      return { ...built, scopeModes: { hold } }
+    })
+    on('tool.call', async ($, e, next) => {
+      const tool = String(e.tool)
+      if (tool !== 'AddStep' && tool !== 'WithdrawStep') return next(e)
+      const input = (e as unknown as { input: object }).input
+      try {
+        const r = tool === 'AddStep' ? await $.manualSteps.add(input as never) : await $.manualSteps.withdraw(input as never)
+        return { result: r, text: JSON.stringify(r) } as never
+      } catch (err) {
+        return { deny: `threw: ${String((err as Error)?.message ?? err)}` }
+      }
+    })
+  },
+}
+const withAwayCaller = { plugins: [modKit, awayCaller] }
+const KEPT: StepsCard = {
+  heading: 'Kept',
+  steps: [
+    { title: 'Rotate the key', url: 'https://a.example', pinnedBy: 's0' },
+    { title: 'Renew the certificate', location: 'The certificates page', pinnedBy: 's0' },
+  ],
+}
+// The session's check: each kept step pinned under the title and the link or location it had.
+const pinKept = ($: Engine) =>
+  hand($, [{ title: 'Rotate the key', url: 'https://a.example', checked: 'not-done' }, { title: 'Renew the certificate', location: 'The certificates page', checked: 'not-done' }], 'Kept')
+type Added = { isShown: boolean; held?: string; reason?: string }
+
+test('carried steps nobody has checked and a card held because Dan is away answer an added step by two values and in two sentences: unchecked until this session pins the carried steps, away from then for as long as the card is held, and shown once he is home and they are pinned again (#3817)', withAwayCaller, async ($, on) => {
+  const env: Record<string, string> = { AWAY: '1' }
+  const w = world(on, {}, { [`card:${ROOT}`]: KEPT }, env)
+  await start($)
+  const unchecked = (await addClose($)) as Added
+  expect(unchecked).toEqual({ isShown: false, held: 'unchecked', reason: 'the steps carried from an earlier session are held until Claude checks them again' })
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  // The session checks the carried steps and pins them as they were kept. Dan is away, so the
+  // card is held for him.
+  expect(await pinKept($)).toMatch(/Dan is away/)
+  const away = (await addClose($)) as Added
+  expect(away).toEqual({ isShown: false, held: 'away', reason: 'the steps this session pinned while Dan was away are held until they are pinned again once he is home' })
+  // Two answers, never one: a caller that acts on the first must not act on the second.
+  expect(away.held).not.toBe(unchecked.held)
+  expect(away.reason).not.toBe(unchecked.reason)
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  // Added again, as at the quiet end of his next request: nothing has changed, so the same answer.
+  expect(await addClose($)).toEqual(away)
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  expect(await band($)).toBeUndefined()
+  // They stay the earlier session's steps, and the store keeps no mark of this session's check.
+  expect(owners(w.mem)).toEqual([
+    ['Rotate the key', 's0'],
+    ['Renew the certificate', 's0'],
+  ])
+  expect(stored(w.mem)).not.toHaveProperty('isPinnedAway')
+  expect(stored(w.mem)).not.toHaveProperty('isCarried')
+  // Home again and pinned once more: the card shows, and a step added to it shows with it.
+  env.AWAY = ''
+  expect(await pinKept($)).toMatch(/step 1 of 2 is next/)
+  expect(await addClose($)).toEqual({ isShown: true })
+})
+
+test('whether this session has checked its carried steps is never read from the store: a kept card carrying the mark is unchecked at the next session start (#3817)', withAwayCaller, async ($, on) => {
+  world(on, {}, { [`card:${ROOT}`]: { ...KEPT, isPinnedAway: true } }, { AWAY: '1' })
+  await start($)
+  expect(await addClose($)).toMatchObject({ isShown: false, held: 'unchecked' })
+})
+
+test('steps this session pins for the first time while Dan is away are held for him too, and a step added says away, never unchecked (#3817)', withAwayCaller, async ($, on) => {
+  world(on, {}, {}, { AWAY: '1' })
+  await start($)
+  expect(await hand($, [step()])).toMatch(/Dan is away/)
+  expect(await addStep($)).toMatchObject({ isShown: false, held: 'away' })
 })
 
 test('nothing is added where nobody is at the prompt, and a step with no place is refused loudly (#1107)', withCaller, async ($, on) => {

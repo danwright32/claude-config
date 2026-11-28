@@ -2249,12 +2249,22 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   it), at the end of the card pinned now under its heading, or as a card of its own; a step already
   on the card unfinished, by its title, is not added twice. It is shown as a new card is and never
   held while Dan is away, since the caller decides when to add; on a card carried from an earlier
-  session it is kept and stays held with the rest. A later pin through the steps tool, which
-  replaces the card, keeps such a step at its end while it is unfinished, unless the new card names
-  it, since it is not Claude's to drop. `$.manualSteps.finish({ title })` finishes that
-  step as checked, whichever step is open. Both are answered by this mod's own hooks on the noun's
+  session, or one already held because he is away, it is kept and stays held with the rest, and
+  the caller is answered not shown with a value saying which hold it is (`held`, #3817):
+  `unchecked` for carried steps nobody has checked in this session, `away` for a card this session
+  pinned while he was away, each with a reason in words of its own. The second is a mark on the
+  card in the session's state (`isPinnedAway`), set by the steps tool's call alone when scope modes
+  holds the card, and dropped whenever the card is kept in the store or read from it, so it is the
+  one record that this session has checked and pinned the steps it holds and no later session
+  inherits it. A later pin through the steps tool,
+  which replaces the card, keeps such a step at its end while it is unfinished, unless the new card
+  names it, since it is not Claude's to drop. `$.manualSteps.finish({ title })` finishes that
+  step as checked, whichever step is open, and `$.manualSteps.withdraw({ title })` (#3770) takes it
+  off as withdrawn, never as done. All three are answered by this mod's own hooks on the noun's
   events, which have the whole engine and so reach mod-kit wherever the folders sort; the noun's own
-  methods throw only when those hooks failed. Sleep mode's morning reminder is the one caller.
+  methods throw only when those hooks failed. There are two callers: sleep mode's morning reminder,
+  which adds and finishes, and since #3770 the goal box's close this session card, which adds and
+  withdraws (and since #3817 withdraws the step it added to a held card).
 - **A step left in prose** (#863). On 2026-10-06 a session ended a turn with "The one thing still
   waiting on you is the migration command from my earlier message"; the command had only ever been
   prose in an earlier reply, and Dan never saw it. So at the turn's end (`classic.Stop`) the mod
@@ -6102,6 +6112,64 @@ file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.
 - **Once.** A box is recorded in the session's state by a read and a versioned write, so two calls
   at once show one; a goal's box by its met record's id, a request's by how many messages Dan had
   typed (mod-kit's one reader of his own words), and a second box needs a new one.
+- **The close card over a held steps card (#3817), decided 2026-11-27.** The close this session
+  card (#3770, README "goal-box") is added to the steps card through manual steps' noun, and manual
+  steps holds a card carried from an earlier session, with any step added to it, until the session
+  has checked the steps and pinned them again (#1107), which nothing but a standing note asked
+  for. So in a folder with kept undone steps the card could not show until the session had done
+  that by itself; Dan's first real test of it ran in one where it had not, with five such steps.
+  (A count of the personal MacBook's session records for the 30 days to 2026-11-27 found 38
+  sessions told about carried steps, 12 of which checked and pinned them unasked. The work
+  MacBook, where most of his sessions run, was not counted.) Two ways out were put to him on the
+  issue: draw the close step alone over the held card, or tell the session first. His answer by
+  picker on 2026-11-27, as the issue records it: "Ask the session to check first", with no design
+  round and the way manual steps holds a carried card left as it is. So when the pin comes back
+  held, the goal box takes back the close step it just added, sends the session one prompt of its
+  own per request of Dan's (`CHECK_CARRIED` in `hooks/close.ts`) asking it to check the carried
+  steps and pin them again, and writes one reason naming the carried card. A session that does
+  not pin them gets no card for that request, which he accepted with the option. The goal box
+  knows why a card is held by the value in manual steps' answer (`held`), never by the words of
+  its reason. The two values and the two reasons are said again in `hooks/close.ts` because a mod
+  cannot read another mod's files, and `tests/test-close-card-carried-reason.sh` fails when the
+  two mods differ, when the two values or the two reasons become one, or when the goal box
+  compares the words.
+  - *What is expected, and what it rests on.* The session pins the steps, the old steps card
+    comes back with its notification, and the close card is added below it at the next quiet turn
+    end. No real session had been sent the prompt when this was written, so nobody has seen it
+    happen yet. By the code it needs three things. The session pins each step under
+    the title and link or place it had: manual steps knows a pinned step as the earlier session's
+    by those (`pinnedBy` in its `hooks/card.ts`), and one pinned under other words becomes this
+    session's own step, which keeps the close card back until Dan has done it, with no further
+    prompt. So the prompt says to keep them, and the same suite fails when manual steps matches by
+    anything else or the prompt stops saying so. Dan is at home (below). And the reply does not
+    end on a question, which the prompt asks for. When every carried step is found done, the close
+    card stands alone.
+  - *A prompt that could not be sent* is tried again by the check itself while the session stays
+    idle, since an idle session has no next turn end: up to three more times (`CARRIED_RETRIES`),
+    one quiet period apart, each try taking every reading afresh, and any turn or message between
+    ends it. After those it is tried again only at a quiet turn end after the session's next turn,
+    and the reason written says which of the two it is. Bounded, so a send that can never enter is
+    not tried every few minutes for good.
+  - *While Dan is away, decided 2026-11-27.* Manual steps holds every card pinned while he is away
+    (#621), so a card whose carried steps the session has already checked and pinned is held too,
+    and the close card cannot follow until he is home and the steps are pinned once more. Three
+    ways to behave were put to him: ask at every request that gets a box, never ask while he is
+    away, or ask only for steps nobody has checked. His answer by picker on 2026-11-27: "Ask only
+    if unchecked (Recommended)". So manual steps answers a step added to a held card with one of two values,
+    and the goal box asks the session to check only for `unchecked`. For `away` it takes its close
+    step back, sends nothing, and writes that the session has pinned the steps already and the
+    card can follow once they are showing. Carried steps nobody has checked are still asked about
+    while he is away, once, so they are ready to show when he is home; the prompt promises no
+    card, since the steps then pinned stay held. An answer with any other value, or none, is read
+    as neither and written as any other pin that was not shown. Never asking while away was not
+    taken because unchecked steps would then wait for the session's next turn after he is home.
+  - *Not pulled:* reading manual steps' card from its state before the pin and never adding the
+    step, which would save the add and the take back but rest on a second fact about another mod's
+    state. It would also end the goal box's part in one fault of manual steps' own: each add and
+    each take back on a held card saves that session's copy of the carried steps as the folder's
+    kept steps, so a session whose copy is old can put back a step another session has since
+    marked done. The add did that once per session before this change; the add and the take back
+    now do it at every quiet turn end with a box while the card stays held.
 
 ## Not design decisions
 
