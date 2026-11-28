@@ -57,8 +57,13 @@ const quoted = (word: string): string => `'${word.replace(/'/g, `'\\''`)}'`
  */
 export const answeredCommand = (transcript: string): string => `python3 ~/.claude/hooks/lib/review-record.py answered --transcript ${quoted(transcript)}`
 
-/** What the record says of this turn's review, or why it could not be read. */
-export type ReviewRead = { state: 'none' | 'handed' | 'answered' } | { unread: string }
+/**
+ * What the record says of this turn's review, or why it could not be read. `handedAt` is when the
+ * review was handed over, in milliseconds, where the record gives a time: the prompt about a steps
+ * card worked through is not sent when a review handed over after the card emptied has asked for
+ * the box already (#3864). A record with no usable time has none, and decides nothing there.
+ */
+export type ReviewRead = { state: 'none' | 'handed' | 'answered'; handedAt?: number } | { unread: string }
 
 const STATES = ['none', 'handed', 'answered'] as const
 
@@ -66,13 +71,18 @@ const STATES = ['none', 'handed', 'answered'] as const
 export const reviewRead = (r: { exitCode: number; stdout: string; stderr: string }): ReviewRead => {
   if (r.exitCode !== 0) return { unread: r.stderr.trim().split('\n').pop() || `the read of the review's record exited ${r.exitCode}` }
   let said: unknown
+  let at: unknown
   try {
-    said = (JSON.parse(r.stdout) as { state?: unknown } | null)?.state
+    const record = JSON.parse(r.stdout) as { state?: unknown; handed_at?: unknown } | null
+    said = record?.state
+    at = record?.handed_at
   } catch {
     said = undefined
   }
   const state = STATES.find(s => s === said)
-  return state ? { state } : { unread: `the read of the review's record answered ${JSON.stringify(r.stdout.trim().slice(0, 80))}, which names no state` }
+  if (!state) return { unread: `the read of the review's record answered ${JSON.stringify(r.stdout.trim().slice(0, 80))}, which names no state` }
+  // The record keeps seconds; every time of the mod's own is in milliseconds.
+  return typeof at === 'number' && Number.isFinite(at) ? { state, handedAt: Math.round(at * 1000) } : { state }
 }
 
 /**

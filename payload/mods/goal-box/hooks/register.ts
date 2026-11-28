@@ -443,7 +443,8 @@ const spendCardNow = async ($: EngineInterface): Promise<void> => {
  * and one followed by a card that has a step open now or cannot be read.
  * The end of turn review's record is asked last, through `record` (endRecord): a review handed over
  * this turn that Dan has not answered spends the record unsent, as it spends the turn end's other
- * question. Claimed before it is sent, so two turn ends at once ask once, and released when the
+ * question, and so does one he has answered that was handed over after the card emptied, which
+ * asked for the box with the card gone. Claimed before it is sent, so two turn ends at once ask once, and released when the
  * prompt did not enter, so a passing failure is asked again at the next turn end (L368).
  */
 const askAfterCard = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<void> => {
@@ -480,6 +481,9 @@ const askAfterCard = async ($: EngineInterface, record: () => Promise<EndRecord>
   const end = await record()
   if (!(await $.state.set(cardAskedRef, emptied.at, { ifVersion: asked.version })).isSet) return
   if (end.unanswered) return debug($, `${UNANSWERED}, so the session is not asked about the Goal accomplished box now the steps card has emptied`)
+  // A review handed over after the card emptied asked for the box with the card already gone, and
+  // the session has answered it: asking again at the same turn's end gets its one line said twice.
+  if (end.handedAt !== undefined && end.handedAt > emptied.at) return debug($, 'an end of turn review handed over after the steps card emptied has asked about the Goal accomplished box already, so the session is not asked again')
   const failed = await sendHeld($, 'ask-after-card', 'the prompt asking about the Goal accomplished box now the steps card has emptied', askCardText())
   if (failed === undefined) {
     if (end.unread !== undefined) $.ui.log(promptedUnreadText(end.unread))
@@ -700,7 +704,12 @@ const reviewNow = async ($: EngineInterface, prompts: number): Promise<ReviewWai
  * then goes out is said where Dan can see it. Asked once a turn end, and only when a prompt is about
  * to be sent, so a turn end that sends nothing never pays for the read.
  */
-type EndRecord = { unanswered: boolean; unread?: string }
+type EndRecord = {
+  unanswered: boolean
+  unread?: string
+  /** When this turn's review was handed over, in milliseconds, where the record gives a time. */
+  handedAt?: number
+}
 const UNANSWERED = 'an end of turn review was handed over this turn and Dan has not answered it'
 const endRecord = ($: EngineInterface): (() => Promise<EndRecord>) => {
   let asked: Promise<EndRecord> | undefined
@@ -708,7 +717,7 @@ const endRecord = ($: EngineInterface): (() => Promise<EndRecord>) => {
     const record = await recordNow($)
     if (record === null) return { unanswered: false }
     if ('unread' in record.read) return { unanswered: false, unread: record.read.unread }
-    return { unanswered: record.read.state === 'handed' }
+    return { unanswered: record.read.state === 'handed', ...(record.read.handedAt === undefined ? {} : { handedAt: record.read.handedAt }) }
   }
   return () => (asked ??= ask())
 }

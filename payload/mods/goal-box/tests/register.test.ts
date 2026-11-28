@@ -3414,6 +3414,47 @@ test("the same once a met /goal's box has been shown: the message that could not
   expect(cardAsks(submitted)).toEqual([])
 })
 
+// An end of turn review handed over after the card emptied asks for the box with the card gone, so
+// the card's prompt would ask the same again at that turn's end. The record gives the hand over's
+// time in seconds, as hooks/lib/review-record.py prints it.
+const reviewAt = (state: 'handed' | 'answered', handedAt: unknown): Gh => ({ exitCode: 0, stdout: `${JSON.stringify({ state, turn: 'p1', handed_at: handedAt, label: 'SESSION REFLECTION' })}\n` })
+const ASKED_BY_REVIEW = /an end of turn review handed over after the steps card emptied has asked about the Goal accomplished box already, so the session is not asked again/
+
+test("a review handed over after the card emptied, and answered, has asked about the box already: the card's prompt is not sent, then or later (#3864)", withAll, async ($, on) => {
+  const { w, submitted, logs } = world(on, { stepsEmptied: EMPTIED, review: reviewAt('answered', (EMPTIED.at + 1) / 1000) })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  expect(logs.filter(l => ASKED_BY_REVIEW.test(l))).toHaveLength(1)
+  w.review = reviewSays('none')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+})
+
+const NOT_ASKED_BY_REVIEW: [string, unknown][] = [
+  ['handed over before the card emptied', (EMPTIED.at - 1) / 1000],
+  ['handed over in the very millisecond the card emptied', EMPTIED.at / 1000],
+  ['whose record gives no time for the hand over', undefined],
+  ['whose record gives a time that is not a number', 'a minute ago'],
+]
+for (const [what, handedAt] of NOT_ASKED_BY_REVIEW)
+  test(`a review ${what}, and answered, asked while a step was open or cannot be placed: the card's prompt is sent (#3864)`, withAll, async ($, on) => {
+    const { submitted, logs } = world(on, { stepsEmptied: EMPTIED, review: reviewAt('answered', handedAt) })
+    await start($)
+    await says($, 'Run the one off test and tell the team')
+    await turnEnds($)
+    expect(cardAsks(submitted)).toHaveLength(1)
+    expect(logs.filter(l => ASKED_BY_REVIEW.test(l))).toEqual([])
+  })
+
+test("the reader of the review's record keeps when the review was handed over, in milliseconds, and only a time that is a number (#3864)", async () => {
+  expect(reviewRead({ exitCode: 0, stdout: '{"state": "answered", "turn": "p1", "handed_at": 1800000000.25, "label": ""}\n', stderr: '' })).toEqual({ state: 'answered', handedAt: 1_800_000_000_250 })
+  expect(reviewRead({ exitCode: 0, stdout: '{"state": "handed", "turn": "p1", "handed_at": 1800000000}\n', stderr: '' })).toEqual({ state: 'handed', handedAt: 1_800_000_000_000 })
+  for (const at of ['"1800000000"', 'null', 'true', '[1800000000]']) expect(reviewRead({ exitCode: 0, stdout: `{"state": "answered", "handed_at": ${at}}`, stderr: '' })).toEqual({ state: 'answered' })
+})
+
 // A record that waits is asked about only under the request it emptied under.
 const PR_OPEN = { links: [link('danwright32/claude-config', 1700)], open: { 'danwright32/claude-config': { exitCode: 0, stdout: '[{"number":1700}]' } } }
 
