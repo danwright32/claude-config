@@ -386,6 +386,15 @@ want_style_code 2 "#3879 a new file added by name is judged when a message only 
 want_says "app/copy.ts" "#3879 and that refusal names the new file"
 run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qm 'a b' && git push"$'\n''echo "never closed'
 want_style_code 2 "#3879 control: the same command nobody can read, its message naming no add, judges the new file"
+#     A named path that is not there, beside an add -u or a commit -a, falls back to the whole
+#     working tree and says so, as it does with neither (case 8 below).
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && git add does-not-exist.txt && git add -u && git commit -qm copy && git push"
+want_style_code 2 "#3879 an unresolvable path beside an add -u falls back rather than narrowing to the tracked changes"
+want_says "could not be worked out" "#3879 an unresolvable path beside an add -u says the reading was widened"
+run_style_hook "$E2E" "cd $W && git add does-not-exist.txt && git commit -qam copy && git push"
+want_style_code 2 "#3879 an unresolvable path beside commit -a falls back rather than narrowing to the tracked changes"
+want_says "could not be worked out" "#3879 an unresolvable path beside commit -a says the reading was widened"
 
 # 6. Content already in the INDEX is carried by a bare commit with no add at all.
 W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"

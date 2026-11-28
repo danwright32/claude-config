@@ -1378,6 +1378,19 @@ pending_lists "git add named.txt \$(git add -u) && git commit -qm x && git push"
   "#3879 a file named beside an add -u inside a substitution is read"
 pending_lists "git add -- -u named.txt && git commit -qm x && git push" named.txt \
   "#3879 a file named after a double dash and a -u is read"
+# A named path that is not there beside the tracked reading (claude-config#3879): the add cannot be
+# accounted for, as when it stands alone, so the whole working tree is listed and the caller says
+# so. The tracked reading used to list the tracked changes only and call that exact.
+want_pending "git add gone.txt && git commit -qam x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#3879 an add naming a path that is not there beside commit -a widens and says so"
+want_pending "git add gone.txt && git add -u && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#3879 an add naming a path that is not there beside an add -u widens and says so"
+want_pending "git add -u && git commit gone.txt -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#3879 a commit naming a path that is not there beside an add -u widens and says so"
+want_pending "git add named.txt && git commit -qam x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 control: a named path that is there beside commit -a keeps the reading exact"
+want_pending "git add -u gone && git commit -qm x && git push" "EXACT|tracked.txt" \
+  "#3879 control: a path that is not there named by the add -u itself widens nothing, no new file can come from it"
 got="$( cd "$PF" && ps_pending_files "git add named.txt && git commit -qm 'a \$(git add -u) b' && git push" | tr '\n' '|' )"
 [ "$got" = "EXACT|named.txt|" ] \
   && check "#3879 control: the same message in a command that can be read is no add, so the named file alone" ok \
