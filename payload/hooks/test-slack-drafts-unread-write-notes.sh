@@ -102,6 +102,19 @@ fed() {
   printf '%s\n' "$@"
   printf 'EOF'
 }
+# given_up <form> <what follows it> <line>...: a text the reader gives up on that holds the lines, in
+# one of five forms, then what follows it in text read whole. The forms: a heredoc fed to a shell,
+# the lines as quoted words in one, a string handed to bash -c, one handed to eval, a sourced file.
+given_up() {
+  local form="$1" after="$2" l q=(); shift 2
+  case "$form" in
+    heredoc) fed "$after" "$@" "$OPEN" ;;
+    quoted) for l in "$@"; do q+=("$(quoted "$l")"); done; fed "$after" "${q[@]}" "$OPEN" ;;
+    bash-c) printf "bash -c '%s' ; %s" "$(lines "$@" "$OPEN")" "$after" ;;
+    eval) printf "eval '%s' ; %s" "$(lines "$@" "$OPEN")" "$after" ;;
+    sourced) lines "$@" "$OPEN" > "$S/given-up.sh"; printf '. ./given-up.sh; %s' "$after" ;;
+  esac
+}
 ROUGH="a command in text this gate could not read as commands for certain"
 PYDOUBT="a PYTHONPATH exported in text this gate could not read as commands for certain"
 ONTO="a copy to a path that only text this gate could not read as commands for certain makes a folder"
@@ -318,6 +331,88 @@ refused "#3884 a file that exports the path of a module that posts, read the sam
 run_s "export PYTHONPATH=postlib; eval '. ./via.sh'; export PYTHONPATH=postlib; eval '$(lines 'echo "a; . ./via.sh; b"' "$OPEN")' ; python3 run.py"
 refused "#3884 quoted words that source a file read earlier in a string handed to eval, which sources one by a variable"
 
+echo "  after such a text, a copy from or onto what it touched only adds to the note"
+
+# A heredoc given up on that removes calm.sh and copies a folder to it: if a shell ran those lines
+# calm.sh is a folder, the copy of it onto the file b fails whole, and b still holds the post.
+UNSURE_DIR=('rm calm.sh' 'cp -R calmdir calm.sh' "$OPEN")
+run_s "cp post.sh b; $(fed 'cp -R calm.sh b; bash b' "${UNSURE_DIR[@]}")"
+refused "#3884 a folder that may be a file, copied in text read whole onto a copy of the script that posts, and that run"
+says "#3884 and it is judged by what the copy held before" "b is made from post.sh and calm.sh earlier in this command"
+run_s "cp post.sh b; $(fed 'cp -R calm.sh b; bash b' 'cp -R calmdir calm.sh' "$OPEN")"
+refused "#3884 the same with nothing removed first"
+run_s "cp calm.sh a; cp post.sh b; $(fed 'mv a b; bash b' 'rm a' 'cp -R calmdir a' "$OPEN")"
+refused "#3884 the same with the source a copy noted earlier, moved onto it"
+run_s "cp -R postdir d; $(fed 'cp -R calm.sh d/run.sh; bash d/run.sh' "${UNSURE_DIR[@]}")"
+refused "#3884 the same onto a script under a folder copied from one that posts"
+run_s "cp post.sh b; $(fed 'cp -R calm.sh b; . ./b' "${UNSURE_DIR[@]}")"
+refused "#3884 the same with the copy sourced"
+run_s "cp post.sh b; $(fed 'cp -R calm.sh b; cat b | bash' "${UNSURE_DIR[@]}")"
+refused "#3884 the same with the copy printed into a shell"
+run_s "cp post.sh b; $(fed 'cp -R calm.sh b; cp -R b c; bash c' "${UNSURE_DIR[@]}")"
+refused "#3884 the same through one more copy"
+run_s "cp post.sh b; bash -c '$(lines "${UNSURE_DIR[@]}")' ; cp -R calm.sh b; bash b"
+refused "#3884 the same with the text given up on a string handed to bash -c"
+run_s "cp post.sh b; eval '$(lines "${UNSURE_DIR[@]}")' ; cp -R calm.sh b; bash b"
+refused "#3884 the same with the text given up on a string handed to eval"
+# A cut of the table generated for #3878, in which every command the gate refused before #3878 is
+# still refused: each form of text given up on, each way it makes calm.sh a folder, and each thing
+# that then takes from calm.sh, onto a copy of the script that posts.
+for form in heredoc quoted bash-c eval sourced; do
+  for made in 'cp -R calmdir calm.sh' 'rm calm.sh|cp -R calmdir calm.sh'; do
+    IFS='|' read -r -a made_lines <<< "$made"
+    for take in 'cp calm.sh b; bash b' 'cp -R calm.sh b; bash b' 'mv calm.sh b; bash b' \
+                'cp -R calm.sh b; . ./b' 'bash -c "cp -R calm.sh b"; bash b' 'eval "cp -R calm.sh b"; bash b' \
+                'cp -R calm.sh b; cat b | bash'; do
+      run_s "cp post.sh b; $(given_up "$form" "$take" "${made_lines[@]}")"
+      refused "#3884 table: text given up on ($form) holding ${made//|/ and }, then $take"
+    done
+    run_s "cp -R postdir d; $(given_up "$form" 'cp -R calm.sh d/run.sh; bash d/run.sh' "${made_lines[@]}")"
+    refused "#3884 table: text given up on ($form) holding ${made//|/ and }, then a copy onto a script under a folder copied from one that posts"
+  done
+done
+# What such a text removes, makes a folder or moves away is touched too, though nothing is noted
+# of what it holds: a copy from it may fail, and the target is then as it was.
+run_s "cp post.sh b; $(fed 'cp calm.sh b; bash b' 'rm calm.sh' "$OPEN")"
+refused "#3884 a file such a text removes, copied in text read whole onto a copy of the script that posts, and that run"
+run_s "cp post.sh b; $(fed 'cp -R calm.sh b; bash b' 'rm calm.sh' 'mkdir calm.sh' "$OPEN")"
+refused "#3884 a file such a text removes and makes a folder of, copied onto it"
+run_s "cp post.sh b; $(fed 'cp calm.sh b; bash b' 'mv calm.sh gone.sh' "$OPEN")"
+refused "#3884 a file such a text moves away, copied onto it"
+run_s "cp post.sh b; $(fed 'cp calm.sh b; bash b' 'rm "$GONE"' "$OPEN")"
+refused "#3884 a removal in such a text of a path that cannot be worked out, then a copy onto it"
+run_s "cp post.sh b; $(fed 'cp calm.sh b; bash b' 'rm c*.sh' "$OPEN")"
+refused "#3884 a removal in such a text by a pattern, then a copy of a file it matches"
+run_s "cp post.sh b; $(fed 'cp calmdir/run.sh b; bash b' 'rm -r calmdir' "$OPEN")"
+refused "#3884 a folder such a text removes, then a copy of a file under it"
+run_s "cp post.sh b; $(fed 'cp calm.sh b; bash b' 'rm b' 'mkdir b' "$OPEN")"
+refused "#3884 a copy read whole onto a target such a text removed and made a folder of"
+run_s "cp post.sh b; $(fed 'echo true > b; bash b' 'rm b' "$OPEN")"
+refused "#3884 a write read whole to a target such a text removed"
+run_s "cp -R postdir d; $(fed 'cp -R calmdir/ d; bash d/run.sh' 'rm calmdir/run.sh' "$OPEN")"
+refused "#3884 a folder with a file such a text removed, copied in text read whole over a folder copied from one that posts"
+says "#3884 and the script is judged by the folder it was copied from before" "postdir/run.sh"
+# A folder test on a path such a text copies a folder to is answered yes, as before #3878: the
+# copy may be one a shell runs, and then the script the test picks is the one that posts.
+run_s "$(fed 'F=calm.sh; [ -d a ] && F=post.sh; bash "$F"' 'cp -R calmdir a' "$OPEN")"
+refused "#3884 a folder test on a path such a text copies a folder to still picks the script that posts"
+# Printed text empties its target before anything is read, so its source decides nothing.
+run_s "cp post.sh b; $(fed 'cat calm.sh > b; bash b' 'rm calm.sh' "$OPEN")"
+allowed "#3884 a file such a text removes, printed in text read whole over a copy of the script that posts, replaces it"
+# What such a text did not touch is replaced as before.
+run_s "cp post.sh b; $(fed 'cp calm.sh b; bash b' 'rm spare.sh' 'cp -R calmdir other' "$OPEN")"
+allowed "#3884 a copy read whole between two paths such a text did not touch still replaces the note"
+# A folder on disk with a file such a text removed is still a folder: a copy into it notes the file
+# under it, and nothing at the folder's own path.
+run_s "$(fed 'cp calm.sh calmdir; bash calmdir' 'rm calmdir/run.sh' "$OPEN")"
+allowed "#3884 a copy into a folder on disk under which such a text removed a file does not note the folder as a file"
+# In text read whole a removal or a move away is not followed, as before #3878, though the copy
+# after it fails in a shell: pinned so that following it shows as a change.
+run_s "cp post.sh b; rm calm.sh; cp calm.sh b; bash b"
+allowed "#3884 STILL UNREAD: a file removed in text read whole, then copied onto a copy of the script that posts"
+run_s "cp post.sh b; mv calm.sh gone.sh; cp calm.sh b; bash b"
+allowed "#3884 STILL UNREAD: a file moved away in text read whole, then copied onto that copy"
+
 echo "  what such a text still hides: a folder change and a variable among quoted words"
 
 # Not closed by #3878, and allowed before it: pinned here so that closing either shows as a change.
@@ -331,6 +426,13 @@ run_s "$(lines 'F=post.sh' "$(quoted 'F=calm.sh')" 'bash "$F"' "$OPEN")"
 allowed "#3884 STILL UNREAD: quoted words that name an assignment of a variable, then a script run through that variable"
 run_s "$(lines 'F=post.sh' 'bash "$F"' "$OPEN")"
 allowed "#3884 STILL UNREAD: the same with no quoted words at all"
+# The folder test above is answered yes for quoted words too, where a shell finds no folder. No
+# other answer is open to it: one that may be either leaves the variable set two ways, and a script
+# run through such a variable is not read in text read whole either.
+run_s "$(fed 'F=calm.sh; [ -d a ] || F=post.sh; bash "$F"' "$(quoted 'cp -R calmdir a')" "$OPEN")"
+allowed "#3884 STILL UNREAD: a folder test on a path that only quoted words copy a folder to, picking the script"
+run_s "F=calm.sh; somecmd || F=post.sh; bash \"\$F\""
+allowed "#3884 STILL UNREAD: in text read whole, a script run through a variable set two ways"
 
 echo "  controls: a text read whole is judged as before, and what such a text does not touch too"
 
@@ -338,6 +440,8 @@ run_s "cp post.sh made.sh; printf true > made.sh; bash made.sh"
 allowed "#3878 a write the reader reads whole still replaces what the file was copied from"
 run_s "$(fed 'bash made.sh' 'cp post.sh made.sh' 'printf true > made.sh')"
 allowed "#3878 and so does one in a heredoc the reader reads whole"
+run_s "cp post.sh made.sh; printf true >> made.sh; bash made.sh"
+refused "#3884 a write the reader reads whole that adds to the file keeps what it was copied from"
 run_s "$(fed 'bash made.sh' 'cp post.sh made.sh' "$(quoted 'printf true > made.sh')")"
 refused "#3878 quoted words in a heredoc the reader reads whole replace nothing"
 says "#3878 and the copy is judged by what it was copied from" "made.sh is made from post.sh earlier in this command"

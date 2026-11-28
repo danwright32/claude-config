@@ -6321,6 +6321,14 @@ read; a folder copied there has every file under it unread; and a `PYTHONPATH` e
 one the gate could not read, so an import Python would look for on it is refused as a check that
 could not be made, while an import found beside the script is read as before. The same holds for
 a script on disk that such a text runs or sources, since the words that run it may be quoted.
+What such a text writes, copies or moves onto, moves away, removes or makes a folder is touched
+from then on, and so is a path above or below it. After that a note is replaced in one place
+(`note_set`) and only where the text is read whole and neither the target nor the source of a
+copy is touched; anywhere else it only gains, and the target is then touched too. A copy from a
+touched source can fail whole and leave its target as it was: after `cp post.sh b`, a heredoc
+given up on that holds `rm calm.sh` and `cp -R calmdir calm.sh` makes `cp -R calm.sh b` fail, and
+`bash b` runs the post. A write of printed text gains only for a touched target, since a shell
+empties the target before it reads the source.
 Before this, `cp post.sh made.sh`, then the quoted words `printf true > made.sh`, then a quote left
 open, left `made.sh` read as `true`, and `bash made.sh` after it was allowed. The cost is that a
 text the reader gives up on that writes a file and then runs it is refused, where the gate used to

@@ -1204,6 +1204,9 @@ COPIERS = {"cp": "tS", "gcp": "tS", "mv": "tS", "gmv": "tS", "install": "BDfghlM
 # Long options whose value may be the next word. GNU's --backup takes one only as --backup=CONTROL, so
 # it is not here: the word after it is a file.
 COPIER_LONG_VALUED = {"--target-directory", "--suffix", "--mode", "--owner", "--group"}
+# Programs that remove a path or make a directory of it and write no text. Nothing is noted of what
+# such a path holds, but in a text the reader gave up on it is touched from then on (note_touched).
+ROUGH_REMAKERS = frozenset({"rm", "grm", "rmdir", "grmdir", "unlink", "gunlink", "mkdir", "gmkdir"})
 MADE_DEPTH = 8  # how many copied directories deep a lookup follows (made_from)
 # curl's options that write a file named by the next word (claude-config#2721), the long ones that
 # leave the name to the server or a config file, those of them taking a value, and the short options
@@ -2055,12 +2058,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # them in the order the commands run; made_from reads them.
         self.made = {}
         self.made_dirs = {}
-        # For a directory that a text the reader gave up on names a copy to (note_one): {directory:
-        # [(a directory it was noted as copied from before, its name)]}, which such a copy never
-        # replaces, and the directories that only such a text makes one, each of which may still be
-        # the file it was before (dir_unsure, claude-config#3878).
+        # For a directory whose note only gains (note_set): {directory: [(a directory it was noted
+        # as copied from before, its name)]}, which a later copy to it never replaces. And the paths
+        # a text the reader gave up on has touched, or that have since taken from one: by real
+        # path, and as patterns where the word naming one cannot be worked out (touched,
+        # claude-config#3878).
         self.made_dirs_kept = {}
-        self.made_dirs_unsure = set()
+        self.rough_touched = set()
+        self.rough_touched_pats = []
         # [(a pattern, what wrote it)] for files written where the path cannot be worked out
         # (claude-config#2721): every path it matches is unreadable from then on.
         self.made_unknown = []
@@ -2430,6 +2435,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             name = os.path.basename(vals[0]) if vals[0] is not None else None
         stdin = self.stdin_of(d, text, whole, redirs)
         label = name or "a command"
+        if name in ROUGH_REMAKERS and self.shell.get("crude"):
+            for a, v in zip(args[1:], vals[1:]):
+                if v is None or not v.startswith("-"):
+                    self.note_touched(a, v, d)
         if odd or name is None:
             out = None
         elif name in COPIERS:
@@ -2951,26 +2960,82 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         return made
 
     def note_file(self, target, d, pieces, append=False):
-        real = os.path.realpath(self.resolve(target, d))
         if self.shell.get("on_disk"):
             pieces = [(k, v, "") if k == "unknown" else (k, v, lb) for k, v, lb in pieces]
-        roughly = self.read_roughly()
-        if append or roughly:
-            pieces = self.pieces_of(target, d) + pieces
-        self.made[real] = pieces + roughly
+        real = self.note_set(target, d, pieces=pieces, append=append)
         if os.path.basename(real) in CURLRC_NAMES:
             self.curlrc_noted.add(real)
+
+    def note_set(self, target, d, pieces=None, came=None, sources=(), append=False, doubt=None):
+        """The one place a note is set, and so the one place a note is replaced: what the file
+        target holds (pieces), or the directory target was copied from (came). Returns target's
+        real path.
+
+        A note is replaced only where the text being read is read whole and neither the target
+        nor any of sources, the real paths a copy takes from, has been touched by a text the
+        reader gave up on (touched). Anywhere else the write may not happen as it is written. In
+        such a text it may be words a shell only prints. After one, the source or the target may
+        be another thing than the gate holds it to be, a directory where it reads a file or a path
+        that is gone, and a copy then fails whole and leaves the target as it was: `cp post.sh b`,
+        a heredoc given up on holding `rm calm.sh` and `cp -R calmdir calm.sh`, then
+        `cp -R calm.sh b; bash b` runs the post. So there the note only gains: what the target
+        held is kept and the new is added, a directory's earlier source beside the new one
+        (made_dirs_kept, read by made_from_known). The target has then taken from something
+        touched, so it is touched itself and whatever takes from it only gains too.
+
+        sources is given for a copy alone. A write of printed text empties its target before
+        anything is read, so what the target held is gone whatever the text's source turns out
+        to be, and only a touched target makes that note gain.
+
+        In a text given up on, and with doubt (a piece for a copy that may not write target,
+        copied_onto), the file also gains a piece the gate could not read, and every file under
+        a directory copied there is unread (claude-config#3878)."""
+        real = os.path.realpath(self.resolve(target, d))
+        roughly = self.read_roughly() or list(doubt or [])
+        gains = bool(roughly) or self.touched(real) or any(self.touched(s) for s in sources)
+        if gains:
+            self.rough_touched.add(real)
+        if came is not None:
+            was = self.made_dirs.get(real)
+            if gains and was and was != came and was not in self.made_dirs_kept.setdefault(real, []):
+                self.made_dirs_kept[real].append(was)
+            if roughly:
+                self.made_unknown.append((glob.escape(real.rstrip("/")) + "/*", roughly[0][2]))
+            self.made_dirs[real] = came
+        if pieces is not None:
+            held = self.pieces_of(target, d) if gains or append else []
+            self.made[real] = held + pieces + roughly
+        return real
+
+    def touched(self, real):
+        """Whether a text the reader gave up on has touched real, or real has since taken from a
+        path one touched (note_set): written, copied or moved onto, moved away, made or removed
+        (note_touched), it or a path under it or above it, since a directory is another thing once
+        anything under it is and a file is gone once a directory above it is."""
+        for t in self.rough_touched:
+            if t == real or t.startswith(real + os.sep) or real.startswith(t + os.sep):
+                return True
+        return any(fnmatch.fnmatchcase(real, pat) for pat in self.rough_touched_pats)
+
+    def note_touched(self, raw, value, d):
+        """A path a text the reader gave up on removes, makes or moves away: nothing is noted of
+        what it holds, and it is touched from then on (touched). Where the word cannot be worked
+        out, or names a pattern, every path it can name is."""
+        if value is not None and not re.search(r"[*?\[]", value):
+            self.rough_touched.add(os.path.realpath(self.resolve(value, d)))
+        else:
+            self.rough_touched_pats += self.unknown_patterns(raw, d, copier=True)
 
     def is_dir(self, word, d):
         real = os.path.realpath(self.resolve(word, d))
         return os.path.isdir(real) or real in self.made_dirs
 
     def dir_unsure(self, real):
-        """Whether real is a directory only by a note that a text the reader gave up on made, or
-        that was made from such a one (note_one). The copy that note stands for may be words a shell
-        only prints, so the path may still be the file it was before, and a copy to it or from it
-        is noted both ways (claude-config#3878)."""
-        return real in self.made_dirs_unsure
+        """Whether real, a directory to the gate, is itself a path a text the reader gave up on
+        touched or one that took from such a path (note_set). What made it a directory may be
+        words a shell only prints, or it may have been removed and a file put there, so the path
+        may be a file, and a copy to it or from it is noted both ways (claude-config#3878)."""
+        return real in self.rough_touched
 
     def copied_onto(self):
         """The piece a path gains where a copy into it as a directory may be a copy onto it as a
@@ -3081,6 +3146,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 if linker and symbolic and not relative and not os.path.isabs(os.path.expanduser(src)):
                     where = os.path.dirname(self.resolve(target, d))
                 self.note_one(src, where, target, d, doubt)
+            if name in ("mv", "gmv") and self.read_roughly():
+                self.note_touched(src, src, d)  # after its targets are noted: it may be gone now
 
     def note_one(self, src, where, target, d, doubt=None):
         """One source copied to one target: a directory to every file under it, a file to its text.
@@ -3090,31 +3157,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         real = os.path.realpath(self.resolve(target, d))
         if src_real == real:
             return
-        roughly = self.read_roughly() or list(doubt or [])
         if os.path.isdir(src_real) or src_real in self.made_dirs:
-            came = (src_real, src.rstrip("/") or src)
-            # A source that may still be a file (dir_unsure) leaves a target that may be one too.
-            maybe_file = self.dir_unsure(src_real)
-            if roughly:
-                # The copy may be words a shell only prints, so it never stands in the place of what
-                # the directory was noted as copied from before: that is kept beside it
-                # (made_from_known), and every file under it is also unread. The directory is still
-                # noted as one, copied from this source, so that a later copy, move or run of it is
-                # followed to the source as it is in text read whole (claude-config#3878).
-                was = self.made_dirs.get(real)
-                if was and was != came and was not in self.made_dirs_kept.setdefault(real, []):
-                    self.made_dirs_kept[real].append(was)
-                self.made_unknown.append((glob.escape(real.rstrip("/")) + "/*", roughly[0][2]))
-            self.made_dirs[real] = came
-            if roughly or maybe_file:
-                # Never taken back: a later copy of a directory onto a path that is a file fails,
-                # so no copy read whole shows the path to be a directory.
-                self.made_dirs_unsure.add(real)
-            if not maybe_file:
+            # Noted as a directory copied from this source even in a text given up on, so that a
+            # later copy, move or run of it is followed to the source as in text read whole.
+            self.note_set(target, d, came=(src_real, src.rstrip("/") or src), sources=[src_real], doubt=doubt)
+            # A source that may be a file (dir_unsure) leaves a target that may be one too.
+            if not self.dir_unsure(src_real):
                 return
         pieces = self.pieces_of(src, where)
         if pieces:
-            self.made[real] = (self.pieces_of(target, d) if roughly else []) + pieces + roughly
+            self.note_set(target, d, pieces=pieces, sources=[src_real], doubt=doubt)
 
     def read_roughly(self):
         """The piece every write gains where the text being read could only be read by the crude cut
