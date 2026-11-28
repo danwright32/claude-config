@@ -3078,7 +3078,13 @@ a file of that name under a folder the suite made with mktemp (`make_repo` in
 test-lessons-advisory.sh), which needs the body's variables followed and the folder shown to be a
 temporary one; and the values of an array assignment (`never=( "$home/x/App.swift" )`), which
 mod-kit's pipeline gives as commands of their own, so a value with a space in it is read as a
-program handed a file.
+program handed a file. Reading an array's values as no commands is a change to mod-kit's write
+reader, which every guard that reads writes shares, and two calls that do change a screen file
+are held today through that reading: an array holding a command that is run afterwards
+(`cmd=( prettier --write app/page.tsx ); "${cmd[@]}"`) and an array of names handed to a program
+the reader does not know (`files=( notes.txt app/page.tsx ); mystery "${files[@]}"`). The guard
+gives the array's own line as its reason for both, as it does for an array nothing uses. A fix
+has to go on holding the two, and `tests/suite-text.test.ts` holds a test for them.
 
 **The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
 to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was

@@ -148,6 +148,18 @@ test('#3602: a loop that writes each of its words, or hands each to a program, i
   expect(w.ran).toEqual([])
 })
 
+// Held through mod-kit reading an array's values as commands of their own. A change to that
+// reading has to go on holding both.
+test('#3602: an array holding a command that is run afterwards, or names handed to a program, is held', withKit, async ($, on) => {
+  const scripts: Record<string, string> = {
+    'tools/test-array-runs.sh': 'cmd=( prettier --write app/page.tsx )\n"${cmd[@]}"',
+    'tools/test-array-hands.sh': 'files=( notes.txt app/page.tsx )\nmystery "${files[@]}"',
+  }
+  const w = world($, on, { files: files(scripts) })
+  for (const path of Object.keys(scripts)) expect({ path, held: (await run($, path)).includes(SKIP_QUESTION) }).toEqual({ path, held: true })
+  expect(w.ran).toEqual([])
+})
+
 test('#3602: fromInsideOutput is true only of a plain name made from the text inside a command substitution', () => {
   const sub = '$(grep -qxF "$c" <<< "$code" && echo ok || echo "not a line")'
   expect(fromInsideOutput(sub, '/w/slate/tests/sysctl')).toBe(true)
