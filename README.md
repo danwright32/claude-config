@@ -896,6 +896,52 @@ one string, 512 files of a pattern, 8 script files, 256 quoted paths of one scri
 a link).
 `hooks/test-payload-write-gate-script-string.sh` holds the cases, on stand in files.
 
+A command is judged in the folder the shell really runs it in (#3855). The gate follows each `cd`
+and `pushd` in the order it is written, and a shell does not keep every one: a `cd` in brackets,
+in a substitution, in a member of a pipeline or in a command sent to the background moves a shell
+of its own, and a `popd` goes back to where its `pushd` was made. After `(cd /elsewhere);` or
+`pushd /elsewhere; popd;` the gate judged what followed in the other folder, so a write under
+`payload/` from the primary checkout went through with no words. Every command typed at the top
+level, and every string handed to a shell, is now judged a second time, in each folder the shell
+may run it in (what is not, is listed below). Which changes a shell undoes is asked of
+`lib/shell-words.py`, which already knew it for `cd`; that reader does not read `pushd` and
+`popd`, so the gate keeps the list of folders those leave. Two things cannot be read from a
+command and are followed both ways: a shell set to keep every `cd` on that list (zsh `autopushd`),
+and a `cd` that is the last command of a pipeline, which zsh runs in the session's shell and bash
+in one of its own. The first reading stays beside the second, and is finished before the second starts: what
+this change adds is read last, so the first reading names every destination it named before, and
+a command is refused when any reading of it names one at risk. Nothing refused before is let
+through by this. A command the shared reader cannot vouch for, or one handing a shell a string it
+cannot vouch for, is judged in every folder a `cd` in it names. The
+second reading cuts where the shell cuts, so a command after a single `&` is judged as a command
+of its own, which the first reading never did.
+
+Two more shapes from the same review are refused (#3855). `xargs` running a command that writes
+is read with the words the commands before it in the pipeline name, so `echo payload/x | xargs rm`
+is the remove it is; words `xargs` reads from a file are in no word of the command and are left to
+the check after the call. And a symbolic link's relative target is also read from the folder the
+link is made in, as the system reads it: `ln -s payload/hooks ../l5`, run in a folder inside the
+checkout, makes a second name for the payload folder beside the checkout. That holds for `ln -s`,
+for a link call given two quoted words in an inline script (`os.symlink`, node `symlinkSync`, a
+path object's `symlink_to`, ruby and perl `symlink`), and for both in a script file the command
+runs. A link folder holding a value only the shell knows is refused from a typed command when the
+target names `payload/`, and is not judged from a script file, as before. `git apply` of a patch
+file is not refused before the call, since no word of the command names what the patch touches;
+the suite applies a patch to a stand in checkout and sees the changed file named after the call.
+
+Not read by this change, each handed to the gate on stand in files and let through before and
+after it: a `cd` the shell may never make (to a folder that is not there, after `false &&`, inside
+`if false`), `chdir`, `find` with `-delete` or `-exec`, and a patch typed into the command as a
+heredoc. And five more, found by the review of the pull request, let through before and after it
+the same way. The text of a heredoc that a shell runs (`bash <<'EOF'`) gets none of the second
+reading, so a `cd` in brackets, a `pushd` and its `popd` or a single `&` inside one is read as it
+was before. A folder change inside a group in braces, an `if` or a loop is taken as kept even when
+that group is piped or sent to the background, where every shell undoes it. A loop that ends a
+pipeline and changes folder is followed one way, where bash and zsh differ. Going back with
+`cd -`, `cd ~-` or `cd "$OLDPWD"` is not followed. And a link's own folder is misread when
+anything follows the link's name: in `ln -s payload/hooks ../l5 2>/dev/null` the redirect is taken
+for the name.
+
 What counts toward the limit of 8 script files is a file the gate goes on to open, once for each
 directory it is run in (#3775). The gate opens a python, perl, ruby, node, php, deno or bun script,
 a file run by its path whose first line names no shell, and a shell script too large for

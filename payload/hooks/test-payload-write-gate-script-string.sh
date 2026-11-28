@@ -592,16 +592,27 @@ runbash "bash $FIX/dev/payload/hooks/gone.sh; bash $FIX/dev/payload/hooks/gone.s
 allowed "#3775 control: the same script that is not there run twice, no payload path besides, is let through"
 runbash "(bash $FIX/dev/payload/hooks/gone.sh)>$FIX/elsewhere/a.txt" "$FIX/elsewhere"
 allowed "#3775 control: and run inside brackets with its output sent elsewhere"
-# What the old search refused by accident is still refused. Taking every occurrence of a script
-# name out could make the word payload/ appear where the name sat against it inside a longer word.
-# Neither path below is a payload path, but dropping a refusal is left to Dan (the pull request of
-# #3775), so the gate asks the old search as well as the new one until he answers.
+# What the old search refused by accident is let through (claude-config#3855). Taking every
+# occurrence of a script name out could make the word payload/ appear where the name sat against it
+# inside a longer word. Neither path below is a payload path, and the gate on main lets both
+# through. The pull request of #3775 kept the two refusals until Dan chose; on 2026-11-27 he chose
+# "Keep now, drop in #3855", so the old search is gone and both are let through, as on main.
 # shellcheck disable=SC2016
 runbash 'bash x; bash $Y xpayload/hooks/x.sh' "$FIX/elsewhere"
-refused "#3775 kept until decided: a script named x beside xpayload/ and a script named by a value"
+allowed "#3855 dropped: a script named x beside xpayload/ and a script named by a value names no payload path"
 # shellcheck disable=SC2016
 runbash 'bash s; bash $Y /api/payloads' "$FIX/elsewhere"
-refused "#3775 kept until decided: a script named s beside /payloads and a script named by a value"
+allowed "#3855 dropped: a script named s beside /payloads and a script named by a value names no payload path"
+# The refusals the old search shared with the new one stay: a real payload path beside each.
+# shellcheck disable=SC2016
+runbash 'bash x; bash $Y payload/hooks/x.sh' "$FIX/elsewhere"
+refused "#3855 control: the first with a real payload path given to the script is still refused"
+# shellcheck disable=SC2016
+runbash 'bash s; bash $Y /api/payload/hooks' "$FIX/elsewhere"
+refused "#3855 control: the second with a real payload folder given to the script is still refused"
+# And so does the other half of the rule: a script this gate cannot read, run inside a payload folder.
+runbash "bash $FIX/scripts/gone.sh" "$FIX/dev/payload/hooks"
+refused "#3855 control: a script that is not there, run inside a payload folder and naming no payload path, is still refused"
 
 echo "a path in a command string takes nothing from the read of the whole command"
 
@@ -631,6 +642,262 @@ runbash "pushd $FIX/elsewhere; popd; $STRING_NAMES_IT_WITH" "$FIX/dev"
 refused "#3775 nor written as a with open( whose path is on the next line"
 runbash "cd $FIX/elsewhere; $STRING_NAMES_IT" "$FIX/dev"
 refused "#3775 and after a cd the shell does follow it is refused as the gate on main refuses it"
+
+echo "a command is judged in the folder the shell really runs it in (claude-config#3855)"
+
+# A CHANGE OF FOLDER THE SHELL UNDOES (claude-config#3855, found in the review of 2026-11-27). The
+# gate followed every cd and pushd it met, so after a cd in brackets, or a pushd and its popd, it
+# judged the commands after it in the other folder while the shell ran them where the session was:
+# a write under payload/ from the primary checkout went through with no words. Each command below
+# is only ever handed to the gate. None is run.
+runbash "(cd $FIX/elsewhere); echo x > payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a redirect after a cd in brackets is refused where the session is"
+says "#3855 and the refusal names the file in the checkout the command runs in" "$FIX/dev/payload/hooks/x.sh"
+runbash "(cd $FIX/elsewhere); python3 -c 'open(\"payload/hooks/x.sh\",\"w\").write(\"x\")'" "$FIX/dev"
+refused "#3855 an inline script opening a payload file on one line, after a cd in brackets"
+runbash "(cd $FIX/elsewhere); rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a remove after a cd in brackets"
+runbash "(cd $FIX/elsewhere && true); cp $FIX/elsewhere/a.txt payload/hooks/new.sh" "$FIX/dev"
+refused "#3855 a copy after brackets holding a cd and another command"
+runbash "(cd $FIX/elsewhere); (rm payload/hooks/x.sh)" "$FIX/dev"
+refused "#3855 a remove in brackets of its own, after a cd in brackets"
+runbash "(cd $FIX/elsewhere) && rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a remove joined to the brackets by &&"
+runbash "(cd $FIX/elsewhere)
+rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a remove on the line after the brackets"
+runbash "(cd $FIX/elsewhere); python3 - <<'EOF'
+open(\"payload/hooks/x.sh\",\"w\").write(\"x\")
+EOF" "$FIX/dev"
+refused "#3855 a script fed from a heredoc, after a cd in brackets"
+runbash "pushd $FIX/elsewhere; popd; echo x > payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a redirect after a pushd and its popd is refused where the session is"
+runbash "pushd $FIX/elsewhere; popd; python3 -c 'open(\"payload/hooks/x.sh\",\"w\").write(\"x\")'" "$FIX/dev"
+refused "#3855 an inline script opening a payload file on one line, after a pushd and its popd"
+runbash "pushd $FIX/elsewhere && popd && rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a remove after a pushd and its popd joined by &&"
+runbash "pushd $FIX/elsewhere >/dev/null; popd >/dev/null; rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a remove after a pushd and a popd whose output is sent away"
+runbash "pushd $FIX/dev; pushd $FIX/elsewhere; popd; rm payload/hooks/x.sh" "$FIX/elsewhere"
+refused "#3855 after two pushd and one popd a remove is judged in the folder the first pushd went to"
+runbash "cd $FIX/elsewhere; popd; rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a cd and a popd: a shell set to keep every cd on its list goes back, so it is judged there too"
+runbash "pushd $FIX/elsewhere; pushd; rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a pushd with no word swaps back to the folder the first pushd left, so the remove is judged there"
+runbash "pushd $FIX/elsewhere; pushd; pushd; rm payload/hooks/x.sh" "$FIX/dev"
+allowed "#3855 control: swapped twice the shell is elsewhere again, and the remove is let through"
+runbash "pushd $FIX/elsewhere; pushd +1; rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a pushd to an entry of the list by its number goes where only the shell knows, so a payload path after it is refused"
+runbash "pushd +1; rm $FIX/elsewhere/a.txt" "$FIX/dev"
+allowed "#3855 control: a remove written in full outside any checkout after such a pushd is let through"
+# MORE WAYS THAN ARE FOLLOWED. Each cd that ends a pipeline doubles the ways the shell may be. Past
+# the number the reading follows it stops, and the command is judged in every folder a cd in it
+# names, the one in brackets included.
+runbash "(cd $FIX/dev); true | cd /a1; true | cd /a2; true | cd /a3; true | cd /a4; rm payload/hooks/x.sh" "$FIX/elsewhere"
+refused "#3855 a command with more ways to read its folder changes than are followed is judged in every folder a cd in it names"
+runbash "(cd $FIX/dev); true | cd /a1; true | cd /a2; true | cd /a3; true | cd /a4; rm $FIX/elsewhere/a.txt" "$FIX/elsewhere"
+allowed "#3855 control: the same with a remove outside any checkout is let through"
+runbash "(cd $FIX/dev); true | cd /a1; true | cd /a2; true | cd /a3; rm payload/hooks/x.sh" "$FIX/elsewhere"
+allowed "#3855 control: with one cd fewer every way is followed, the cd in brackets is undone, and the remove lands outside any checkout"
+runbash "cd $FIX/elsewhere | cat; rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a cd in a pipeline moves a shell of its own, so the remove after it is judged where the session is"
+# A cd that is the LAST command of a pipeline moves the session shell in zsh and a shell of its own
+# in bash, so what follows it is judged both where the cd went and where the session was.
+runbash "true | cd $FIX/elsewhere; rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a cd that ends a pipeline may move a shell of its own, so the remove after it is judged where the session is too"
+runbash "true | cd $FIX/elsewhere; echo x > payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 and so is a redirect after it"
+runbash "true | cd $FIX/dev; rm payload/hooks/x.sh" "$FIX/elsewhere"
+refused "#3855 a cd that ends a pipeline may move the session shell, so the remove after it is judged where the cd went too"
+runbash "true | cd $FIX/elsewhere; rm $FIX/elsewhere/a.txt" "$FIX/dev"
+allowed "#3855 control: a remove outside any checkout after a cd that ends a pipeline is let through"
+runbash "cd $FIX/elsewhere & rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 so is a cd sent to the background"
+runbash "true & rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a command after a single & is a command of its own, and is judged"
+# A command the shared reader cannot vouch for, here one with a quote left open: which folder each
+# part runs in cannot be read, so each is judged in every folder a cd in the command names, the
+# session's among them, and cut at a single & too.
+runbash "(cd $FIX/elsewhere); rm payload/hooks/x.sh \"left open" "$FIX/dev"
+refused "#3855 a command the reader cannot read is judged where the session is too, after a cd in brackets"
+runbash "true & rm payload/hooks/x.sh \"left open" "$FIX/dev"
+refused "#3855 and after a single &"
+runbash "sleep 1& rm payload/hooks/x.sh \"left open" "$FIX/dev"
+refused "#3855 and after a single & that follows a digit"
+runbash "cd $FIX/elsewhere && rm payload/hooks/x.sh \"left open" "$FIX/dev"
+refused "#3855 and after a cd the shell would keep, since which folder it runs in cannot be read"
+# Judged in each folder, never refused outright: the path below names a payload folder, so a gate
+# that refused every command it cannot read that names one would refuse it.
+runbash "(cd $FIX/elsewhere); rm $FIX/elsewhere/payload/a.txt \"left open" "$FIX/dev"
+allowed "#3855 control: a command the reader cannot read that names a payload folder outside any checkout is let through"
+# The same when the part that cannot be read is a string handed to a shell: the command around it
+# reads well, and the string is still judged every way (found by the lessons review of this change).
+runbash "bash -c 'true & rm payload/hooks/x.sh \"left open'" "$FIX/dev"
+refused "#3855 a string handed to a shell that the reader cannot read is judged after a single & too"
+runbash "bash -c '(cd $FIX/elsewhere); rm $FIX/elsewhere/payload/a.txt \"left open'" "$FIX/dev"
+allowed "#3855 control: such a string that names a payload folder outside any checkout is let through"
+# And when it is a string an inline script hands a shell: each part of it is judged where the script
+# runs as well, whatever cd the string holds, since which folder a part runs in cannot be read.
+runbash "python3 -c \"import os; os.system('true; cd $FIX/elsewhere; rm payload/hooks/x.sh \\\"left open')\"" "$FIX/dev"
+refused "#3855 a string an inline script hands a shell that the reader cannot read is judged where the script runs, whatever cd it holds"
+runbash "python3 -c \"import os; os.system('true; cd $FIX/elsewhere; rm $FIX/elsewhere/payload/a.txt \\\"left open')\"" "$FIX/dev"
+allowed "#3855 control: such a string of an inline script that names a payload folder outside any checkout is let through"
+runbash "python3 -c \"import os; os.system('true; cd $FIX/elsewhere; rm payload/hooks/x.sh')\"" "$FIX/dev"
+allowed "#3855 control: the same string with its quote closed is read, its cd is kept, and the remove lands elsewhere"
+# A command the reader reads to its end and still will not vouch for is judged in every folder as
+# well: a redirect that a backslash and a line break split, which not every shell joins, and a
+# heredoc typed on one line, which no shell gives a body.
+runbash "cd $FIX/elsewhere; echo x >\\
+> $FIX/elsewhere/log; rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a command the reader will not vouch for, a redirect split over two lines, is judged where the session is too"
+runbash "cd $FIX/elsewhere; cat <<EOF; rm payload/hooks/x.sh; EOF" "$FIX/dev"
+refused "#3855 and so is one with a heredoc typed on one line"
+runbash "cd $FIX/elsewhere; echo x >\\
+> $FIX/elsewhere/log; rm $FIX/elsewhere/a.txt" "$FIX/dev"
+allowed "#3855 control: such a command whose remove is outside any checkout is let through"
+runbash "sleep 1& rm payload/hooks/x.sh" "$FIX/dev"
+refused "#3855 a command after a single & that follows a digit is judged, in a command the reader can read"
+# What really moved is still judged where it moved to, and what was refused before still is.
+runbash "( cd $FIX/elsewhere; echo x > payload/hooks/x.sh )" "$FIX/dev"
+allowed "#3855 control: a write inside the brackets, after the cd there, lands elsewhere and is let through"
+runbash "cd $FIX/elsewhere; echo x > payload/hooks/x.sh" "$FIX/dev"
+allowed "#3855 control: a write after a cd the shell keeps lands elsewhere and is let through"
+runbash "cd $FIX/elsewhere && rm payload/hooks/x.sh" "$FIX/dev"
+allowed "#3855 control: so is a remove joined to that cd by &&"
+runbash "pushd $FIX/elsewhere; echo x > payload/hooks/x.sh; popd" "$FIX/dev"
+allowed "#3855 control: a write between a pushd and its popd lands elsewhere and is let through"
+runbash "pushd $FIX/elsewhere; rm payload/hooks/x.sh" "$FIX/dev"
+allowed "#3855 control: a remove after a pushd with no popd lands elsewhere and is let through"
+runbash "true & rm $FIX/elsewhere/a.txt" "$FIX/dev"
+allowed "#3855 control: a remove outside any checkout after a single & is let through"
+runbash "(cd $FIX/dev); echo x > payload/hooks/x.sh" "$FIX/elsewhere"
+allowed "#3855 control: a write after a cd in brackets into the checkout stays where the session is, elsewhere"
+runbash "cd $FIX/dev; (cd $FIX/elsewhere); rm payload/hooks/x.sh" "$FIX/elsewhere"
+refused "#3855 a remove after a kept cd into the checkout and an undone one out of it is judged in the checkout"
+runbash "python3 -c \"import os; os.system('(cd $FIX/elsewhere); rm payload/hooks/x.sh')\"" "$FIX/dev"
+refused "#3855 control: the same inside a command string an inline script runs was refused before, and is"
+runbash "python3 -c \"import os; os.system('true; pushd $FIX/elsewhere; popd; rm payload/hooks/x.sh')\"" "$FIX/dev"
+refused "#3855 a pushd and its popd inside a command string an inline script runs: the remove is judged where the script runs"
+runbash "python3 -c \"import os; os.system('true; pushd $FIX/elsewhere; popd; rm $FIX/elsewhere/a.txt')\"" "$FIX/dev"
+allowed "#3855 control: the same string with a remove outside any checkout is let through"
+runbash "bash -c 'pushd $FIX/dev; pushd $FIX/elsewhere; popd; rm payload/hooks/x.sh'" "$FIX/elsewhere"
+refused "#3855 two pushd and one popd inside a command string handed to a shell are judged where the first pushd went"
+# A COMMAND IS REFUSED WHEN ANY READING OF IT REFUSES. The reading that was there follows the
+# pushd into the checkout and knows no popd, so it judges the remove in the checkout. The new
+# reading goes back with the popd and judges it elsewhere. The first still refuses, so the gate does.
+runbash "pushd $FIX/dev; popd; rm payload/hooks/x.sh" "$FIX/elsewhere"
+refused "#3855 what the reading that was there refused is still refused: a remove after a pushd into the checkout and its popd"
+runbash "pushd $FIX/dev >/dev/null; popd >/dev/null; python3 -c 'open(\"payload/hooks/x.sh\",\"w\").write(\"x\")'" "$FIX/elsewhere"
+refused "#3855 and an inline script opening a payload file after that pushd and its popd"
+
+echo "a remove or an edit fed its paths by the command before it (claude-config#3855)"
+
+# xargs runs its command on the words it is fed. The gate read xargs rm as a remove of nothing.
+# Now the words the commands before it in the pipeline name are judged as what it writes.
+runbash "echo payload/hooks/x.sh | xargs rm" "$FIX/dev"
+refused "#3855 xargs rm fed a payload path is refused"
+says "#3855 and the refusal names the file" "$FIX/dev/payload/hooks/x.sh"
+runbash "printf '%s\\n' payload/hooks/x.sh | xargs rm -f" "$FIX/dev"
+refused "#3855 the same fed by printf"
+runbash "echo 'payload/hooks/x.sh' | xargs rm" "$FIX/dev"
+refused "#3855 the same with the path in single quotes"
+runbash "grep -l foo payload/hooks/x.sh | xargs sed -i -e s/a/b/" "$FIX/dev"
+refused "#3855 an in place sed fed the files a search of payload names"
+runbash "find payload/hooks -name x.sh | xargs rm" "$FIX/dev"
+refused "#3855 a remove fed by a find under payload"
+runbash "echo x.sh | xargs rm" "$FIX/dev/payload/hooks"
+refused "#3855 a remove fed a bare name, run inside the payload folder"
+runbash "echo payload/hooks/x.sh | xargs -n1 rm" "$FIX/dev"
+refused "#3855 xargs with an option of its own before the remove"
+runbash "echo payload/hooks/x.sh | xargs git rm" "$FIX/dev"
+refused "#3855 a git rm fed a payload path"
+runbash "echo payload/hooks/x.sh | sort | xargs rm" "$FIX/dev"
+refused "#3855 a path fed through another command on the way"
+runbash "echo payload/hooks/x.sh | sudo xargs rm" "$FIX/dev"
+refused "#3855 xargs run behind sudo"
+runbash "bash -c 'echo payload/hooks/x.sh | xargs rm'" "$FIX/dev"
+refused "#3855 xargs rm fed a payload path inside a command string handed to a shell"
+runbash "python3 -c \"import os; os.system('echo payload/hooks/x.sh | xargs rm')\"" "$FIX/dev"
+refused "#3855 and inside a command string an inline script runs"
+runbash "echo $FIX/elsewhere/a.txt | xargs rm" "$FIX/dev"
+allowed "#3855 control: xargs rm fed a path outside any checkout is let through"
+runbash "echo payload/hooks/x.sh | xargs cat" "$FIX/dev"
+allowed "#3855 control: xargs running a command that only reads is let through"
+runbash "echo payload/hooks/x.sh | xargs wc -l; rm $FIX/elsewhere/a.txt" "$FIX/dev"
+allowed "#3855 control: a remove after the pipeline has ended is not fed by it"
+
+echo "a symbolic link's target is read from the link's own folder (claude-config#3855)"
+
+# The system reads a symbolic link's target from the folder the link is in, never from where the
+# command ran. The gate read it from where the command ran, so a link to payload/hooks made from
+# the tests folder, beside the checkout, was a second name for the payload folder it never saw.
+runbash "ln -s payload/hooks ../l5" "$FIX/dev/tests"
+refused "#3855 a link whose target, read from the link's folder, is the payload folder"
+says "#3855 and the refusal names the payload folder" "$FIX/dev/payload/hooks"
+runbash "ln -sf payload/hooks ../l5" "$FIX/dev/tests"
+refused "#3855 the same with -sf"
+runbash "ln -s ../dev/payload/hooks $FIX/elsewhere/l6" "$FIX/dev/tests"
+refused "#3855 a target that climbs out of the link's folder and into the checkout"
+runbash "ln -s payload/hooks $FIX/dev" "$FIX/elsewhere"
+refused "#3855 a link made inside a folder named last, its target read from that folder"
+runbash "ln -s -t $FIX/dev/tests ../payload/hooks" "$FIX/elsewhere"
+refused "#3855 a link made in the folder -t names, its target read from that folder"
+runbash "ln -s --target-directory=$FIX/dev/tests ../payload/hooks" "$FIX/elsewhere"
+refused "#3855 the same with the folder named by --target-directory="
+runbash "ln -s -t $FIX/elsewhere a.txt" "$FIX/elsewhere"
+allowed "#3855 control: a link made in a folder -t names outside any checkout is let through"
+runbash "python3 -c 'import os; os.symlink(\"payload/hooks\", \"../l9\")'" "$FIX/dev/tests"
+refused "#3855 the same link made by os.symlink"
+runbash "node -e 'require(\"fs\").symlinkSync(\"payload/hooks\", \"../l12\")'" "$FIX/dev/tests"
+refused "#3855 by node symlinkSync"
+runbash "python3 -c 'from pathlib import Path; Path(\"../l13\").symlink_to(\"payload/hooks\")'" "$FIX/dev/tests"
+refused "#3855 by a path object's symlink_to"
+runbash "python3 -c \"import os; os.system('ln -s payload/hooks ../l10')\"" "$FIX/dev/tests"
+refused "#3855 by ln in a command string an inline script runs"
+printf '#!/bin/bash\nln -s payload/hooks ../l11\n' > "$FIX/scripts/rel.sh"
+runbash "bash $FIX/scripts/rel.sh" "$FIX/dev/tests"
+refused "#3855 by ln in a script file the command runs"
+printf 'import os\nos.symlink("payload/hooks", "../l14")\n' > "$FIX/scripts/rel.py"
+runbash "python3 $FIX/scripts/rel.py" "$FIX/dev/tests"
+refused "#3855 by os.symlink in a script file the command runs"
+runbash "ln -s a.txt $FIX/elsewhere/l7" "$FIX/dev"
+allowed "#3855 control: a link outside any checkout to a file beside it is let through"
+runbash "ln -s payload/hooks ../l5" "$FIX/elsewhere"
+allowed "#3855 control: the first command run where no checkout is beside the link is let through"
+runbash "ln payload/hooks/x.sh ../l8" "$FIX/dev/tests"
+allowed "#3855 control: a hard link's source is read from where the command runs, as the system reads it"
+
+echo "a patch file applied by git is caught after the call, by its destination (claude-config#3855)"
+
+# RULED OUT, WITH THE MEASUREMENT (claude-config#3855). The files a patch touches are named in the
+# patch FILE and in no word of the command, as with any other write a file makes: before the call
+# there is nothing to read, and the check after the call names what changed. Here the patch is
+# really applied, to the stand in checkout, between the two halves.
+prepost(){ # prepost <event> <command> <cwd> <tool use id>
+  OUT="$(python3 -c '
+import json, sys
+print(json.dumps({"hook_event_name": sys.argv[1], "tool_name": "Bash", "cwd": sys.argv[3],
+                  "tool_use_id": sys.argv[4], "session_id": sys.argv[5], "tool_input": {"command": sys.argv[2]}}))
+' "$1" "$2" "$3" "$4" "$SID" | env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PAYLOAD_WRITE_STATE_DIR="$FIX/state" PAYLOAD_WRITE_INSTALLED_DIR="$FIX/installed" bash "$HOOK" 2>&1)"; RC=$?
+}
+mkdir -p "$FIX/installed"
+: > "$FIX/dev/payload/hooks/x.sh"
+git -C "$FIX/dev" add payload/hooks/x.sh 2>/dev/null
+printf 'patched\n' > "$FIX/dev/payload/hooks/x.sh"
+git -C "$FIX/dev" diff -- payload/hooks/x.sh > "$FIX/elsewhere/p.patch" 2>/dev/null
+: > "$FIX/dev/payload/hooks/x.sh"
+if [ -s "$FIX/elsewhere/p.patch" ]; then check "#3855 the fixture holds a patch that touches the stand in payload file" ok
+else check "#3855 the fixture holds a patch that touches the stand in payload file" "git made no patch, so the two cases below measure nothing"; fi
+prepost PreToolUse "git apply $FIX/elsewhere/p.patch" "$FIX/dev" g1
+allowed "#3855 git apply of a patch file is not refused before it runs: no word of the command names what it touches"
+git -C "$FIX/dev" apply "$FIX/elsewhere/p.patch" 2>/dev/null
+if [ "$(cat "$FIX/dev/payload/hooks/x.sh" 2>/dev/null)" = "patched" ]; then check "#3855 the patch was applied to the stand in checkout" ok
+else check "#3855 the patch was applied to the stand in checkout" "the stand in payload file did not change, so the next case measures nothing"; fi
+prepost PostToolUse "git apply $FIX/elsewhere/p.patch" "$FIX/dev" g1
+if [ "$RC" -eq 2 ]; then check "#3855 and the payload file it changed is reported after the call" ok
+else check "#3855 and the payload file it changed is reported after the call" "exit $RC, said: ${OUT:0:160}"; fi
+says "#3855 by the name of the file" "$FIX/dev/payload/hooks/x.sh"
+: > "$FIX/dev/payload/hooks/x.sh"
 
 case "$(ps -o command= -p "$WPID" 2>/dev/null || true)" in
   *claude-sync*watch*) check "the stand in watcher lived to the end of the suite" ok ;;

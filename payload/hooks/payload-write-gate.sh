@@ -67,6 +67,13 @@
 # refused in words that say so and that say to run the command directly, where this gate can
 # read it.
 #
+# A command is judged in the folder the shell really runs it in (claude-config#3855). The gate
+# followed every cd and pushd it met, and a shell undoes some: one in brackets, in a pipeline or
+# sent to the background, and a pushd at its popd. Every command is judged again in each folder the
+# shell may run it in, beside the reading that was there, so this too only ever adds a refusal.
+# With it: xargs running a command that writes is given the words the pipeline before it names,
+# and a symbolic link's relative target is read from the folder the link is made in.
+#
 # The questions come from lib/sync-clone.sh, shared with the warning hook, so the two cannot come
 # to two different answers about whether a hold is in force (L370).
 #
@@ -901,9 +908,273 @@ def plain_writes(head, args):
         return [w for w in args if not w.startswith("-")]
     return []
 
+# A SYMBOLIC LINK READS ITS TARGET FROM ITS OWN FOLDER (claude-config#3855). The system resolves a
+# relative target from the folder the link is in, never from where the command ran, and every word
+# of ln was read from where the command ran. So ln -s payload/hooks ../l5, run in the tests folder
+# of a checkout, made a second name for the payload folder beside the checkout and was let through
+# (found in the review of 2026-11-27, on stand in files). The target is now ALSO read from the
+# folder the link is made in: the folder of the last word, and that word itself, since ln makes
+# the link inside it when it is a folder. A target written in full, or from the home folder, reads
+# the same from anywhere. A hard link names a file from where the command runs, as it was read.
+def from_link(target, folders, base):
+    """(target, folder) for each folder a symbolic link is made in, when its target is relative."""
+    t = target.strip().strip("\"\x27")
+    if not t or t[0] in "/~$`":
+        return []
+    out = []
+    for f in folders:
+        b = move(f, base) if f.strip().strip("\"\x27") else base
+        if b != base and (target, b) not in out:
+            out.append((target, b))
+    return out
+
+def link_reads(head, args, base):
+    """What ln -s writes besides its words read where it runs: each relative target, read from the
+    folder its link is made in."""
+    if head != "ln" or not any(a == "--symbolic" or re.match(r"-[A-Za-z]*s", a) for a in args):
+        return []
+    names, into, k = [], None, 0
+    while k < len(args):
+        a = args[k]
+        if a in ("-t", "--target-directory") and k + 1 < len(args):
+            into, k = args[k + 1], k + 1
+        elif a.startswith("--target-directory="):
+            into = a.split("=", 1)[1]
+        elif not a.startswith("-"):
+            names.append(a)
+        k += 1
+    if into is not None:
+        folders, targets = [into], names
+    elif len(names) > 1:
+        last = names[-1].strip().strip("\"\x27")
+        folders, targets = [os.path.dirname(last.rstrip("/")), last], names[:-1]
+    else:
+        return []
+    out = []
+    for t in targets:
+        out += from_link(t, folders, base)
+    return out
+
+# The same for a link an inline script or a script file makes by a call given two quoted words:
+# os.symlink and node symlinkSync (the target, then the link), ruby File.symlink and FileUtils
+# ln_s, perl and php symlink, and a path object linking to a target (the link, then the target).
+# A call given a value for either word names nothing to read here, and is judged by its words.
+QUOTED_WORD = r"[rbuRBU]{0,2}\\?[\"\x27]([^\"\x27\n]+?)\\?[\"\x27]"
+LINK_PAIR = re.compile(r"(?:symlink(?:Sync)?|ln_sf?)\s*\(?\s*" + QUOTED_WORD + r"\s*,\s*" + QUOTED_WORD)
+LINK_TO = re.compile(QUOTED_WORD + r"\s*\)\s*\.symlink_to\(\s*" + QUOTED_WORD)
+def script_link_reads(text, base):
+    """(target, folder) for each symbolic link a script text makes from two quoted words."""
+    pairs = [(m.group(1), m.group(2)) for m in LINK_PAIR.finditer(text)]
+    pairs += [(m.group(2), m.group(1)) for m in LINK_TO.finditer(text)]
+    out = []
+    for target, link in pairs:
+        out += from_link(target, [os.path.dirname(link.rstrip("/")), link], base)
+    return out
+
+SEP = r"&&|\|\||;|\||\n"
+
+# A COMMAND XARGS RUNS IS GIVEN ITS WORDS BY THE PIPELINE BEFORE IT (claude-config#3855). xargs is
+# read as a launcher, so xargs rm payload/x is the remove it runs, but in echo payload/x | xargs rm
+# the remove was read with no words and nothing was judged (found in the review of 2026-11-27).
+# So after an xargs that runs a command that writes to its words, one more segment is read: that
+# command with every word the commands before it in the pipeline name, which the loop below judges
+# as it judges the typed form. Whether the command writes is asked of the same functions the loop
+# asks. Words the pipeline reads from a file (xargs rm < list) are in no word of the command, and
+# are left to the check after the call.
+class Fed(str):
+    """A segment put together here, never one the command holds: it fills nothing in placed_own."""
+
+def fed_words(seg):
+    """The words a command of a pipeline names, which an xargs after it may be given."""
+    words = seg.split()
+    k = 0
+    while k < len(words) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[k]):
+        k += 1
+    if k >= len(words):
+        return []
+    return [w for w in past_launchers(words[k:])[1] if not w.startswith("-") and not re.match(r"[0-9&]*[<>]", w)]
+
+def xargs_writes(seg):
+    """Whether seg is xargs running a command that writes to the words it is given."""
+    words = seg.split()
+    k = 0
+    while k < len(words) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[k]):
+        k += 1
+    names = [w.lstrip("({").rsplit("/", 1)[-1] for w in words[k:]]
+    if "xargs" not in names:
+        return False
+    at = k + names.index("xargs")
+    # xargs is the command here, past sudo and the like, never a word given to another command:
+    # a word put in its place is read as the command.
+    fed = "\x05"
+    if past_launchers(words[k:at] + [fed])[0] != fed:
+        return False
+    head, args = past_launchers(words[k:])
+    if head == "xargs":
+        head, args = past_launchers(words[at + 1:]) if words[at + 1:] else ("", [])
+    found = git_command([head] + args) if head else None
+    if found:
+        return bool(git_writes((found[0], found[1], list(found[2]) + [fed]), cwd))
+    return bool(head) and bool(plain_writes(head, args + [fed]))
+
+def segments_of(text):
+    """text cut into segments at each separator, as it always was, with one more after each xargs
+    that runs a command that writes: that command given the words the pipeline before it names."""
+    bits = re.split("(" + SEP + ")", text)
+    out, fed = [], []
+    for i in range(0, len(bits), 2):
+        seg = bits[i]
+        out.append(seg)
+        try:
+            if fed and xargs_writes(seg):
+                out.append(Fed(seg + " " + " ".join(fed)))
+            fed = fed + fed_words(seg) if bits[i + 1:i + 2] == ["|"] else []
+        except Exception:
+            fed = []
+    return out
+
+# WHERE THE SHELL REALLY RUNS EACH COMMAND (claude-config#3855).
+#
+# The loop below follows every cd and pushd it meets, in the order they are written. The shell does
+# not keep every one: a cd in brackets, in a substitution, in a member of a pipeline or in a
+# command sent to the background moves a shell of its own and ends with it, and a popd goes back
+# to where its pushd was made. So after (cd /elsewhere); or pushd /elsewhere; popd; the loop judged
+# the commands after it in the other folder while the shell ran them where the session was, and a
+# write under payload/ from the primary checkout was let through with no words (found in the
+# review of 2026-11-27, on stand in files).
+#
+# Which folder changes a shell undoes is asked of lib/shell-words.py, the reader every gate shares
+# (commands): it keeps a folder for each shell a command opens and drops it when that shell ends,
+# and says how each command ended. It reads cd alone. A pushd and a popd it does not know, so that
+# one rule is kept here, read the way it reads a cd (stack_change), over the same shells.
+#
+# What comes back is every folder the shell MAY run a command in, since two things cannot be read
+# from the command. A shell set to keep every cd on its list of folders (zsh autopushd) goes back
+# on a popd that a plain shell refuses. And the last command of a pipeline runs in the session
+# shell in zsh and in a shell of its own in bash. Each is followed both ways.
+#
+# This reading is ADDED to the reading the loop makes, never put in its place: the loop still judges
+# every segment in the folder it always believed, so nothing it refused is let through by this.
+WORLDS_MAX = 16
+STACK_ENTRY = re.compile(r"[+-][0-9]+\Z")
+
+def stack_change(text):
+    """(pushd or popd, the word it is given or None) for a command that is one, read the way
+    lib/shell-words.py reads a cd (cd_target), or None."""
+    text = _sw.spaced(_sw.join_continuations(text))
+    try:
+        words = _sw.shell_split(text)
+    except ValueError:
+        words = text.split()
+    i, n = 0, len(words)
+    while i < n and (words[i] in _sw.RESERVED or _sw.ASSIGNMENT.match(words[i])):
+        i += 1
+    if i >= n or words[i] not in ("pushd", "popd"):
+        return None
+    what, dest = words[i], None
+    i += 1
+    while i < n and dest is None:
+        w = words[i]
+        if re.match(r"\d*[<>]", w):
+            # A redirect is not the folder, and neither is the word it sends its output to.
+            i += 2 if re.fullmatch(r"\d*[<>]+&?", w) else 1
+            continue
+        if STACK_ENTRY.match(w) or (what == "pushd" and not w.startswith("-")):
+            dest = w
+        i += 1
+    return what, dest
+
+def stepped(world, change):
+    """One way the shell may be after a folder change: (the folder it is in, the folders pushd
+    left, whether this shell keeps every cd on that list too)."""
+    d, stack, keeps = world
+    what, dest = change
+    if dest is not None and STACK_ENTRY.match(dest):
+        # An entry of the list by its number, written as the shell writes one: only it knows it.
+        return (UNKNOWN + "~" + dest, stack, keeps)
+    if what == "cd":
+        return (move(dest, d), stack + (d,) if keeps else stack, keeps)
+    if what == "pushd" and dest is not None:
+        return (move(dest, d), stack + (d,), keeps)
+    if what == "pushd":
+        # With no word it swaps the folder with the last one left.
+        return (stack[-1], stack[:-1] + (d,), keeps) if stack else world
+    return (stack[-1], stack[:-1], keeps) if stack else world
+
+def shell_runs(text, start, shown=None, depth=0):
+    """(folders, text) for each pipeline text runs, each string one of its commands hands a shell
+    and each heredoc body it holds, with every folder the shell may run it in. shown is text with
+    the bodies that are only copied blanked, and is where a body is read from. Raises when the
+    shared reader cannot vouch for its reading, so the caller judges every folder there is."""
+    parts, spans, heredocs, unsure = [], [], [], []
+    found = _sw.commands(text, "", heredocs=heredocs, parts=parts, spans=spans, unsure=unsure)
+    if unsure or len(found) != len(parts) or len(heredocs) != len(spans):
+        raise ValueError("a reading lib/shell-words.py does not vouch for")
+    shells = {0: {"worlds": [(start, (), False), (start, (), True)], "pipe": [], "in": None, "piped": False}}
+    def folders(worlds):
+        out = []
+        for w in worlds:
+            if w[0] not in out:
+                out.append(w[0])
+        return out
+    out, ran_in = [], []
+    for (_, t), p in zip(found, parts):
+        scope = p["scope"]
+        f = shells.get(scope[-1])
+        if f is None:
+            # A shell of its own starts where the shell that opened it is, and what it changes ends
+            # with it: nothing is ever copied back.
+            opened_by = next(shells[i] for i in reversed(scope[:-1]) if i in shells)
+            f = shells[scope[-1]] = {"worlds": list(opened_by["worlds"]), "pipe": [], "in": None, "piped": False}
+        worlds = f["worlds"]
+        ran_in.append(folders(worlds))
+        if f["in"] is None:
+            f["in"] = folders(worlds)
+        f["pipe"].append(t)
+        if p["how"] == "|":
+            f["piped"] = True
+            continue
+        dirs, members, piped = f["in"], f["pipe"], f["piped"]
+        f["pipe"], f["in"], f["piped"] = [], None, False
+        out.append((dirs, " | ".join(members)))
+        if depth < 4:
+            for member in members:
+                try:
+                    string = _sw.wrapped(_sw.command_rest(member)[0])
+                except Exception:
+                    string = None
+                # Outside the try: a string the reader cannot vouch for raises here, to the caller,
+                # so the whole command is judged in every folder as one it cannot read is. Caught
+                # here, the string was read by nothing new and said nothing (L42).
+                if string and string[1] is not None:
+                    for d in dirs:
+                        out += shell_runs(string[1], d, None, depth + 1)
+        target = _sw.cd_target(t)
+        change = ("cd", target) if target is not None else stack_change(t)
+        if change is None or p["how"] == "&":
+            continue
+        moved = [stepped(w, change) for w in worlds]
+        f["worlds"] = []
+        for w in (worlds + moved if piped else moved):
+            if w not in f["worlds"]:
+                f["worlds"].append(w)
+        if len(f["worlds"]) > WORLDS_MAX:
+            raise ValueError("more ways than are followed")
+    for f in shells.values():
+        if f["pipe"]:
+            out.append((f["in"], " | ".join(f["pipe"])))
+    for opener, body_start, body_end in spans:
+        at = next((k for k, p in enumerate(parts) if any(o[0] == opener for o in p["openers"])), None)
+        if at is None:
+            raise ValueError("a heredoc body no command was found for")
+        out.append((ran_in[at], (shown if shown is not None else text)[body_start:body_end]))
+    return out
+
 base = cwd
 CD_TO = object()  # marks a segment that is a directory the commands after it run in
-segments = re.split(r"&&|\|\||;|\||\n", shell_text)
+AGAIN = object()  # marks segments added by claude-config#3855, read after every segment read before it
+crude = segments_of(shell_text)
+segments = list(crude)
 # The commands a shell runs from its -c string, eval from its words and env -S from its string
 # (claude-config#1478), read by lib/shell-words.py as commands of their own, each after a cd to the
 # directory it runs in, so a cd inside one moves only what follows it there. Only added to the
@@ -1001,7 +1272,6 @@ OPENED_PATH = r"open\(\s*([\"\x27][^\"\x27]+[\"\x27])\s*,\s*[\"\x27][wa]"
 # included, and one more is refused as a command this gate could not finish reading.
 UNTOLD = "\x04"
 STRINGS_MAX = 256
-SEP =r"&&|\|\||;|\||\n"
 HOLE = "$_"
 NAMES_PAYLOAD = r"(?i)(?:^|[^A-Za-z0-9_.-])payload/|/payload(?:$|[^A-Za-z0-9_.-])"
 IN_PAYLOAD = r"(?i)(?:^|/)payload(?:/|$)"
@@ -1078,7 +1348,8 @@ def told(prefix, body, tail):
 def string_segments(text, b):
     """The segments of one command string, run in directory b: its own, cut as a typed command is,
     and those of each command a shell inside it runs, as the whole command has them above."""
-    out = [(CD_TO, b)] + re.split(SEP, text)
+    own = segments_of(text)
+    out = [(CD_TO, b)] + own
     try:
         for d, inner, _, _, depth in _sw.every_command(text):
             if depth > 0 or "$(" in text or "`" in text or "<<" in text:
@@ -1086,6 +1357,20 @@ def string_segments(text, b):
     except Exception:
         for m in re.finditer(r"[^\s\"\x27;&|<>()]*(?i:payload)/[^\s\"\x27;&|<>()]*", text):
             add(m.group(0), b)
+    # And each command of the string in the folder the shell really runs it in (claude-config#3855,
+    # shell_runs). A string that reading cannot vouch for has each segment judged where the string
+    # starts as well, whatever cd it holds.
+    # Held back behind the AGAIN mark, as the same reading of the whole command is (below).
+    again = []
+    try:
+        for dirs, inner in shell_runs(text, b):
+            for d in dirs:
+                again += [(CD_TO, d)] + segments_of(inner)
+    except Exception:
+        again = []
+        for seg in own:
+            again += [(CD_TO, b), seg]
+    out.append((AGAIN, again))
     return out
 
 def program_is_value(text):
@@ -1240,6 +1525,38 @@ try:
 except Exception:
     untold("a command string an inline script hands to a shell", UNTOLD_STRING, cwd)
 
+# EVERY COMMAND AGAIN, IN THE FOLDER THE SHELL REALLY RUNS IT IN (claude-config#3855, shell_runs
+# above). Added after the segments of the command itself, which are read first and exactly as they
+# were. This reading also cuts where the shell cuts: a command after a single &, which the cut
+# into segments above never splits, is a command of its own here and is judged.
+#
+# A command the shared reader cannot vouch for (a quote left open, a line it is not sure the shell
+# runs) has every segment judged in every folder a cd in it could have left the shell, the session
+# folder first, with no cd followed, and cut at a single & as well: which of those folders it runs
+# in cannot be read, so it is judged in each (L42).
+#
+# READ LAST, SO THE READING THAT WAS THERE IS NOT TOUCHED BY IT. These segments, those the same
+# reading adds for a command string (string_segments) and each one put together for an xargs (Fed)
+# are held back behind the AGAIN mark until every segment the gate read before this change has
+# been read, strings found on the way included. So those are read in the order and with the notes
+# (placed, the strings already read) they always had, and every destination they named is still
+# named. What is read after them can only name more. The step that refuses asks each destination
+# by itself and refuses on the first that is at risk, so a command is refused when ANY reading
+# of it names one.
+SINGLE_AMP = r"(?<![&>|<])&(?![&>])"
+again = []
+try:
+    for dirs, text in shell_runs(cmd, cwd, shell_text):
+        for d in dirs:
+            again += [(CD_TO, d)] + segments_of(text)
+except Exception:
+    again = []
+    for b in ALL_BASES:
+        for seg in crude:
+            for piece in dict.fromkeys([seg] + re.split(SINGLE_AMP, seg)):
+                again += [(CD_TO, b), piece]
+segments.append((AGAIN, again))
+
 placed = set()
 # WHAT THE SEGMENTS OF THE COMMAND ITSELF PLACED, AND NOTHING A STRING ADDED (claude-config#3775). The read
 # of the whole command, below the loop, leaves out a path a segment placed. A segment added from a
@@ -1253,11 +1570,46 @@ placed = set()
 placed_own = set()
 # The list grows as it is read: a command string found in a segment is added to its end, with the
 # directory it runs in before it, and read in its turn (claude-config#3689, STRINGS_MAX).
-for at, seg in enumerate(segments):
-    typed = at < OWN_SEGMENTS
+read_at = set()
+# Any segment holding the letters of cd or pushd, however it is written: one too many is read
+# twice, and one too few would leave the segments after it in the wrong folder.
+FOLDER_CHANGE = re.compile(r"cd|pushd")
+# What claude-config#3855 added is held here until the list as it was has been read to its end,
+# and is then read in its turn (READ LAST, above).
+held_back = []
+reading_held = [False]
+def in_turn():
+    at = 0
+    while True:
+        if at == len(segments):
+            if reading_held[0] or not held_back:
+                return
+            reading_held[0] = True
+            segments.extend(held_back)
+            continue
+        yield at, segments[at]
+        at += 1
+for at, seg in in_turn():
+    # A segment put together here from the words a pipeline feeds xargs (Fed) is no segment of the
+    # command itself, wherever it stands in the list.
+    typed = at < OWN_SEGMENTS and not isinstance(seg, Fed)
+    if isinstance(seg, tuple) and seg[0] is AGAIN:
+        (segments if reading_held[0] else held_back).extend(seg[1])
+        continue
+    if isinstance(seg, Fed) and not reading_held[0]:
+        # With the folder it stood in, since the segments held back are read after a cd of their own.
+        held_back.extend([(CD_TO, base), seg])
+        continue
     if isinstance(seg, tuple) and seg[0] is CD_TO:
         base = seg[1]
         continue
+    # A segment held back that was already read in this folder says nothing new, so it is not read
+    # twice (claude-config#3855: every command is added again in the folder the shell runs it in,
+    # which for most commands is the folder it was read in). Never one that changes folder, which
+    # moves the segments after it, and never a segment of the list as it was.
+    if reading_held[0] and (base, seg.strip()) in read_at and not FOLDER_CHANGE.search(seg):
+        continue
+    read_at.add((base, seg.strip()))
     # A redirect TARGET: the word after > or >> (or 2>, &>, a fd form), attached or separated.
     for m in re.finditer(r"(?:^|[^0-9<>&|])(?:[0-9]*|&)>>?\s*([^\s;&|<>]+)", seg):
         add(m.group(1), base)
@@ -1275,6 +1627,12 @@ for at, seg in enumerate(segments):
         for w in m.group(1).split()[1:]:
             if not w.startswith("-"):
                 add(w, base)
+        for w, folder in link_reads("ln", m.group(1).split()[1:], base):
+            add(w, folder)
+    # A link a script makes from two quoted words, its target read from the folder the link is in
+    # (claude-config#3855, script_link_reads).
+    for w, folder in script_link_reads(seg, base):
+        add(w, folder)
     try:
         segments += read_strings(seg, [base], False)
         for m in RUN_VALUE.finditer(seg):
@@ -1308,6 +1666,9 @@ for at, seg in enumerate(segments):
         continue
     for w in plain_writes(head, args):
         add(w, base)
+    # A symbolic link reads its target from its own folder (claude-config#3855, link_reads).
+    for w, folder in link_reads(head, args, base):
+        add(w, folder)
 
 # Read over the whole command too, for a script path the cut into segments split (a quoted path
 # holding a ; or |): one no segment of the command itself placed is judged where the session is,
@@ -1487,6 +1848,12 @@ def script_links(text, base, bare):
         for w in m.group(1).split()[1:]:
             if not w.startswith("-"):
                 add_placed(w, base)
+        for w, folder in link_reads("ln", m.group(1).split()[1:], base):
+            add_placed(w, folder)
+    # A symbolic link reads its target from its own folder (claude-config#3855). Only where that
+    # folder can be placed, as with every link read from a file: add_placed drops the rest.
+    for w, folder in script_link_reads(text, base):
+        add_placed(w, folder)
 
 def shell_links(text, base):
     """The words of one command of a shell script file when it is a link command, each placed."""
@@ -1498,6 +1865,8 @@ def shell_links(text, base):
         for w in words[1:]:
             if not w.startswith("-"):
                 add_placed(w, base)
+        for w, folder in link_reads(words[0].rsplit("/", 1)[-1], words[1:], base):
+            add_placed(w, folder)
 
 def heredoc_written():
     """The files this command writes from a heredoc of its own, whose text is in the command."""
@@ -1582,6 +1951,8 @@ try:
                 for w in m.group(1).split():
                     if not w.startswith("-"):
                         add_placed(w, b)
+                for w, folder in link_reads("ln", m.group(1).split(), b):
+                    add_placed(w, folder)
             script_links(body, b, False)
     if unread:
         # ONLY THE WORD WHERE A SCRIPT IS RUN IS TAKEN OUT (claude-config#3775, found in review
@@ -1597,21 +1968,17 @@ try:
             if p:
                 rest_of_it = re.sub(r"(?:^|(?<=[\s\"\x27`;&|()<>]))" + re.escape(p) + r"(?=[\s\"\x27`;&|()<>]|$)",
                                     " ", rest_of_it, count=1)
-        # THE SEARCH AS IT WAS, KEPT BESIDE THE NEW ONE. Taking every occurrence out could also
+        # THE SEARCH AS IT WAS IS GONE (claude-config#3855). Taking every occurrence out could also
         # MAKE the word payload/ appear, where a script name sat against it inside a longer word:
-        # a script named x beside xpayload/hooks, or one named s beside /payloads. Those refusals
-        # are for a path that is no payload path. Dropping a refusal is a choice left to Dan in the
-        # pull request of #3775, so until he answers, a command either search refuses is refused.
-        as_it_was = cmd
-        for p in own_scripts:
-            if p:
-                as_it_was = as_it_was.replace(p, " ")
+        # a script named x beside xpayload/hooks, or one named s beside /payloads. Those two
+        # refusals were for a path that is no payload path, and the gate on main lets both
+        # through. The pull request of #3775 asked the old search as well until Dan chose, and on
+        # 2026-11-27 he chose "Keep now, drop in #3855". Only the search above is asked now.
         written = heredoc_written()
         for path, full, why_not, b in unread:
             if full in written:
                 continue
-            if re.search(NAMES_PAYLOAD, rest_of_it) or re.search(NAMES_PAYLOAD, as_it_was) \
-                    or re.search(IN_PAYLOAD, b.lstrip(UNKNOWN)):
+            if re.search(NAMES_PAYLOAD, rest_of_it) or re.search(IN_PAYLOAD, b.lstrip(UNKNOWN)):
                 t = UNTOLD + re.sub(r"\s+", " ", "a command that runs the script file %s, which this gate could not read" % full) \
                     + "\t" + re.sub(r"\s+", " ", "payload-write-gate.sh could not read the script file %s (%s), so a link or "
                     "a write it makes cannot be read from it, and the command names a payload/ path besides it or "

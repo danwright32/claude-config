@@ -2551,13 +2551,79 @@ refused. That read now asks only what the segments of the command itself placed.
 path named besides a script that could not be read was looked for with every occurrence of every
 script path the command runs taken out as plain text, so a script named `a` hid `payload/`, and a
 script run by its payload path hid the same path given as a word to the unread script. Only the
-word where a script is run is taken out now, once for each time the command runs it. The old
-search is still asked beside the new one, and a command either refuses is refused: taking every
+word where a script is run is taken out now, once for each time the command runs it. Taking every
 occurrence out could also make the word `payload/` appear where a script name sat against it
-inside a longer word (a script named `x` beside `xpayload/hooks`), and whether that accidental
-refusal goes is a choice left to Dan in the pull request. Over the 99
+inside a longer word (a script named `x` beside `xpayload/hooks`, one named `s` beside
+`/payloads`). The pull request of #3775 kept those two accidental refusals by asking the old
+search beside the new one until Dan chose; on 2026-11-27 he chose "Keep now, drop in #3855", so
+the old search is gone and both commands are let through, as on main (#3855). Over the 99
 made up commands of that review, none that main refuses is let through after the first fix (four
 before it); that is a measurement over those commands and no proof for every command.
+
+**A command is judged in the folder the shell really runs it in (#3855).** The same review found
+that the gate follows a change of folder the shell undoes. Its loop moves its folder at every `cd`
+and `pushd` it meets, in the order they are written, and cuts the command at separators without
+knowing where brackets close. So after `(cd /elsewhere);` it judged the commands after it in the
+other folder (the folder name with the closing bracket still on it, as it happens), and after
+`pushd /elsewhere; popd;` likewise, since it read no `popd` at all. The shell runs those commands
+where the session is. From the root of the primary checkout, a redirect, a remove, a copy and an
+inline script opening a file under `payload/` were each let through with no words, on stand in
+files.
+
+The first question of the issue was whether the shared reader already knows which folder changes
+a shell undoes. It does, for `cd`: `commands()` in `lib/shell-words.py` keeps a folder for each
+shell a command opens (brackets, a substitution, a process substitution) and drops it when that
+shell ends, leaves a `cd` in a pipeline member or a background command unmoved, and says how each
+command ended. It reads no `pushd` and no `popd`. So the gate asks the reader for the shells and
+keeps one rule of its own over them, the list of folders a `pushd` leaves and a `popd` returns to,
+read the way the reader reads a `cd`. Teaching the reader `pushd` would change what every other
+gate that asks it decides, which is not this change.
+
+Three choices. The new reading is added and the old one kept: replacing the folder the loop
+believes with the folder the shell uses would also let through commands the loop refuses today in
+a folder the shell never enters, and a change to this gate may add refusals and never remove one
+(the two above excepted, by Dan's choice). So each command is judged where the loop believed and
+where the shell may be. The loop keeps notes as it reads (which paths a script has already
+placed, which command strings it has already read), and a segment read later sees the notes of
+the ones before it. So everything this change adds (the second reading of the command, the same
+for each command string, and each segment put together for an `xargs`) is held back and read
+only after the whole list as it was, strings found on the way included: the old reading runs in
+the order and with the notes it always had, names every destination it named before, and what is
+read after it can only name more. The step that refuses asks each destination by itself and
+stops at the first one at risk, so a command is refused when any reading names one. A case in
+the suite holds it: after `pushd` into the checkout and its `popd`, the old reading still judges
+a remove in the checkout and the new one judges it where the session is, and the command is
+refused. Second, what the reading gives is every folder the shell MAY be in. A
+shell set to keep every `cd` on its list goes back on a `popd` that a plain shell refuses, and the
+last command of a pipeline runs in the session's shell in zsh and in a shell of its own in bash;
+neither can be read from the command, so both are followed, up to 16 ways. Third, a command the
+reader cannot vouch for (a quote left open, a line it is not sure the shell runs) is judged in
+every folder any `cd` in it names, the session's first, with no `cd` followed: the reading that
+sees more writes. So is a command that reads well and hands a shell a string the reader cannot
+vouch for (`bash -c`, `eval`): the first build caught that failure and read on, so the string was
+judged by nothing new, and the lessons review of the change found it. The added reading cuts where the shell cuts, which the loop's own cut never did
+at a single `&`, so `true & rm payload/x` is now refused too.
+
+The other three shapes the review named were each handed to the gate first. `xargs rm` fed a
+payload path was a real gap: `xargs` is read as a launcher, and the remove it runs was read with
+no words. A pipeline member that is `xargs` running a command that writes is now read once more
+with the words the members before it name, by the same loop and the same test of what writes. A
+link whose target is relative to the link's own folder was a real gap: every word of `ln` was
+read from where the command ran, and the system reads a symbolic link's target from the folder
+the link is in. The target is now read from there as well, for `ln -s`, a link call given two
+quoted words in a script, and both in a script file. `git apply` of a patch file is no gap in
+what the gate promises: no word of the command names what the patch touches, as with any write a
+file makes, and the check after the call names it. A case in the suite applies a patch to a stand
+in checkout between the two halves and sees the file named.
+
+Handed to the gate and let through before and after this change, each recorded as a finding of
+its own: a `cd` the shell may never make (a folder that is not there, a `cd` after `false &&`, one
+inside `if false`), `chdir`, `find` with `-delete` or `-exec`, and a patch typed into the command
+as a heredoc. A `cd` in the body of a function that is never called was let through and is now
+refused, since the shared reader reads no `cd` there. Not handed to the gate: a group in braces
+piped or sent to the background, which the shared reader does not read as a shell of its own. The
+two other gates the issue asked about are answered in the pull request, from a reading of their
+code.
 
 The reading of script files is held to 8 files the gate opens itself (a python, perl, ruby, node,
 php, deno or bun script, a file run by its path whose first line names no shell, and a shell
