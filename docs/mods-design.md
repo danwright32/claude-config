@@ -3167,6 +3167,57 @@ required: three that must move (held, then passed), four that change or sit besi
 (held both ways), a script file handed a live substitution (held both ways), and four that pass
 both ways. Not established: the work MacBook's records, and any call older than 2026-10-26.
 
+**A word a helper names through an operator, and a loop's word inside a substitution (#3602), for
+the design round guard: both still held, and what freeing them has to show.** Two suites of this
+repository are held for text that writes nothing. `tools/test-lessons-core-rerank.sh` hands its
+helper a page's name, and the helper prints `${3:0:1500}`: `calledWith` writes out only `$1`,
+`${1}`, `$@` and `$*`, so the body is not read and the call is judged as a program the reader does
+not know. `payload/skills/disk-full/test-disk-full-skill.sh` loops over command lines and looks
+for each with a quiet grep inside a command substitution that also prints quoted text holding a
+space. mod-kit's write reader (`eachOf`) writes the loop's word in place inside the substitution
+and gives each piece of a word holding a space as a name of its own, and the guard holds those
+names. The same loop with no quoted text in the substitution
+(`check "$(grep -q "$want" notes.txt && echo ok)"`) is not held.
+Neither is freed by a rule on the body's own words, because such a rule is not true of every
+script. A piece that stands in a command that only prints it can still be the cause of a write
+to a screen file, so a reading that writes a piece out has to hold each of these:
+- a piece as the flag, the operand or the subcommand of a command the write reader knows as a
+  reader (`sed "${2:0:2}" s/a/b/ app/*` handed `-i`, `sort "${2%X}"` handed `-oapp/page.tsxX`,
+  and the same with find, awk, git, curl and dd);
+- a printed piece that reaches a writer: inside the body (a group or a subshell that is piped, a
+  process substitution, a file the body then runs), where the helper is called (the call piped,
+  inside a substitution, sent to a file that is then run, or made by a function that is itself
+  piped), through a function of the script named `echo`, or in the command that runs the script
+  (`bash suite.sh | xargs touch`);
+- a default's or an alternative's own text, given because the shell makes none or several of a
+  word of the call (`"$@"`, a bare variable, a pattern, braces, an array, a substitution);
+- a default or a usage check that gives the call's word, where that word is a flag, a program or
+  one part of a name (`sed "${2:-x}"` handed `-i`).
+A name the reader makes inside a substitution cannot be dropped either: a loop word holding a
+space, which the substitution prints, reaches the program it is handed to
+(`mystery $(echo $pair)`, `fix "$(echo "$spec" | cut -d' ' -f2)"`), and a helper can make a name
+of the text the substitution prints.
+A reading that frees the two suites has to show three things of every script it frees: that the
+helper's commands can do no more than print or compare; that `echo` and `printf` are the shell's
+own, which means reading every file the script reads in (both suites read in
+`payload/hooks/lib/suite-deadline.sh` from outside their own folder, which `readInFile` does not
+read); and where what is printed goes, in the body, at each call, in the script and in the command
+that runs it. Every script named above is a test in `tests/suite-text.test.ts` that is held, and
+the two suites' own lines stand beside them, held too. A change that frees the suites turns those
+two into runs that pass unasked and leaves the rest held.
+Not covered either, and still held: a helper that keeps what it was handed in a local variable and writes
+a file of that name under a folder the suite made with mktemp (`make_repo` in
+test-lessons-advisory.sh), which needs the body's variables followed and the folder shown to be a
+temporary one; and the values of an array assignment (`never=( "$home/x/App.swift" )`), which
+mod-kit's pipeline gives as commands of their own, so a value with a space in it is read as a
+program handed a file. Reading an array's values as no commands is a change to mod-kit's write
+reader, which every guard that reads writes shares, and two calls that do change a screen file
+are held today through that reading: an array holding a command that is run afterwards
+(`cmd=( prettier --write app/page.tsx ); "${cmd[@]}"`) and an array of names handed to a program
+the reader does not know (`files=( notes.txt app/page.tsx ); mystery "${files[@]}"`). The guard
+gives the array's own line as its reason for both, as it does for an array nothing uses. A fix
+has to go on holding the two, and `tests/suite-text.test.ts` holds a test for them.
+
 **The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
 to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was
 decided on, the design round guard 13 and ask before saving 3 (swiftc 8, gh 3, chk 2, swift 1, set
