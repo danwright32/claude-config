@@ -718,37 +718,79 @@ def make(unknown_dir, system_bin):
             if ran and ran[1] is None:  # the text being read is itself a sourced file's
                 nested = self.__dict__.setdefault("_exact_nested", {})
                 nested.setdefault(os.path.realpath(ran[0]), []).append(real)
+                # How many such there are, for sourced_shadow, which keeps its answer while none is added.
+                self.__dict__["_exact_nested_count"] = self.__dict__.get("_exact_nested_count", 0) + 1
 
         def sourced_shadow(self, paths, name):
             """Whether one of the sourced files paths, or a file one of them sources, defines a
             function or an alias called name (claude-config#3837). Each is read as the gate reads
-            any file, so one an earlier command of this call wrote is read as what was written."""
+            any file, so one an earlier command of this call wrote is read as what was written.
+
+            The answer is kept for the files and the name while nothing it was worked out from has
+            changed: the files sourced so far (paths, and how many a sourced file sources), what
+            this call wrote each file read from (the gate's made, by the very list it holds), and
+            how much the gate has noted of folders copied, paths not worked out, programs that may
+            write and git (the same counts written_program keeps). system_program asks this for
+            every cat, cp, echo and printf of a text, and each asking read what the call wrote for
+            every sourced file again: worked out each time, judging `bash tests/test-claude-sync.sh`
+            took 6.5 to 7.0 s of processor against 5.9 to 6.3 s before the issue, and the run of the
+            gate's own suite 8.1 to 8.7 s against 5.3 to 5.9 s (three readings each, taken in turn,
+            at a load of 94 to 140)."""
             nested = self.__dict__.get("_exact_nested", {})
-            seen, todo = set(), list(paths)
+            memo = self.__dict__.setdefault("_exact_sourced_shadow", {})
+            key = (tuple(paths), name)
+            stamp = (self.__dict__.get("_exact_nested_count", 0),) + self.written_counts()[1:]
+            # Never with a folder copied: a file under one is read as the file it was copied from,
+            # which is not among the files kept here.
+            kept = None if self.made_dirs else memo.get(key)
+            if kept and kept[1] == stamp and all(self.made.get(real) is was and (was is None or len(was) == n)
+                                                 for real, (was, n) in kept[2]):
+                return kept[0]
+            seen, todo, answer = {}, list(paths), False
             while todo:
                 real = todo.pop()
                 if real in seen:
                     continue
-                seen.add(real)
+                was = self.made.get(real)
+                seen[real] = (was, None if was is None else len(was))
                 text = self.sourced_text(real)
                 if text is None or (text and self.exact_shadowed(text, name)):
-                    return True  # one the gate could not read whole may define anything
+                    answer = True  # one the gate could not read whole may define anything
+                    break
                 todo.extend(nested.get(real, ()))
-            return False
+            memo[key] = (answer, stamp, tuple(seen.items()))
+            return answer
 
         def sourced_text(self, real):
-            """The text of a sourced file, read once unless this call wrote it. "" for one that is
-            not there, which a shell sources nothing from. None for one that is there and that the
-            gate could not read, or could not read whole (past SOURCED_MAX): a shell may still read
-            it, so sourced_shadow takes it to define a function of any name, and the program is
-            doubted, never believed (the lessons review of 4817ab3, 2026-11-27)."""
+            """The text of a sourced file, read once unless this call wrote it. "" only for one
+            that is not there and that nothing in this call wrote, which a shell sources nothing
+            from. None for one the gate could not read, or could not read whole: one that is there
+            and cannot be opened, one past SOURCED_MAX, and one this call wrote where any part of
+            what it was written from is not text the gate holds or a file it can open (a copy of a
+            file it cannot open reads as nothing, which is not the same as holding nothing). A
+            shell may still read such a file, so sourced_shadow takes it to define a function of
+            any name, and the program is doubted, never believed."""
+            made = self.made_from(real)
+
             def work():
+                for kind, value, _ in made or ():
+                    if kind == "text":
+                        continue
+                    if kind != "file" or not os.path.isfile(value) or not os.access(value, os.R_OK):
+                        return None
                 try:
                     data = self.content(real, limit=SOURCED_MAX + 1)
                 except (OSError, ValueError):
-                    return None if os.path.lexists(real) else ""
+                    return None if made is not None or os.path.lexists(real) else ""
                 return None if len(data) > SOURCED_MAX else data.decode("utf-8", "replace")
-            return work() if self.made_from(real) is not None else self.exact_once(("sourced text", real), work)
+            return work() if made is not None else self.exact_once(("sourced text", real), work)
+
+        def written_counts(self):
+            """How much the gate has noted of what this call wrote, as one value to compare: the
+            files written by name, then the folders copied, the paths not worked out, the programs
+            that may write, the code that names files and the git commands. Each only ever grows."""
+            return (len(self.made), len(self.made_dirs), len(self.made_unknown), len(self.made_maybe),
+                    len(self.made_code), len(self.made_git))
 
         def written_program(self, word, name, bare):
             """Whether an earlier command of this call wrote, or may have written, the file the
@@ -756,17 +798,36 @@ def make(unknown_dir, system_bin):
             file called name in a folder of the session's PATH or of the gate's SYSTEM_BIN. Asked
             of the gate's own record of what the call wrote (made_from), which is empty for most
             calls and answers at once then. For a bare name the folders are searched once for each
-            name while that record holds the same number of entries."""
+            name while that record is as it was (written_counts). Where only the files written by
+            name have grown, and none of them is the file a folder would hold for the name, the
+            answer stands as well: a suite writes a file by name every few commands, and searching
+            every folder again after each one is the same reading of the record made over and over
+            (sourced_shadow has the measurement)."""
             if not (self.made or self.made_dirs or self.made_unknown or self.made_maybe or self.made_code
                     or self.made_git):
                 return False
             if not bare:
                 return self.made_from(word) is not None
-            folders = set(system_bin) | {e for e in (os.environ.get("PATH") or "").split(os.pathsep) if os.path.isabs(e)}
-            key = ("written program", name, len(self.made), len(self.made_dirs), len(self.made_unknown),
-                   len(self.made_maybe), len(self.made_code), len(self.made_git))
-            return self.exact_once(key, lambda: any(self.made_from(os.path.join(folder, name)) is not None
-                                                   for folder in sorted(folders)))
+            memo = self.__dict__.setdefault("_exact_written_program", {})
+            counts = self.written_counts()
+            kept = memo.get(name)
+            if kept is None:
+                folders = set(system_bin) | {e for e in (os.environ.get("PATH") or "").split(os.pathsep)
+                                             if os.path.isabs(e)}
+                places = [os.path.join(folder, name) for folder in sorted(folders)]
+                # As made_from finds a file written by name: by the path with every link followed.
+                kept = memo[name] = [None, None, places, {os.path.realpath(place) for place in places}]
+            if kept[1] == counts:
+                return kept[0]
+            # With a folder copied, a file under it is read as the file it was copied from, which a
+            # later write by name can be, so there the folders are searched again.
+            if kept[0] is False and not self.made_dirs and kept[1][1:] == counts[1:] \
+                    and not any(real in self.made for real in kept[3]):
+                kept[1] = counts
+                return False
+            kept[0] = any(self.made_from(place) is not None for place in kept[2])
+            kept[1] = counts
+            return kept[0]
 
         def exact_once(self, key, work):
             """work()'s answer for key, worked out once: each of the three askings below depends

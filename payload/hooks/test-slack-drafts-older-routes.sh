@@ -130,7 +130,25 @@ if [ -r "$P/locked.sh" ]; then
 else
   refused "#3837 route 1: a sourced file the gate cannot open leaves cat doubted"
 fi
+run_here 'cp locked.sh made-locked.sh; . ./made-locked.sh; cat calm.sh > run.sh; bash run.sh'
+if [ -r "$P/locked.sh" ]; then
+  echo "SUITE-PART-UNMEASURED #3837 route 1: a sourced file this call copied from a file the gate cannot open leaves cat doubted: this user can read a file with no permissions, so the case cannot be made here"
+else
+  refused "#3837 route 1: a sourced file this call copied from a file the gate cannot open leaves cat doubted"
+fi
 chmod 644 "$P/locked.sh"
+run_here "printf '' > made-empty.sh; . ./made-empty.sh; cat calm.sh > run.sh; bash run.sh"
+allowed "#3837 route 1: a sourced file this call wrote empty, which the gate read whole, leaves cat believed"
+run_here "printf '%s\\n' 'cat() { ./frob; }' > made-defs.sh; . ./made-defs.sh; cat calm.sh > run.sh; bash run.sh"
+refused "#3837 route 1: a function called cat in a sourced file this call wrote is refused"
+run_here "printf '%s\\n' 'helper() { :; }' > made-calm.sh; . ./made-calm.sh; cat calm.sh > run.sh; bash run.sh"
+allowed "#3837 route 1: a sourced file this call wrote that defines another function leaves cat believed"
+# What a sourced file defines is asked once for the files sourced so far and what this call wrote
+# them from (sourced_shadow), so each of these changes one of the two after the first asking.
+run_here "cp calm.sh kept.txt; . ./defs-calm.sh; cat calm.sh > first.txt; . ./defs.sh; cat calm.sh > run.sh; bash run.sh"
+refused "#3837 route 1: a file sourced after cat was first asked about is still read"
+run_here "printf '%s\\n' 'helper() { :; }' > made-twice.sh; . ./made-twice.sh; cat calm.sh > first.txt; printf '%s\\n' 'cat() { ./frob; }' > made-twice.sh; . ./made-twice.sh; cat calm.sh > run.sh; bash run.sh"
+refused "#3837 route 1: a sourced file written again after cat was first asked about is read as written the second time"
 run_here '. ./not-there.sh 2>/dev/null; cat calm.sh > run.sh; bash run.sh'
 allowed "#3837 route 1: a sourced file that is not there leaves cat believed"
 run_here '. ./defs.sh; cp calm.sh run.sh; bash run.sh'
@@ -176,6 +194,13 @@ run_here 'cp ./frob ./cat2; /bin/cat calm.sh > run.sh; bash run.sh'
 allowed "#3837 route 2: a write elsewhere leaves cat by its path believed"
 run_here '/bin/cat calm.sh > run.sh; bash run.sh'
 allowed "#3837 route 2: cat by its path with nothing written still passes"
+
+# Whether this call wrote the program is asked once for each name while the gate's record of what
+# the call wrote stays as it was (written_program), so here the record changes after the first asking.
+run_here 'cp calm.sh kept.txt; cat calm.sh > first.txt; cp frob /usr/local/bin/cat; cat calm.sh > run.sh; bash run.sh'
+refused "#3837 route 2: a file called cat copied into a system folder after cat was first asked about is still seen"
+run_here 'cp calm.sh kept.txt; cat calm.sh > first.txt; cp frob elsewhere/cat; cat calm.sh > run.sh; bash run.sh'
+allowed "#3837 route 2: a file called cat copied into a folder the shell does not search leaves cat believed"
 
 echo "== route 3: a program whose word cannot be worked out, handed the file that is run next =="
 
@@ -297,6 +322,22 @@ chain w 3 'bash named.sh'
 run_here 'bash w0.sh'
 refused "#3837 route 7: a script three deep that only names an endpoint is still refused by that name, never read past it"
 says "#3837 route 7: and that refusal still names the no network wrapper" "no network wrapper"
+# Three deep or deeper, a script is read as commands only up to the gate's DEEP_FILE_MAX, 256 KB:
+# reading tests/test-claude-sync.sh (1.9 MB) where the gate's own suite reaches it that deep took
+# the judgement of that suite's run from 5.8 to 13.2 s of processor, past the gate's 11 s. A longer
+# one is judged by the names in it, as before the issue, which is left open and put to Dan; the
+# last case holds what the gate answers for it today, so a change is seen.
+pad() { python3 -c 'import sys; sys.stdout.write(("# " + "x" * 97 + "\n") * int(sys.argv[1]))' "$1" >> "$2"; }
+chain lit 4 'bash post.sh'
+pad 2000 "$P/lit3.sh"
+chain big 4 'bash post.sh'
+pad 2700 "$P/big3.sh"
+run_here 'bash lit0.sh'
+refused "#3837 route 7: a script that posts, behind four others of which the last is 200 KB, is refused"
+run_here 'bash big3.sh'
+refused "#3837 route 7: a script of 270 KB that runs a script that posts, run by the command itself, is refused as before"
+run_here 'bash big0.sh'
+allowed "#3837 route 7, left as it is: a script that posts behind four others, of which the last is 270 KB, is judged by the names in it and passes"
 
 echo "== route 8: a write that is only quoted words, in a text the reader gave up on =="
 

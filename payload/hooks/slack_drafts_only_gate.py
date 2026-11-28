@@ -588,6 +588,17 @@ MAX_DEPTH = 3
 # a shell is handed (`bash -c`, eval) is not read deeper than MAX_DEPTH, and is refused there, as
 # before.
 FILE_DEPTH = 8
+# The longest text read as commands past MAX_DEPTH. A longer one there is judged as it was before
+# claude-config#3837, by the names in it and what it imports, so a post behind such a script that
+# deep still passes: that part of the issue's route 7 is open, and is Dan's to decide. The gate's own
+# suite reaches tests/test-claude-sync.sh (1.9 MB) three deep, in the words of its cost cases, and
+# with that file read as commands there judging `bash payload/hooks/test-slack-drafts-only-gate.sh`
+# took 13.2 s of processor against 8.8 to 8.9 s with it judged by its names (the least of three
+# readings each, taken in turn at a load of 130 to 180, 2026-11-27), which is past the gate's 11 s,
+# so the gate refused the run of its own suite as one it ran out of time on. Every other script in
+# this repository is under 256 KB, and with scripts up to 1 MB read that deep the same judgement cost
+# what it does with scripts up to 100 KB read (8.9 against 8.9 s).
+DEEP_FILE_MAX = 256 * 1024
 # A JavaScript or TypeScript script's relative imports are followed (claude-config#2318): repo-digest's
 # `npm run digest` runs src/digest.ts, which names no endpoint and imports src/slack.ts, which does.
 JS_EXT = (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")
@@ -2718,7 +2729,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if hit:
                 return f"{name} runs a script from its input that names {hit.group(0)}" if unread is None else \
                     f"{name} {text_how}, which names {hit.group(0)}"
-            if shell_hint:
+            if shell_hint and len(body) <= DEEP_FILE_MAX:
                 # Past MAX_DEPTH, and naming no endpoint: read as commands down to FILE_DEPTH, and
                 # refused there as text the gate could not check, as a script file is (script_body,
                 # claude-config#3837). Where the reading finds nothing it goes on as it did before.
@@ -3235,10 +3246,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # Past MAX_DEPTH (FILE_DEPTH says why, claude-config#3837): first judged exactly as it
             # was before that issue, by a name in its text and by what it imports, so nothing
             # refused then passes now. One that passed is then read as commands like any other,
-            # unless it is already being read higher up this chain, or stands FILE_DEPTH deep,
-            # where it is refused as a script the gate could not check, not as one that posts.
+            # unless it is already being read higher up this chain, or is longer than
+            # DEEP_FILE_MAX, which leaves it judged as before, or stands FILE_DEPTH deep, where it
+            # is refused as a script the gate could not check, not as one that posts.
             found = self.script_named(label, real, d, body, first, lang, hit)
-            if found or self.being_read(real):
+            if found or self.being_read(real) or len(body) > DEEP_FILE_MAX:
                 return found
             if depth >= FILE_DEPTH:
                 return self.unfollow(self.too_deep(label, FILE_DEPTH))
@@ -6508,7 +6520,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             hit = MARKER.search(fed)
             if hit:
                 return f"{name} reads commands from its input, which names {hit.group(0)}"
-            if is_body and depth >= MAX_DEPTH:
+            if is_body and depth >= MAX_DEPTH and len(fed) <= DEEP_FILE_MAX:
                 # Past MAX_DEPTH, and naming no endpoint: read as commands down to FILE_DEPTH, and
                 # refused there as text the gate could not check, as a script file is (script_body,
                 # claude-config#3837). Where the reading finds nothing it goes on as it did before.
