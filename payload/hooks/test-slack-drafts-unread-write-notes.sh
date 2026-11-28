@@ -355,9 +355,9 @@ run_s "cp post.sh b; bash -c '$(lines "${UNSURE_DIR[@]}")' ; cp -R calm.sh b; ba
 refused "#3884 the same with the text given up on a string handed to bash -c"
 run_s "cp post.sh b; eval '$(lines "${UNSURE_DIR[@]}")' ; cp -R calm.sh b; bash b"
 refused "#3884 the same with the text given up on a string handed to eval"
-# A cut of the table generated for #3878, in which every command the gate refused before #3878 is
-# still refused: each form of text given up on, each way it makes calm.sh a folder, and each thing
-# that then takes from calm.sh, onto a copy of the script that posts.
+# A cut of the generated table (claude-config#3878), every row refused: each form of text given up
+# on, each way it makes calm.sh a folder, and each thing that then takes from calm.sh, onto a copy
+# of the script that posts.
 for form in heredoc quoted bash-c eval sourced; do
   for made in 'cp -R calmdir calm.sh' 'rm calm.sh|cp -R calmdir calm.sh'; do
     IFS='|' read -r -a made_lines <<< "$made"
@@ -392,7 +392,7 @@ refused "#3884 a write read whole to a target such a text removed"
 run_s "cp -R postdir d; $(fed 'cp -R calmdir/ d; bash d/run.sh' 'rm calmdir/run.sh' "$OPEN")"
 refused "#3884 a folder with a file such a text removed, copied in text read whole over a folder copied from one that posts"
 says "#3884 and the script is judged by the folder it was copied from before" "postdir/run.sh"
-# A folder test on a path such a text copies a folder to is answered yes, as before #3878: the
+# A folder test on a path such a text copies a folder to is answered yes: the
 # copy may be one a shell runs, and then the script the test picks is the one that posts.
 run_s "$(fed 'F=calm.sh; [ -d a ] && F=post.sh; bash "$F"' 'cp -R calmdir a' "$OPEN")"
 refused "#3884 a folder test on a path such a text copies a folder to still picks the script that posts"
@@ -406,16 +406,23 @@ allowed "#3884 a copy read whole between two paths such a text did not touch sti
 # under it, and nothing at the folder's own path.
 run_s "$(fed 'cp calm.sh calmdir; bash calmdir' 'rm calmdir/run.sh' "$OPEN")"
 allowed "#3884 a copy into a folder on disk under which such a text removed a file does not note the folder as a file"
-# In text read whole a removal or a move away is not followed, as before #3878, though the copy
+# In text read whole a removal or a move away is not followed, though the copy
 # after it fails in a shell: pinned so that following it shows as a change.
 run_s "cp post.sh b; rm calm.sh; cp calm.sh b; bash b"
 allowed "#3884 STILL UNREAD: a file removed in text read whole, then copied onto a copy of the script that posts"
 run_s "cp post.sh b; mv calm.sh gone.sh; cp calm.sh b; bash b"
 allowed "#3884 STILL UNREAD: a file moved away in text read whole, then copied onto that copy"
+# A removal by a pattern touches the paths the pattern can name and what is under them, and no
+# folder above them, where a removal by a plain path touches the folders above it too. A name
+# between quotes that holds a pattern character is one name to a shell and is read like a pattern.
+run_s "cp -R postdir d; $(fed 'cp -R calmdir/ d; bash d/run.sh' 'rm calmdir/r*.sh' "$OPEN")"
+allowed "#3884 STILL UNREAD: a folder with a file such a text removed by a pattern, copied in text read whole over a folder copied from one that posts"
+run_s "cp -R postdir d; $(fed 'cp -R calmdir/ d; bash d/run.sh' "rm 'calmdir/r*.sh'" "$OPEN")"
+allowed "#3884 a name between quotes that holds a pattern character, removed in such a text, touches no folder above it"
 
 echo "  what such a text still hides: a folder change and a variable among quoted words"
 
-# Not closed by #3878, and allowed before it: pinned here so that closing either shows as a change.
+# Two gaps left open, both allowed: pinned here so that closing either shows as a change.
 # The crude cut follows a change of folder it lists whether or not a shell runs it, and it places no
 # variable, so a script run through one is not read at all.
 run_s "$(lines 'cd postdir' 'bash run.sh' "$OPEN")"
