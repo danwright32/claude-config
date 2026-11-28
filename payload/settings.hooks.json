@@ -257,6 +257,13 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/lessons-merge-gate.sh",
+            "timeout": 45,
+            "onFailure": "block",
+            "statusMessage": "Checking Dan has answered for the lesson entries the PR changes"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-work-names-publish.sh",
             "timeout": 45,
             "onFailure": "block",
@@ -349,6 +356,17 @@
         ]
       },
       {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/server-skill-ask.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__playwright__.*|mcp__plugin_playwright_playwright__.*",
         "hooks": [
           {
@@ -397,6 +415,17 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/db-write-ask.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/connector-change-ask.sh",
             "timeout": 10,
             "onFailure": "block"
           }
@@ -503,6 +532,17 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/verification-tally-notice.sh",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/announce-answer-note.sh",
+            "timeout": 15,
+            "statusMessage": "Noting the picker Dan answered"
           }
         ]
       },
@@ -672,6 +712,11 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/checkout-behind-notice.sh",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/repo-visibility-notice.sh",
+            "timeout": 10
           }
         ]
       }

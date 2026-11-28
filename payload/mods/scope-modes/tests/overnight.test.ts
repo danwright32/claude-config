@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { NEVER_ASKED, overnightRefusal, primaryFrom, readableWay, repoFromRemotes, type Look, type OvernightCall } from '../hooks/overnight.ts'
+import { NEVER_ASKED, SAFE_BY_NAME, overnightRefusal, primaryFrom, readableWay, repoFromRemotes, type Look, type OvernightCall } from '../hooks/overnight.ts'
 import { gateAnswerOf, judgeRequiredLabel, type Gate, type Opened } from '../hooks/requiredlabel.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { ghRepo, githubRepo, linkRepo } from './mod-kit/hooks/repo.ts'
@@ -719,6 +719,54 @@ describe('outward tools: every write under claude.ai and PostHog, Chrome by its 
     // A name that says neither is refused: only a name that reads is let through.
     expect(await tool('mcp__claude_ai_Google_Calendar__suggest_time', {})).toBe('use mcp__claude_ai_Google_Calendar__suggest_time')
   })
+  // #3740: the list named two families of server, so a tool that deletes, removes or pauses on any
+  // other one (a plugin's own server, one added by hand) was approved overnight. Now a tool whose
+  // own name holds delet, remov or paus is refused on every server.
+  test('a tool that deletes, removes or pauses is refused on any server (#3740)', async () => {
+    const names = [
+      // A plugin's own server, and one added by hand: neither family the list named.
+      'mcp__plugin_uptime_monitors__delete_monitor',
+      'mcp__plugin_uptime_monitors__pause_monitor',
+      'mcp__notes__remove_page',
+      // The part of a word is matched, so a name with no separator, or another form of the word, is
+      // refused too.
+      'mcp__notes__deletePage',
+      'mcp__notes__bulkremovepages',
+      'mcp__notes__page_deletion',
+      'mcp__plugin_uptime_monitors__unpause-monitor',
+      'mcp__notes__REMOVE_PAGE',
+      // A server whose own name holds a double underscore: every reading of where the tool begins.
+      'mcp__notes__v2__delete_page',
+      'mcp__notes__delete__list',
+      // A name with no tool after the server cannot be read as a tool, so the whole of it is judged.
+      'mcp__page_remover',
+    ]
+    // Every name judged before the one comparison, so a failure shows each tool that went ahead.
+    const got: Record<string, string> = {}
+    for (const name of names) got[name] = (await tool(name, {})) ?? 'goes ahead'
+    expect(got).toEqual(Object.fromEntries(names.map(name => [name, `use ${name}`])))
+  })
+  test('on a server the list names, a read whose name holds one of those words is refused too (#3740)', async () => {
+    // The harmless side to be wrong on (L648): before, its name reading was enough to let it through.
+    expect(await tool('mcp__claude_ai_Notes__list_deleted_pages', {})).toBe('use mcp__claude_ai_Notes__list_deleted_pages')
+    expect(await tool('mcp__posthog__get_paused_flags', {})).toBe('use mcp__posthog__get_paused_flags')
+    // A read with none of them still goes ahead.
+    expect(await tool('mcp__claude_ai_Notes__list_pages', {})).toBeUndefined()
+  })
+  test('what #3740 leaves as it was: any other tool on a server the list does not name', async () => {
+    // Whether the list should refuse every tool on a server it does not know is Dan's to settle
+    // (#3740, its first open question), so these still go ahead, a create among them.
+    for (const name of ['mcp__notes__list_pages', 'mcp__notes__create_page', 'mcp__plugin_uptime_monitors__get_monitor', 'mcp__playwright__browser_click'])
+      expect({ name, r: await tool(name, {}) }).toEqual({ name, r: undefined })
+    // The word in the server's name alone says nothing about the tool.
+    expect(await tool('mcp__page_remover__list_pages', {})).toBeUndefined()
+    expect(await tool('mcp__plugin_pause_kit__get_status', {})).toBeUndefined()
+  })
+  // Naming a tool there makes sleep mode approve more, so a name added without this line changing
+  // with it fails here, where a review sees it.
+  test("no tool is named safe from that rule yet: naming one is Dan's decision (#3740)", () => {
+    expect([...SAFE_BY_NAME]).toEqual([])
+  })
   // #2064: Chrome is judged by the tab a call acts in and the host its page is on (browser.ts), so a
   // session can check its own work on a test host; anything else in Chrome is still refused,
   // reading Dan's own tabs included, which went ahead before because the tool's name says it reads.
@@ -781,6 +829,88 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
   })
   test('one whose checkout cannot be told is refused', async () => {
     expect(await bash('git checkout main', { cwd: `${'/Users'}/x/somewhere` })).toBe('run git checkout where it could not be told whether this is a primary checkout')
+  })
+  // #3398: git acts on the repository a command names, never on the folder the call was typed in.
+  // Until then the rule asked only about the last -C read from that folder, else that folder, so
+  // each of these ran from a linked worktree and moved a primary checkout.
+  const WT = `${'/Users'}/x/wt`
+  const REPO = `${'/Users'}/x/repo`
+  const untold = 'run git checkout where it could not be told whether this is a primary checkout'
+  test('a checkout naming its repository apart is one that cannot be told, typed in a linked worktree or anywhere (#3398)', async () => {
+    for (const c of [
+      `git --git-dir=${REPO}/.git --work-tree=${REPO} checkout main`,
+      `git --git-dir ${REPO}/.git checkout main`,
+      `git --work-tree=${REPO} checkout main`,
+      `GIT_DIR=${REPO}/.git GIT_WORK_TREE=${REPO} git checkout main`,
+      `GIT_DIR=${REPO}/.git git checkout main`,
+      `GIT_WORK_TREE=${REPO} git checkout main`,
+      `env GIT_DIR=${REPO}/.git git checkout main`,
+      `export GIT_DIR=${REPO}/.git; git checkout main`,
+      `GIT_DIR=${REPO}/.git; export GIT_DIR; git checkout main`,
+      `read GIT_DIR; export GIT_DIR; git checkout main`,
+      `git -C ${WT} --git-dir=${REPO}/.git checkout main`,
+    ])
+      expect({ c, r: await bash(c, { cwd: WT }) }).toEqual({ c, r: untold })
+    expect(await bash(`git --git-dir=${REPO}/.git --work-tree=${REPO} switch -c x`, { cwd: WT })).toBe('run git switch where it could not be told whether this is a primary checkout')
+  })
+  test('a variable named with no value in the line takes the temp folder allowances away too, as one given a value always did (#3398 lessons review)', async () => {
+    // The controls: in a throwaway repository under the temp folder each of these goes ahead.
+    expect(await bash('cd /tmp/t3 && git checkout main')).toBeUndefined()
+    expect(await bash('cd /tmp/t3 && git branch -D x')).toBeUndefined()
+    expect(await bash('cd /tmp/t3 && git push -f /tmp/t1 main')).toBeUndefined()
+    // GIT_DIR read or exported with no `=` reaches git all the same, so the folder says nothing.
+    for (const naming of ['read GIT_DIR; export GIT_DIR', 'export GIT_DIR', 'printf -v GIT_WORK_TREE %s /x; export GIT_WORK_TREE', 'export GIT_DIR=/x/.git']) {
+      expect({ naming, r: await bash(`cd /tmp/t3 && ${naming}; git checkout main`) }).toEqual({ naming, r: untold })
+      expect({ naming, r: await bash(`cd /tmp/t3 && ${naming}; git branch -D x`) }).toEqual({ naming, r: 'delete a branch' })
+      expect({ naming, r: await bash(`cd /tmp/t3 && ${naming}; git push -f /tmp/t1 main`) }).toEqual({ naming, r: 'force push' })
+    }
+  })
+  // The review of #3532. Whether a call names a git variable is read from the reader's commands, so
+  // a commit message or an echo quoting `GIT_DIR=` names none. The temp folder allowances were
+  // taken away by that text anywhere in the call before #3398, and are still: they keep the text's
+  // own reading beside the reader's, so nothing refused then goes ahead now.
+  test('text that only quotes a setting still takes the temp folder allowances away, and moves no checkout out of reach (#3532 review)', async () => {
+    for (const data of ['echo "GIT_DIR=/x/.git"', 'git commit -m "GIT_DIR=/x/.git"', 'grep -rn "GIT_WORK_TREE=" notes']) {
+      expect({ data, r: await bash(`cd /tmp/t3 && ${data}; git branch -D x`) }).toEqual({ data, r: 'delete a branch' })
+      expect({ data, r: await bash(`cd /tmp/t3 && ${data}; git push -f /tmp/t1 main`) }).toEqual({ data, r: 'force push' })
+    }
+    // Typed in a linked worktree, the checkout behind such text is asked of that folder, as it was
+    // before #3398; in the primary checkout it is refused, as it always was.
+    expect(await bash('echo "GIT_DIR=/x/.git"; git checkout main', { cwd: WT })).toBeUndefined()
+    expect(await bash('git commit -m "GIT_DIR=/x/.git" && git checkout main', { cwd: WT })).toBeUndefined()
+    expect(await bash('echo "GIT_DIR=/x/.git"; git checkout main', { cwd: REPO })).toBe('run git checkout in a primary checkout')
+    // A real setting behind the same text still leaves the repository untold.
+    expect(await bash('echo "GIT_DIR=/x/.git"; export GIT_DIR=/x/.git; git checkout main', { cwd: WT })).toBe(untold)
+  })
+  test('more than one -C is read as git chains them: the folder they lead to is the one asked about (#3398)', async () => {
+    // Typed in a folder of the linked worktree, the last -C alone names a folder of that worktree.
+    expect(await bash(`git -C ${'/Users'}/x -C repo checkout main`, { cwd: `${WT}/a` })).toBe('run git checkout in a primary checkout')
+    expect(await bash(`git -C ${WT} -C ../repo switch main`, { cwd: `${WT}/a` })).toBe('run git switch in a primary checkout')
+    expect(await bash('git -C .. -C ../repo checkout main', { cwd: `${WT}/a` })).toBe('run git checkout in a primary checkout')
+    // A chain that leads nowhere known, or that mod-kit cannot work out, is one that cannot be told.
+    expect(await bash(`git -C ${'/Users'}/x -C somewhere checkout main`, { cwd: WT })).toBe(untold)
+    expect(await bash('git -C "$A" -C sub checkout main', { cwd: WT })).toBe(untold)
+    expect(await bash(`git -C ${WT} -C "$B" checkout main`, { cwd: WT })).toBe(untold)
+  })
+  test('what the old reading refused is still refused: the last -C alone is judged beside the chain (#3398, Dan to decide)', async () => {
+    // git runs in the linked worktree here, where a checkout is allowed. The last -C read alone
+    // names a folder of the primary checkout, which the rule refused before #3398 and still does:
+    // letting the chain alone decide is the right reading and a loosening, so it is Dan's to choose.
+    expect(await bash(`git -C ${WT} -C sub checkout main`, { cwd: REPO })).toBe('run git checkout in a primary checkout')
+    expect(await bash(`git -C ${WT} -C sub checkout main`, { cwd: `${'/Users'}/x/somewhere` })).toBe(untold)
+  })
+  test('the controls: a checkout placed by no -C, one -C or a cd is judged exactly as before (#3398)', async () => {
+    expect(await bash('git checkout main', { cwd: WT })).toBeUndefined()
+    expect(await bash(`git -C ${WT} checkout main`)).toBeUndefined()
+    expect(await bash(`cd ${WT} && git checkout main`)).toBeUndefined()
+    expect(await bash(`git -C ${WT} -C sub checkout main`, { cwd: WT })).toBeUndefined()
+    expect(await bash(`git -C ${'/Users'}/x -C wt checkout main`, { cwd: WT })).toBeUndefined()
+    expect(await bash('git -c advice.detachedHead=false checkout main', { cwd: WT })).toBeUndefined()
+    expect(await bash('git commit -m "read GIT_DIR as git does" && git checkout main', { cwd: WT })).toBeUndefined()
+    expect(await bash(`git -C ${REPO} checkout main`, { cwd: WT })).toBe('run git checkout in a primary checkout')
+    expect(await bash('git -C "$W" checkout main', { cwd: WT })).toBe(untold)
+    // Putting named files back moves no checkout, wherever it is named.
+    expect(await bash(`git --git-dir=${REPO}/.git --work-tree=${REPO} checkout -- a.ts`, { cwd: WT })).toBeUndefined()
   })
   test('force pushes', async () => {
     for (const c of ['git push --force', 'git push -f origin x', 'git push -uf origin x', 'git push --force-with-lease origin x', 'git push origin +x', 'git push origin HEAD:+main', 'git push origin --force-with-lease=x:abc x', 'git push --force-if-includes --force-with-lease origin x', 'git push -fu origin x', 'git push --mirror', 'git push --forc origin x', 'git push --force-with origin x', 'git push --mirr'])

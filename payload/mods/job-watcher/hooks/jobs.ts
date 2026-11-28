@@ -1,5 +1,7 @@
 // The background job watcher's rules, apart from the hooks (claude-config#611).
 
+import { taskFinished, tasksIn } from './mod-kit/inflight.ts'
+
 // A job started in the background names itself and its output file ("running in background with ID:
 // X. Output is being written to: Y."), and so does a foreground command Claude Code moved there at its
 // timeout ("Command did not complete within its 120s timeout and was moved to the background (ID: X).
@@ -69,16 +71,10 @@ export const startedTask = (tool: string, result: unknown, text: string): string
 // One entry of the background work Claude Code sends with a stop (background_tasks): the whole
 // session's work in flight, whoever started it. Undefined when the list is missing or is not a list,
 // so a caller can tell an unreadable list from an empty one (L10); an entry naming no task is passed over.
+// Read through mod-kit's one list of what is in flight (hooks/mod-kit/inflight.ts, #3770), the
+// reader the close this session card reads the same list with.
 export type InFlight = { id: string; what: string }
-export const inFlight = (raw: unknown): InFlight[] | undefined => {
-  if (!Array.isArray(raw)) return undefined
-  return raw.flatMap(t => {
-    const e = typeof t === 'object' && t !== null ? (t as Record<string, unknown>) : {}
-    if (typeof e.id !== 'string' || !e.id) return []
-    const what = typeof e.command === 'string' && e.command ? e.command : typeof e.description === 'string' ? e.description : ''
-    return [{ id: e.id, what: shortCommand(what || e.id) }]
-  })
-}
+export const inFlight = (raw: unknown): InFlight[] | undefined => tasksIn(raw, shortCommand)?.map(({ id, what }) => ({ id, what }))
 
 // #1517: what Claude Code says of each task in the same list, by id: its status, or '' when an entry
 // names a task but no status, so a task listed without one is still listed, never read as missing.
@@ -95,8 +91,8 @@ export const listedStatuses = (raw: unknown): Map<string, string> | undefined =>
 // Whether Claude Code has finished a task, from what it last said of it: a status it ends tasks with
 // (TaskStop's "is not running (status: completed)", measured on 2.1.309), or 'unlisted', the task
 // left out of a list that had to name it. Any other status, unknown ones included, is not finished.
-const FINISHED_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'killed', 'stopped'])
-export const harnessFinished = (said: string): boolean => said === 'unlisted' || FINISHED_STATUSES.has(said)
+// The statuses are mod-kit's one list's (#3770).
+export const harnessFinished = (said: string): boolean => said === 'unlisted' || taskFinished(said)
 
 // What a subagent is told when its stop is refused for the work it still holds (#1326).
 export const holdRefusal = (held: InFlight[]): string =>

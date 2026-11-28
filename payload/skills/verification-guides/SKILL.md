@@ -114,11 +114,25 @@ receipt folder holds screenshots of private apps. Beside it are the screenshots,
 of every record `record render` wrote from this run, which the merge check matches the posted
 record against), and the copies of areas.json and the guides the run used. It records the machine, the head and the commit checked out, when serve
 started, became ready and stopped and why (`stop`, `ready_failed`, `serve_exited`, `deadline`,
-`recovered`, `start_failed`, `start_error`, `start_interrupted`, `supervisor_error`), the build
+`recovered`, `start_failed`, `start_error`, `start_interrupted`, `supervisor_error`, and
+`caller_gone`, which only a run started with a lifeline, as the tests start theirs, can record), the build
 stamp, and `egress` (below). The three `start_` reasons mean setup failed before serve started, and
 `worktree_removed` says whether the worktree went: `start_failed` a named refusal, `start_error` any other error (a full disk, a
 failed copy), `start_interrupted` an interrupt. `stop_detail` carries the error itself and any
-cleanup step that also failed, which `start` reports too, as `start-cleanup-failed`.
+cleanup step that also failed, which `start` reports too, as `start-cleanup-failed`. A stop that
+could not finish is cut off (a killed serve that could not be collected, or a run whose caller was
+gone and whose stop was still going after the longest a working stop can take): `stop_detail` then
+says the run was cut off and why, and `egress` reads `unmeasured`, never a verdict. `recovered`
+means `stop` found the supervisor gone with no ending recorded. `stop` then ends the run's process
+groups by the numbers in the receipt only if the supervisor was killed outright before it began to
+end them itself, which the file `recover-by-receipt` beside the receipt says for as long as it is
+there. Once the supervisor has removed that file, `stop` signals nothing, because those numbers may
+by then be another program's: `stop_detail` names the groups it did not signal, and anything left
+of the run under them may still be running. Where one of those groups was serve's, `stop` exits 8
+with `serve-unconfirmed`, as it does for a run that was cut off with serve's group not signalled
+or not read, and for an ordinary stop whose `ps` failed or could not be started, which kills
+serve's group without listing it and records `egress` as `unmeasured` where the monitor would have
+said clean: nothing has checked that the app is gone or its port free, so look before the next run.
 
 The receipt's `egress` is the verdict of the egress monitor, [scripts/egress.py](scripts/egress.py),
 which the run's supervisor starts before serve and settles after serve's whole process group is
@@ -253,6 +267,8 @@ The runner's brief:
 >    For `guide`, write the new check and why. Judge every done when item too.
 > 5. Stop, always, also when something above failed:
 >    `python3 ~/.claude/skills/verification-guides/scripts/run_session.py stop <receipt id>`.
+>    When `stop` exits non zero, report its refusal word for word in your hand back and start no
+>    further run: the app may still be running and holding its port.
 > 6. Write the draft `{"receipt_id", "nonce", "areas": [{"area", "checks": [{"id", "result", "note", "blame"}], "done_when": [{"id", "result", "note"}], "screenshots", "guide_edits": [{"check_id", "new", "why"}]}]}`
 >    to `<scratchpad>/verify-<n>/draft.json`, render it with
 >    `python3 ~/.claude/skills/verification-guides/scripts/verification.py record render --pr-body <scratchpad>/verify-<n>/body.md < <scratchpad>/verify-<n>/draft.json > <scratchpad>/verify-<n>/comment.md`,
@@ -317,8 +333,9 @@ pull request's BASE commit holds `.claude/verification/areas.json`, through
 `verification.py`. It reads areas.json and the guides from the base commit, so a pull request
 cannot change what judges it: a new file needs an owner merged first, and a guide the pull request
 edits counts only once it has merged. A merge passes when every changed file lands in exactly one
-bucket and each touched area's newest record at the head (or at an earlier commit whose later
-changes, in the pull request's own files, leave the area alone) passes every check and done when
+bucket and each touched area's newest record at the head (or at an earlier commit since which the
+pull request's own patch leaves the area alone; a file the base branch alone changed, merged into
+the branch since, does not count, claude-config#3574) passes every check and done when
 item, with its receipt on the merging machine showing serve stopped, a clean egress verdict, a
 build stamp equal to the record's commit, and a successful drive call for the area, and the record
 exactly as `record render` wrote it from that receipt (its fingerprint in `rendered.jsonl`). The

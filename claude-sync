@@ -57,6 +57,22 @@ set -euo pipefail
 # written into the run's scratch note (see scratch_note_this_run), which is the only evidence a
 # killed run leaves of itself (claude-config#314).
 SYNC_RUN_ARGV="${*:-<no arguments>}"
+# WHICH SYNC THIS IS, so a count kept per sync is added to once however many times one sync asks the
+# same question (the review of #3759): a send that changes the mod names checks them, and the apply
+# its reconcile runs checks them again. Set here for a typed run, and set afresh by every watch_tick,
+# since the watcher is one long process running many syncs. Read from the environment in one case
+# only: the new copy a hand over starts (SYNC_REEXECED=1, see reexec_after_self_update) is a new
+# process finishing the same sync, so it carries on with the tag it was handed (the second review of
+# #3759). A tag found in any other run's environment, left in somebody's shell say, is never read,
+# so it can never make two syncs one. Taken out of the environment at once, as SYNC_SEND_REFUSED is,
+# so nothing this run starts inherits it.
+SYNC_RUN_TAG_HANDED="${SYNC_RUN_TAG:-}"
+SYNC_RUN_TAG="$$.$(date +%s).$RANDOM"
+if [ "${SYNC_REEXECED:-0}" = "1" ]; then
+  case "$SYNC_RUN_TAG_HANDED" in ''|*[!0-9.]*) ;; *) SYNC_RUN_TAG="$SYNC_RUN_TAG_HANDED" ;; esac
+fi
+unset SYNC_RUN_TAG_HANDED
+export -n SYNC_RUN_TAG 2>/dev/null || true
 
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 SYNC_REPO="${SYNC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -5019,6 +5035,53 @@ hooks_refused_here(){   # -> the recorded refusals as a JSON array, or [] when t
   printf '%s' "${r:-[]}"
 }
 
+# THE OTHER KEYS IN settings.hooks.json (claude-config#3741). The sync reads only the hooks block from
+# that file, so a top level key somebody puts beside it (a permissions block, measured 2026-11-26) is
+# applied on neither Mac. Until #3741 the pull met one in silence and the next send rewrote the file
+# as the hooks block alone, deleting the key from the repository. Now the pull names it and the send
+# writes its hooks block into the file it read. The sync still never CARRIES such a key: a setting
+# both Macs share goes in settings.shared.json, and only once it is on SHARED_SETTINGS_ALLOWED.
+#
+# payload_hooks_file_object: the payload's settings.hooks.json with this Mac's home put back, compact,
+# when it is a JSON object; {} when there is no file, or when it holds JSON null; and a failure,
+# printing nothing, otherwise. null holds no key and no hooks, and the send's reading of the hooks
+# block (`.hooks // {}`) already takes it as an empty block, so it is read the same way here: refusing
+# it held the block back on every send, saying a second reading had failed, where before #3741 the
+# next send wrote its block over it (the review of #3741). Two readers of one file must agree.
+payload_hooks_file_object(){
+  [ -f "$PAYLOAD/settings.hooks.json" ] || { printf '{}'; return 0; }
+  local w
+  w="$(detok < "$PAYLOAD/settings.hooks.json" | jq -c 'if . == null then {} elif type == "object" then . else error("not an object") end' 2>/dev/null)" || return 1
+  [ -n "$w" ] || return 1
+  printf '%s' "$w"
+}
+# HOOKS_FILE_KEYS_TOLD_FILE: the keys the last notification about them named, per Mac and gitignored,
+# so the notification is posted once per set of keys rather than on every pull (L36), and a new key
+# is news again. Absent or unreadable means the next pull that meets a key notifies, the loud side.
+HOOKS_FILE_KEYS_TOLD_FILE="$SYNC_REPO/.hooks-file-keys-told"
+hooks_file_other_keys(){   # -> the payload file's top level keys other than hooks, comma separated;
+  # fails when the file cannot be read, which is not the same as a file holding no other key, so a
+  # caller never clears the told record over a file it could not read
+  local w
+  w="$(payload_hooks_file_object)" || return 1
+  jq -r '[keys_unsorted[] | select(. != "hooks")] | join(", ")' <<< "$w" 2>/dev/null
+}
+report_hooks_file_other_keys(){   # $1 = hooks_file_other_keys' answer
+  if [ -z "$1" ]; then
+    rm -f "$HOOKS_FILE_KEYS_TOLD_FILE" 2>/dev/null || true
+    return 0
+  fi
+  # Every pull that meets it says so, in its output and the log, since each one leaves it out again.
+  echo "claude-sync: the shared config's settings.hooks.json holds $1 beside the hooks block. The sync applies only the hooks block from that file, so $1 was NOT applied to settings.json on this Mac, or on any other, and a send keeps it in that file rather than deleting it. A setting both Macs share belongs in settings.shared.json, once it is on that file's list of shared settings; otherwise take it out of payload/settings.hooks.json." >&2
+  sync_log_line "settings.hooks.json holds $1 beside the hooks block, and it was NOT applied to settings.json: the sync applies only the hooks block from that file"
+  [ "$(cat "$HOOKS_FILE_KEYS_TOLD_FILE" 2>/dev/null || true)" = "$1" ] && return 0
+  [ -t 2 ] && return 0
+  if notify_posted "settings.hooks.json holds $1, which the sync does not apply"; then
+    printf '%s\n' "$1" > "$HOOKS_FILE_KEYS_TOLD_FILE" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # The hooks block of the commit this Mac LAST APPLIED, which is the base both directions compare
 # against. Without it there is no way to tell "the other Mac removed this" from "this Mac has not
 # seen it yet", so an empty base means keep, in both directions.
@@ -5598,7 +5661,7 @@ PROT
   # hooks block of settings.json, with this Mac's home path tokenized, MERGED against what the
   # payload already holds rather than replacing it (claude-config#300). See merge_hook_blocks.
   if [ -f "$CLAUDE_HOME/settings.json" ]; then
-    local _sh_local _sh_pay _sh_base _sh_merged
+    local _sh_local _sh_pay _sh_base _sh_merged _sh_whole
     _sh_local="$(jq -c '.hooks // {}' "$CLAUDE_HOME/settings.json" 2>/dev/null || true)"
     # The shared copy, read the same way. It used to fall back to an empty block when it could not
     # be parsed, and the merge then published this Mac's block over it, losing whatever it held
@@ -5646,8 +5709,18 @@ PROT
           "it could not be checked"*) notify "held back the hooks block: it could not be checked" ;;
           *) notify "held back the hooks block: a hook is registered for tools its header does not declare" ;;
         esac
+      elif [ -n "$_sh_merged" ] && _sh_whole="$(payload_hooks_file_object)"; then
+        # Written INTO the file it was read from, never as the hooks block alone (claude-config#3741):
+        # rewriting it as {hooks: ...} deleted every other top level key somebody had put there from
+        # the repository, on the first send after it arrived, and said nothing. Such a key is not
+        # applied by a pull (report_hooks_file_other_keys says so); the send only keeps it.
+        jq -n --argjson h "$_sh_merged" --argjson w "$_sh_whole" '$w | .hooks = $h' | tok > "$PAYLOAD/settings.hooks.json"
       elif [ -n "$_sh_merged" ]; then
-        printf '%s' "$_sh_merged" | jq '{hooks: .}' | tok > "$PAYLOAD/settings.hooks.json"
+        note_held_back settings.hooks.json
+        # Reached only when the file changed between the two readings: everything the first one
+        # accepts, the second accepts too.
+        echo "claude-sync: the shared config's settings.hooks.json was read for its hooks block, but could not be read as a JSON object when read again to write the block into it (it may have changed in between), so this Mac's hooks block was NOT published into it and the repo keeps the copy it has. Check it with 'jq . $PAYLOAD/settings.hooks.json'." >&2
+        sync_log_line "the hooks block was NOT published, because the shared config's settings.hooks.json could not be read as a JSON object to write it into"
       else
         note_held_back settings.hooks.json
         echo "claude-sync: the hooks block could not be merged for publishing, so the repo keeps the copy it had and this Mac's hook changes have NOT been sent. Check $CLAUDE_HOME/settings.json and the payload's settings.hooks.json with jq." >&2
@@ -6612,8 +6685,27 @@ SHARED_SETTINGS_FILE="settings.shared.json"
 # **/payload/CLAUDE.md would stop every project's payload/CLAUDE.md loading (lessons review of
 # #3635), so the shared file cannot be used to stop any other rules file. The list is written
 # whole, as every shared value is.
-SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env claudeMdExcludes"
-SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL, claudeMdExcludes"
+#
+# THE READ DENY RULES ARE SHARED (#3563, on Dan's sign off, recorded on that issue's pull request).
+# Measured on both Macs (2026-11-24 and 2026-11-25), neither settings.json held one deny rule, so a
+# session's file tools could open an SSH private key or a stored Cloudflare or Salesforce CLI
+# login. permissions is the one name on SHARED_SETTINGS_ALLOWED whose setting is not written as
+# the shared file holds it.
+#
+# How it lands. permissions is otherwise each Mac's own, so nothing under
+# it is ever written whole: the pull ADDS each shared rule a Mac's permissions.deny lacks, after
+# the rules already there, and leaves its allow and ask rules, its mode, its extra folders and its
+# own deny rules exactly as they were. A rule a Mac already holds is not added twice, so a second
+# pull changes nothing. A rule is never removed: taking one out of the shared file leaves it on
+# each Mac, so this file can make a Mac refuse more and never less. Only permissions.deny may be
+# in the shared file, and only the rules on SHARED_DENY_RULES. Each of those names one folder of
+# stored logins under ~/, which Claude Code reads as the home folder of whoever runs it, so the
+# text is the same on both Macs. Any other key under permissions (an allow or ask rule, a mode) and
+# any other rule is refused whole: Read(~/**) would stop every session on both Macs reading its
+# own project, and would stay until removed by hand on each.
+SHARED_DENY_RULES="Read(~/.ssh/**) Read(~/.sfdx/**) Read(~/Library/Preferences/.wrangler/config/**)"
+SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env claudeMdExcludes permissions"
+SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL, claudeMdExcludes, permissions.deny"
 SHARED_OUTPUT_STYLES="default Explanatory Learning"
 SHARED_ENV_ALLOWED="CLAUDE_CODE_SUBAGENT_MODEL"
 SHARED_MODEL_ALIASES="opus sonnet haiku fable"
@@ -6624,6 +6716,11 @@ SHARED_SETTINGS_APPLY_JQ='def apply_shared($s): reduce ($s | to_entries[]) as $e
     reduce ($e.value | to_entries[]) as $m (.; reduce ($m.value | to_entries[]) as $f (.; .modelSettings[$m.key][$f.key] = $f.value))
   elif $e.key == "env" then
     reduce ($e.value | to_entries[]) as $v (.; if $v.value == null then del(.env[$v.key]) else .env[$v.key] = $v.value end)
+  elif $e.key == "permissions" then
+    reduce (($e.value.deny // [])[]) as $r (.;
+      (.permissions.deny // []) as $have
+      | if ($have | type) != "array" then error("permissions.deny in settings.json is not a list")
+        elif ($have | any(.[]; . == $r)) then . else .permissions.deny = $have + [$r] end)
   else .[$e.key] = $e.value end);'
 STATUS_LINE_SCRIPT_REL="mods/status-bar/statusline.sh"
 status_line_command(){ printf 'bash %s/%s' "$CLAUDE_HOME" "$STATUS_LINE_SCRIPT_REL"; }
@@ -6687,8 +6784,19 @@ shared_settings_wanted(){
           (.[] | select(type != "string" or (test("^\\*\\*/(claude-config/|claude-config/\\.claude/worktrees/\\*/|claude-config-sync/)payload/CLAUDE\\.md$") | not)) |
             "claudeMdExcludes holds \(tojson), not one of the forms **/claude-config/payload/CLAUDE.md, **/claude-config/.claude/worktrees/*/payload/CLAUDE.md or **/claude-config-sync/payload/CLAUDE.md (it may exclude only a copy of this repository'"'"'s rules file, and names no home folder)")
         end)
+      else empty end),
+      (if has("permissions") then
+        (.permissions | if type != "object" then "permissions is \(tojson), not an object holding a deny list" else
+          ((keys - ["deny"])[] | "permissions.\(.) is not a setting the sync shares (only permissions.deny, which can make a Mac refuse more and never less; an allow or ask rule, a mode and every other permission setting stay each Mac'"'"'s own)"),
+          (if has("deny") | not then "permissions holds no deny list, the one thing under it the sync shares" else
+            (.deny | if type != "array" or length == 0 then "permissions.deny is \(tojson), not a list of rules" else
+              (.[] | select(. as $r | ($r | type) != "string" or ($denyok | split(" ") | any(.[]; . == $r) | not)) |
+                "permissions.deny holds \(tojson), not one of the rules the sync shares (\($denyok | split(" ") | join(", "))); each names one folder of stored logins under ~/, and a wider rule would stop sessions on both Macs reading their own files")
+            end)
+          end)
+        end)
       else empty end)
-    ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" --arg envok "$SHARED_ENV_ALLOWED" --arg aliases "$SHARED_MODEL_ALIASES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
+    ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" --arg envok "$SHARED_ENV_ALLOWED" --arg aliases "$SHARED_MODEL_ALIASES" --arg denyok "$SHARED_DENY_RULES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
   if [ -n "$bad" ]; then
     echo "claude-sync: refused $SHARED_SETTINGS_FILE because $bad, so nothing from it was written into settings.json. Fix the value in the repo." >&2
     printf '{}'; return 0
@@ -6716,7 +6824,17 @@ write_settings_extras(){
        "$cur" > "$tmp" 2>/dev/null; then
     [ -n "$had" ] || rm -f "$cur"
     rm -f "$tmp"
-    echo "claude-sync: could not write the status line or the shared settings (${names:-$SHARED_SETTINGS_DESC}) into settings.json, so it was left exactly as it was. That usually means it is not valid JSON: check it with 'jq . $settings', fix it, then pull again." >&2
+    # Two causes of their own, each said as itself (L11): the file parses, and either permissions
+    # is not an object at all, or the list the shared deny rules are added to is not a list (#3563).
+    local why="That usually means it is not valid JSON: check it with 'jq . $settings', fix it, then pull again."
+    if [ -n "$had" ] && jq -e 'has("permissions")' <<< "$shared" >/dev/null 2>&1; then
+      if jq -e 'has("permissions") and (.permissions | type | . != "object" and . != "null")' "$settings" >/dev/null 2>&1; then
+        why="Its permissions is not an object, so there is no deny list to add the shared deny rules to: make it an object in $settings (or remove it), then pull again."
+      elif jq -e '(.permissions.deny // []) | type != "array"' "$settings" >/dev/null 2>&1; then
+        why="Its permissions.deny is not a list of rules, so the shared deny rules could not be added to it: make it a list in $settings (or remove it), then pull again."
+      fi
+    fi
+    echo "claude-sync: could not write the status line or the shared settings (${names:-$SHARED_SETTINGS_DESC}) into settings.json, so it was left exactly as it was. $why" >&2
     # Said, not notified: an unreadable settings.json already raises the hooks block's notification on
     # the same apply, and a second one per run for the same fault is the alert people learn to
     # dismiss (review of #775, L36).
@@ -6738,6 +6856,33 @@ write_settings_extras(){
   [ -n "$want_sl" ] && record_applied updated "settings.json (status line: $STATUS_LINE_SCRIPT_REL)"
   return 0
 }
+# THE SHARED DENY RULES THIS MAC LACKS (#3563). A deny rule taken out of settings.json by hand, or
+# by anything that rewrites the file, leaves nothing behind to notice: the files it covered simply
+# open again. So status names each rule the shared file lists and this Mac's permissions.deny does
+# not hold, with the pull that puts it back. Read through the apply's own reading of the shared
+# file, so a file the apply refuses has nothing to report here (the apply says why), and quiet
+# while every rule is there or the shared file lists none.
+report_shared_deny_rules(){
+  local settings="$CLAUDE_HOME/settings.json" want missing rc=0
+  command -v jq >/dev/null 2>&1 || return 0
+  want="$(shared_settings_wanted 2>/dev/null)"
+  jq -e 'has("permissions")' <<< "$want" >/dev/null 2>&1 || return 0
+  if [ -f "$settings" ]; then
+    missing="$(jq -r --argjson s "$want" '(.permissions.deny // []) as $have
+      | if ($have | type) != "array" then error("not a list") else $s.permissions.deny[] | select(. as $r | $have | any(.[]; . == $r) | not) end' "$settings" 2>/dev/null)" || rc=$?
+  else
+    missing="$(jq -r '.permissions.deny[]' <<< "$want" 2>/dev/null)" || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "--- the deny rules both Macs share ---"
+    echo "  claude-sync could not check whether $settings holds the deny rules $SHARED_SETTINGS_FILE lists: it is not valid JSON, or its permissions is not an object holding a list of deny rules (jq exit $rc). Until it is fixed no pull can add them, so Claude Code's file tools may open the stored logins they cover."
+    return 0
+  fi
+  [ -n "$missing" ] || return 0
+  echo "--- the deny rules both Macs share ---"
+  echo "  permissions.deny in $settings lacks: $(printf '%s\n' "$missing" | paste -sd',' - | sed 's/,/, /g'). $SHARED_SETTINGS_FILE lists each as a deny rule for both Macs, so on this Mac Claude Code's file tools can open the stored logins it covers. Run 'claude-sync pull' to put back what is missing."
+  return 0
+}
 report_settings_extras(){
   local st
   st="$(status_line_state)"
@@ -6746,6 +6891,7 @@ report_settings_extras(){
       echo "--- settings this sync writes ---"
       echo "  statusLine in $CLAUDE_HOME/settings.json runs ${st#*$'\t'}, not this Mac's status bar ($(status_line_command)), so the status bar mod's line does not show here. The sync never overwrites it: delete the statusLine entry and the next pull writes the status bar's." ;;
   esac
+  report_shared_deny_rules
   report_shared_effort_model
   report_review_option
   report_pinned_compiler
@@ -6994,6 +7140,133 @@ run_bounded(){
     exit 124 if ($? & 127) == 14;
     exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' "$@"
 }
+# THE MOD CHECKS THAT DID NOT FINISH (claude-config#3759). A validation the bound stopped says nothing
+# about the mod, only that claude was too slow to answer: on 2026-11-26 at 11:14 AM ET one did at a
+# load average of about 60, and "a mod is not loading on this Mac" was shown with no mod failing. So a
+# time out is said as could not check, and notifies only once the same mod's check has timed out on
+# SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY syncs in a row, so a check that can never finish is still heard
+# (L13) while one slow answer under load is not news (Dan's rule on alerts). A mod not listed, or
+# refused, still notifies at once.
+#
+# MOD_CHECK_TIMEOUTS_FILE: per Mac and gitignored, one line per mod whose last check timed out,
+# "<mod> TAB <syncs in a row> TAB <epoch of the first> TAB <told 0|1> TAB <SYNC_RUN_TAG of the sync
+# that last counted it>". The tag is what makes the count one per SYNC: a second check in the same
+# sync finds its own tag and adds nothing. Absent is no time outs. A record that is there and cannot
+# be read is NEVER read as none (L98): the run says so, a time out it meets notifies since nothing
+# can say it is the first, and the record is kept aside as .unreadable.
+MOD_CHECK_TIMEOUTS_FILE="$SYNC_REPO/.mod-check-timeouts"
+# Present while a record that cannot be read could not be set aside either and that has been
+# notified, so it is notified once, not on every sync (L36); removed by the first sync that reads the
+# record again, so the next time it cannot be read is news again.
+MOD_CHECK_TIMEOUTS_STUCK_TOLD="$MOD_CHECK_TIMEOUTS_FILE.stuck-told"
+mod_check_timeouts_read(){   # sets MCT_LINES; returns 1, MCT_LINES empty, when the record cannot be read
+  MCT_LINES=""
+  [ -e "$MOD_CHECK_TIMEOUTS_FILE" ] || [ -L "$MOD_CHECK_TIMEOUTS_FILE" ] || return 0
+  { [ -f "$MOD_CHECK_TIMEOUTS_FILE" ] && [ -r "$MOD_CHECK_TIMEOUTS_FILE" ]; } || return 1
+  local body
+  body="$(cat "$MOD_CHECK_TIMEOUTS_FILE" 2>/dev/null)" || return 1
+  is_blank "$body" && return 0
+  awk -F'\t' 'NF != 5 || $1 == "" || $2 !~ /^[1-9][0-9]*$/ || $3 !~ /^[0-9]+$/ || ($4 != "0" && $4 != "1") || $5 == "" { bad = 1 }
+    END { exit bad }' <<< "$body" || return 1
+  MCT_LINES="$body"
+}
+mod_check_span_words(){   # $1 = syncs in a row  $2 = epoch of the first -> "on the last sync" and the like
+  if [ "$1" = 1 ]; then printf 'on the last sync'; return 0; fi
+  local when; when="$(date_from_epoch "$2" '%Y-%m-%d %H:%M')"
+  printf 'on the last %s syncs in a row, the first at %s' "$1" "${when:-an unknown time}"
+}
+# status: every mod the last syncs could not check, and a record that cannot be read. Silent when
+# every check finished, which is what an absent record means.
+report_mod_checks_unfinished(){
+  local name n since told run
+  if ! mod_check_timeouts_read; then
+    echo "--- mods the sync could not check ---"
+    if [ -e "$MOD_CHECK_TIMEOUTS_FILE.unreadable" ] || [ -L "$MOD_CHECK_TIMEOUTS_FILE.unreadable" ]; then
+      echo "  The record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be read, so how many syncs in a row could not check a mod is not known. An earlier unreadable record, $MOD_CHECK_TIMEOUTS_FILE.unreadable, is already there, so the next sync cannot set this one aside either: it leaves both as they are and counts nothing until somebody looks at both and removes them."
+    else
+      echo "  The record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be read, so how many syncs in a row could not check a mod is not known. The next sync that checks the mods keeps it as $MOD_CHECK_TIMEOUTS_FILE.unreadable and starts a new one."
+    fi
+    return 0
+  fi
+  is_blank "$MCT_LINES" && return 0
+  echo "--- mods the sync could not check ---"
+  while IFS=$'\t' read -r name n since told run; do
+    [ -n "$name" ] || continue
+    if [ "$n" -ge "$SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY" ]; then
+      echo "  could not check mod $name $(mod_check_span_words "$n" "$since"): 'claude plugin validate' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT). Whether it loads is not known. That is $SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY or more in a row, which notifies; run 'claude plugin validate $CLAUDE_HOME/mods/$name' to see how long it takes."
+    else
+      echo "  could not check mod $name $(mod_check_span_words "$n" "$since"): 'claude plugin validate' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT). Whether it loads is not known. A notification comes if $SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY syncs in a row cannot check it."
+    fi
+  done <<< "$MCT_LINES"
+}
+# After every mod has an outcome: post at most ONE notification about time outs, naming every mod
+# whose time outs just reached the number in a row (recorded as told only when it really posted,
+# L368; one per mod was six notifications at once on a loaded evening, L36), say a record that could
+# not be read, and write the new record. $1 = 1 when the old record was read  $2 = the new record's
+# lines  $3 = the mods due a notification, space separated  $4 = the mods that timed out while the old
+# record could not be read, comma separated. $3 is empty whenever $1 is not 1, so the notification
+# about due mods and the one about a record that could not be read never both post in one sync.
+mod_check_timeouts_settle(){
+  local ok="$1" new="$2" due="$3" blind="$4" name n since told run tmp
+  local due_words="" due_ns="" due_count=0
+  for name in $due; do
+    IFS=$'\t' read -r _ n since told run <<< "$(awk -F'\t' -v n="$name" '$1 == n' <<< "$new")"
+    sync_log_line "could not check mod $name $(mod_check_span_words "$n" "$since"): 'claude plugin validate' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s each time. Whether it loads is not known."
+    due_words="$due_words${due_words:+, }$name"
+    due_ns="$due_ns${due_ns:+ }$n"
+    due_count=$((due_count + 1))
+  done
+  if [ "$due_count" -gt 0 ] && [ ! -t 2 ]; then
+    local message
+    if [ "$due_count" = 1 ]; then
+      message="could not check mod $due_words on the last $due_ns syncs in a row"
+    elif [ "$(tr ' ' '\n' <<< "$due_ns" | sort -u | wc -l | tr -d ' ')" = 1 ]; then
+      message="could not check mods $due_words on the last ${due_ns%% *} syncs in a row"
+    else
+      message="could not check mods $due_words, each on $SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY or more syncs in a row"
+    fi
+    if notify_posted "$message"; then
+      for name in $due; do
+        new="$(awk -F'\t' -v n="$name" 'BEGIN { OFS = "\t" } $1 == n { $4 = 1 } { print }' <<< "$new")"
+      done
+    fi
+  fi
+  if [ "$ok" = 1 ]; then
+    rm -f "$MOD_CHECK_TIMEOUTS_STUCK_TOLD" 2>/dev/null || true
+  else
+    local aside="$MOD_CHECK_TIMEOUTS_FILE.unreadable"
+    if [ -e "$aside" ] || [ -L "$aside" ] || ! mv "$MOD_CHECK_TIMEOUTS_FILE" "$aside" 2>/dev/null; then
+      # Never deleted to make room (L5): the run says so, and keeps counting nothing until it is moved.
+      echo "claude-sync: the record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be read, and could not be set aside as $aside either (one is already there, or the move failed), so it was left as it is and no syncs in a row are being counted. Look at both, then remove them." >&2
+      sync_log_line "the record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be read or set aside, so no syncs in a row are being counted"
+      # Notified once for as long as it stays that way, not on every sync, including the syncs where
+      # every check finished. A marker that cannot be written leaves the next sync to notify again,
+      # the loud side.
+      if [ ! -t 2 ] && [ ! -e "$MOD_CHECK_TIMEOUTS_STUCK_TOLD" ] \
+         && notify_posted "the record of mod checks that did not finish could not be read or set aside, so no syncs in a row are being counted"; then
+        { : > "$MOD_CHECK_TIMEOUTS_STUCK_TOLD"; } 2>/dev/null || true
+      fi
+      return 0
+    fi
+    echo "claude-sync: the record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be read, so how many syncs in a row could not check a mod is not known. It is kept as $aside, and a new record counts from this sync." >&2
+    sync_log_line "the record of mod checks that did not finish could not be read; kept as $aside, and a new record counts from this sync"
+    # Nothing can say a time out it met is the first, so it is heard rather than counted from zero.
+    [ -z "$blind" ] || [ -t 2 ] || notify "could not check mod $blind, and how many syncs in a row could not is not known"
+  fi
+  if is_blank "$new"; then
+    rm -f "$MOD_CHECK_TIMEOUTS_FILE" 2>/dev/null || true
+    [ ! -e "$MOD_CHECK_TIMEOUTS_FILE" ] && return 0
+  else
+    tmp="$MOD_CHECK_TIMEOUTS_FILE.writing.$$"
+    if [ ! -d "$MOD_CHECK_TIMEOUTS_FILE" ] && printf '%s\n' "$new" > "$tmp" 2>/dev/null && mv -f "$tmp" "$MOD_CHECK_TIMEOUTS_FILE" 2>/dev/null; then
+      return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  echo "claude-sync: the record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be updated, so the next sync counts time outs in a row from what it held before this one." >&2
+  sync_log_line "the record of mod checks that did not finish, $MOD_CHECK_TIMEOUTS_FILE, could not be updated"
+  return 0
+}
 check_mods_loaded(){
   local dirs bin listed d name out bad="" names=""
   dirs="$(mod_dirs_here)"
@@ -7038,6 +7311,11 @@ ALL
     [ -t 2 ] || notify "no mod is listed as loaded on this Mac"
     return 0
   fi
+  # From here every mod gets an outcome, so the record of time outs in a row is read here and
+  # rewritten below; a check that could not run at all (the returns above) leaves it as it was.
+  local mct_ok=1 mct_new="" mct_now mct_line mct_n mct_since mct_told mct_run mct_due="" mct_blind="" mct_said
+  mod_check_timeouts_read || mct_ok=0
+  mct_now="$(date +%s)"
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     name="$(mod_name "$d")"
@@ -7048,8 +7326,26 @@ ALL
     fi
     rc=0; out="$(run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" "$bin" plugin validate "$d" 2>&1)" || rc=$?
     if [ "$rc" -eq 124 ]; then
-      bad=1
-      echo "claude-sync: could not check mod $name: 'claude plugin validate' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT) and was stopped." >&2
+      # Could not check, which is not the same as refused: it never sets bad (#3759).
+      mct_line=""
+      [ "$mct_ok" = 1 ] && mct_line="$(awk -F'\t' -v n="$name" '$1 == n' <<< "$MCT_LINES")"
+      if [ -n "$mct_line" ]; then
+        IFS=$'\t' read -r _ mct_n mct_since mct_told mct_run <<< "$mct_line"
+        # One per sync: a check this same sync already counted (a send's own, then its reconcile's
+        # apply) adds nothing.
+        [ "$mct_run" = "$SYNC_RUN_TAG" ] || mct_n=$((mct_n + 1))
+      else
+        mct_n=1; mct_since="$mct_now"; mct_told=0
+      fi
+      mct_new="$mct_new${mct_new:+$'\n'}$name	$mct_n	$mct_since	$mct_told	$SYNC_RUN_TAG"
+      if [ "$mct_ok" != 1 ]; then
+        mct_blind="$mct_blind${mct_blind:+, }$name"
+        mct_said="How many syncs before this one could not check it is not known, because the record of them could not be read."
+      else
+        [ "$mct_n" -ge "$SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY" ] && [ "$mct_told" = 0 ] && mct_due="$mct_due${mct_due:+ }$name"
+        mct_said="Syncs in a row that could not check it: $mct_n, and $SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY in a row notify."
+      fi
+      echo "claude-sync: could not check mod $name: 'claude plugin validate' did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT) and was stopped, so whether it loads is not known. $mct_said" >&2
       continue
     fi
     if [ "$rc" -ne 0 ]; then
@@ -7061,7 +7357,9 @@ ALL
   done <<MODS
 $dirs
 MODS
+  # Not listed or refused: at once, as before. A time out never reaches this (#3759).
   [ -n "$bad" ] && { [ -t 2 ] || notify "a mod is not loading on this Mac"; }
+  mod_check_timeouts_settle "$mct_ok" "$mct_new" "$mct_due" "$mct_blind"
   if [ -n "$MODS_SETTINGS_CHANGED" ] && [ -n "$names" ]; then
     echo "claude-sync: mods configured on this Mac: $names. They take effect in a new session; a session already running keeps what it loaded."
   fi
@@ -7520,7 +7818,7 @@ MOVED
   # HERE, before any file moves, and this half only takes OUT what it no longer holds (this Mac's own
   # copy of every line that stays, untouched); the mirror then deletes and installs the scripts; and
   # the half after it puts in what is new, leaving out any line whose script is still missing.
-  local hk_settings="$CLAUDE_HOME/settings.json" hk_inc="" hk_bas="" hk_loc="" hk_target="" hk_wrote=""
+  local hk_settings="$CLAUDE_HOME/settings.json" hk_inc="" hk_bas="" hk_loc="" hk_target="" hk_wrote="" hk_extra=""
   if [ -f "$PAYLOAD/settings.hooks.json" ]; then
     [ -f "$hk_settings" ] || echo '{}' > "$hk_settings"
     # The hooks block used to be REPLACED wholesale, which silently unregistered a
@@ -7535,6 +7833,9 @@ MOVED
     # merge kept nothing the base held and unregistered every hook on this Mac. It leaves hk_target
     # empty, and the second half says which file could not be read.
     hk_inc="$(detok < "$PAYLOAD/settings.hooks.json" | jq -c '.hooks // {}' 2>/dev/null)" || hk_inc=""
+    # Any other key in the file is left out of settings.json, and said so, naming it (#3741). A file
+    # that cannot be read names none and keeps the told record: the second half says it could not be read.
+    if hk_extra="$(hooks_file_other_keys)"; then report_hooks_file_other_keys "$hk_extra"; fi
     hk_bas="$(last_applied_hook_block)"
     # The SAME rule the send applies, with the roles the other way round: what is arriving is
     # primary, what is registered here is secondary (claude-config#300, see merge_hook_blocks). No
@@ -10081,6 +10382,9 @@ reexec_after_self_update(){   # $1 before  $2 after  $3 command for the child
   # SYNC_LOCK travels too: the resumed run must look at the same lock this one is holding,
   # not fall back to the default path and take a second one.
   export SYNC_REEXECED=1 SYNC_PULL_BASE="$1" CLAUDE_HOME SYNC_REPO SYNC_LOCK
+  # And the sync's tag, since the new copy finishes the same sync, and a count kept per sync must
+  # not count it twice (the second review of #3759). Inside a watch tick this is the tick's own local.
+  export SYNC_RUN_TAG
   # exec REPLACES this process, so its EXIT trap never runs and the send stamp taken there would
   # be lost. A sync whose push went up and which then handed off to the updated script would
   # report "never sent" for work that provably left this Mac, which is the defect this stamp
@@ -15613,6 +15917,7 @@ payload/$rel
   fi
   report_automatic_jobs
   report_hook_suite_result
+  report_mod_checks_unfinished
   report_outage_tally
   report_stray_processes
   report_scratch_leftovers
@@ -15796,6 +16101,21 @@ if [ -n "$_sct_given" ] && ! _wn_got="$(whole_above_zero "$SYNC_CLAUDE_CHECK_TIM
   exit 2
 fi
 [ -z "$_wn_got" ] || SYNC_CLAUDE_CHECK_TIMEOUT="$_wn_got"
+# How many syncs in a row a mod's check must time out before that notifies (claude-config#3759; the
+# number and its measurement are in DESIGN.md's table of limits). Refused when it cannot be read,
+# like the bound above, rather than run with a count nobody chose.
+_mctn_given="${SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY:-}"
+SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY="${SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY:-5}"
+_wn_got=""
+if [ -n "$_mctn_given" ] && ! _wn_got="$(whole_above_zero "$SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY")"; then
+  if [ -n "$WHOLE_NUMBER_MISSING" ]; then
+    echo "claude-sync: SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY='$SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY' could not be read: $WHOLE_NUMBER_MISSING. Refusing to run rather than counting time outs against a number nobody read." >&2
+    exit 2
+  fi
+  echo "claude-sync: SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY='$SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY' is not a positive whole number of syncs. Refusing to run rather than counting time outs against a number nobody can read." >&2
+  exit 2
+fi
+[ -z "$_wn_got" ] || SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY="$_wn_got"
 
 SYNC_SCRATCH_DU_TIMEOUT="${SYNC_SCRATCH_DU_TIMEOUT:-30}"
 case "$SYNC_SCRATCH_DU_TIMEOUT" in
@@ -16971,6 +17291,10 @@ watch_end_fswatch(){   # $1 = fswatch's pid, as its own first line said
 # asking for one, which is the only send a hold stops.
 watch_tick(){
   local now_digest
+  # Each tick is its own sync, though the watcher that runs it lives for days. Local, and bash scopes
+  # a local dynamically, so everything this tick calls reads this tag, and it ends with the tick.
+  local SYNC_RUN_TAG
+  SYNC_RUN_TAG="${BASHPID:-$$}.$(date +%s).$RANDOM"
   # Refuses the SEND, and only on a difference it could actually READ. A hash that cannot be taken,
   # because the file is mid rename or has been moved, is not a divergence, and refusing on it would
   # stop this Mac publishing over the ordinary race that every legitimate update passes through.
