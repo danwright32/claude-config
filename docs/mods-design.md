@@ -2511,7 +2511,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   `/plan-council`", and any unfinished step on the card answered the prose check whatever that step
   was. So `hooks/typed.ts` recognises a command handed over to type (an imperative to type, run,
   start, paste, invoke, launch or kick off it, leading its sentence, its line, the words after a
-  label's colon or a clause after "so", with "just", "when you're ready" or "after those two"
+  label's colon or a clause after "so" (and, since #3865, after "then" or "and then"), with
+  "just", "when you're ready" or "after those two"
   before it; "to do X, type"; "until you run", "you have to type", "you should now run", "needs
   you to type", "remember to type"; "your next move is" and "your next move:"; "is yours:" then a
   marked command; "open a new session and run"; a fenced block whose first line is the command),
@@ -2528,10 +2529,11 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   line or in a block quote; file text inside a code block; a list the line above it calls the
   session's own plan or examples; a command called an example or named as a skill; a sentence
   that speaks of a web address (endpoint, route, URL, redirect, domain); a block introduced as
-  already typed; and a path. "use" and "enter" are not among the verbs, after "your next move is
-  to" ("Your next step is to use `/tmp`") as anywhere else; "begin" is read there: the independent
-  review of pull request 3677 found them holding a skill ("use the `/db-apply` skill"), a folder and
-  a web address, and no turn held in the count of 2026-11-27 below depended on them. A one word route with nothing said of it
+  already typed; and a path. "use" and "enter" are not among the verbs that lead a sentence: the
+  independent review of pull request 3677 found them holding a skill ("use the `/db-apply` skill"),
+  a folder and a web address, and no turn held in the count of 2026-11-27 below depended on them.
+  After "your next move is to", "begin" is read, and since #3865 "use" as well (the entry after
+  this one). A one word route with nothing said of it
   ("Start `/login`.") cannot be told from a command and is still held, once, and the ask lets the
   session answer in one line. The review's two lists, seventeen hand overs that passed and eleven
   replies held that handed nothing over, are cases in `tests/typed.test.ts`, held together so a
@@ -2565,6 +2567,86 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   last steps call named it, finished or not; this one follows each card through its steps calls
   and verdicts and asks for an unfinished step. By the first count's rule the same 30 days give
   25.
+- **The typed command check's misreads, narrowed rule by rule** (#3865). The second review of pull
+  request 3677 and the work MacBook's count of it listed replies read wrongly in both directions.
+  Each is a case in `tests/typed.test.ts`, the two sides of a rule in one test. A miss is the fault
+  the check exists to stop and a false hold costs one exchange, so a rule that lets a reply pass
+  recognises one harmless shape and holds everything else. The first build's passing rules were
+  wider than that: the independent review of pull request 3889 wrote 155 invented replies that
+  hand a command over to type now, and that build passed 95 of the 143 main held. Those replies,
+  with main's answer to each, are `tests/typed-replies.ts`; each of the 143 has a test of its
+  own, and the check holds all of them. No longer counted, each by one shape:
+  "you should", "you must" and "you have to" where the words before "you" make it a report ("the
+  README says you should run", "found that you must type", "explains why you should run"), a
+  sentence about another design ("In the old design you must type"), or a suggestion with
+  "should" that names no moment ("big enough that you should start", "I think you should run");
+  however else the sentence opens they are held ("After the merge you must run", "which is why
+  you must run"). "Is yours:" before two commands or more laid out as a choice, by the label's
+  noun ("The call is yours:") or by "or" between them; before one command it is held whatever is
+  said of it. An imperative after a label naming what follows as the session's own work ("After
+  you approve the plan I will do two things:", "What I will do for you next:"), unless the label
+  goes on to speak of Dan ("I will keep going after you do one thing:"). A command for a time
+  Dan is away ("for the morning", "when you are back", "when you wake", "tomorrow"), read in
+  three places only: right after the command, with nothing between but where to type it, and
+  ending its clause ("on the work MacBook tomorrow", "in the morning and the new band will
+  show"); in a label that is nothing but the time ("For the morning:"); or leading the words
+  that hand it over ("When you're back, run"). A word meaning at once in the command's own
+  words wins over any of them ("now", "tonight", "first"), and a time anywhere else is said of
+  something else ("now, the rest can wait for the morning", "in the morning-report tab", "to
+  load the guard I merged in the morning"). One offered beside a new session, named as one after
+  the command ("or start a fresh session"), and never "or" with other words ("or keep seeing the
+  old error"). And one the sentence right after puts off, where that sentence opens with the
+  command as its subject and the putting off as its verb ("It can wait for the morning.", "I
+  have put that down for the morning"), or offers a new session for ("Or open a new
+  session."); "This cannot wait", "the rest can wait", "Nothing is wrong with the merge queue,
+  and it can wait for the morning" and "Or leave it and the session ends" are held. Now counted: an imperative after ", then" where the words before
+  it are not the session's own; "go ahead and run"; "you'll have to run"; "use" after "your next
+  step is to", with a closed list of system folders (`/tmp`, `/usr`) never a command; "before
+  anything else", which is no standing rule; a command beside a web word that names something
+  built for web addresses ("the new URL guard"); a code block judged by the sentence that
+  introduces it and not the one before it on the line ("You ran the first half. Paste the
+  second:"); a list under a line saying what the session needs ("I need two things:"); and
+  whatever follows a code block that is never closed, which hides nothing. A report back that
+  names the command, or the panel a planning command starts, is the command's own step and gets
+  no second ask ("Tell me when the panel has finished"); a word of the command's own name is no
+  sign of that ("the code" after `/code-review`).
+  Left as built, each pinned by a test named for what it does today, and put to Dan: a project
+  folder of one word after "your next step is to use" is held; a loose time ("at your
+  convenience", "before the next build") is held as now; the session's own plan under a label
+  that names nobody ("Next: run `/code-review` on the diff, then merge.") or said as imperatives
+  joined by ", then" ("Rebase first, then run `/code-review`, then merge.") is held, since "To
+  plan it: type `/plan-lite`" has the same shape and is a hand over; and a report worded
+  outside the shapes above ("The issue says: you have to type", "tell you that you have to
+  type") is held. So is a command put off in words the rules do not know: by a next sentence
+  whose verb is neither "can wait" nor "have put down" ("That is noted for the morning."), by
+  "it can wait" after a clause of that sentence, where "it" can name what the clause spoke of
+  ("Nothing tonight depends on it, and it can wait for the morning"), or
+  under a label that names the time among other words ("Something to look for in the
+  morning:"). Of the review's 72 replies that hand nothing over, 11 are held, 7 of them as on
+  main. Three of its hand overs are missed, as on main: "anything new" read as a standing rule,
+  a block fenced with tildes, and "later is too late" read as an offer.
+  The time the check takes is part of what it holds: a hook that never yields is stopped after
+  about six seconds and the turn ends unheld. The first build read "you should" only where "you"
+  led a clause, with a pattern that could start at every "and", "so" or "but" and took 7.7 to
+  8.8 seconds on 40,000 characters of them, against 16 to 20 ms on main. That pattern is gone,
+  the sentence a command sits in is found by reading back from it, and a case times 40,000
+  characters of each such word against plain words of the same length in the same run.
+  The notice Claude Code writes itself when the account is out of usage needed no change. Claude
+  Code runs its StopFailure hooks there in place of Stop (its own text for that event: "Fires
+  instead of Stop when an API error (rate limit, auth failure, etc.) ended the turn"), and of the
+  45 turns that ended in such a notice in the personal MacBook's 30 days to 2026-11-28 none is
+  followed by a record of stop hooks having run, against 1,659 of 3,089 other turn ends. The
+  earlier counts held those turns only because a count reads the record; the count sets them
+  apart now.
+  Counted on 2026-11-28 over the personal MacBook's 134 interactive sessions of the 30 days
+  before (3,141 turns; the 45 ending in Claude Code's own notice set apart, neither check holding
+  any of them; 3,096 judged): 36 held by both the check as it was and the check as it is, none
+  newly held, 3 newly passed. Read one by one, 1 of the 3 hands the command over for when Dan is
+  back and 2 offer it beside starting a new session. Each moved turn is laid to the rule that
+  moved it by running the new check with that one rule put back: 1 to a time right after the
+  command, 1 to a new session in the same sentence and 1 to the next sentence offering a new
+  session. The first build passed 6: the 3 it passed and this one holds are for the morning,
+  put off in the three wordings named above as left held.
 - **A call the permission check refused is answered by a step pinned after it, or by one line**
   (#3842). On 2026-11-27 the permission check refused a call that set a row of Dan's to do list.
   The session rightly did not send it again, then told him in eight replies that the row was his
