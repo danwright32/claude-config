@@ -43,6 +43,10 @@ check_eq(){ if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3
 # The state directory is the scratch directory's, never Dan's (L2). CLAUDECODE is set so the runner's
 # removal of it is exercised even in CI.
 export AI_REVIEW_STATE_DIR="$WORKDIR/state"
+# The night's record is the scratch directory's too, and absent unless a case names its own: a stop
+# at the fourth round of findings writes a note for the morning while the Mac is asleep (#3557), and
+# a suite run by hand on a sleeping Mac must never write into the real night's notes (L322).
+export CLAUDE_SLEEP_RECORD="$WORKDIR/no-sleep-record.json"
 # And the phase records a running review publishes for the load window (claude-config#1730).
 export MWR_PHASE_DIR="$WORKDIR/phases"
 export CLAUDECODE=1
@@ -1282,6 +1286,19 @@ printf '{"session_id":"n5","cwd":"%s","hook_event_name":"UserPromptSubmit","prom
 [ ! -e "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.push-acknowledged" ] && ok || bad "#1388 a push acknowledgement older than 14 days is swept with its review"
 [ -e "$AI_REVIEW_STATE_DIR/new-pr-abc.txt.push-acknowledged" ] && ok || bad "#1388 a push acknowledgement newer than 14 days is kept"
 rm -f "$AI_REVIEW_STATE_DIR/new-pr-abc.txt.push-acknowledged"
+# And what a stop at the fourth round of findings leaves beside a review (#3557): Dan's kept answer
+# and the marker of the night its note was written. Each is read only with its review.
+for kind in stop-answered stop-noted; do
+  printf 'finished=1\n' > "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.$kind"
+  touch -t 202601010000 "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.$kind"
+  printf 'finished=1\n' > "$AI_REVIEW_STATE_DIR/new-pr-abc.txt.$kind"
+done
+printf '{"session_id":"n5b","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
+for kind in stop-answered stop-noted; do
+  [ ! -e "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.$kind" ] && ok || bad "#3557 a round stop's $kind file older than 14 days is swept with its review"
+  [ -e "$AI_REVIEW_STATE_DIR/new-pr-abc.txt.$kind" ] && ok || bad "#3557 a round stop's $kind file newer than 14 days is kept"
+  rm -f "$AI_REVIEW_STATE_DIR/new-pr-abc.txt.$kind"
+done
 # And what a review killed mid write leaves behind (#1430): the temporary file a review is written
 # to before its rename, and the inputs a run removes when it ends (the diff the runner reads, the
 # marks and code the left out pass builds). Each lives only while one run does, so one older than
@@ -3219,9 +3236,11 @@ rd_start(){ # rd_start <head> <findings> [start flags]: that head's review, wait
   FAKE_CLAUDE_OUT="$f" prr start --dir "$REPO" --sha "$h" --base-ref main --branch feat/rounds "$@" > "$WORKDIR/rd-start.out"
   wait_final "$h" || bad "#1358 the review of ${h:0:7} finished"
 }
-# As the push gate asks: the branch only, so the pull request is found by it.
-rd_check(){ prr check --dir "$REPO" --sha "$1" --base-ref main --branch feat/rounds --gate push; }
+# As the push gate asks: the branch only, so the pull request is found by it. Anything after the
+# head is handed on (who is asking, #3557).
+rd_check(){ local h="$1"; shift; prr check --dir "$REPO" --sha "$h" --base-ref main --branch feat/rounds --gate push "$@"; }
 step_of(){ grep -F 'Step back' <<<"$1"; }
+stop_of(){ grep -F 'Stopped for Dan' <<<"$1"; }
 list_of(){ awk '/FILES THIS PUSH CHANGED/ { on = 1 } on { print } /END OF FILE LIST/ { exit }' <<<"$1"; }
 ANS_R1="OWNER|2099-01-01T10:00:00Z|Lessons review (head HEADR1):"$'\n\n'"1. Rounds.swift:5: not a defect, the caller reports it."
 
@@ -3267,6 +3286,8 @@ for h in "$R2" "$R3" "$R4"; do
   check_not "#1358 a review that stopped nothing is not named as a round: ${h:0:7}" "${h:0:7}" "$(step_of "$out")"
 done
 check "#1358 the findings to fix are still shown" "the retry loop has no bound" "$out"
+check_not "#3557 round 3 still only advises: it is not stopped for Dan" "Stopped for Dan" "$out"
+check_not "#3557 and names no picker" "AskUserQuestion" "$out"
 rk="$(key_in "$out")"
 [ -n "$rk" ] && ok || bad "#1358 the refusal still carries its read key: $out"
 out="$(rd_check "$R6")"
@@ -3292,10 +3313,298 @@ check_eq "#1358 the review records the head it read from" "$R6" "$(meta "$(final
 check_eq "#1358 and the branch's base, which it and the earlier rounds cover together" "$(G merge-base main "$R7")" "$(meta "$(final_of "$R7")" base)"
 out="$(rd_check "$R7")"; rc=$?
 check_eq "#1358 round 4 refuses on its finding" "1" "$rc"
-check "#1358 and asks to step back again" "round 4 of" "$(step_of "$out")"
 check "#1358 saying what this review read" "the changes since ${R6:0:7}" "$out"
 check_not "#1358 never claiming the whole branch" "review of the whole branch" "$out"
 check "#1358 the finding it raised is shown" "the eighteenth line copies the twelfth" "$out"
+
+# ---- Round 4 stops for Dan (claude-config#3557). The step back was advice and the rounds went on
+# past it, so from the round after it the refusal is a stop: no read key is given or taken, the
+# main session is told to ask Dan with a picker tied to this review, a subagent is told to hand
+# back, and while he sleeps a note is written for the morning. Only his own answer for this review
+# lifts it. ----
+F7="$(final_of "$R7")"
+out7="$out"
+check "#3557 round 4 stops for Dan, naming the round" "Stopped for Dan: this is round 4 of" "$out7"
+check_not "#3557 in place of the step back, which asks for another fix" "Step back" "$out7"
+check_eq "#3557 and gives no read key" "" "$(key_in "$out7")"
+check "#3557 it tells the agent to stop fixing" "Stop fixing findings on this branch" "$(stop_of "$out7")"
+for h in "$R1" "$R5" "$R6"; do
+  check "#3557 it names the earlier round's file: ${h:0:7}" "$(final_of "$h")" "$(stop_of "$out7")"
+done
+check "#3557 the main session is told to ask Dan with a picker" "Ask Dan now with AskUserQuestion" "$out7"
+check "#3557 whose metadata names the stop's own source" '"source": "review-round"' "$out7"
+check "#3557 and the head it is about" "\"head\": \"$R7\"" "$out7"
+for label in "Narrow the change" "Change the approach" "Go on with these findings"; do
+  check "#3557 offering: $label" "\"$label\"" "$out7"
+done
+check_not "#3557 and is not told it is a subagent" "You are a subagent" "$out7"
+rs_meta(){ python3 -c 'import re, sys
+m = re.search(r"metadata (\{.*?\}) \. The question", sys.argv[1], re.S)
+print(m.group(1) if m else "")' "$1"; }
+rs_facts(){ grep -m 1 -E '^Round [0-9]+ of lessons review findings on ' <<<"$1"; }
+META7="$(rs_meta "$out7")"; FACTS7="$(rs_facts "$out7")"
+[ -n "$META7" ] && ok || bad "#3557 (produced: the stop's picker metadata can be read out of the refusal)"
+check "#3557 the facts line names the round, the branch and the head" "Round 4 of lessons review findings on feat/rounds in repo, at ${R7:0:7}" "$FACTS7"
+check "#3557 and how many rounds came before" "3 earlier rounds" "$FACTS7"
+out="$(prr check --dir "$REPO" --sha "$R7" --base-ref main --branch feat/rounds)"; rc=$?
+check_eq "#3557 a merge of the same head is stopped too" "1" "$rc"
+check "#3557 in the merge's own words" "from round 4 a merge waits for Dan's answer" "$out"
+
+# The read key can never carry a push past the stop. No key is shown at a stop, so one is issued
+# here as the gate issues it, which is the strongest key a session could ever hold.
+SK="$( . "$DIR/lib/ai-review-common.sh"; ar_readkeys_issue "$F7" )"
+[ -n "$SK" ] && ok || bad "#3557 (produced: a key issued for the stopped review)"
+out="$(PR_REVIEW_READ="$SK" rd_check "$R7")"; rc=$?
+check_eq "#3557 a valid read key does not carry a push past the stop" "1" "$rc"
+check "#3557 it is still stopped" "Stopped for Dan" "$out"
+check "#3557 and the key is said not to be taken" "The PR_REVIEW_READ given was not taken" "$out"
+[ ! -e "$F7.push-acknowledged" ] && ok || bad "#3557 and nothing is recorded as read"
+# Nor an acknowledgement, however it came to be beside the review (carried from another head, say).
+( . "$DIR/lib/ai-review-common.sh"; ar_readkeys_ack_write "$F7.push-acknowledged" "$F7" "$(meta "$F7" finished)" push ) \
+  && ok || bad "#3557 (produced: a valid push acknowledgement beside the stopped review)"
+out="$(rd_check "$R7")"; rc=$?
+check_eq "#3557 a valid acknowledgement does not carry a push past the stop" "1" "$rc"
+check "#3557 it is still stopped" "Stopped for Dan" "$out"
+rm -f "$F7.push-acknowledged"
+
+# A subagent cannot ask Dan: it is told to hand back, with the picker for its session to put.
+out="$(rd_check "$R7" --asker agent)"; rc=$?
+check_eq "#3557 a subagent's push is refused at round 4" "1" "$rc"
+check "#3557 it is told it cannot ask" "You are a subagent and cannot ask Dan" "$out"
+check "#3557 and to hand back to its session" "hand back to the session that sent you" "$out"
+check "#3557 with the findings in its report" "this round's findings" "$out"
+check "#3557 and the picker for that session to put" "It asks Dan with AskUserQuestion" "$out"
+check_not "#3557 never told to ask Dan itself" "Ask Dan now" "$out"
+check "#3557 the findings are still shown, for the report" "the eighteenth line copies the twelfth" "$out"
+out="$(prr check --dir "$REPO" --sha "$R7" --base-ref main --branch feat/rounds --gate push --asker somebody 2>&1)"; rc=$?
+check_eq "#3557 an asker the check does not know is refused as a usage error, never read as the main session" "64" "$rc"
+
+# Asleep: nobody is asked. A note is written for the morning, once, and the push is refused.
+SLEEPDIR="$WORKDIR/sleep"; mkdir -p "$SLEEPDIR"
+BOOT="$( . "$DIR/lib/sleep.sh"; sleep_boot_of "$(sysctl -n kern.boottime 2>/dev/null)" )"
+python3 -c 'import json, sys, time
+now = int(time.time() * 1000)
+json.dump({"v": 1, "generation": "g3557", "since": now - 1000, "until": now + 3600000, "night": "2026-11-25",
+           "bootTime": int(sys.argv[2] or 1), "report": sys.argv[1] + "/report.md",
+           "startedBy": {"sessionId": "s1", "cwd": sys.argv[1]}, "workers": ["s1"], "placeBefore": "home"},
+          open(sys.argv[1] + "/current.json", "w"))' "$SLEEPDIR" "$BOOT"
+( . "$DIR/lib/sleep.sh"; sleep_active "$SLEEPDIR/current.json" ) && ok || bad "#3557 (produced: the fixture record reads as asleep)"
+night_notes(){ python3 -c 'import json, sys
+n = 0
+try:
+    for line in open(sys.argv[1]):
+        j = json.loads(line)
+        n += j.get("kind") == "question" and sys.argv[2] in j.get("text", "") and len(j.get("options") or []) == 3
+except OSError:
+    pass
+print(n)' "$SLEEPDIR/notes/g3557.jsonl" "$1"; }
+check_eq "#3557 (control: no note before the stop is met asleep)" "0" "$(night_notes "round 4")"
+out="$(CLAUDE_SLEEP_RECORD="$SLEEPDIR/current.json" rd_check "$R7")"; rc=$?
+check_eq "#3557 asleep: the push is refused, never passed" "1" "$rc"
+check "#3557 asleep: it is still the stop" "Stopped for Dan" "$out"
+check "#3557 asleep: it says Dan is asleep and is not asked" "Dan is asleep (sleep mode), so he is not asked tonight" "$out"
+check "#3557 asleep: and that a note was written" "A note for the morning was written" "$out"
+check "#3557 asleep: and to stop work on the branch" "stop work on this branch" "$out"
+check_not "#3557 asleep: no picker is named" "AskUserQuestion" "$out"
+check_eq "#3557 asleep: the note for the morning is on the night's notes, with the three answers" "1" "$(night_notes "round 4")"
+check_eq "#3557 asleep: naming the branch" "1" "$(night_notes "feat/rounds")"
+out="$(CLAUDE_SLEEP_RECORD="$SLEEPDIR/current.json" rd_check "$R7" --asker agent)"; rc=$?
+check_eq "#3557 asleep: a subagent's push is refused too" "1" "$rc"
+check "#3557 asleep: and it hands back saying the branch waits" "hand back to the session that sent you, saying that it waits for Dan" "$out"
+check "#3557 asleep: the second refusal says the note is already there" "was written earlier tonight" "$out"
+check_eq "#3557 asleep: and writes no second note" "1" "$(night_notes "round 4")"
+# A worker joining rewrites the night's record. It is still the same night (its generation, which
+# lib/sleep.sh reads), so the note is not written a second time (lessons review of 74a18e7).
+python3 -c 'import json, sys
+p = sys.argv[1] + "/current.json"
+r = json.load(open(p))
+r["workers"] = ["s1", "s2"]
+json.dump(r, open(p, "w"))' "$SLEEPDIR"
+out="$(CLAUDE_SLEEP_RECORD="$SLEEPDIR/current.json" rd_check "$R7")"
+check "#3557 asleep: a worker joining the night does not make it a new night" "was written earlier tonight" "$out"
+check_eq "#3557 asleep: so there is still one note" "1" "$(night_notes "round 4")"
+check_eq "#3557 asleep: the night is named by the record's generation" "g3557" "$( . "$DIR/lib/sleep.sh"; sleep_generation "$SLEEPDIR/current.json" )"
+check_eq "#3557 asleep: and a record that cannot be read names no night" "" "$( . "$DIR/lib/sleep.sh"; sleep_generation "$SLEEPDIR/none.json" )"
+out="$(CLAUDE_SLEEP_RECORD="$SLEEPDIR/current.json" PR_REVIEW_READ="$SK" rd_check "$R7")"; rc=$?
+check_eq "#3557 asleep: a read key does not carry the push either" "1" "$rc"
+# A note that cannot be written is said, with why, and the push is still refused.
+rm -f "$F7.stop-noted"
+chmod 400 "$SLEEPDIR/notes/g3557.jsonl"; chmod 500 "$SLEEPDIR/notes"
+out="$(CLAUDE_SLEEP_RECORD="$SLEEPDIR/current.json" rd_check "$R7")"; rc=$?
+chmod 700 "$SLEEPDIR/notes"; chmod 600 "$SLEEPDIR/notes/g3557.jsonl"
+check_eq "#3557 asleep: a note that cannot be written still refuses" "1" "$rc"
+if [ "$(id -u)" = 0 ]; then
+  echo "SUITE-PART-UNMEASURED #3557 a note that could not be written is said: root writes a folder it may not, so the case cannot be made"
+else
+  check "#3557 asleep: and says the note could NOT be written" "could NOT be written" "$out"
+  check_eq "#3557 asleep: and no second note is there" "1" "$(night_notes "round 4")"
+  [ ! -e "$F7.stop-noted" ] && ok || bad "#3557 asleep: a note that was not written is not marked as written, so the next refusal tries again"
+fi
+
+# Nor does a comment that answers the stopped review's findings: before the stop, a review whose
+# every finding a comment answers lets the push through with no key at all (#1338, #1340).
+SHOWN7="$(grep -m 1 -F 'the eighteenth line copies the twelfth' <<<"$out7")"
+rd_pr 91 "${ANS_R1/HEADR1/${R1:0:7}}" "OWNER|2099-01-01T12:00:00Z|Lessons review at ${R7:0:7}:"$'\n\n'"> $SHOWN7"$'\n\n'"Not a defect: the two lines differ by design."
+out="$(rd_check "$R7")"; rc=$?
+check_eq "#3557 a comment answering the stopped review's findings does not let the push through" "1" "$rc"
+check "#3557 it is still stopped" "Stopped for Dan" "$out"
+rd_pr 91 "${ANS_R1/HEADR1/${R1:0:7}}"
+
+# Dan's answer, read from the session's transcript. tr_answer <file> <session> <metadata> <question> <chosen> [prefilled]
+tr_answer(){ python3 - "$@" <<'PY'
+import json, os, sys
+path, session, meta, question, chosen = sys.argv[1:6]
+labels = json.loads(os.environ.get("TR_LABELS") or "null") or ["Narrow the change", "Change the approach", "Go on with these findings"]
+q = {"question": question, "header": "Round stop", "multiSelect": False,
+     "options": [{"label": l, "description": "What happens to the branch next."} for l in labels]}
+ask = {"questions": [q], "metadata": json.loads(meta)}
+if len(sys.argv) > 6:
+    ask["answers"] = {question: chosen}
+uid = "toolu_%d" % (os.path.getsize(path) if os.path.exists(path) else 0)
+with open(path, "a") as f:
+    f.write(json.dumps({"sessionId": session, "timestamp": "2026-11-26T05:00:00.000Z", "cwd": "/",
+                        "message": {"role": "assistant", "content": [{"type": "tool_use", "id": uid, "name": "AskUserQuestion", "input": ask}]}}) + "\n")
+    f.write(json.dumps({"sessionId": session, "timestamp": "2026-11-26T05:01:00.000Z",
+                        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": uid, "content": "answered"}]},
+                        "toolUseResult": {"questions": [q], "answers": {question: chosen}}}) + "\n")
+PY
+}
+SAID="The findings: the eighteenth line repeats the twelfth, as two of the three rounds before did."
+Q7="A lessons review has stopped this branch."$'\n'"$FACTS7"$'\n'"$SAID"
+stopped(){ rd_check "$R7" --transcript "$1" --session "${2:-s1}"; }
+if ! command -v node >/dev/null 2>&1; then
+  echo "SUITE-PART-UNMEASURED #3557 Dan's answer lifting the stop: node is not on PATH, and it runs the shared check of a picker he could read"
+else
+  T="$WORKDIR/tr-narrow.jsonl"; tr_answer "$T" s1 "$META7" "$Q7" "Narrow the change"
+  out="$(stopped "$T")"
+  check "#3557 his answer to narrow the change lifts nothing" "Stopped for Dan" "$out"
+  T="$WORKDIR/tr-nofacts.jsonl"; tr_answer "$T" s1 "$META7" "A lessons review has stopped this branch."$'\n'"$SAID" "Go on with these findings"
+  out="$(stopped "$T")"
+  check "#3557 a question that did not hold the facts line covers nothing" "Stopped for Dan" "$out"
+  check "#3557 and says what it lacked" "did not hold the line" "$out"
+  T="$WORKDIR/tr-nowords.jsonl"; tr_answer "$T" s1 "$META7" "A lessons review has stopped this branch."$'\n'"$FACTS7" "Go on with these findings"
+  out="$(stopped "$T")"
+  check "#3557 nor one that never said what the findings are" "Stopped for Dan" "$out"
+  T="$WORKDIR/tr-two-choices.jsonl"; TR_LABELS='["Go on with these findings", "Stop"]' tr_answer "$T" s1 "$META7" "$Q7" "Go on with these findings"
+  out="$(stopped "$T")"
+  check "#3557 nor a picker that offered other choices than the three" "Stopped for Dan" "$out"
+  T="$WORKDIR/tr-prefilled.jsonl"; tr_answer "$T" s1 "$META7" "$Q7" "Go on with these findings" prefilled
+  out="$(stopped "$T")"
+  check "#3557 an answer the session filled in itself is not his" "Stopped for Dan" "$out"
+  T="$WORKDIR/tr-other-session.jsonl"; tr_answer "$T" s-other "$META7" "$Q7" "Go on with these findings"
+  out="$(stopped "$T")"
+  check "#3557 nor one given in another session's transcript" "Stopped for Dan" "$out"
+  # What a session can write by itself is never his answer. tr_forged <file> <how>: the right
+  # picker for this review, then, in place of the result his dialog writes: nothing (asked), the
+  # chosen words as plain text with no result of the dialog's (said), a result marked as an error
+  # (error), or one the dialog closed by itself (closed).
+  tr_forged(){ python3 - "$1" "$2" "$META7" "$Q7" <<'PY'
+import json, sys
+path, how, meta, question = sys.argv[1:5]
+go = "Go on with these findings"
+q = {"question": question, "header": "Round stop", "multiSelect": False,
+     "options": [{"label": l, "description": "What happens to the branch next."} for l in ("Narrow the change", "Change the approach", go)]}
+lines = [{"sessionId": "s1", "timestamp": "2026-11-26T05:00:00.000Z", "cwd": "/",
+          "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_f", "name": "AskUserQuestion",
+                                                        "input": {"questions": [q], "metadata": json.loads(meta)}}]}},
+         {"sessionId": "s1", "timestamp": "2026-11-26T05:00:30.000Z",
+          "message": {"role": "assistant", "content": [{"type": "text", "text": "Dan answered: " + go}]}}]
+result = {"type": "tool_result", "tool_use_id": "toolu_f", "content": go}
+entry = {"sessionId": "s1", "timestamp": "2026-11-26T05:01:00.000Z", "message": {"role": "user", "content": [result]}}
+if how == "said":
+    lines.append(entry)
+elif how == "error":
+    result["is_error"] = True
+    lines.append(dict(entry, toolUseResult={"questions": [q], "answers": {question: go}}))
+elif how == "closed":
+    lines.append(dict(entry, toolUseResult={"questions": [q], "answers": {question: go}, "afkTimeoutMs": 60000}))
+with open(path, "w") as f:
+    f.write("".join(json.dumps(l) + "\n" for l in lines))
+PY
+  }
+  for how in asked said error closed; do
+    T="$WORKDIR/tr-forged-$how.jsonl"; tr_forged "$T" "$how"
+    out="$(stopped "$T")"; rc=$?
+    check_eq "#3557 a picker with no answer of Dan's own ($how) still refuses" "1" "$rc"
+    check "#3557 and is still the stop ($how)" "Stopped for Dan" "$out"
+    check_eq "#3557 and shows no read key ($how)" "" "$(key_in "$out")"
+  done
+  # A transcript that cannot be read stops, and says so: missing, a folder, and bytes that are no record.
+  mkdir -p "$WORKDIR/tr-a-folder.jsonl"
+  printf '\377\376 not a record\n{"sessionId": "s1", "message": "AskUserQuestion tool_result"\n' > "$WORKDIR/tr-garbage.jsonl"
+  for T in "$WORKDIR/tr-missing.jsonl" "$WORKDIR/tr-a-folder.jsonl"; do
+    out="$(stopped "$T")"; rc=$?
+    check_eq "#3557 a transcript that cannot be read refuses: ${T##*/}" "1" "$rc"
+    check "#3557 and is still the stop: ${T##*/}" "Stopped for Dan" "$out"
+    check "#3557 saying it could not be read: ${T##*/}" "transcript could not be read for his answer" "$out"
+  done
+  out="$(stopped "$WORKDIR/tr-garbage.jsonl")"; rc=$?
+  check_eq "#3557 a transcript holding no record of an answer refuses" "1" "$rc"
+  check "#3557 and is still the stop" "Stopped for Dan" "$out"
+  # An answer for another branch, and one for an older head of this one: each a real answer to a real
+  # question, about another review.
+  judged(){ python3 "$DIR/lib/review-round.py" judge --repository repo --finished "$(meta "$F7" finished)" --findings 1 --base "$(meta "$F7" base)" "$@"; }
+  OTHER="$(judged --branch feat/other --head "$R7" --round 4)"
+  T="$WORKDIR/tr-other-branch.jsonl"
+  tr_answer "$T" s1 "$(sed -n 5p <<<"$OTHER")" "$(sed -n 3p <<<"$OTHER")"$'\n'"$SAID" "Go on with these findings"
+  out="$(stopped "$T")"
+  check "#3557 his answer for another branch does not lift this one" "Stopped for Dan" "$out"
+  OLDER="$(python3 "$DIR/lib/review-round.py" judge --repository repo --branch feat/rounds --head "$R6" --round 3 --findings 1 \
+    --finished "$(meta "$(final_of "$R6")" finished)" --base "$(meta "$(final_of "$R6")" base)")"
+  T="$WORKDIR/tr-older-head.jsonl"
+  tr_answer "$T" s1 "$(sed -n 5p <<<"$OLDER")" "$(sed -n 3p <<<"$OLDER")"$'\n'"$SAID" "Go on with these findings"
+  out="$(stopped "$T")"
+  check "#3557 nor his answer for an older head" "Stopped for Dan" "$out"
+  # The same head reviewed again: its facts line reads word for word the same, so the question he
+  # read cannot tell the two reviews apart. Only the digest does, through the review's finish.
+  AGAIN="$(python3 "$DIR/lib/review-round.py" judge --repository repo --branch feat/rounds --head "$R7" --round 4 --findings 1 \
+    --finished "$(( $(meta "$F7" finished) + 1 ))" --base "$(meta "$F7" base)")"
+  check_eq "#3557 (control: another review of the same head has the same facts line)" "$FACTS7" "$(sed -n 3p <<<"$AGAIN")"
+  T="$WORKDIR/tr-reviewed-again.jsonl"
+  tr_answer "$T" s1 "$(sed -n 5p <<<"$AGAIN")" "$Q7" "Go on with these findings"
+  out="$(stopped "$T")"
+  check "#3557 nor his answer for another review of this same head, whose question read the same" "Stopped for Dan" "$out"
+  check_not "#3557 (control: the two other reviews have digests of their own)" "$(sed -n 2p <<<"$OTHER")" "$META7 $(sed -n 2p <<<"$OLDER")"
+  [ ! -e "$F7.stop-answered" ] && ok || bad "#3557 and none of those answers was kept as his"
+
+  # His own answer for this review. A subagent's call reads it and keeps nothing.
+  TG="$WORKDIR/tr-go-on.jsonl"; tr_answer "$TG" s1 "$META7" "$Q7" "Go on with these findings"
+  out="$(rd_check "$R7" --asker agent --transcript "$TG" --session s1)"; rc=$?
+  check_not "#3557 a subagent's push after Dan answered its session is no longer stopped" "Stopped for Dan" "$out"
+  [ ! -e "$F7.stop-answered" ] && ok || bad "#3557 and a subagent's call keeps nothing on the record"
+  out="$(stopped "$TG")"; rc=$?
+  check_eq "#3557 after his answer the push is held by its findings, as before the stop" "1" "$rc"
+  check_not "#3557 and is no longer stopped for him" "Stopped for Dan" "$out"
+  check "#3557 it says his answer lifted the stop for this head alone" "Dan answered for this review at round 4" "$out"
+  check "#3557 the step back is back, as advice" "round 4 of" "$(step_of "$out")"
+  rk7="$(key_in "$out")"
+  [ -n "$rk7" ] && ok || bad "#3557 and the findings' read key is shown again: $out"
+  [ -s "$F7.stop-answered" ] && ok || bad "#3557 his answer is kept beside the review, for a check that reads no session"
+  out="$(rd_check "$R7")"; rc=$?
+  check_not "#3557 a check with no session to read (the merge helper's) finds his answer kept" "Stopped for Dan" "$out"
+  out="$(PR_REVIEW_READ="$(key_in "$out")" rd_check "$R7")"; rc=$?
+  check_eq "#3557 and the read key then lets the push through, as it always did" "0" "$rc"
+  out="$(prr check --dir "$REPO" --sha "$R7" --base-ref main --branch feat/rounds)"; rc=$?
+  check_eq "#3557 the merge of that head still needs the findings' key itself" "1" "$rc"
+  check_not "#3557 but is not stopped for Dan a second time" "Stopped for Dan" "$out"
+  # The kept answer is only as good as the secret it is signed under: with the secret gone, or the
+  # record damaged, a check that reads no session stops again, never passes.
+  mv "$AI_REVIEW_STATE_DIR/helper-keys.secret" "$WORKDIR/secret.aside"
+  out="$(rd_check "$R7")"; rc=$?
+  check_eq "#3557 with the gate's secret missing, his kept answer cannot be checked and the push is refused" "1" "$rc"
+  check "#3557 as the stop, never as a pass" "Stopped for Dan" "$out"
+  check_eq "#3557 with no read key shown" "" "$(key_in "$out")"
+  mv -f "$WORKDIR/secret.aside" "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+  cp "$F7.stop-answered" "$WORKDIR/stop-answered.aside"
+  for damage in "" "answered" "finished=$(meta "$F7" finished)"; do
+    printf '%s\n' "$damage" > "$F7.stop-answered"
+    out="$(rd_check "$R7")"
+    check "#3557 a damaged record of his answer stops again: '${damage%%=*}'" "Stopped for Dan" "$out"
+  done
+  cp "$WORKDIR/stop-answered.aside" "$F7.stop-answered"
+  out="$(rd_check "$R7")"
+  check_not "#3557 (control: with the secret and the record back, his kept answer is read again)" "Stopped for Dan" "$out"
+fi
 
 # The answered match works on a narrowed review: a finding answered on the third round, raised
 # again, is shown as answered.
@@ -3333,7 +3642,22 @@ check_not "#1358 not only the change since" "ONLY WHAT CHANGED SINCE" "$sbin"
 check_eq "#1358 and no narrowing is recorded" "" "$(meta "$(final_of "$RB")" since)"
 out="$(rd_check "$RB")"; rc=$?
 check_eq "#1358 the rebased head's finding refuses" "1" "$rc"
-check "#1358 the rounds before the rebase still count" "round 5 of" "$(step_of "$out")"
+check "#1358 the rounds before the rebase still count" "round 5 of" "$(stop_of "$out")"
+# Round 5 is stopped for Dan again (claude-config#3557): his answer was for round 4's head alone.
+FB="$(final_of "$RB")"
+check_eq "#3557 the round after an answered one is stopped again, with no key" "" "$(key_in "$out")"
+if [ -n "${TG:-}" ]; then
+  out="$(rd_check "$RB" --transcript "$TG" --session s1)"
+  check "#3557 his answer for the earlier head does not lift the later head's stop" "Stopped for Dan" "$out"
+  cp "$F7.stop-answered" "$FB.stop-answered"
+  out="$(rd_check "$RB")"
+  check "#3557 nor does the record of it, copied beside the later head's review" "Stopped for Dan" "$out"
+fi
+printf 'finished=%s\nmac=%064d\n' "$(meta "$FB" finished)" 0 > "$FB.stop-answered"
+out="$(rd_check "$RB")"; rc=$?
+check_eq "#3557 a record of his answer written by hand lifts nothing" "1" "$rc"
+check "#3557 it is still stopped" "Stopped for Dan" "$out"
+rm -f "$FB.stop-answered"
 
 # A branch name used again by another pull request does not inherit its rounds.
 G checkout -q main

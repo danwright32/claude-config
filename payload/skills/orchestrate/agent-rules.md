@@ -30,6 +30,7 @@ You are one of several agents, each working one item while the orchestrator sess
 - When your brief gives a load limit, run `uptime` before each push and push only while the first load figure is under it. Otherwise wait in the foreground about two minutes at a time, as many times as your brief allows, then hand back saying the load stayed high. On a busy Mac the push gate's scanners stop at 160 seconds (claude-config#3536).
 - No dashes as punctuation and no emoji in new lines. Never use `SKIP_TEST_CHECK`, `SKIP_STYLE_CHECK` or any other override; if a hook blocks you, fix the cause.
 - Push your branch. Do not open or merge a pull request. Write the PR description to `pr-body.md` in your working folder, ending with the session link line from your brief.
+- When the lessons review refuses your push with a line starting `Stopped for Dan:`, the pull request is in its fourth round of findings or later, and the decision is Dan's, not the next fix (claude-config#3557). Stop fixing, and send the push no other way: no read key carries it. You cannot ask Dan yourself, so hand back, with that round's findings, the earlier rounds' files the refusal names, and the picker it gives for your session to put to him. When the refusal says he is asleep, hand back saying the branch waits for him.
 
 ## Never do these yourself
 

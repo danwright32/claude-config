@@ -115,6 +115,10 @@ AR_ADVISORY_LEAD="Advisory, minor findings:"
 # The words that open a refusal's request to step back after three rounds of findings
 # (claude-config#1358), which lib/pr-review.sh writes and lib/merge-when-ready.sh looks for.
 AR_STEP_BACK_LEAD="Step back:"
+# The words that open a refusal's stop from the fourth round of findings, when the push or merge
+# waits for Dan's answer and no read key carries it (claude-config#3557). lib/pr-review.sh writes
+# them and lib/merge-when-ready.sh looks for them, at the start of a line as it does the words above.
+AR_ROUND_STOP_LEAD="Stopped for Dan:"
 
 # A finished review's text, capped (claude-config#560). A hook's output reaches the session through
 # additionalContext or a refusal reason, and anything past 10,000 characters is cut by the platform
@@ -226,6 +230,36 @@ ar_readkeys_ack_ok() {   # $1 = acknowledgement file, $2 = review file, $3 = fin
   local m
   case "$3" in ''|*[!0-9]*) return 1 ;; esac
   m="$(ar__readkeys_ack_mac "$2" "$3" "$4")" || return 1
+  [ "${#m}" -eq 64 ] && [ "$(cat "$1" 2>/dev/null)" = "finished=$3"$'\n'"mac=$m" ]
+}
+# DAN'S ANSWER AT A ROUND STOP (claude-config#3557). From the fourth round of findings on one pull
+# request lib/pr-review.sh refuses until Dan has answered for that review, and his answer is read from
+# the session's transcript (lib/review-round.py). The merge helper asks with no transcript, so once a
+# check has read his answer it is kept beside the review as <review>.stop-answered: the review's
+# finish time and a MAC under the same secret, binding the review's own identity (its file's name,
+# which is the repository's key and the head) and that finish, as an acknowledgement's does. So one
+# written by hand, copied from another head's review, or left by a review since written again reads
+# as no answer. These two carry the read keys' name on purpose: pr-review-gate.sh refuses a Bash
+# command that calls anything so named, by the match it already makes.
+ar__readkeys_stop_mac() {   # $1 = review file, $2 = finish time -> its MAC, or return 1
+  local id="${1##*/}"
+  [ -n "$id" ] || return 1
+  ar__helper_key_mac "stop:$id:$2"
+}
+ar_readkeys_stop_write() {   # $1 = answer file, $2 = review file, $3 = finish time -> 0 once written
+  local m
+  case "$3" in ''|*[!0-9]*) return 1 ;; esac
+  # No key has been shown for a review stopped at its first check, so the secret may not exist yet.
+  ar__helper_secret_make || return 1
+  m="$(ar__readkeys_stop_mac "$2" "$3")" || return 1
+  [ "${#m}" -eq 64 ] || return 1
+  { printf 'finished=%s\nmac=%s\n' "$3" "$m" > "$1"; } 2>/dev/null
+}
+ar_readkeys_stop_ok() {   # $1 = answer file, $2 = review file, $3 = finish time -> 0 when it is one
+  local m
+  case "$3" in ''|*[!0-9]*) return 1 ;; esac
+  [ -e "$1" ] || return 1
+  m="$(ar__readkeys_stop_mac "$2" "$3")" || return 1
   [ "${#m}" -eq 64 ] && [ "$(cat "$1" 2>/dev/null)" = "finished=$3"$'\n'"mac=$m" ]
 }
 

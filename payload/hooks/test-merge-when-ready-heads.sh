@@ -399,6 +399,46 @@ fresh "$OLD" 0 "$GREEN"
 printf '1\n' > "$ST/review-answers"
 out="$(run 7 --squash)"; rc=$?
 check_not "#1358 control: an ordinary refusal does not ask to step back" "step back" "$(grep 'Stopped:' <<<"$out")"
+check_not "#3557 control: nor does it stop the pull request for Dan" "for Dan" "$(grep 'Stopped:' <<<"$out")"
+
+# From the fourth round the review stops for Dan and gives no read key (claude-config#3557). The
+# helper shows that refusal, and its own stop line asks for no key and no next fix: it says the
+# pull request waits for Dan, and which command keeps his answer for a helper that reads no session.
+ROUND_STOP='Refusing to merge: the lessons review of the whole branch repo feat/x at abc1234 finished (2m 01s) with 1 finding(s), and this is round 4 of findings on this pull request that stopped a push or merge. They are shown for the decision of Dan, not for another fix:
+Stopped for Dan: this is round 4 of lessons review findings on this pull request. Stop fixing findings on this branch. No read key is given for this review until he has answered for it.
+App/x.swift:2: the retry loop has no bound (L524). Should be: bound it. [severity: major]'
+cat > "$STUBS/pr-review-round-stop.sh" <<EOS
+#!/usr/bin/env bash
+case "\$1" in
+  start) exit 0 ;;
+  check) printf '%s\n' '$ROUND_STOP'; exit 1 ;;
+esac
+EOS
+chmod +x "$STUBS/pr-review-round-stop.sh"
+fresh "$OLD" 0 "$GREEN"
+out="$(MWR_REVIEW_LIB="$STUBS/pr-review-round-stop.sh" run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#3557 a refusal that stops for Dan stops the helper" "1" "$rc"
+check "#3557 showing the stop in its log" "Stopped for Dan: this is round 4 of" "$out"
+check "#3557 the helper's own stop line says the pull request waits for Dan" "stops this pull request for Dan" "$(grep 'Stopped:' <<<"$out")"
+check "#3557 and to fix nothing more" "Fix nothing more on the branch" "$(grep 'Stopped:' <<<"$out")"
+check_not "#3557 it asks for no read key, since none carries this merge" "PR_REVIEW_READ=<key>" "$(grep 'Stopped:' <<<"$out")"
+check "#3557 it names the command that keeps his answer for the helper" "typed gh pr merge" "$(grep 'Stopped:' <<<"$out")"
+check_eq "#3557 nothing merged" "0" "$(count gh-calls 'pr merge')"
+# A finding that only QUOTES the words, mid line, is not a stop.
+QUOTED_STOP='Refusing to merge until these are read: the lessons review of the whole branch repo feat/x at abc1234 finished (2m 01s) with 1 finding.
+lib/x.sh:3: the check matches "Stopped for Dan:" anywhere in the text (L11). Should be: match it at the start of a line. [severity: major]'
+cat > "$STUBS/pr-review-quoted-stop.sh" <<EOS
+#!/usr/bin/env bash
+case "\$1" in
+  start) exit 0 ;;
+  check) printf '%s\n' '$QUOTED_STOP'; exit 1 ;;
+esac
+EOS
+chmod +x "$STUBS/pr-review-quoted-stop.sh"
+fresh "$OLD" 0 "$GREEN"
+out="$(MWR_REVIEW_LIB="$STUBS/pr-review-quoted-stop.sh" run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#3557 a finding quoting the words still stops the helper" "1" "$rc"
+check "#3557 with the ordinary stop line, which asks for the key" "PR_REVIEW_READ=<key>" "$(grep 'Stopped:' <<<"$out")"
 
 # =================================================================================================
 # 16. GitHub's head for the pull request lags the branch's tip (claude-config#1458). On 2026-10-21

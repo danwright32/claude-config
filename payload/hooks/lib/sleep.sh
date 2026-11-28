@@ -144,6 +144,21 @@ sleep_active() {
   [ "$(sleep_state "$@")" = asleep ]
 }
 
+# The night's own name: the record's generation, which its notes file is named after and which
+# stays the same however often the record is written again in the night (a worker joining, say).
+# For a caller that must do something once a night (lib/pr-review.sh, claude-config#3557). Prints
+# nothing when the record cannot be read or names none, and the caller then knows no night.
+sleep_generation() {
+  local file="${1:-${CLAUDE_SLEEP_RECORD:-$HOME/.claude/state/sleep/current.json}}"
+  python3 -c 'import json, sys
+try:
+    with open(sys.argv[1], errors="replace") as fh:
+        g = json.load(fh).get("generation")
+except Exception:
+    g = None
+print(g if isinstance(g, str) and g and "\n" not in g else "")' "$file" 2>/dev/null
+}
+
 # The one writer of the night's notes (claude-config#835), for every phase that has something for
 # the morning report: a question, a finding, a proposed issue or lesson, done, parked or failed
 # work, a heartbeat, a rate limit wait. Never write the notes file or the report yourself.

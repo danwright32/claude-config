@@ -35,7 +35,10 @@
 #   findings not yet read                                 refused with the findings and their read
 #                                                         key, until a push presents it as
 #                                                         PR_REVIEW_READ=<key> <the push command>
-#   still running when the wait ends                      refused, with the time waited
+#   findings, in their fourth round or later              refused as a stop for Dan, with no read key
+#                                                         issued and none taken, until he has answered
+#                                                         for that review (claude-config#3557)
+#   still running when the wait ends                     refused, with the time waited
 #   could not run, failed, timed out, too large, ...      refused (L42), naming the restart command
 #                                                         and the one command override
 # And three this gate decides itself:
@@ -159,6 +162,12 @@ fi
 args=(check --gate push --dir "$top" --sha "$head")
 [ -n "$branch" ] && args+=(--branch "$branch")
 [ -n "$review_base" ] && args+=(--base-ref "$review_base")
+# Who sent the push, which only a stop at the fourth round of findings reads (claude-config#3557):
+# a subagent cannot ask Dan and is told to hand back, and his answer is read from the session's
+# transcript. With the library's reader absent nothing is added, and the stop words both cases.
+if declare -F ps_asker_args >/dev/null; then
+  while IFS= read -r asker_arg; do [ -n "$asker_arg" ] && args+=("$asker_arg"); done <<<"$(ps_asker_args "$payload")"
+fi
 t0="$(now_s)"
 while :; do
   out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?

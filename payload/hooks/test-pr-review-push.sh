@@ -44,6 +44,10 @@ check_not(){ if [[ "$3" != *"$2"* ]]; then ok; else bad "$1"; echo "  must not c
 check_eq(){ if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3')"; fi; }
 
 export AI_REVIEW_STATE_DIR="$WORKDIR/state"
+# No night's record: a stop at the fourth round of findings writes a note for the morning while the
+# Mac is asleep (#3557), and a suite run by hand on a sleeping Mac must never write into the real
+# night's notes (L322).
+export CLAUDE_SLEEP_RECORD="$WORKDIR/no-sleep-record.json"
 export PR_REVIEW_DEADLINE_SECONDS=30
 export AI_REVIEW_HOST="Daniels-MacBook-Pro-2"
 unset AI_REVIEW_HOSTS SKIP_PR_REVIEW PR_REVIEW_READ 2>/dev/null || true
@@ -545,6 +549,86 @@ pk="$(key_in "$out")"
 [ -n "$pk" ] && ok || bad "#1358 the refusal still names a read key: $out"
 out="$(fire_push "PR_REVIEW_READ=$pk git push -u origin feat/sync")"; rc=$?
 check_eq "#1358 and the key still lets the push through: no new block" "0" "$rc"
+
+# ===========================================================================================
+# Round 4 stops for Dan, through the gates (claude-config#3557). The gates hand on who sent the
+# command from the hook payload: a payload carrying an agent_id is a subagent's, which is told to
+# hand back, and Dan's answer is read from the transcript the payload names. No read key carries
+# the push or the merge past the stop.
+# ===========================================================================================
+as_payload(){ # as_payload <command> <JSON of the payload's other fields>
+  python3 -c 'import json, sys
+d = {"session_id": "s1", "cwd": sys.argv[1], "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": sys.argv[2]}}
+d.update(json.loads(sys.argv[3]))
+print(json.dumps(d))' "$REPO" "$1" "$2"; }
+printf 'func roundFour() {}\n' >> "$REPO/App/Sync.swift"; G commit -q -am "round four"
+R4="$(G rev-parse HEAD)"; F4="$(final_of "$R4")"
+out="$(FAKE_SLEEP_WAITS=1 fire_push "git push -u origin feat/sync")"; rc=$?
+check_eq "#3557 the fourth round's push is refused" "2" "$rc"
+check "#3557 as a stop for Dan" "Stopped for Dan: this is round 4 of" "$out"
+check_not "#3557 not as a step back" "Step back" "$out"
+check_eq "#3557 with no read key" "" "$(key_in "$out")"
+check "#3557 the main session is told to ask Dan with a picker" "Ask Dan now with AskUserQuestion" "$out"
+out4="$out"
+out="$(as_payload "git push -u origin feat/sync" '{"agent_id": "agent-7"}' | bash "$PUSH_GATE" 2>&1)"; rc=$?
+check_eq "#3557 a subagent's push at round 4 is refused" "2" "$rc"
+check "#3557 the payload's agent_id gets the hand back wording" "You are a subagent and cannot ask Dan" "$out"
+check "#3557 naming the hand back" "hand back to the session that sent you" "$out"
+check_not "#3557 and is never told to ask Dan itself" "Ask Dan now" "$out"
+out="$(as_payload "git push -u origin feat/sync" '{"agent_id": ""}' | bash "$PUSH_GATE" 2>&1)"
+check "#3557 an empty agent_id is the main session's" "Ask Dan now with AskUserQuestion" "$out"
+SK="$( . "$DIR/lib/ai-review-common.sh"; ar_readkeys_issue "$F4" )"
+[ -n "$SK" ] && ok || bad "#3557 (produced: a key issued for the stopped review)"
+out="$(fire_push "PR_REVIEW_READ=$SK git push -u origin feat/sync")"; rc=$?
+check_eq "#3557 a valid read key typed in front of the push does not carry it past the stop" "2" "$rc"
+check "#3557 and is said not to be taken" "The PR_REVIEW_READ given was not taken" "$out"
+printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/sync"}\n' "$R4" > "$FAKE_LOG/pr-view.json"
+out="$(as_payload "gh pr merge 7 --squash" '{"agent_id": "agent-7"}' | bash "$MERGE_GATE" 2>&1)"; rc=$?
+check_eq "#3557 a merge of the stopped head is refused too" "2" "$rc"
+check "#3557 as a stop, in the merge's words" "from round 4 a merge waits for Dan's answer" "$out"
+check "#3557 and the merge gate hands the subagent on as well" "You are a subagent and cannot ask Dan" "$out"
+out="$(fire_merge "PR_REVIEW_READ=$SK gh pr merge 7 --squash")"; rc=$?
+check_eq "#3557 nor does the key carry the merge" "2" "$rc"
+rm -f "$FAKE_LOG/pr-view.json"
+# Each gate's own account of its outcomes names the stop, so a reader of the gate is not told that
+# a read key always carries a push or merge (lessons review of 74a18e7).
+check "#3557 the push gate's list of outcomes names the stop" "refused as a stop for Dan, with no read key" "$(sed -n '1,60p' "$DIR/pr-review-push-gate.sh")"
+check "#3557 the merge gate's header names the stop" "the merge waits for Dan's answer for that review" "$(sed -n '1,20p' "$MERGE_GATE")"
+# Dan's answer in the session's transcript, which the payload names.
+META4="$(python3 -c 'import re, sys
+m = re.search(r"metadata (\{.*?\}) \. The question", sys.argv[1], re.S)
+print(m.group(1) if m else "")' "$out4")"
+FACTS4="$(grep -m 1 -E '^Round [0-9]+ of lessons review findings on ' <<<"$out4")"
+[ -n "$META4" ] && [ -n "$FACTS4" ] && ok || bad "#3557 (produced: the picker's metadata and facts line can be read out of the gate's refusal)"
+TR="$WORKDIR/transcript.jsonl"
+python3 - "$TR" "$META4" "$FACTS4" <<'PY'
+import json, sys
+path, meta, facts = sys.argv[1:4]
+question = facts + "\nThe findings: deleteEvent still swallows the error, as in each round before."
+q = {"question": question, "header": "Round stop", "multiSelect": False,
+     "options": [{"label": l, "description": "What happens to the branch next."}
+                 for l in ("Narrow the change", "Change the approach", "Go on with these findings")]}
+with open(path, "w") as f:
+    f.write(json.dumps({"sessionId": "s1", "timestamp": "2026-11-26T05:00:00.000Z", "cwd": "/",
+                        "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "AskUserQuestion",
+                                                                       "input": {"questions": [q], "metadata": json.loads(meta)}}]}}) + "\n")
+    f.write(json.dumps({"sessionId": "s1", "timestamp": "2026-11-26T05:01:00.000Z",
+                        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "answered"}]},
+                        "toolUseResult": {"questions": [q], "answers": {question: "Go on with these findings"}}}) + "\n")
+PY
+if ! command -v node >/dev/null 2>&1; then
+  echo "SUITE-PART-UNMEASURED #3557 Dan's answer read through the push gate: node is not on PATH, and it runs the shared check of a picker he could read"
+else
+  out="$(as_payload "git push -u origin feat/sync" "{\"session_id\": \"s-other\", \"transcript_path\": \"$TR\"}" | bash "$PUSH_GATE" 2>&1)"
+  check "#3557 an answer in another session's transcript lifts nothing" "Stopped for Dan" "$out"
+  out="$(as_payload "git push -u origin feat/sync" "{\"transcript_path\": \"$TR\"}" | bash "$PUSH_GATE" 2>&1)"; rc=$?
+  check_eq "#3557 after Dan's answer in this session the push is held by its findings again" "2" "$rc"
+  check_not "#3557 and no longer stopped for him" "Stopped for Dan" "$out"
+  pk="$(key_in "$out")"
+  [ -n "$pk" ] && ok || bad "#3557 the findings' read key is shown again: $out"
+  out="$(fire_push "PR_REVIEW_READ=$pk git push -u origin feat/sync")"; rc=$?
+  check_eq "#3557 and the key then lets the push through, as it always did" "0" "$rc"
+fi
 
 echo
 echo "passed: $pass, failed: $fail"

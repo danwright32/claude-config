@@ -12,6 +12,7 @@
 #
 #   pr-review.sh start   --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>] [--pr <number>] [--gate merge|push]
 #   pr-review.sh check   --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>] [--pr <number>] [--gate merge|push]
+#                        [--asker agent] [--transcript <file> --session <id>]
 #   pr-review.sh restart --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>] [--pr <number>] [--gate merge|push]
 #
 # start: begins a detached review of <base>..<head> and returns at once. <base> is the merge base
@@ -40,6 +41,9 @@
 #   the refusals name for a review that failed or ran out of time.
 # --gate push: the push gate asking (pr-review-push-gate.sh, claude-config#599). Same verdicts, its
 #   own words, and a presented read key recorded where only pushes read it (see below).
+# --asker agent, --transcript, --session: who is asking, as the gate's hook payload names them, which
+#   only a stop at the fourth round of findings reads (ROUND FOUR STOPS FOR DAN, below): a subagent
+#   is told to hand back, and Dan's answer is read from the session's transcript.
 # A finished review is reused by check only when it covers the range asked about: with --base-ref,
 #   its recorded base must be an ancestor of (or be) that ref's merge base with the head, else it is
 #   started again (claude-config#599), because a review started at commit or push time reads from the
@@ -62,6 +66,10 @@
 #                                       From the third round of findings on the same pull request
 #                                       it also asks to step back and reconsider the approach,
 #                                       blocking nothing more (claude-config#1358, round_rows).
+#   ok, in its fourth round or later    refused with no read key, and a key presented is not taken,
+#                                       until Dan has answered for this review; a subagent is told
+#                                       to hand back, and while he sleeps a note is written for the
+#                                       morning (claude-config#3557, round_stop).
 #   ok, only minor findings new         allowed, printing them as advisory, with no key and nothing
 #                                       recorded as read (claude-config#1356, severity_split).
 #   ok, every finding answered before   allowed, listing each with the review that raised it first
@@ -184,19 +192,23 @@ PRR_OVERRIDE="SKIP_PR_REVIEW=1"
 # The round of findings from which a refusal asks to step back, and after which a review reads only
 # what changed since the last reviewed head (claude-config#1358, see round_rows).
 PRR_STEP_BACK_ROUNDS=3
+# The round from which a refusal stops for Dan (claude-config#3557): the round after the step back,
+# which is the issue's own number, the fourth. Derived, so the two can never name the same round.
+PRR_STOP_ROUNDS=$((PRR_STEP_BACK_ROUNDS + 1))
 # The pull request's number, once answered_findings has read it, which a round is recorded under.
 prr_pr_number=""
 
-usage() { echo "usage: pr-review.sh start|check|restart --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>] [--pr <number>] [--gate merge|push]" >&2; exit 64; }
+usage() { echo "usage: pr-review.sh start|check|restart --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>] [--pr <number>] [--gate merge|push] [--asker agent] [--transcript <file> --session <id>]" >&2; exit 64; }
 
 verb="${1:-}"; shift || true
-dir="."; sha=""; base_ref=""; branch_arg=""; gate="merge"; pr_arg=""
+dir="."; sha=""; base_ref=""; branch_arg=""; gate="merge"; pr_arg=""; asker=""; asker_transcript=""; asker_session=""
 while [ $# -gt 0 ]; do
   case "$1" in
     # A flag given last has no value, and `shift 2` then fails WITHOUT shifting, which loops.
-    --dir|--sha|--base-ref|--branch|--gate|--pr)
+    --dir|--sha|--base-ref|--branch|--gate|--pr|--asker|--transcript|--session)
       [ $# -ge 2 ] || { echo "pr-review.sh: $1 needs a value." >&2; usage; }
-      case "$1" in --dir) dir="$2" ;; --sha) sha="$2" ;; --base-ref) base_ref="$2" ;; --branch) branch_arg="$2" ;; --gate) gate="$2" ;; --pr) pr_arg="$2" ;; esac
+      case "$1" in --dir) dir="$2" ;; --sha) sha="$2" ;; --base-ref) base_ref="$2" ;; --branch) branch_arg="$2" ;; --gate) gate="$2" ;; --pr) pr_arg="$2" ;;
+        --asker) asker="$2" ;; --transcript) asker_transcript="$2" ;; --session) asker_session="$2" ;; esac
       shift 2 ;;
     *) usage ;;
   esac
@@ -209,6 +221,9 @@ case "$verb" in start|check|restart|_groups) ;; *) usage ;; esac
 # <review>.push-acknowledged, which a later push reads and a merge does NOT, so the merge gate asks
 # for the key itself exactly as before (the key the push was shown still reads the same review).
 case "$gate" in merge|push) ;; *) usage ;; esac
+# --asker: agent when the gate's hook payload carried an agent_id, which only a subagent's does. Any
+# other value is refused, since an unknown asker would read as the main session, which can ask Dan.
+case "$asker" in ''|agent) ;; *) usage ;; esac
 act="$gate"
 
 top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || {
@@ -232,6 +247,8 @@ final="$AR_STATE_DIR/$name.txt"
 pending="$final.pending"
 acknowledged="$final.acknowledged"  # a merge presented the read key; this is what allows it
 push_acknowledged="$final.push-acknowledged"  # a push presented it; allows later pushes, never a merge
+stop_answered="$final.stop-answered"  # Dan answered for this review at a round stop (#3557)
+stop_noted="$final.stop-noted"      # the night a round stop's note for the morning was written (#3557)
 leftout="$final.leftout"            # the files this review did not read, for its verdict (#583)
 embedded="$final.embedded"          # the embedded base64 it did not read, for its verdict (#2307)
 prread="$final.prread"              # what reading the pull request came to, for the ledger (#1168)
@@ -920,7 +937,16 @@ round_rows() {
 # The request to step back, one line. $1 = round_rows, $2 = this round's number. Names the five
 # latest earlier rounds and where their findings are.
 step_back() {
-  local n="$2" total k=0 fin s rf heads="" files=""
+  local n="$2" heads files
+  round_names "$1"
+  echo "$AR_STEP_BACK_LEAD this is round $n of lessons review findings on this pull request (the earlier rounds were the reviews of $heads). Stop fixing findings one at a time. Read this round's findings with the earlier rounds' as one group, look for what they have in common, and reconsider the approach rather than patching the next line. The earlier rounds' findings are in: $files"
+}
+
+# The five latest earlier rounds by head, and where their findings are. $1 = round_rows. Sets heads
+# and files, which the caller declares.
+round_names() {
+  local total k=0 fin s rf
+  heads=""; files=""
   total="$(printf '%s\n' "$1" | grep -c .)"
   while IFS=$'\t' read -r fin s rf; do
     [ -n "$s" ] || continue
@@ -929,7 +955,137 @@ step_back() {
     heads="$heads${heads:+, }${s:0:7}"; files="$files${files:+ }$rf"
   done <<<"$1"
   [ "$total" -gt 5 ] && heads="$((total - 5)) older and $heads"
-  echo "$AR_STEP_BACK_LEAD this is round $n of lessons review findings on this pull request (the earlier rounds were the reviews of $heads). Stop fixing findings one at a time. Read this round's findings with the earlier rounds' as one group, look for what they have in common, and reconsider the approach rather than patching the next line. The earlier rounds' findings are in: $files"
+  return 0
+}
+
+# ROUND FOUR STOPS FOR DAN (claude-config#3557). The step back above is advice, and the rounds went
+# on past it: measured 2026-11-26 on the personal MacBook over 2,213 saved reviews of 515 branches
+# in 15.0 days, 184 reviews were rounds (their findings stopped a push or merge), and 4 branches
+# reached a fourth. So from round PRR_STOP_ROUNDS, the round after the step back, the refusal is a
+# stop: no read key is given or taken for that review, and nothing lets its push or merge through
+# but Dan's own answer for it (or the one command override every refusal of this gate has).
+#
+# What counts as a round is unchanged, and is the one count the step back reads (round_rows): a
+# review whose findings stopped a push or merge. A review nobody was shown is no fix round: of 266
+# saved reviews holding a major or critical finding, the 82 that are not rounds were never shown at
+# any check, so counting them would stop a branch on its first push for commits nobody was asked to
+# fix. Once a review is recorded as a round at or past the stop it stays stopped on every later check
+# of it, whatever is presented: a read key, an acknowledgement carried from another head, or a
+# comment that has answered its findings since.
+#
+# Who is told what. The main session is told to ask Dan with a picker (AskUserQuestion) whose
+# metadata names this review by a sha256 and whose question holds the facts line, both from
+# lib/review-round.py, the one home of the rule for his answer. A subagent (--asker agent) cannot
+# ask him, so it is told to stop and hand back to the session that sent it, with the picker for that
+# session to put. While Dan is asleep (lib/sleep.sh) nobody is asked: a note is written for the
+# morning through sleep_note, once a night for each review, and the branch waits.
+#
+# What lifts it. His answer "Go on with these findings", read from the session's transcript by
+# lib/review-round.py, for exactly this review: this head, this finish. It is then kept beside the
+# review under the gate's secret (ar_readkeys_stop_write), because the merge helper asks with no
+# transcript, and the check goes on as it did before the stop: the findings and their read key,
+# with the step back. His other two answers lift nothing: the work moves to a new head, whose review
+# is asked about again when it is a round too. A review carried to a later head (#1280) is a new
+# review file, so his answer for the head it was carried from does not cover it.
+#
+# Whether Dan has answered for this review. $1 = its finish, $2 = its round. Sets the rs_ values the
+# stop's words are built from: the digest, the facts line, the picker's metadata and its words.
+round_stop_answered() {
+  rs_digest=""; rs_facts=""; rs_why=""; rs_unkept=""; rs_meta=""; rs_narrow=""; rs_approach=""; rs_go_on=""; rs_line=""; rs_min=""
+  ar_readkeys_stop_ok "$stop_answered" "$final" "$1" && return 0
+  local out rc verdict rbase args
+  if ! command -v python3 >/dev/null 2>&1 || [ ! -f "$PRR_LIB/review-round.py" ]; then
+    rs_why="the rule that reads his answer cannot run ($PRR_LIB/review-round.py or python3 is missing)"
+    return 1
+  fi
+  args=(judge --repository "${repository:-$repo_label}" --branch "$branch" --head "${full_sha:-$sha}" --finished "$1" --round "$2" --findings "$findings")
+  rbase="$(meta_of "$final" base)"
+  [ -n "$rbase" ] && args+=(--base "$rbase")
+  [ -n "$asker_transcript" ] && [ -n "$asker_session" ] && args+=(--transcript "$asker_transcript" --session "$asker_session")
+  out="$(python3 "$PRR_LIB/review-round.py" "${args[@]}" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rs_why="the rule that reads his answer failed (exit $rc: $(printf '%s' "$out" | tail -n 1 | cut -c1-200))"
+    return 1
+  fi
+  { IFS= read -r verdict; IFS= read -r rs_digest; IFS= read -r rs_facts; IFS= read -r rs_why; IFS= read -r rs_meta
+    IFS= read -r rs_narrow; IFS= read -r rs_approach; IFS= read -r rs_go_on; IFS= read -r rs_line; IFS= read -r rs_min; } <<<"$out"
+  [ "$verdict" = answered ] || return 1
+  # Kept for a check that reads no session. A subagent's call reads his answer and writes nothing.
+  if [ "$asker" != agent ]; then
+    ar_readkeys_stop_write "$stop_answered" "$final" "$1" \
+      || rs_unkept="(Dan's answer could not be kept beside $final, so a check that reads no session, the merge helper's, will stop on this review again.)"
+  fi
+  return 0
+}
+
+# Exit 0 only while Dan is asleep (lib/sleep.sh, the one reader of the night's record). Sets
+# rs_sleep_why when that reader could not be loaded, which the stop then says.
+round_stop_asleep() {
+  rs_sleep_why=""
+  # shellcheck source=sleep.sh
+  declare -F sleep_active >/dev/null || . "$PRR_LIB/sleep.sh" 2>/dev/null
+  if ! declare -F sleep_active >/dev/null || ! declare -F sleep_note >/dev/null; then
+    rs_sleep_why="Whether Dan is asleep could not be read, since $PRR_LIB/sleep.sh could not be loaded; if he is, ask nothing and leave this branch for the morning."
+    return 1
+  fi
+  sleep_active
+}
+
+# The note for the morning, once a night for each review. $1 = the review's finish, $2 = its round.
+# Sets rs_note, the sentence the stop says about it. A note that could not be written is said, with
+# why, so the session reports the wait itself: never a silent nothing (L10).
+round_stop_note() {
+  local night line err text
+  # The night is named by its record's generation, read by lib/sleep.sh, the one reader of that
+  # record: the record is written again in the night (a worker joining), and is still that night.
+  night="$(sleep_generation 2>/dev/null)"
+  if [ -n "$night" ] && [ "$(cat "$stop_noted" 2>/dev/null)" = "finished=$1"$'\n'"night=$night" ]; then
+    rs_note="The note for the morning about this review was written earlier tonight."
+    return 0
+  fi
+  text="The lessons review stopped the $act of $branch at $short in round $2 of its findings: the review holds $findings finding(s), and $(($2 - 1)) earlier round(s) of this pull request each stopped a push or merge. The branch waits for your answer. Its findings are in $final."
+  line="$(python3 -c 'import json, sys
+print(json.dumps({"kind": "question", "repo": sys.argv[1], "text": sys.argv[2], "options": sys.argv[3:]}))' \
+    "${repository:-$repo_label}" "$text" "${rs_narrow:-Narrow the change}" "${rs_approach:-Change the approach}" "${rs_go_on:-Go on with these findings}" 2>/dev/null)"
+  if [ -n "$line" ] && err="$(sleep_note "$line" 2>&1)"; then
+    { printf 'finished=%s\nnight=%s\n' "$1" "$night" > "$stop_noted"; } 2>/dev/null
+    rs_note="A note for the morning was written, so he is asked when he wakes."
+  else
+    # The writer's last line names the error, where python prints a stack ahead of it.
+    err="$(printf '%s\n' "${err:-the note could not be built}" | grep . | tail -n 1 | cut -c1-300)"
+    rs_note="The note for the morning could NOT be written ($err), so say in your own report for the morning that $branch waits for Dan's answer at round $2 of its lessons review."
+  fi
+}
+
+# The stop, in place of the read key and the step back. $1 = round_rows, $2 = this round's number,
+# $3 = the review's finish. Reads the rs_ values round_stop_answered set.
+round_stop() {
+  local n="$2" heads files picker
+  round_names "$1"
+  echo "$AR_ROUND_STOP_LEAD this is round $n of lessons review findings on this pull request (the earlier rounds were the reviews of $heads), and from round $PRR_STOP_ROUNDS a $act waits for Dan's answer, never for the next fix (claude-config#3557). Stop fixing findings on this branch. No read key is given for this review until he has answered for it, and a key presented is not taken. The earlier rounds' findings are in: $files"
+  [ -n "${PR_REVIEW_READ:-}" ] && echo "The PR_REVIEW_READ given was not taken: no read key carries a $act past this stop."
+  if round_stop_asleep; then
+    round_stop_note "$3" "$n"
+    if [ "$asker" = agent ]; then
+      echo "Dan is asleep (sleep mode), so he is not asked tonight. $rs_note You are a subagent: stop work on this branch and hand back to the session that sent you, saying that it waits for Dan. Ask nothing, and do not $act it another way."
+    else
+      echo "Dan is asleep (sleep mode), so he is not asked tonight. $rs_note Ask nothing, stop work on this branch, leave it as it is, and do not $act it another way."
+    fi
+    return 0
+  fi
+  [ -n "$rs_sleep_why" ] && echo "($rs_sleep_why)"
+  if [ -z "$rs_digest" ] || [ -z "$rs_meta" ]; then
+    echo "The picker that asks Dan cannot be named, because ${rs_why:-the rule that reads his answer gave no digest}. Stop work on this branch and tell Dan so in your reply; a subagent hands that back to the session that sent it."
+    return 0
+  fi
+  picker="one question, the three options \"$rs_narrow\", \"$rs_approach\" and \"$rs_go_on\", no answers filled in, and metadata $rs_meta . The question must hold this line, word for word, on a line of its own:"$'\n\n'"$rs_facts"$'\n\n'"and a line starting \"$rs_line\" that says in plain words what this round's findings are and what they share with the earlier rounds' (at least $rs_min characters). If he answers \"$rs_go_on\", this $act may be sent again: the stop is lifted for this head alone, and its findings and their read key are then shown as before. If he answers \"$rs_narrow\" or \"$rs_approach\", that is done on the branch: nothing is lifted, and the next head's review is asked about again if it stops a push or merge too."
+  if [ "$asker" = agent ]; then
+    echo "You are a subagent and cannot ask Dan. Stop work on this branch and hand back to the session that sent you, with this round's findings (below) and the earlier rounds' files (above) in your report, and with this for that session to do. It asks Dan with AskUserQuestion: $picker"
+  else
+    echo "Ask Dan now with AskUserQuestion: $picker A subagent cannot ask him: it hands this back to the session that sent it."
+  fi
+  [ -n "$rs_why" ] && echo "(An answer of his was not taken: $rs_why.)"
+  return 0
 }
 
 # After three rounds, what a review of this head reads: only the files this branch changes (or had
@@ -1894,7 +2050,7 @@ do_check() {
         need="$(git merge-base "$base_ref" "$full_sha" 2>/dev/null)"
         if [ -n "$need" ] && ! git merge-base --is-ancestor "$rbase" "$need" 2>/dev/null; then
           local again_msg
-          rm -f "$final" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$final.round" 2>/dev/null
+          rm -f "$final" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$final.round" "$stop_answered" "$stop_noted" 2>/dev/null
           again_msg="$(do_start)"
           if [ -e "$pending" ]; then
             echo "Refusing to $act yet: the lessons review of $repo_label $branch at $short read from ${rbase:0:7}, which does not cover everything $base_ref brings in from ${need:0:7}, so it was started again over the whole range. $again_msg Run the $act again once it has finished."
@@ -1940,6 +2096,19 @@ do_check() {
       # again for this head, by any route, is unread until its own findings are acknowledged.
       local fin
       fin="$(meta_of "$final" finished)"
+      # A review already recorded as a round at or past the stop, with no answer from Dan, is stopped
+      # before anything below can let it through (claude-config#3557, ROUND FOUR STOPS FOR DAN): an
+      # acknowledgement, a read key, or its findings having been answered since. One checked for
+      # the first time is not yet a round, and reaches the same stop where its round is recorded.
+      local stop_due=0 prior_rounds="" this_round=0 stop_lifted=""
+      local rs_digest="" rs_facts="" rs_why="" rs_unkept="" rs_meta="" rs_narrow="" rs_approach="" rs_go_on="" rs_line="" rs_min="" rs_sleep_why="" rs_note=""
+      if [ -n "$fin" ] && [ "$(meta_of "$final.round" finished)" = "$fin" ]; then
+        prior_rounds="$(round_rows)"
+        this_round=$(( $(printf '%s\n' "$prior_rounds" | grep -c .) + 1 ))
+        if [ "$this_round" -ge "$PRR_STOP_ROUNDS" ]; then
+          if round_stop_answered "$fin" "$this_round"; then stop_lifted=1; else stop_due=1; fi
+        fi
+      fi
       # A merge reads only a merge's acknowledgement; a push reads either, since a merge that read
       # them has already shown them to a session (claude-config#599).
       local read_by="" ack_file="$acknowledged"
@@ -1947,7 +2116,9 @@ do_check() {
       # Each acknowledgement carries a MAC under the gate's secret (claude-config#1719), so one a
       # session wrote by hand reads as no acknowledgement at all, and it names this review file
       # (#1739), so one copied from another review finished in the same second reads as none too.
-      if [ -n "$fin" ] && ar_readkeys_ack_ok "$acknowledged" "$final" "$fin" merge; then
+      if [ "$stop_due" = 1 ]; then
+        :
+      elif [ -n "$fin" ] && ar_readkeys_ack_ok "$acknowledged" "$final" "$fin" merge; then
         read_by="merge"
       elif [ -n "$fin" ] && [ "$gate" = push ] && ar_readkeys_ack_ok "$push_acknowledged" "$final" "$fin" push; then
         read_by="push"
@@ -1956,7 +2127,7 @@ do_check() {
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), already read by a $read_by that presented their key."
         return 0
       fi
-      if [ -n "$fin" ] && ar_readkeys_valid "$final" "${PR_REVIEW_READ:-}"; then
+      if [ "$stop_due" = 0 ] && [ -n "$fin" ] && ar_readkeys_valid "$final" "${PR_REVIEW_READ:-}"; then
         # A failed write is said, since the next attempt will then need the key again.
         ar_readkeys_ack_write "$ack_file" "$final" "$fin" "$gate" \
           || echo "(The read could not be recorded beside $final, so a later $act of this head will need the key again.)"
@@ -1967,7 +2138,7 @@ do_check() {
       local ans_n ans_lines ans_text ans_note new_findings
       answered_findings
       new_findings=$((findings - ans_n))
-      if [ "$ans_n" -gt 0 ] && [ "$new_findings" -le 0 ]; then
+      if [ "$stop_due" = 0 ] && [ "$ans_n" -gt 0 ] && [ "$new_findings" -le 0 ]; then
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), and each repeats one an earlier review of this pull request raised that a \"Lessons review\" comment already answered, at lines unchanged since, so none is new and the $act is not stopped (claude-config#1338). Shown here so an answer that no longer holds can still be acted on:"
         printf '%s' "$ans_text"
         return 0
@@ -1975,7 +2146,7 @@ do_check() {
       # Of the new ones, the minor ones are advisory and the rest are to fix (#1356, severity_split).
       local adv_n adv_lines block_n
       severity_split
-      if [ "$block_n" -le 0 ]; then
+      if [ "$stop_due" = 0 ] && [ "$block_n" -le 0 ]; then
         local advnoun="findings"; [ "$adv_n" -eq 1 ] && advnoun="finding"
         echo "$AR_ADVISORY_LEAD the lessons review of $repo_label $branch at $short finished ($took) with $adv_n minor $advnoun and nothing more serious. Minor findings do not stop the $act and need no fix round:"
         show_part advisory
@@ -1989,13 +2160,36 @@ do_check() {
       local noun="findings"; [ "$block_n" -eq 1 ] && noun="finding"
       # This review stopped the push or merge, so it is a round of findings (#1358, round_rows),
       # recorded for its own finish and under the pull request's number when known.
-      local round_note="" prior_rounds this_round
-      if [ -n "$fin" ]; then
-        { printf 'finished=%s\npr=%s\n' "$fin" "${pr_arg:-$prr_pr_number}" > "$final.round"; } 2>/dev/null \
-          || round_note="(This round could not be recorded beside $final, so later reviews will not count it as a round.)"
+      local round_note=""
+      if [ "$stop_due" = 0 ]; then
+        if [ -n "$fin" ]; then
+          { printf 'finished=%s\npr=%s\n' "$fin" "${pr_arg:-$prr_pr_number}" > "$final.round"; } 2>/dev/null \
+            || round_note="(This round could not be recorded beside $final, so later reviews will not count it as a round.)"
+        fi
+        prior_rounds="$(round_rows)"
+        this_round=$(( $(printf '%s\n' "$prior_rounds" | grep -c .) + 1 ))
+        # The round this very check recorded, at or past the stop (claude-config#3557).
+        if [ -z "$stop_lifted" ] && [ -n "$fin" ] && [ "$this_round" -ge "$PRR_STOP_ROUNDS" ]; then
+          if round_stop_answered "$fin" "$this_round"; then stop_lifted=1; else stop_due=1; fi
+        fi
       fi
-      prior_rounds="$(round_rows)"
-      this_round=$(( $(printf '%s\n' "$prior_rounds" | grep -c .) + 1 ))
+      if [ "$stop_due" = 1 ]; then
+        # No key is issued: one nobody was shown cannot be presented, and none would be taken.
+        echo "Refusing to $act: the lessons review of $scope_words at $short finished ($took) with $findings finding(s), and this is round $this_round of findings on this pull request that stopped a push or merge. They are shown for Dan's decision, not for another fix:"
+        round_stop "$prior_rounds" "$this_round" "$fin"
+        show_part fix
+        if [ "$adv_n" -gt 0 ]; then
+          echo "$AR_ADVISORY_LEAD $adv_n more, which are minor:"
+          show_part advisory
+        fi
+        if [ "$ans_n" -gt 0 ]; then
+          echo "Also raised again: $ans_n finding(s) repeating one an earlier review of this pull request raised that a \"Lessons review\" comment already answered, at lines unchanged since (claude-config#1338). Answered findings do not lift this stop:"
+          printf '%s' "$ans_text"
+        fi
+        [ -n "$ans_note" ] && echo "$ans_note"
+        [ -n "$round_note" ] && echo "$round_note"
+        return 1
+      fi
       local readkey keyrc=0
       readkey="$(ar_readkeys_issue "$final")" || keyrc=$?
       echo "Refusing to $act until these are read: the lessons review of $scope_words at $short finished ($took) with $block_n $noun. Here they are. Check each against the code, fix what is real or say why it is not in a comment on the pull request beginning \"Lessons review at $short\", quoting each finding it answers on a line of its own beginning \"> \", exactly as shown here. Every later review of it reads that comment on either Mac, and a finding raised again that it quotes, at lines unchanged since, counts as answered. Then $act with their read key in front of the $act command:"
@@ -2009,6 +2203,9 @@ do_check() {
       [ -n "${PR_REVIEW_READ:-}" ] && [ "$keyrc" -eq 0 ] && echo "The PR_REVIEW_READ given is not this review's key: it belongs to another review or head."
       # Guidance on top of the refusal, never another block: the key above still lets it through.
       [ "$this_round" -ge "$PRR_STEP_BACK_ROUNDS" ] && step_back "$prior_rounds" "$this_round"
+      # Past the stop only because Dan answered for this review (claude-config#3557).
+      [ -n "$stop_lifted" ] && echo "(Dan answered for this review at round $this_round, so its stop is lifted for this head alone: a later head's review is asked about again if it stops a push or merge too.)"
+      [ -n "$rs_unkept" ] && echo "$rs_unkept"
       # The ones to fix under the key, then the minor ones and the answered ones, each apart (#1338,
       # #1356).
       show_part fix
@@ -2064,7 +2261,7 @@ case "$verb" in
   # its start line, which named them already.
   check) do_check; rc=$?; [ "$rc" -eq 3 ] || { ar_left_out_note "$leftout" "$(meta_of "$final" status)"; ar_embedded_note "$embedded" "$(meta_of "$final" status)"; pr_read_note; }; exit "$rc" ;;
   # A restart is asked for a fresh reading, so it never carries an earlier review (#1280 lessons review).
-  restart) rm -f "$final" "$pending" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$final.round" "$leftout" "$embedded" "$prread"; rm -rf "$parts_root/$name".*; no_carry=1; do_start ;;
+  restart) rm -f "$final" "$pending" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$final.round" "$stop_answered" "$stop_noted" "$leftout" "$embedded" "$prread"; rm -rf "$parts_root/$name".*; no_carry=1; do_start ;;
   _groups) do_groups ;;
 esac
 exit 0

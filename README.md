@@ -1929,9 +1929,10 @@ ran five or more rounds with findings, 25 ran ten or more, and about a third of 
 restated an earlier round's. So from the third round, the refusal also says `Step back:` and asks
 the agent to stop fixing findings one at a time, read the round's findings with the earlier rounds'
 as one group, and reconsider the approach, naming the earlier rounds and where their findings are.
-It is guidance on top of the refusal, never another block: the read key lets the push or merge
-through exactly as before. `merge-when-ready.sh` prints that refusal and its own stop line then asks
-for the step back too. A round is a review whose findings stopped a push or merge. Dan decided on
+At the third round it is guidance on top of the refusal, never another block: the read key lets the
+push or merge through exactly as before (from the fourth round the refusal is a stop, in the next
+paragraph). `merge-when-ready.sh` prints that refusal and its own stop line then asks for the step
+back too. A round is a review whose findings stopped a push or merge. Dan decided on
 2026-10-19 that a clean review is not a round; a review whose new findings were all minor (advisory)
 or all already answered stopped nothing either, so it is not a round, and nor is a review never
 checked. The check records each round beside its review (`<review>.round`, keyed to the review's
@@ -1947,6 +1948,34 @@ history. Its review file records `since=<head>` and every verdict on it says wha
 branch is read instead, saying why, when the last reviewed head is not an ancestor (a rebase or an
 amend), when nothing in the branch's files changed since it, or when the changes since it are over
 the size cap. Only this Mac's reviews are counted, since each Mac keeps its own.
+
+From the fourth round, stop and ask Dan (claude-config#3557). The step back is advice, and the
+rounds went on past it, so from the round after it the refusal says `Stopped for Dan:` and is a
+stop. No read key is given for that review and one presented is not taken, on a push or a merge, and
+an acknowledgement beside the review or a comment that has answered its findings since does not let
+it through either. The round count is the step back's own, so a review nobody was shown is not a
+round: measured 2026-11-26 on the personal MacBook over 2,213 saved reviews of 515 branches in 15.0
+days, 266 reviews held a major or critical finding, 184 of them stopped a push or merge and are
+rounds, the other 82 were never shown at any check, and 4 branches reached a fourth round. What the
+refusal tells whoever sent the command depends on who that is, which the gates read from the hook
+payload (`ps_payload_asker` in `lib/push-scope.sh`). The main session is told to ask Dan with an
+AskUserQuestion picker of three options, "Narrow the change", "Change the approach" and "Go on with
+these findings", whose metadata names the review by a sha256 over the repository, branch, head,
+base, finish time, round and finding count, and whose question must hold a facts line word for word
+and a line starting "The findings:" in the session's own plain words. A subagent, whose payload
+carries an `agent_id`, cannot ask him, so it is told to stop and hand back to its session with the
+findings and that picker. While Dan is asleep nobody is asked: a note for the morning is written
+through `sleep_note`, once a night for each review, and the branch waits. Only his answer "Go on
+with these findings" lifts the stop, for that head alone: it is read from the session's transcript
+by `lib/review-round.py`, as a database apply's is, kept beside the review under the gate's secret
+(`<review>.stop-answered`) for the merge helper, which reads no session, and the check then goes on
+as before the stop, with the findings, their read key and the step back. His other two answers lift
+nothing, and the next head's review is asked about again when it is a round too. `merge-when-ready.sh`
+prints the stop and its own stop line asks for no key: it says the pull request waits for Dan, and
+that a typed `gh pr merge` from the session he answered in keeps his answer for the helper. The one
+command override `SKIP_PR_REVIEW=1` is unchanged and still skips the whole review, this stop
+included. What the stop cannot see: a picker written into the transcript by a script, and a check
+run by hand with a transcript of its own.
 
 Every gate judges ONE repository, and every merge gate ONE pull request, per command, so a command
 doing the same thing twice in different places is refused rather than judged by its first
