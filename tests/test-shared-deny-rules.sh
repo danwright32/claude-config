@@ -39,6 +39,19 @@ ROOT="$(cd "$HERE/.." && pwd)"
 }
 suite_deadline_arm || exit $?
 
+# Every matcher check runs python3 and every check of the shared file and the pull reads JSON with
+# jq. Without either, dozens of checks fail as if the deny rules were wrong (claude-config#3691), so
+# a machine lacking one says the suite was not measured here rather than failing it. One line, the
+# shape test-live-settings-edit.sh uses for jq.
+missing_tools=""
+command -v python3 >/dev/null 2>&1 || missing_tools="python3"
+command -v jq >/dev/null 2>&1 || missing_tools="${missing_tools:+$missing_tools and }jq"
+if [ -n "$missing_tools" ]; then
+  echo "SUITE-PART-UNMEASURED every case, because this machine lacks $missing_tools, and the matcher checks run python3 while the shared file and pull checks read settings with jq, so here they would fail as if the deny rules were wrong"
+  printf 'SUITE-RESULT passed=0 failed=0\n'
+  exit 0
+fi
+
 pass=0; fail=0
 ok(){ pass=$((pass + 1)); }
 bad(){ fail=$((fail + 1)); echo "FAIL: $1"; }
