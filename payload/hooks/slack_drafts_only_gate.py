@@ -1004,6 +1004,13 @@ PY_BANG = re.compile(r"^#!.*\b(python[0-9.]*|pypy[0-9.]*)\b")
 PY_ENV_CHANGE = re.compile(r"(^|[^A-Za-z0-9_])(PATH|PYTHONHOME|PYTHONUSERBASE|VIRTUAL_ENV|CONDA_PREFIX)\+?="
                            r"|(^|[\s;&|(`])(source|\.|activate|conda|pyenv|mamba|micromamba|eval|function)(\s|$)"
                            r"|\(\s*\)\s*\{")
+# The entry a PYTHONPATH gains where an export of it is read in text the reader gave up on
+# (Judge.exported_path, claude-config#3878): where Python looks from that entry on is not known. A
+# path under /dev/null names no folder, so every reader of the list passes it over as a folder that
+# is not there, and being an entry it stays through each copy made of the list. PY_PATH_DOUBT is
+# how a refusal names such a path.
+PY_PATH_UNREAD = "/dev/null/a PYTHONPATH exported in text this gate could not read"
+PY_PATH_DOUBT = "a PYTHONPATH exported in text this gate could not read as commands for certain"
 # Read when a file cannot be parsed as Python by this python3: each import statement's first line.
 PY_IMPORT_LINE = re.compile(r"^[ \t]*(?:from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+\(?([^#\n)]*)|import[ \t]+([^#\n]+))",
                             re.M)
@@ -1197,7 +1204,18 @@ COPIERS = {"cp": "tS", "gcp": "tS", "mv": "tS", "gmv": "tS", "install": "BDfghlM
 # Long options whose value may be the next word. GNU's --backup takes one only as --backup=CONTROL, so
 # it is not here: the word after it is a file.
 COPIER_LONG_VALUED = {"--target-directory", "--suffix", "--mode", "--owner", "--group"}
+# Programs that remove a path or make a directory of it and write no text. Nothing is noted of what
+# such a path holds, but in a text the reader gave up on it is touched from then on (note_touched).
+ROUGH_REMAKERS = frozenset({"rm", "grm", "rmdir", "grmdir", "unlink", "gunlink", "mkdir", "gmkdir"})
 MADE_DEPTH = 8  # how many copied directories deep a lookup follows (made_from)
+# How many things one path may be held to hold (Judge.ways), and how many times one call is
+# judged, once for each choice of them (Readings). Past either the path is one the gate could not
+# read, so nothing is ever left unjudged by a count.
+MAX_WAYS = 12
+MAX_READINGS = 96
+WAYS_PAST = "more writes than this gate reads one at a time, after text it could not read as commands for certain"
+WAY_LONG = ("writes that leave it longer than this gate reads of one file, after text it could not read as "
+            "commands for certain")
 # curl's options that write a file named by the next word (claude-config#2721), the long ones that
 # leave the name to the server or a config file, those of them taking a value, and the short options
 # that take one, so a value glued to a cluster (-sSo run.sh, -orun.sh) is read as curl reads it.
@@ -1973,10 +1991,52 @@ def budget_clock():
     return time.monotonic, BUDGET_SECONDS
 
 
+class Readings:
+    """Which of the things a path may hold each run of the judgement reads it as (Judge.reading,
+    claude-config#3878). A path that text the reader gave up on touched may hold what a later write
+    puts there or what it held before, and no shell ever holds one after the other, so the gate
+    never reads the two as one text, where a held file with no newline at its end would take the
+    text after it as its own words. main() judges the call once for each, and refuses it when any
+    of those runs refuses. The first run reads every such path as the write written last leaves
+    it, which is how a gate that knows of no such text reads it.
+
+    A run is told what to read at each choice it meets, in order (forced), reads the first at
+    every choice after those, and keeps what it read with how many there were to read (taken).
+    another() sets the next run: the last choice with one left moves on, the choices before it
+    stay. unsteady is set when a run meets fewer to choose from than the run before it did at the
+    same place, which a gate that reads a call the same way twice never does."""
+
+    def __init__(self):
+        self.forced, self.taken, self.runs, self.unsteady = [], [], 1, False
+
+    def choose(self, count):
+        at = len(self.taken)
+        pick = self.forced[at] if at < len(self.forced) else 0
+        if pick >= count:
+            pick, self.unsteady = 0, True
+        self.taken.append((pick, count))
+        return pick
+
+    def another(self):
+        taken = self.taken
+        while taken and taken[-1][0] + 1 >= taken[-1][1]:
+            taken.pop()
+        if not taken:
+            return False
+        self.forced = [pick for pick, _ in taken[:-1]] + [taken[-1][0] + 1]
+        self.taken = []
+        self.runs += 1
+        return True
+
+
 class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, ShWalkShapes, NoNetworkRoute,
             UnknownProgram, PyFileRuns, ScriptParams, ExactOutput):
-    def __init__(self, sw):
+    def __init__(self, sw, readings=None):
         self.sw = sw
+        # What this run reads each path that may hold more than one thing as (reading), shared
+        # by every run of one call, and what it has read so far, so a path is one thing all run.
+        self.readings = readings or Readings()
+        self.read_as = {}
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
         # commands are being judged (None for the command line itself), for the refusal late()
         # raises, from tick() and from the budget's timer (claude-config#2432, #2571).
@@ -2048,6 +2108,17 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # them in the order the commands run; made_from reads them.
         self.made = {}
         self.made_dirs = {}
+        # Those two hold each path as the write written last leaves it. Where that write may not
+        # have happened as it is written (note_set), what else the path may hold: {file: [the
+        # pieces of each other text]} and {directory: [(another directory it may be a copy of, its
+        # name)]}. Each is a text or a folder of its own, read alone and never after another
+        # (ways). And the paths a text the reader gave up on has touched, or that have since
+        # taken from one: by real path, and as patterns where the word naming one cannot be
+        # worked out (touched, claude-config#3878).
+        self.made_also = {}
+        self.made_dirs_kept = {}
+        self.rough_touched = set()
+        self.rough_touched_pats = []
         # [(a pattern, what wrote it)] for files written where the path cannot be worked out
         # (claude-config#2721): every path it matches is unreadable from then on.
         self.made_unknown = []
@@ -2157,6 +2228,24 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if self.clock is time.monotonic and hasattr(signal, "setitimer"):
             signal.setitimer(signal.ITIMER_REAL, 0)
 
+    def again(self):
+        """A fresh judge for the next run of one call's judgement (Readings), on this one's clock
+        and budget: the time is the call's, however many times it is judged. Nothing one run
+        noted or worked out reaches the next but which reading comes next."""
+        nxt = Judge(self.sw, self.readings)
+        nxt.clock, nxt.budget, nxt.started, nxt.overran = self.clock, self.budget, self.started, self.overran
+        if self.clock is time.monotonic and hasattr(signal, "setitimer"):
+            signal.signal(signal.SIGALRM, nxt.interrupt)
+        return nxt
+
+    def one_of_several(self):
+        """For a refusal found in a run that read some path as other than the write written last
+        leaves it: words saying so, since the reason then names what that path may still hold."""
+        if not any(pick for pick, _ in self.readings.taken):
+            return ""
+        return (" (read as one of the things a path may hold after text this gate could not read as commands "
+                "for certain touched it; each is judged alone)")
+
     @staticmethod
     def sized(path):
         """A path with its size, for the refusal; the path alone when its size cannot be read."""
@@ -2212,17 +2301,37 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
     def made_from(self, path, depth=0):
         """What an earlier command of this call wrote path from, as [(kind, path or text, name)], or
         None when nothing did. A file under a directory copied earlier is the same file under the
-        directory it was copied from, followed MADE_DEPTH copies deep."""
-        if not (self.made or self.made_dirs or self.made_unknown or self.made_maybe or self.made_code
-                or self.made_git):
-            return None
-        if "\0" in path and not (self.made or self.made_dirs or self.made_unknown):
+        directory it was copied from, followed MADE_DEPTH copies deep. Where the path may hold
+        more than one thing (made_ways), this is the one this run of the judgement reads it as
+        (reading), and one too long to read whole is one the gate could not read (way_long)."""
+        found = self.made_ways(path, depth)
+        if len(found) == 1:
+            return found[0]
+        real = os.path.realpath(path)
+        way = found[self.reading(("file", real), found)]
+        if self.way_long(real, way):
+            way = list(way or []) + [("unknown", None, WAY_LONG)]
+        return way
+
+    def noted(self):
+        """Whether an earlier command of this call wrote a file or copied a directory by name."""
+        return bool(self.made or self.made_dirs or self.made_also or self.made_dirs_kept)
+
+    def noted_files(self):
+        """The real path of each file an earlier command of this call wrote by name."""
+        return list(self.made) + [real for real in self.made_also if real not in self.made]
+
+    def made_ways(self, path, depth=0):
+        """Each thing made_from can give for path, as it gives it, the write written last first:
+        each of ways() with what a write to a path that could not be worked out may add to it."""
+        if not (self.noted() or self.made_unknown or self.made_maybe or self.made_code or self.made_git):
+            return [None]
+        if "\0" in path and not (self.noted() or self.made_unknown):
             # Names no file. Only code a program was given is noted, and before #2772 this returned
             # above, so a path os.path refuses passes as it did; with a write noted it raises, and the
             # wrapper refuses, as before (a replay crash, 2026-11-12).
-            return None
+            return [None]
         real = os.path.realpath(path)
-        found = self.made_from_known(real, depth)
         # A file written where the path could not be worked out may be this one (claude-config#2721),
         # and so may one another program writes under a folder or names in its code (#2772).
         guessed = [("unknown", None, label) for pat, label in self.made_unknown
@@ -2231,27 +2340,110 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             guessed += self.program_guesses(path, real)
         if self.made_git:
             guessed += self.git_guesses(real)
-        return (list(found or []) + guessed) if guessed else found
+        return [(list(found or []) + guessed) if guessed else found for found in self.ways(real, depth)]
 
-    def made_from_known(self, real, depth):
-        """made_from for a path written by name."""
-        if real in self.made:
-            return self.made[real]
-        head = real
-        while self.made_dirs and depth < MADE_DEPTH:
+    @staticmethod
+    def same_way(a, b):
+        """Whether two of the things a path may hold are the same one; nothing noted is one thing."""
+        return (a or []) == (b or [])
+
+    def ways(self, real, depth=0):
+        """The one reader of the notes (made, made_dirs, made_also, made_dirs_kept): each thing
+        real may hold from the writes noted by name, as pieces [(kind, path or text, name)], or
+        None where that is nothing. Each is a file of its own, read alone and never after another:
+        a shell holds one of them, and a file with no newline at its end, or one longer than the
+        gate reads, read in front of the next would take it as its own words or hide it
+        (claude-config#3878).
+
+        First what the write written last leaves, with every write taken to have happened as it
+        is written: the file's own note, else the same file under the directory that the nearest
+        copied directory above it was copied from last. Then what else it may hold: the same file
+        under each other directory one above it may be a copy of, and each other text noted for
+        the file itself (made_also). Past MAX_WAYS of them the last is one the gate could not
+        read."""
+        found, others = [self.made[real]] if real in self.made else [None], []
+        # first: True until the reading above is found, False once it is and a directory further
+        # up is still read on, None where no directory above is read (the file has its own note).
+        head, first = real, (None if real in self.made else True)
+        while first is not None and (self.made_dirs or self.made_dirs_kept) and depth < MADE_DEPTH:
             parent = os.path.dirname(head)
             if parent == head:
                 break
-            if parent in self.made_dirs:
-                src_dir, label = self.made_dirs[parent]
-                rel = os.path.relpath(real, parent)
-                src = os.path.join(src_dir, rel)
-                found = list(self.made_from(src, depth + 1) or [])
-                if os.path.isfile(src) and not any(p[1] == src for p in found):
-                    found.append(("file", src, os.path.join(label, rel)))
-                return found or None
             head = parent
-        return None
+            cames = self.dir_ways(parent)
+            if cames == [None]:
+                continue
+            rel, under = os.path.relpath(real, parent), []
+            for came in cames:
+                if came is not None:
+                    under += self.under_ways(came, rel, depth)
+            if cames[0] is not None and first:
+                found, under = under[:1], under[1:]
+            others += under
+            if cames[0] is not None:
+                # A directory above this one is read on only where this one may be no copy at
+                # all (None among them), and then as one more thing the file may hold.
+                first = False if None in cames else None
+        for way in others + self.made_also.get(real, []):
+            if not any(self.same_way(way, known) for known in found):
+                found.append(way)
+        if len(found) > MAX_WAYS:
+            found = found[:MAX_WAYS - 1] + [[("unknown", None, WAYS_PAST)]]
+        return found
+
+    def under_ways(self, came, rel, depth):
+        """ways() for the file rel under a directory copied from came, (a directory, its name):
+        each thing the same file under that directory may hold, with the file on disk there."""
+        src_dir, label = came
+        src = os.path.join(src_dir, rel)
+        out = []
+        for way in self.made_ways(src, depth + 1):
+            under = list(way or [])
+            if os.path.isfile(src) and not any(p[1] == src for p in under):
+                under.append(("file", src, os.path.join(label, rel)))
+            out.append(under or None)
+        return out
+
+    def reading(self, key, found):
+        """Which of found, the things a path may hold, this run of the judgement reads it as:
+        the same one for as long as they are the same things, the first until Readings says
+        another."""
+        key = (key, repr(found))
+        if key not in self.read_as:
+            self.read_as[key] = self.readings.choose(len(found))
+        return self.read_as[key]
+
+    def way_long(self, real, way):
+        """Whether way, one of several things real may hold, is longer than the gate reads of a
+        file (MAX_FILE). Read to that length, whatever came after the cut would be judged by
+        nothing, so it is one the gate could not read."""
+        try:
+            parts = self.parts_of(real, way, MAX_FILE + 1, None)
+        except OSError:
+            return False  # not there to read: content() raises the same to whoever reads it
+        return sum(len(data) for _, data in parts) > MAX_FILE
+
+    def dir_ways(self, real):
+        """The one reader of the directory notes: each (directory, its name) real may be a copy
+        of from the copies noted by name, None for no copy at all. First the copy written last
+        (made_dirs), then each other it may be (made_dirs_kept)."""
+        found = [self.made_dirs.get(real)]
+        for came in self.made_dirs_kept.get(real, ()):
+            if came not in found:
+                found.append(came)
+        return found
+
+    def dir_from(self, real):
+        """(The directory, its name) this run reads real as copied from by an earlier command, or
+        None: of dir_ways, the one this run of the judgement reads (reading)."""
+        found = self.dir_ways(real)
+        return found[self.reading(("dir", real), found)] if len(found) > 1 else found[0]
+
+    def dir_noted(self, real):
+        """Whether this run reads real as a directory an earlier command copied."""
+        if None not in self.dir_ways(real):
+            return True  # a copy whichever it is read as
+        return self.dir_from(real) is not None
 
     def is_file(self, path):
         """Whether path is a file to read: on disk, or made by an earlier command of this call."""
@@ -2279,11 +2471,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         among what an earlier command made it from (code that names the file it writes) or after
         that, and for the newline put before it then. For
         line_place, which says which of them holds a line of the joined text (claude-config#3278)."""
+        return self.parts_of(path, self.made_from(path), limit, part)
+
+    def parts_of(self, path, pieces, limit, part):
+        """content_parts for a path made from pieces, as made_from gives them."""
 
         def wanted(data):
             return part is None or (part == "binary") == self.binary(data)
 
-        pieces = self.made_from(path)
         if not pieces:
             with open(path, "rb") as f:
                 data = f.read(limit)
@@ -2413,6 +2608,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             name = os.path.basename(vals[0]) if vals[0] is not None else None
         stdin = self.stdin_of(d, text, whole, redirs)
         label = name or "a command"
+        if name in ROUGH_REMAKERS and self.shell.get("crude"):
+            for a, v in zip(args[1:], vals[1:]):
+                if v is None or not v.startswith("-"):
+                    self.note_touched(a, v, d)
         if odd or name is None:
             out = None
         elif name in COPIERS:
@@ -2933,19 +3132,140 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             made.append(("file", path, word))
         return made
 
+    def ways_of(self, word, d):
+        """pieces_of for each thing the file named word may hold (made_ways), the write written
+        last first, with none chosen: a copy leaves its target holding whichever its source held."""
+        path = os.path.realpath(self.resolve(word, d))
+        out = []
+        for way in self.made_ways(path):
+            made = list(way or [])
+            if os.path.isfile(path) and not any(p[1] == path for p in made):
+                made.append(("file", path, word))
+            out.append(made)
+        return out
+
     def note_file(self, target, d, pieces, append=False):
-        real = os.path.realpath(self.resolve(target, d))
         if self.shell.get("on_disk"):
             pieces = [(k, v, "") if k == "unknown" else (k, v, lb) for k, v, lb in pieces]
-        if append:
-            pieces = self.pieces_of(target, d) + pieces
-        self.made[real] = pieces
+        real = self.note_set(target, d, pieces=pieces, append=append)
         if os.path.basename(real) in CURLRC_NAMES:
             self.curlrc_noted.add(real)
 
+    def note_set(self, target, d, pieces=None, came=None, sources=(), append=False, doubt=None, beside=False,
+                 more=()):
+        """The one place a note is set: what the file target holds (pieces), or the directory
+        target was copied from (came). Returns target's real path.
+
+        The write is always noted as the one written last (made, made_dirs), over the one before
+        it, so that reading stays what a gate following no text given up on would read, and
+        whatever that refuses is refused here. An append is what a shell makes it: what the file
+        held, then the text added.
+
+        What the target held is gone for certain only where the text being read is read whole
+        and neither the target nor any of sources, the real paths a copy takes from, has been
+        touched by a text the reader gave up on (touched). Anywhere else the write may not happen
+        as it is written. In such a text it may be words a shell only prints. After one, the
+        source or the target may be another thing than the gate holds it to be, a directory where
+        it reads a file or a path that is gone, and a copy then fails whole and leaves the target
+        as it was: `cp post.sh b`, a heredoc given up on holding `rm calm.sh` and `cp -R calmdir
+        calm.sh`, then `cp -R calm.sh b; bash b` runs the post. So there the note also gains:
+        each thing the target may have held before stays one more thing it may hold (made_also,
+        made_dirs_kept, None there for a directory that was no copy before). Each is kept apart,
+        and ways() reads them one at a time, never one after another. The target has then taken
+        from something touched, so it is touched itself and whatever takes from it gains too.
+
+        sources is given for a copy alone. A write of printed text empties its target before
+        anything is read, so what the target held is gone whatever the text's source turns out
+        to be, and only a touched target makes that note gain. more is each other thing a
+        copy's source may hold (ways_of), which the target may then hold as well.
+
+        beside is for a second reading of a copy already noted as it is written (a source that
+        may be a file where the gate reads a directory, note_one), and doubt, a piece for a copy
+        that may not write target (copied_onto), makes it one too: such a reading is only one
+        more thing the target may hold, and never the write written last.
+
+        In a text given up on, and with doubt, the file may also hold something the gate could
+        not read, and every file under a directory copied there is unread (claude-config#3878)."""
+        real = os.path.realpath(self.resolve(target, d))
+        roughly = self.read_roughly() or list(doubt or [])
+        gains = bool(roughly) or self.touched(real) or any(self.touched(s) for s in sources)
+        beside = beside or doubt is not None
+        if came is not None:
+            kept = list(self.made_dirs_kept.get(real, ())) if gains else []
+            if beside:
+                kept.append(came)
+            else:
+                if gains:
+                    kept.append(self.made_dirs.get(real))
+                self.made_dirs[real] = came
+            last = self.made_dirs.get(real)
+            kept = [k for i, k in enumerate(kept) if k != last and k not in kept[:i]]
+            self.made_dirs_kept.pop(real, None)
+            if kept:
+                self.made_dirs_kept[real] = kept
+            if roughly:
+                self.made_unknown.append((glob.escape(real.rstrip("/")) + "/*", roughly[0][2]))
+        if pieces is not None:
+            held = self.ways(real) if gains else []
+            if beside:
+                also = held[1:] + [pieces]
+            else:
+                if append:
+                    pieces = self.pieces_of(target, d) + pieces
+                self.made[real] = pieces
+                also = held
+            also += [list(way) for way in more]
+            if roughly:
+                also.append(roughly)
+            last, kept = self.made.get(real), []
+            for way in also:
+                if not self.same_way(way, last) and not any(self.same_way(way, k) for k in kept):
+                    kept.append(way)
+            self.made_also.pop(real, None)
+            if kept:
+                self.made_also[real] = kept[:MAX_WAYS]
+        if gains:
+            self.rough_touched.add(real)
+        return real
+
+    def touched(self, real, under=True):
+        """Whether a text the reader gave up on has touched real, or real has since taken from a
+        path one touched (note_set): written, copied or moved onto, moved away, made or removed
+        (note_touched), it or a path under it or above it, since a directory is another thing once
+        anything under it is and a file is gone once a directory above it is. With under False a
+        path under it does not count: whatever was done below a directory, it is one still."""
+        for t in self.rough_touched:
+            if t == real or (under and t.startswith(real + os.sep)) or real.startswith(t + os.sep):
+                return True
+        return any(fnmatch.fnmatchcase(real, pat) for pat in self.rough_touched_pats)
+
+    def note_touched(self, raw, value, d):
+        """A path a text the reader gave up on removes, makes or moves away: nothing is noted of
+        what it holds, and it is touched from then on (touched). Where the word cannot be worked
+        out, or names a pattern, every path it can name is."""
+        if value is not None and not re.search(r"[*?\[]", value):
+            self.rough_touched.add(os.path.realpath(self.resolve(value, d)))
+        else:
+            self.rough_touched_pats += self.unknown_patterns(raw, d, copier=True)
+
     def is_dir(self, word, d):
         real = os.path.realpath(self.resolve(word, d))
-        return os.path.isdir(real) or real in self.made_dirs
+        return os.path.isdir(real) or self.dir_noted(real)
+
+    def dir_unsure(self, real):
+        """Whether real, a directory to the gate, is a path a text the reader gave up on touched
+        or one that took from such a path (note_set): itself, by a pattern that can name it, or
+        through a directory above it. What made it a directory may be words a shell only prints,
+        or it may have been removed and a file put there, so the path may be a file, and a copy
+        to it or from it is noted both ways (claude-config#3878)."""
+        return self.touched(real, under=False)
+
+    def copied_onto(self):
+        """The piece a path gains where a copy into it as a directory may be a copy onto it as a
+        file (dir_unsure): which of the two a shell does cannot be told, so what the path holds
+        from then on cannot be read."""
+        return [("unknown", None, "" if self.shell.get("on_disk") else
+                 "a copy to a path that only text this gate could not read as commands for certain makes a folder")]
 
     def copy_target_may_be(self, name, args, vals, i):
         """Whether args[i], a word worked out of a copy, link or move (COPIERS) another word of which
@@ -3024,6 +3344,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         relative = linker and "r" in flags
         symbolic = "s" in flags
         no_dir = "T" in flags and not installer
+        onto = False
         if target_dir is not None:
             srcs, dest, into = ops, target_dir, True
         elif len(ops) == 1 and linker:
@@ -3033,31 +3354,64 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         else:
             srcs, dest = ops[:-1], ops[-1]
             into = not no_dir and (len(srcs) > 1 or dest.endswith("/") or self.is_dir(dest, d))
+            # Into a directory that may still be a file (dir_unsure): the copy may write that path.
+            onto = into and len(srcs) == 1 and not dest.endswith("/") \
+                and self.dir_unsure(os.path.realpath(self.resolve(dest, d)))
         for src in srcs:
             targets = [os.path.join(dest, os.path.basename(src.rstrip("/")) or src)] if into else [dest]
             if into and recursive and src.endswith("/") and len(srcs) == 1:
                 targets.append(dest)  # BSD cp -R src/ copies what is in src; GNU copies src itself
             if destdir:  # also where the gate recorded it before #2742, so nothing refused then passes
                 targets += [os.path.join(destdir, t.lstrip("/")) for t in targets]
-            for target in targets:
+            for target, doubt in [(t, None) for t in targets] + ([(dest, self.copied_onto())] if onto else []):
                 # A symbolic link's own text is read from the directory the link is in.
                 where = d
                 if linker and symbolic and not relative and not os.path.isabs(os.path.expanduser(src)):
                     where = os.path.dirname(self.resolve(target, d))
-                self.note_one(src, where, target, d)
+                self.note_one(src, where, target, d, doubt)
+            if name in ("mv", "gmv") and self.read_roughly():
+                self.note_touched(src, src, d)  # after its targets are noted: it may be gone now
 
-    def note_one(self, src, where, target, d):
-        """One source copied to one target: a directory to every file under it, a file to its text."""
+    def note_one(self, src, where, target, d, doubt=None):
+        """One source copied to one target: a directory to every file under it, a file to its text.
+        doubt is the piece the target gains where the copy may not write it (copied_onto): it is
+        then noted as a write in a text the reader gave up on is, added to what the target held."""
         src_real = os.path.realpath(self.resolve(src, where))
         real = os.path.realpath(self.resolve(target, d))
         if src_real == real:
             return
-        if os.path.isdir(src_real) or src_real in self.made_dirs:
-            self.made_dirs[real] = (src_real, src.rstrip("/") or src)
-            return
-        pieces = self.pieces_of(src, where)
-        if pieces:
-            self.made[real] = pieces
+        beside = False
+        if os.path.isdir(src_real) or self.dir_noted(src_real):
+            # Noted as a directory copied from this source even in a text given up on, so that a
+            # later copy, move or run of it is followed to the source as in text read whole.
+            self.note_set(target, d, came=(src_real, src.rstrip("/") or src), sources=[src_real], doubt=doubt)
+            # A source that may be a file (dir_unsure) leaves a target that may be one too.
+            if not self.dir_unsure(src_real):
+                return
+            beside = True
+        # Each thing the source may hold is one the target may hold, the first as the copy is
+        # written. A source that may hold nothing leaves the target as it was (note_set keeps that).
+        found = self.ways_of(src, where)
+        others = [way for way in found[1:] if way]
+        if found[0]:
+            self.note_set(target, d, pieces=found[0], sources=[src_real], doubt=doubt, beside=beside, more=others)
+        elif others:
+            self.note_set(target, d, pieces=others[0], sources=[src_real], doubt=doubt, beside=True, more=others[1:])
+
+    def read_roughly(self):
+        """The piece every write gains where the text being read could only be read by the crude cut
+        (lib/shell-words.py crude_commands), else []. That cut lists whatever MAY be a command,
+        words inside quotes included, which a shell only prints. Noted as any other write, such a
+        pretend write would replace what the gate holds for the file: after `cp post.sh made.sh`,
+        the line `echo 'a $(printf true > made.sh) b'`, in a script with a quote left open further
+        down, would leave made.sh read as `true`, and `bash made.sh` after it allowed
+        (claude-config#3837). So in such a text a write only ever adds: what the file held before
+        is kept, and the file also holds something the gate could not read, which refuses a later
+        run of it as one that could not be checked."""
+        if not self.shell.get("crude"):
+            return []
+        return [("unknown", None, "" if self.shell.get("on_disk") else
+                 "a command in text this gate could not read as commands for certain")]
 
     def script(self, word, d, depth, shell_hint, lang=None, label=None, sourced=False, built=None, maybe=True):
         """The reason a script file posts, or None. lang ("js" or "py") is the language of the
@@ -3072,7 +3426,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         is read the same way: a suite runs one hook by a variable hundreds of times, and each of those
         is now a read of the hook and of everything it runs and sources (claude-config#2678). The same
         way is the file, whether it is sourced, the word, label and directory it is read by, the
-        depth, the program, and where the Python it starts looks for imports and what it is handed.
+        depth, the program, where the Python it starts looks for imports and what it is handed, and
+        whether the text that reads it is one the reader gave up on (read_roughly).
         What a sourced file exports is kept with it and put back, since that reaches the commands
         after it. Nothing is kept while an earlier command of this call has written a file
         (made_from), since what a file reads as then depends on that write. Every reading under such
@@ -3117,7 +3472,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if self.is_installed(real, self.nudge):
             return None  # /nudge, the one script let through (Dan, 2026-11-05), unless this call overwrote it
         key = None
-        if self.placing and not (self.made or self.made_dirs or self.made_unknown or self.made_maybe
+        if self.placing and not (self.noted() or self.made_unknown or self.made_maybe
                                  or self.made_code or self.made_git or self.made_built):
             # A directory that is not there (a cd the reader kept as written, `cd "$WORK"`) is one
             # directory to this: no relative path is found under any of them.
@@ -3126,7 +3481,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             key = (real, sourced, word, label, d if there else None, depth, shell_hint, lang,
                    self.sh_cwd(d) != SH_UNKNOWN_DIR, repr(sorted(py.items())), repr(self.exported),
                    self.shell.get("program") if sourced else None,
-                   self.script_reads_by(word, sourced, real))  # its $0, the words it is handed (#3395)
+                   self.script_reads_by(word, sourced, real),  # its $0, the words it is handed (#3395)
+                   # In a text the reader gave up on, an export the file makes is added to what was
+                   # exported, never put in its place (exported_path), so the export kept from a
+                   # reading in text read whole is not the one to put back there (#3878).
+                   bool(self.read_roughly()))
             if key in self.clean:
                 if sourced:
                     self.exported = self.clean[key]
@@ -3342,6 +3701,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return
                 if targets is False and lead is not None and spec == lead and self.found_nowhere(spec, root):
                     continue  # Python stops there with ImportError, before anything runs
+                if targets is False and kind == "py" and not spec.startswith(".") \
+                        and PY_PATH_UNREAD in self.py_cmd["path"]:
+                    yield self.unfollow(f"{via}, a module Python looks for on {PY_PATH_DOUBT}, so the gate "
+                                        "cannot tell which file that runs"), None, None, None
+                    return
                 if targets is False:
                     where = ("" if kind != "py" or spec.startswith(".") else
                              " beside the script, on its PYTHONPATH or sys.path, in the standard library or installed")
@@ -3576,6 +3940,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         interp = self.py_cmd.get("interp")
         if not interp or not self.py_cmd.get("plain"):
             return False
+        if PY_PATH_UNREAD in self.py_cmd["path"]:
+            return False  # it may be in a folder of a PYTHONPATH the gate could not read (exported_path)
         path = self.resolve(interp, self.py_cmd["cwd"]) if "/" in interp else None
         # A bare name is the first on the PATH, as the shell finds it (shutil.which is not used:
         # importing shutil costs 4 ms on every call the gate reads). An empty or relative entry is
@@ -3620,6 +3986,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if not module:
             return []
         for base in list(inserts[0]) + [root] + self.py_cmd["path"]:
+            if base == PY_PATH_UNREAD:
+                return False  # where Python looks from here on is not known (exported_path)
             found = self.raw_resolve(base, module) if isinstance(base, tuple) else self.resolve_in(base, 0, module, names)
             if found is not None:
                 return found
@@ -4859,7 +5227,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if not os.path.isabs(path) and (d == SH_UNKNOWN_DIR or not d):
                 return None
             path = self.resolve(path, d)
-            isfile, isdir = self.is_file(path), os.path.isdir(path) or os.path.realpath(path) in self.made_dirs
+            isfile, isdir = self.is_file(path), os.path.isdir(path) or self.dir_noted(os.path.realpath(path))
             # -e is any path that exists, a device, fifo or socket too (lessons review of #2538:
             # `[ -e /dev/null ] || P=other` read as replacing P, so the file really sourced went unread).
             out = isfile if vals[0] == "-f" else isdir if vals[0] == "-d" else \
@@ -5934,6 +6302,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.shell["zero"], self.next_zero = self.next_zero, None
         self.shell["ran"], self.next_ran = self.next_ran, None
         self.shell["parent"] = saved  # the text that runs this one, whose output carries it (#2913)
+        # A text that a command of a text the reader gave up on runs or sources may never be run,
+        # where that command is quoted words, so its writes are noted as that text's own are
+        # (read_roughly, claude-config#3878).
+        self.shell["crude"] = bool(saved.get("crude"))
         self.next_script, self.next_cwd_known, self.next_on_disk, self.next_program = None, True, False, None
         handed, self.next_handed = self.next_handed, None
         try:
@@ -5945,6 +6317,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 starts = [p["start"] for p in parts]
             except self.sw.Unreadable:
                 parts, starts = [], []  # read by the crude cut, so no command's place is known
+                self.shell["crude"] = True  # and a write it lists may be quoted words (read_roughly)
             # The command of a package script that the words after the script's name land in: the one
             # they are written inside, as the shell reads text added to the end of a line, which a
             # command inside a substitution earlier in it is not (script_handed, claude-config#3143).
@@ -5979,11 +6352,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # it (headed_filled in lib/sh-walk-shapes.py, claude-config#3252), while the reader's
             # commands for that string, which that reading stands in for, are passed over.
             headed = None
+            # The depth of a wrapper whose string the reader could not read for certain, while the
+            # commands listed from that string are being read: a write among them may be quoted
+            # words, as in a whole text read by the crude cut (read_roughly, claude-config#3837).
+            rough_text, rough_under = bool(self.shell.get("crude")), None
             for d, text, wrapper, why, wdepth in self.sw.every_command(s, cwd):
                 if headed is not None:
                     if wdepth > headed:
                         continue
                     headed = None
+                if rough_under is not None and wdepth <= rough_under:
+                    rough_under = None
+                self.shell["crude"] = rough_text or rough_under is not None
                 d = self.settled_dir(d)  # a cd built from $0 or BASH_SOURCE, worked out (#2913)
                 while wraps and wraps[-1][0] >= wdepth:
                     wraps.pop()
@@ -6054,6 +6434,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return reason
                 if wrapper:
                     wraps.append([wdepth, text, d, -1])
+                    if why == self.sw.WHY_QUOTE and rough_under is None:
+                        rough_under = wdepth
                 if not wdepth:
                     self.shell["last_cmd"] = (at, text) if at is not None else None
                     if home is not None:
@@ -6098,9 +6480,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if words and words[0] == "export":
             for w in words[1:]:
                 if w.startswith("PYTHONPATH="):
-                    self.exported = self.py_path(self.sh_pythonpath(w[len("PYTHONPATH="):], text, d), d)
+                    named = self.py_path(self.sh_pythonpath(w[len("PYTHONPATH="):], text, d), d)
+                    self.exported = self.exported_path(named)
         elif not words and value is not None:
-            self.exported = self.py_path(value, d)
+            self.exported = self.exported_path(self.py_path(value, d))
         here = os.path.abspath(d or os.getcwd())
         if value is not None:
             path = self.py_path(value, d)
@@ -6140,6 +6523,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             self.py_cmd = saved
             if not sourced:
                 self.exported = saved_exported
+
+    def exported_path(self, named):
+        """What an export of PYTHONPATH naming the folders named leaves exported. In a text the
+        reader gave up on (read_roughly) the export may be words a shell only prints, or a real one
+        whose value the crude cut split, so which folders are exported after it is not known
+        (claude-config#3878): the path is PY_PATH_UNREAD alone, the entry at which a later Python's
+        imports stop being placed (resolve_py). No folder is kept beside it, the ones exported
+        before included: every reader of the path stops at that entry, so one would decide nothing."""
+        return [PY_PATH_UNREAD] if self.read_roughly() else named
 
     def rest_of(self, text):
         """The shared reader's command_rest(text), worked out once for each text. What it gives
@@ -6638,6 +7030,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", mod):
             return None
         found = self.resolve_py(0, mod, ("__main__",), here, here)
+        if found is False and PY_PATH_UNREAD in self.py_cmd["path"]:
+            return self.unfollow(f"{name} -m {mod} runs a module Python looks for on {PY_PATH_DOUBT}, so the "
+                                 "gate cannot tell which file that runs")
         if not found:
             # A runner from the standard library or installed is read by what it runs (#2844).
             return self.py_runner(program, name, mod, after, d, depth, here)
@@ -8290,6 +8685,22 @@ def main():
         judge.watch()
         try:
             reason = judge.line(cmd, cwd, 0, cmd)
+            # Once more for each other thing a path touched by text the reader gave up on may
+            # hold (Readings), until a run refuses: each is judged as a text of its own.
+            while not reason and judge.readings.another():
+                if judge.readings.runs > MAX_READINGS:
+                    reason = judge.unfollow(
+                        f"it writes or copies, after text this gate could not read as commands for certain, files "
+                        f"that could then hold more than {MAX_READINGS} different sets of texts, more than the gate "
+                        f"judges one at a time")
+                    break
+                judge = judge.again()
+                reason = judge.line(cmd, cwd, 0, cmd)
+            if not reason and judge.readings.unsteady:
+                reason = judge.unfollow("the gate read this command two ways in two readings of it, so neither "
+                                        "can be relied on")
+            elif reason:
+                reason += judge.one_of_several()
         except NulPath:
             reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
         except UnsureComment as e:

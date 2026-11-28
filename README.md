@@ -6323,6 +6323,36 @@ this command", and "line 3 as it is on disk" for a line of the script's own that
 it is made from. Nothing is refused or allowed that was not before. Editing the two files in
 separate calls, or the hook alone, passes. Suite: `test-slack-drafts-made-lines.sh`.
 
+A text the shared reader gives up on (a quote left open, in a heredoc fed to a shell, a script
+file, a sourced file, a string handed to `bash -c` or `eval`, or the command itself) is cut crudely
+into whatever may be a command, words inside quotes included. A write among those may be words a
+shell only prints, so it never takes the place of what the gate noted before (claude-config#3878).
+A file written there may hold what it was noted to hold, what is written, or something the gate
+could not read; a folder copied there has every file under it unread; and a `PYTHONPATH` exported there is
+one the gate could not read, so an import Python would look for on it is refused as a check that
+could not be made, while an import found beside the script is read as before. The same holds for
+a script on disk that such a text runs or sources, since the words that run it may be quoted.
+What such a text writes, copies or moves onto, moves away, removes or makes a folder is touched
+from then on, and so is a path above or below it. A note is set in one place (`note_set`), always
+as the write written last, which is how a gate that follows no such text reads the path. What the
+path held before is gone for certain only where the text is read whole and neither the target nor
+the source of a copy is touched; anywhere else it stays one more thing the path may hold, and the
+target is then touched too. Those things are never read as one text, where a held file with no
+newline at its end, or one longer than the gate reads, would take in or hide the text after it:
+one reader (`ways`) lists them, and the whole call is judged once for each (`Readings`), the write
+written last first, and refused if any of those runs refuses. One too long to read whole, more
+than `MAX_WAYS` of them for one path, or more than `MAX_READINGS` runs for one call, is refused
+as a check that could not be made. A copy from a
+touched source can fail whole and leave its target as it was: after `cp post.sh b`, a heredoc
+given up on that holds `rm calm.sh` and `cp -R calmdir calm.sh` makes `cp -R calm.sh b` fail, and
+`bash b` runs the post. A write of printed text gains only for a touched target, since a shell
+empties the target before it reads the source.
+Before this, `cp post.sh made.sh`, then the quoted words `printf true > made.sh`, then a quote left
+open, left `made.sh` read as `true`, and `bash made.sh` after it was allowed. The cost is that a
+text the reader gives up on that writes a file and then runs it is refused, where the gate used to
+read what was written. Still unread: a real write the crude cut hides, because it reads the
+redirection as inside a quote, is not noted at all. Suite: `test-slack-drafts-unread-write-notes.sh`.
+
 Since claude-config#3356 one refusal says what to run instead. `bun test` with test files named,
 typed in a mod's folder, is refused where the gate cannot find a module one of those files imports
 (on 2026-11-20: `bun test tests/rules.test.ts tests/register.test.ts` in
