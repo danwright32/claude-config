@@ -207,6 +207,13 @@ agent_payload 'grep "\"agent_id\"" x.json' '-'
 [ "$(run_payload | rewritten_to)" = "rtk grep agent_id x.json" ] \
   && check "#3548 a main session's command that names agent_id in its text is still rewritten" ok \
   || check "#3548 a main session's command that names agent_id in its text is still rewritten" "got [$(run_payload)]"
+# The text above reaches the payload with its quotes escaped, so only a key elsewhere puts a quoted
+# "agent_id" in the raw payload: a reader matching the payload's text skips this one.
+printf 'rtk git status\n' > "$TMPROOT/rewrite"
+printf '%s\n' '{"tool_input":{"command":"git status","agent_id":"x"}}' > "$TMPROOT/payload.json"
+[ "$(run_payload | rewritten_to)" = "rtk git status" ] \
+  && check "#3548 a main session's payload with agent_id only inside tool_input is still rewritten" ok \
+  || check "#3548 a main session's payload with agent_id only inside tool_input is still rewritten" "got [$(run_payload)]"
 # Only the rewrite stops. Every warning the hook gives still reaches a subagent's caller: an rtk too
 # old to rewrite, and a missing shared reader that leaves a gh or git log rewrite unjudged.
 printf 'rtk 0.22.0\n' > "$TMPROOT/version"; printf 'rtk git status\n' > "$TMPROOT/rewrite"
