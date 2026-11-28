@@ -1134,8 +1134,10 @@ ps__commit_stages_all() {
 # named inside an echo or a message is not one.
 #
 # $2 is the question:
-#   scope  prints ALL, TRACKED, PATHS then the paths one per line, UNKNOWN (an add was seen but
-#          could not be read, or it names nothing), or NONE (no add at all)
+#   scope  prints ALL, TRACKED then the paths the adds name one per line (all but those of an add
+#          that is surely -u and paths and nothing more), PATHS then the paths one per line,
+#          UNKNOWN (an add was seen but could not be read, or it names nothing), or NONE (no add
+#          at all)
 #   takes  prints yes when any add takes more than the paths it names (ALL or TRACKED), else no;
 #          when the only such adds are in a script file the command runs, two more lines follow:
 #          the directory the first of them inside a repository runs in (its own git -C counted,
@@ -1228,6 +1230,12 @@ def add_named(text):
 EVERYTHING = {"-A", "--all", "--no-ignore-removal", ".", "./", ":/", "*"}
 TRACKED_ONLY = {"-u", "--update"}
 REDIRECT = re.compile(r"\d*(>>?|<<?)&?")
+# A segment of plain words only: nothing in it can start a second command or stand for other text.
+PLAIN = re.compile(r"[A-Za-z0-9_./=+,:@%~ \t-]*\Z")
+# A quoted run of those same characters, which the shell reads as the words themselves. A quote
+# holding anything else (a variable, a glob, the other kind of quote) is no match and stays. The
+# single quote is written \x27, because this program is itself inside a pair of them.
+QUOTED_PLAIN = re.compile(r"\"[A-Za-z0-9_./=+,:@%~ \t-]*\"|\x27[A-Za-z0-9_./=+,:@%~ \t-]*\x27")
 saw_add, takes_all, tracked, unreadable, unread_wrapper, paths = False, False, False, False, False, []
 # Each segment as (directory, script, text): the directory and the script file it is in for the
 # commands of a script the command runs (claude-config#2301), None for every other.
@@ -1284,7 +1292,7 @@ for where, script, seg in segments:
     saw_add = True
     if not readable or through_variable:
         unreadable = True
-    skip, this_takes = False, False
+    skip, this_takes, updates, flagged, own = False, False, False, False, []
     for a in found[2]:
         if skip:
             skip = False
@@ -1297,10 +1305,23 @@ for where, script, seg in segments:
         if a in EVERYTHING:
             takes_all = this_takes = True
         elif a in TRACKED_ONLY:
-            tracked = this_takes = True
-        elif a and not a.startswith("-") and readable and a not in paths:
+            tracked = this_takes = updates = True
+        elif a.startswith("-"):
+            flagged = True
+        elif a and readable:
+            own.append(a)
+    # An add with -u takes no untracked file, so the paths it names itself add nothing to the
+    # tracked reading and are left out, but only where the add is surely that and nothing more:
+    # its other words are all paths, and its segment is plain words, quoted or not. Any other flag
+    # keeps them, because one can take the -u back (git stages the new file named after
+    # `-u --no-update`, or any short form of that flag), and so does a double dash, after which a
+    # -u is a file name. Anything else in the segment keeps them too, because another command in it
+    # may be what names them (`git add new.txt & git add -u`, claude-config#3879).
+    if not (updates and not flagged and PLAIN.match(QUOTED_PLAIN.sub("", seg))):
+        for a in own:
             # Once: a command is read both by the cut and by the records of the shell reader.
-            paths.append(a)
+            if a not in paths:
+                paths.append(a)
     if this_takes:
         if script is None:
             direct_takes = True
@@ -1349,7 +1370,10 @@ elif takes_all:
 elif unreadable:
     print("UNKNOWN")
 elif tracked:
+    # The paths other adds name follow: one may be untracked, which no add -u takes.
     print("TRACKED")
+    for p in paths:
+        print(p)
 elif paths:
     print("PATHS")
     for p in paths:
@@ -1368,9 +1392,9 @@ else:
 #
 # Prints a scope word on the first line and, for PATHS, one path per line after it:
 #   INDEX    no add and no -a: the commit takes the index and nothing else
-#   TRACKED  `git add -u`, or a `commit -a`: every tracked change. When an add also names paths
-#            beside a `commit -a`, they follow one per line, and the caller reads them too,
-#            because a named path may be untracked and -a alone never takes one.
+#   TRACKED  `git add -u`, or a `commit -a`: every tracked change. When another add also names
+#            paths, they follow one per line, and the caller reads them too, because a named path
+#            may be untracked and neither -u nor -a ever takes one.
 #   ALL      `git add -A`, `.`, `:/` or `*`: every change, untracked files included
 #   PATHS    the paths the add names, and the paths the commit names itself (`git commit <paths>`,
 #            claude-config#3111), exactly as written, for the caller to resolve

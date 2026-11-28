@@ -1248,6 +1248,59 @@ want_scope "git add -u sub && git commit -qm x && git push" "TRACKED" \
   "#457 control: an add -u with a path and no commit -a names no untracked path"
 want_scope "git add -A && git commit -qam x && git push" "ALL" \
   "#457 control: an add taking everything stays ALL beside commit -a"
+# An add naming paths AND another add with -u (claude-config#3879). The commit takes every tracked
+# change and the named paths, and a named path may be untracked, which -u never takes. So the paths
+# follow TRACKED, as they do beside a commit -a. Only the paths of an add that does not carry -u
+# itself: `git add -u sub` takes no untracked file under sub.
+want_scope "git add new.ts && git add -u && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 an add naming a path beside an add -u takes tracked changes AND the path"
+want_scope "git add -u && git add new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 the same with the add -u first"
+want_scope "git add a.ts; git add --update; git add b/c.ts; git commit -qm x; git push" "TRACKED|a.ts|b/c.ts" \
+  "#3879 the same with --update between two adds naming paths"
+want_scope "git add -u sub && git add new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 the path of the add that carries -u itself is not named beside the other add's"
+want_scope "git add sub -u && git add new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 nor when its -u comes after its path"
+want_scope "git add -- -u new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 after a double dash a -u is a file's name, so the paths beside it are still named"
+want_scope "git add new.ts && git add -u && git commit -qam x && git push" "TRACKED|new.ts" \
+  "#3879 an add -u, an add naming a path and a commit -a name the path once"
+want_scope "git add --update sub && git add new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 the path of the add that carries --update itself is not named either"
+# The paths of an add with -u are left out only when its other words are all paths. Another flag
+# can take the -u back: git stages the new file named after `-u --no-update`, and takes any short
+# form of that flag. So any other flag keeps the paths, whatever git does with it.
+want_scope "git add -u --no-update new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 an add whose -u is taken back by --no-update still names its path"
+want_scope "git add --update --no-upd sub && git commit -qm x && git push" "TRACKED|sub" \
+  "#3879 the same with --update and a short form of the flag"
+want_scope "git add --no-update -u new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 the same with the other flag before the -u"
+want_scope "git add -u -v sub && git commit -qm x && git push" "TRACKED|sub" \
+  "#3879 any other flag beside the -u keeps the path, whatever git does with it"
+want_scope "git add -u -- sub && git commit -qm x && git push" "TRACKED|sub" \
+  "#3879 a double dash after the -u keeps the path too"
+# A quoted word of plain characters is the word itself, so it answers as the unquoted one does. A
+# quote holding anything else, a backtick or a variable, and the paths are kept.
+want_scope "git add -u \"sub\" && git commit -qm x && git push" "TRACKED" \
+  "#3879 a folder in double quotes after -u answers as the unquoted folder does"
+want_scope "git add -u 'sub' && git commit -qm x && git push" "TRACKED" \
+  "#3879 and so does one in single quotes"
+want_scope "git add -u \"sub dir\" && git add new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 and one holding a space, beside another add naming a path"
+want_scope "git add -u \"--no-update\" new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 a flag in quotes is still a flag, so the path beside it is named"
+want_scope "git add -u '*.ts' && git commit -qm x && git push" "TRACKED|*.ts" \
+  "#3879 a glob in quotes is not a plain word, so it is kept"
+want_scope "git add -u \"\$D\" && git commit -qm x && git push" "TRACKED|\$D" \
+  "#3879 a variable in quotes is not a plain word, so it is kept"
+want_scope "git add -u \$D && git commit -qm x && git push" "TRACKED|\$D" \
+  "#3879 nor is a bare variable"
+want_scope "git add -u \`echo sub\` && git commit -qm x && git push" "TRACKED|\`echo|sub\`" \
+  "#3879 a backtick in the segment keeps its words"
+want_scope "git add -u \"a'b\" && git commit -qm x && git push" "TRACKED|a'b" \
+  "#3879 one kind of quote inside the other is not a plain word, so it is kept"
 
 # The commonest commit there is: a heredoc message whose body has an apostrophe. The whole command
 # was tokenised at once, the unbalanced quote failed it, and the add's scope came back UNKNOWN, so
@@ -1326,6 +1379,79 @@ want_pending "git add \"named.txt && git commit -qm x && git push" "WIDENED|name
   "#457 an add nobody can read widens to the whole tree and says so"
 want_pending "git add gone.txt && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
   "#457 an add naming a path that is not there widens and says so"
+# A new file added by name beside an add with -u (claude-config#3879): the tracked changes AND the
+# named file, which is untracked and so is in no reading of the tracked changes.
+want_pending "git add named.txt && git add -u && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 an add naming an untracked file beside an add -u takes that file and the tracked changes"
+want_pending "git add -u && git add named.txt && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 the same with the add -u first"
+want_pending "git add named.txt; git add --update; git commit -qm x; git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 the same with --update and semicolons"
+want_pending "git add sub && git add -u && git commit -qm x && git push" "EXACT|sub/new.txt|tracked.txt" \
+  "#3879 a directory named beside an add -u takes the untracked files under it"
+want_pending "git add -u sub && git add named.txt && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 the directory an add -u names itself gives up no untracked file, the other add's file is read"
+want_pending "git add -u && git commit -qm x && git push" "EXACT|tracked.txt" \
+  "#3879 control: an add -u alone takes tracked changes and no untracked file"
+want_pending "git add -u sub && git commit -qm x && git push" "EXACT|tracked.txt" \
+  "#3879 control: an add -u naming a directory takes no untracked file under it"
+want_pending "git add -u \"sub\" && git commit -qm x && git push" "EXACT|tracked.txt" \
+  "#3879 control: nor does one naming the directory in double quotes, the same answer as unquoted"
+want_pending "git add -u 'sub' && git add named.txt && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 control: nor one naming it in single quotes, the other add's file is read"
+# An add whose -u is taken back by --no-update stages the new file it names, so that file is read.
+want_pending "git add -u --no-update named.txt && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 a new file named by an add whose -u is taken back by --no-update is read"
+want_pending "git add --update --no-u sub && git commit -qm x && git push" "EXACT|sub/new.txt|tracked.txt" \
+  "#3879 the same with --update, a short form of the flag and a directory"
+want_pending "git add -u \"--no-update\" 'named.txt' && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 the same with the flag and the file in quotes"
+# The pretend add: a command the reader gives up on (a quote left open on a later line) has the
+# words inside its quotes listed too, so an add -u written inside a commit message is counted as
+# one. Whatever else that reading lists, the file the real add names must be in it.
+pending_lists() { # pending_lists <command> <file> <description>: the file is listed, whatever else is
+  local got
+  got="$( cd "$PF" && ps_pending_files "$1" | tr '\n' '|' )"
+  case "|$got" in *"|$2|"*) check "$3" ok ;; *) check "$3" "got [$got]" ;; esac
+}
+pending_lists "git add named.txt && git commit -qm 'a \$(git add -u) b' && git push"$'\n''echo "never closed' named.txt \
+  "#3879 an add -u only named inside a message, in a command nobody can read, still leaves the named file read"
+# The paths of an add that carries -u are left out only where its segment is surely that one add.
+# A second command in the segment, or a double dash before the -u, and they are read.
+pending_lists "git add named.txt & git add -u && git commit -qm x && git push" named.txt \
+  "#3879 a file named before a single ampersand and an add -u is read"
+pending_lists "git add named.txt & git add -u && git commit -qm x && git push"$'\n''echo "never closed' named.txt \
+  "#3879 a file named before a single ampersand and an add -u is read in a command nobody can read"
+pending_lists "git add named.txt \$(git add -u) && git commit -qm x && git push" named.txt \
+  "#3879 a file named beside an add -u inside a substitution is read"
+pending_lists "git add -- -u named.txt && git commit -qm x && git push" named.txt \
+  "#3879 a file named after a double dash and a -u is read"
+# A named path that is not there beside the tracked reading (claude-config#3879), pinned as it
+# answers: EXACT with the tracked changes, where the same add beside a plain commit widens. Listing
+# the whole working tree here would count any untracked test file in it as this push's test, and
+# the test gate then asks its judge about a push it refuses outright. A change of these answers is
+# a decision about that gate, never a tidy up.
+want_pending "git add gone.txt && git commit -qam x && git push" "EXACT|tracked.txt" \
+  "#3879 pinned: an add naming a path that is not there beside commit -a keeps the tracked reading and does not widen"
+want_pending "git add gone.txt && git add -u && git commit -qm x && git push" "EXACT|tracked.txt" \
+  "#3879 pinned: an add naming a path that is not there beside an add -u keeps the tracked reading and does not widen"
+want_pending "git add -u && git commit gone.txt -qm x && git push" "EXACT|tracked.txt" \
+  "#3879 pinned: a commit naming a path that is not there beside an add -u keeps the tracked reading and does not widen"
+want_pending "git add named.txt gone.txt && git add -u && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 pinned: a path that is there named beside one that is not, and an add -u: the one that is there is still read"
+want_pending "git add named.txt && git commit -qam x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 control: a named path that is there beside commit -a keeps the reading exact"
+want_pending "git add -u gone && git commit -qm x && git push" "EXACT|tracked.txt" \
+  "#3879 control: a path that is not there named by the add -u itself widens nothing, no new file can come from it"
+# Under PATHS every named path is checked for being there, not only the first.
+want_pending "git add named.txt gone.txt && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#3879 a path that is not there named after one that is still widens and says so"
+want_pending "git add gone.txt named.txt && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
+  "#3879 control: the same with the path that is not there named first"
+got="$( cd "$PF" && ps_pending_files "git add named.txt && git commit -qm 'a \$(git add -u) b' && git push" | tr '\n' '|' )"
+[ "$got" = "EXACT|named.txt|" ] \
+  && check "#3879 control: the same message in a command that can be read is no add, so the named file alone" ok \
+  || check "#3879 control: the same message in a command that can be read is no add, so the named file alone" "got [$got]"
 # Paths come back relative to the repository root wherever the command runs, so a hook that went
 # into a subdirectory reads the same list.
 got="$( cd "$PF/sub" && ps_pending_files "git add new.txt && git commit -qm x" | tr '\n' '|' | sed 's/|$//' )"

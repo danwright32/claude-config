@@ -360,6 +360,52 @@ W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
 run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qam copy && git push"
 want_style_code 0 "an add beside commit -a does not take an untracked file nobody named"
 
+# 5c. An add naming a NEW file AND another add with -u take both (claude-config#3879): the
+#     tracked changes -u takes, and the named file, which is untracked and so is in no reading of
+#     the tracked changes.
+W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git add -u && git commit -qm copy && git push"
+want_style_code 2 "#3879 a new file added by name beside an add -u is judged"
+want_says "app/copy.ts" "#3879 and the refusal names the new file"
+want_says "about to make" "#3879 as content the pending commit takes"
+W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
+run_style_hook "$E2E" "cd $W && git add -u && git add app/copy.ts && git commit -qm copy && git push"
+want_style_code 2 "#3879 the same with the add -u first"
+#     The tracked change the add -u takes is still read, and the stranger nobody named stays out.
+W="$(mk_pending_repo "$CLEAN" "$CLEAN" "$BAD")"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git add -u && git commit -qm copy && git push"
+want_style_code 2 "#3879 an add beside an add -u still judges the tracked change -u takes"
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git add -u && git commit -qm copy && git push"
+want_style_code 0 "#3879 an add beside an add -u does not take an untracked file nobody named"
+#     The pretend add: an add -u written only inside a commit message, in a command the reader
+#     gives up on (a quote left open on a later line), where the words inside quotes are listed too.
+W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qm 'a \$(git add -u) b' && git push"$'\n''echo "never closed'
+want_style_code 2 "#3879 a new file added by name is judged when a message only names an add -u, in a command nobody can read"
+want_says "app/copy.ts" "#3879 and that refusal names the new file"
+run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qm 'a b' && git push"$'\n''echo "never closed'
+want_style_code 2 "#3879 control: the same command nobody can read, its message naming no add, judges the new file"
+#     An add whose -u is taken back by --no-update stages the new file it names, so it is judged.
+W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
+run_style_hook "$E2E" "cd $W && git add -u --no-update app/copy.ts && git commit -qm copy && git push"
+want_style_code 2 "#3879 a new file named by an add whose -u is taken back by --no-update is judged"
+want_says "app/copy.ts" "#3879 and that refusal names the new file too"
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && git add -u --no-update app/copy.ts && git commit -qm copy && git push"
+want_style_code 0 "#3879 control: the same add does not take an untracked file nobody named"
+#     A named path that is not there, beside an add -u or a commit -a, pinned as it answers: the
+#     tracked changes are read and the stranger nobody named is not. Reading the whole working
+#     tree here would also count a stranger's untracked test as this push's test at the test gate.
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && git add does-not-exist.txt && git add -u && git commit -qm copy && git push"
+want_style_code 0 "#3879 pinned: an unresolvable path beside an add -u does not take an untracked file nobody named"
+run_style_hook "$E2E" "cd $W && git add does-not-exist.txt && git commit -qam copy && git push"
+want_style_code 0 "#3879 pinned: an unresolvable path beside commit -a does not take an untracked file nobody named"
+W="$(mk_pending_repo "$CLEAN" "$CLEAN" "$BAD")"
+run_style_hook "$E2E" "cd $W && git add does-not-exist.txt && git add -u && git commit -qm copy && git push"
+want_style_code 2 "#3879 an unresolvable path beside an add -u still judges the tracked change -u takes"
+
 # 6. Content already in the INDEX is carried by a bare commit with no add at all.
 W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
 ( cd "$W" && git add app/copy.ts ) >/dev/null 2>&1
