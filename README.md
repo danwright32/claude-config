@@ -114,8 +114,9 @@ carrying such a copy went through the gate, with every suite the gate ran passin
 CI 17 minutes later. The suite now also asks `hooks/lib/repo-files.sh` for the repository's own
 suites under `payload/` and fails when its scan read fewer of them, and that line is what selects
 it. Measured alone on 2026-11-28, at nice 15 on 12 cores: 0.67 to 0.84 seconds before that check (5
-runs, load averages 27 to 33) and 1.06 to 1.14 seconds with it (5 runs, load averages 48 to 52),
-plus one run of 6.6 seconds as the load rose from 43 to 58. The gate as a whole was not timed with
+runs, load averages 27 to 33). With it, 0.98 to 1.04 seconds at a load average just under 10 (5
+runs) and 1.06 to 1.14 seconds at load averages of 48 to 52 (5 runs), plus one run of 6.6 seconds
+as the load rose from 43 to 58. The gate as a whole was not timed with
 and without it. In the gate's own records of a push refused for time that morning, with its slowest
 scanners at 147 to 155 seconds, two scanners that take 0.6 seconds alone were recorded at 1 and 2
 seconds (2026-11-28).
