@@ -11976,8 +11976,10 @@ turn's first record inside its limits (`FAR_BYTES`, `FAR_MS`, and `OUT_BYTES` on
 kept under the 4,194,304 bytes the engine keeps of a process's output), or did not finish at all,
 the log says so and the turn end is told that the turn went unread and a refusal may have gone
 unseen: pin what one left, or say "No refused call left you anything to do." (either hold's line
-answers both). That is told once a turn, and again only when the record of the first telling is
-itself further back than the reader got; a transcript that is not there still names no refusal.
+answers both). A turn read part of the way is told that once, and again only when the record of
+the first telling is itself further back than the reader got. A read that did not finish cannot
+look for that record, so it is told once per chain of turn ends (`stop_hook_active`), which can
+be more than once a turn. A transcript that is not there still names no refusal.
 A page
 published with the Artifact tool is judged as it is published, read from the file it came from
 (#1811, `hooks/page.ts`): two list items, numbered or bulleted, that each begin with a thing to do

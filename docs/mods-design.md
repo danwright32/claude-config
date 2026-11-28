@@ -2647,9 +2647,11 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   (`UNREAD_MARK`) with two ways out: pin what a refusal left, or say "No refused call left you
   anything to do.", a line that stays true when no call was refused (the refusal hold's own line
   answers it too, and this line answers that hold). A step pinned in the part that was read
-  settles it as well. It is told once a turn, and a second time only when the record of the first
-  telling is itself further back than the reader got. A stretch never read and a clean turn no
-  longer look alike.
+  settles it as well. A turn read part of the way is told once, and a second time only when the
+  record of the first telling is itself further back than the reader got. A read that did not
+  finish cannot look for that record, so it is told once per chain of turn ends
+  (`stop_hook_active`), which can be more than once a turn. A stretch never read and a clean turn
+  no longer look alike.
   A transcript perl names as one it could not open still asks nothing, as before. The engine's
   types say the call is rejected when perl cannot start or is still running at its time limit
   (read from the types, not seen in a live session: the test engine runs no process), and that
