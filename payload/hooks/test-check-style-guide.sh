@@ -396,8 +396,8 @@ W="$(mk_style_repo 'const label = "Loading, please wait";')"
 ROOT3739="${W%/work}"
 run_style_hook "$(dirname "$ROOT3739")" "cd $(basename "$ROOT3739"); cat <<EOF; cd work; git push${NL}body${NL}EOF${NL}ls"
 want_style_code 0 "#3739 control: clean copy pushed behind a relative cd is allowed"
-# More such lines than the reader used to rewrite before it gave up: with 63 quiet opener lines
-# in front of it the push was hidden again.
+# However many such lines stand in front of it: the reader's limit counts readings of the text,
+# never lines with an opener.
 W="$(mk_style_repo "$BAD")"
 many=""; n=0
 while [ "$n" -lt 100 ]; do many="${many}cat <<E; true${NL}x${NL}E${NL}"; n=$((n + 1)); done

@@ -1751,6 +1751,10 @@ def crude_inner(text):
     return out
 
 
+# Where the crude cut cuts: every separator, quotes and all.
+CRUDE_CUT = re.compile(r"&&|\|\||;|\||\n")
+
+
 def crude_commands(s, cwd=""):
     """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all,
     and after the pieces of that cut the commands that may be written inside one (crude_inner).
@@ -1768,7 +1772,7 @@ def crude_commands(s, cwd=""):
     (claude-config#3473).
     """
     out, found, old = [], [], None
-    for text in re.split(r"&&|\|\||;|\||\n", s):
+    for text in CRUDE_CUT.split(s):
         if text.strip():
             found.extend((cwd, inner) for inner in crude_inner(text))
             out.append((cwd, text))
@@ -3245,9 +3249,9 @@ def flattened(s):
         of their own: `bash -c 'git`, the pair and `push'` ran the push, and so did the same
         inside backquotes. So those are written as that shell reads them (inner_typed).
     The rewritten text is never given in place of the text so far, only beside it (_added), and
-    only where the two together are read as exactly the commands of each: a count of names once
-    decided that the rewritten text could stand alone, and a command of the same name paid for
-    one the rewrite had hidden.
+    only where the two together are read as exactly the commands of each. A count of names
+    cannot decide that the rewritten text may stand alone: a second command of the same name
+    keeps the count level while the rewrite hides the first.
     """
     plain = s.replace("\n", FLAT_BREAK)
     typed, flat = _pairs_joined(s, plain) if "\\\n" in s else (s, plain)
@@ -3378,27 +3382,58 @@ def inner_typed(s, depth=0):
     """s, the command as typed, with the text another shell reads written as that shell reads it
     (claude-config#3739), or None where that changes nothing:
       * a single quoted string that is the whole of what a wrapper hands on to be read as
-        commands (`bash -c`, `eval`, `watch` and the rest of wrapped()) is written as
-        _string_read() writes it. Any other single quoted string (an argument of `echo`, a
-        commit message) is read by no shell and is left as typed;
+        commands (`bash -c`, `eval`, `watch` and the rest of wrapped()), and stands in that
+        wrapper's own command (_wrapper_spans), is written as _string_read() writes it. Any
+        other single quoted string (an argument of `echo`, a commit message, though it hold
+        the very text a wrapper beside it is handed) is read by no shell and is left as typed;
       * inside backquotes, each run of backslashes and line break that joins the next line for
         their shell is taken out (commands()'s `reread`).
     No join puts a skip word together (_joined_at). A text that cannot be read to its end has
     its backquotes rewritten as far as it was read, and the strings of the wrappers the crude
     cut finds."""
-    found = []
+    found, parts = [], []
     try:
-        cut = commands(s, reread=found, typed=True)
+        cut = commands(s, parts=parts, reread=found, typed=True)
+        held = [(p["start"], p["end"], [(x[0], x[1]) for x in p["inner"]], [c]) for c, p in zip(cut, parts)]
     except Unreadable:
-        cut = crude_commands(s)
-    strings = _wrapper_strings(cut) if any(kind == "'" for kind, _, _ in found) else ()
+        held = _crude_pieces(s)
+    spans = _wrapper_spans(held) if any(kind == "'" for kind, _, _ in found) else ()
     text = s
     for kind, at, end in sorted(found, key=lambda e: e[1], reverse=True):
         if kind == "`":
             text = _joined_at(text, at, at + end)
-        elif text[at:end] in strings:
+        elif any(start <= at and end <= stop and text[at:end] in strings
+                 and not any(a <= at and end <= b for a, b in inner) for start, stop, inner, strings in spans):
             text = text[:at] + _string_read(text[at:end], depth) + text[end:]
     return text if text != s else None
+
+
+def _crude_pieces(s):
+    """The pieces crude_commands() cuts s into, each as (start, end, [], commands): s[start:end]
+    is the piece, and commands the piece and the commands that may be written inside it
+    (crude_inner). For inner_typed(), which must know where in the text a command stands."""
+    held, at = [], 0
+    for m in list(CRUDE_CUT.finditer(s)) + [None]:
+        end = len(s) if m is None else m.start()
+        if s[at:end].strip():
+            held.append((at, end, [], [("", s[at:end])] + [("", t) for t in crude_inner(s[at:end])]))
+        at = end if m is None else m.end()
+    return held
+
+
+def _wrapper_spans(held):
+    """(start, end, inner, strings) for each of held, the commands of a text as typed with where
+    each stands, that hands a string on to be read as commands: strings is what it and the
+    wrappers inside that string hand on (_wrapper_strings), and inner the stretches of
+    s[start:end] that are substitutions, whose commands are among held themselves. A single
+    quoted string is a wrapper's only where it stands in that wrapper's own command: the same
+    text as an argument of `echo` beside it is read by no shell."""
+    spans = []
+    for start, end, inner, cut in held:
+        strings = _wrapper_strings(cut)
+        if strings:
+            spans.append((start, end, inner, strings))
+    return spans
 
 
 def _string_read(s, depth):
@@ -3468,8 +3503,7 @@ def _pairs_joined(s, plain):
 # How many times opener_lines() reads one text again before it stops with what it has rewritten.
 # One reading settles the first separator after an opener on every line that has one, so the
 # count that matters is how many such separators one line holds, or how deep one such line sits
-# inside another's body, never how many such lines there are: a limit on lines hid a push after
-# the opener on the sixty fourth.
+# inside another's body, never how many such lines there are.
 OPENER_LINE_LIMIT = 64
 
 

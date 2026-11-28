@@ -247,6 +247,16 @@ unchanged("an argument of echo holding the pair is handed over as it always was"
 unchanged("a string ssh hands another machine is handed over as it always was", "ssh host 'gi" + J + "t push'")
 text_is("an argument of echo is left as typed beside a wrapper's string that is rewritten",
         "echo 'x SKIP_X" + J + "=1 y'; bash -c 'l" + J + "s'", "echo 'x SKIP_X\\; =1 y'; bash -c 'l\\; s'; echo 'x SKIP_X\\; =1 y'; bash -c 'ls'")
+text_is("an argument of echo holding the very text a wrapper beside it is handed is left as typed too",
+        "echo 'l" + J + "s'; bash -c 'l" + J + "s'", "echo 'l\\; s'; bash -c 'l\\; s'; echo 'l\\; s'; bash -c 'ls'")
+text_is("and so is one after the wrapper, and one in a substitution among the wrapper's own words",
+        "bash -c 'l" + J + "s' $(echo 'l" + J + "s'); echo 'l" + J + "s'",
+        "bash -c 'l\\; s' $(echo 'l\\; s'); echo 'l\\; s'; bash -c 'ls' $(echo 'l\\; s'); echo 'l\\; s'")
+for cmd in ("a; b && c | d\ne || f", "bash -c 'l" + J + "s'; echo \"q", "x=$(a; b) ; `c; d`", ""):
+    pieces = sw._crude_pieces(cmd)
+    row("the crude cut's pieces with where they stand are the pieces the crude cut gives: %r" % cmd,
+        "" if sorted(t for _, _, _, cut in pieces for _, t in cut) == sorted(t for _, t in sw.crude_commands(cmd))
+        and all(cmd[a:b] == cut[0][1] for a, b, _, cut in pieces) else "got %r, and the crude cut gives %r" % (pieces, sw.crude_commands(cmd)))
 text_is("where a join in a wrapper's string would put a skip word together the pair is written after the word",
         "bash -c 'true; SKIP_" + J + "X=1 " + PUSH + "'", "bash -c 'true; SKIP_\\; X=1 " + PUSH + "'; bash -c 'true; SKIP_X=1\\;  " + PUSH + "'")
 shows("and the push behind that word is named", "bash -c 'true; SKIP_" + J + "X=1 " + PUSH + "'", ("", "git", "push", ""))
