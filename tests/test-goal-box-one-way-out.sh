@@ -110,7 +110,7 @@ def scan(files):
     for rel in sorted(files):
         for n, line in enumerate(files[rel].split('\n')):
             within = rel == REGISTER and first <= n <= last
-            for kind, group in (('send', SENDS), ('show', SHOWS + ([RESULT] if rel == REGISTER else []))):
+            for kind, group in (('send', SENDS), ('show', SHOWS + [RESULT])):
                 for what, pattern in group:
                     if not pattern.search(line):
                         continue
@@ -128,7 +128,7 @@ def scan(files):
     if send is not None and (asked is None or kept is None or not asked < kept < send):
         problems.append('leave sends a prompt before it has read what the turn ends found of the review (readAtEnd, then reviewOpenRef, then the send)')
     review = at(r'\breviewNow\s*\(')
-    for what, pattern in SHOWS:
+    for what, pattern in SHOWS + [RESULT]:
         shows = at(pattern.pattern)
         if shows is not None and (review is None or not review < shows):
             problems.append('leave reaches %s before it has asked the record at the call (reviewNow)' % what)
@@ -175,6 +175,8 @@ PLANTS = [
     ("the card's content built outside leave", other, after("export const showIt = () => cardOf('t', 'g', [])"), r"reaches the card's content outside leave"),
     ('a box recorded as shown outside leave', REGISTER, after("const showIt = ($: EngineInterface, entry: GoalBoxShown) => claim($, entry)"), r'reaches the record of a box shown outside leave'),
     ('a tool result returned outside leave', REGISTER, after("const showIt = () => { return { result: 'GOAL ACCOMPLISHED', text: '' } }"), r'reaches a tool result outside leave'),
+    ('a tool result returned in another file of the mod', other, after("export const showIt = () => { return { result: 'GOAL ACCOMPLISHED', text: '' } }"), r'reaches a tool result outside leave'),
+    ('leave returning a tool result without asking the record', REGISTER, swap('    const prompts = q.entry.prompts\n', "    const prompts = q.entry.prompts\n    if (q.shipped.length === 0) return { result: q.goal, text: q.goal, context: [] }\n"), r'leave reaches a tool result before it has asked the record at the call'),
     ('leave sending without reading what the turn ends found', REGISTER, swap('  await readAtEnd($, q.end)\n  const open', '  const open'), r'leave sends a prompt before it has read'),
     ('leave showing the box without asking the record', REGISTER, swap('await reviewNow($, prompts)', 'null'), r'before it has asked the record at the call'),
     ('leave gone, its sites left where they were', REGISTER, lambda source: source.replace('async function leave(', 'async function leaves('), r'leave was found 0 times'),
