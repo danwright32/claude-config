@@ -724,6 +724,187 @@ check(c.status === 2 && c.json === null, 'a flag nobody defined did not exit 2 f
   check(c.status === 2 && c.json === null && /Usage/.test(c.stderr || ''), 'a command named ' + name + ' with a flag did not print the usage and exit 2: ' + JSON.stringify(c).slice(0, 300));
 });
 
+// ---- wordingRefusal and its command line (claude-config#3846): the one judge of what a post may hold.
+// On 2026-11-27 Dan approved, by picker, wording whose first line was the mention followed by a
+// sentence. Only the merge gate read the rules, so the label went on and the merge was refused, and
+// he was asked a second time. The judge is now asked BEFORE he is: of a wording file, by the command
+// line, and it must be the gate's own judge, so every case here feeds the gate and the command the
+// same wording and holds them to one code and one sentence.
+check(typeof entry.wordingRefusal === 'function', '#3846 the library exports no wordingRefusal, so nothing judges a wording file by the merge gate\'s rules');
+const wordingRefusal = typeof entry.wordingRefusal === 'function' ? entry.wordingRefusal : function () { return { code: 'ABSENT', reason: '' }; };
+const ruleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'changelog-wording-'));
+let ruleFiles = 0;
+function wordingFile(text) {
+  ruleFiles += 1;
+  const file = path.join(ruleDir, 'wording-' + ruleFiles + '.md');
+  fs.writeFileSync(file, text);
+  return file;
+}
+// What the merge gate says of a pull request whose Announcement block is this wording.
+function gateOf(wording) { return gate(['changelog/announce'], SENTENCE + '\n## Announcement\n' + wording + '\n\n## Testing\nran it', HERE); }
+// One answer of the command line as [code, reason], null for wording it would not refuse.
+function saidOf(c) { return c.json && c.json.refused === true ? [c.json.code, c.json.reason] : c.json && c.json.refused === false ? null : 'no answer'; }
+// The wording Dan was asked about that day, in shape: the mention and a sentence on one line.
+const SHARED_LINE = '@here Calls can now be handed back to the queue.\n\n- Press Hand back\n- Pick a reason';
+const RULE_CASES = [
+  ['wording that passes', POST, null, ''],
+  ['the mention sharing its line with a sentence', SHARED_LINE, 'ANNOUNCEMENT_NO_OPENER', 'on a line of its own'],
+  ['no mention at all', 'Hi team\nYou can now hand a call back.', 'ANNOUNCEMENT_NO_OPENER', 'on a line of its own'],
+  ['an HTML comment', '@here\n<!-- say what agents do differently -->\nYou can now hand a call back.', 'ANNOUNCEMENT_HTML_COMMENT', 'HTML comment'],
+  ['a dash as punctuation', '@here\nHand back - then pick a reason.', 'ANNOUNCEMENT_DASHES', 'Hand back - then pick a reason.'],
+  // E (the review's L2): the gate's sentence for these two is about a pull request ("The heading in
+  // this pull request has no post under it ... or relabel this"), which is not true of a file. The
+  // fifth entry says so: the file form is held to the gate's CODE and to words of its own (FILE_CASES
+  // holds what they say), and the --body form to the gate's code and words as every other case is.
+  ['nothing at all', '', 'EMPTY_ANNOUNCEMENT', 'no post under it', true],
+  ['only blank lines', ' \n\n\t\n', 'EMPTY_ANNOUNCEMENT', 'no post under it', true],
+  ['a code span', '@here\nRun `the thing` now.', 'ANNOUNCEMENT_MARKDOWN', 'code (a backtick)'],
+  ['a block quote', '@here\n> quoted', 'ANNOUNCEMENT_MARKDOWN', 'a block quote (a line starting with >)'],
+  ['a table', '@here\n| a | b |\n| 1 | 2 |', 'ANNOUNCEMENT_MARKDOWN', 'a table (a line starting with |)'],
+  ['a picture', '@here\n![shot](https://example.com/a.png)', 'ANNOUNCEMENT_MARKDOWN', 'a picture (![...])'],
+  ['struck through text', '@here\nThis is ~~gone~~ now.', 'ANNOUNCEMENT_MARKDOWN', 'struck through text (~~)'],
+  ['a task box', '@here\n- [ ] do it', 'ANNOUNCEMENT_MARKDOWN', 'a task box ([ ] or [x] after a bullet)'],
+  ['a nested list', '@here\n- one\n  - inside', 'ANNOUNCEMENT_MARKDOWN', 'a nested list (an indented bullet or number)'],
+  ['a rule line', '@here\nAbove\n\n***\n\nBelow', 'ANNOUNCEMENT_MARKDOWN', 'a rule line (three hyphens, stars or underscores)'],
+  // A (the review of this change, M1): a bare carriage return is a line's end to the hash and was
+  // none to the rules, so a line start it hid (a block quote here) was judged by nothing while the
+  // hash was that of the same lines ended properly, which the gate refuses.
+  ['a block quote hidden behind a bare carriage return', '@here\nSomething changed.\r> a quoted line', 'ANNOUNCEMENT_CARRIAGE_RETURN', 'Something changed.'],
+  ['a table hidden behind a bare carriage return', '@here\nSomething changed.\r| a | b |\nMore.', 'ANNOUNCEMENT_CARRIAGE_RETURN', 'carriage return'],
+  ['a bare carriage return with nothing behind it', '@here\nOne\rTwo', 'ANNOUNCEMENT_CARRIAGE_RETURN', 'carriage return'],
+];
+// A: the hash of wording holding a bare carriage return is the hash of the same lines ended
+// properly, which is why the rules must not read it as one line: one hash, two verdicts.
+check(announcementHash('@here\nSomething changed.\r> a quoted line') === announcementHash('@here\nSomething changed.\n> a quoted line'),
+  '#3846 A a bare carriage return no longer hashes as a line end, which the cases about it depend on');
+RULE_CASES.forEach(function (rc) {
+  const name = rc[0], wording = rc[1], code = rc[2], needle = rc[3];
+  const g = gateOf(wording);
+  const fromGate = g === null ? null : [g.code, g.reason];
+  check(code === null ? fromGate === null : fromGate !== null && fromGate[0] === code && fromGate[1].indexOf(needle) !== -1,
+    '#3846 ' + name + ': the merge gate did not answer ' + code + ' as this case expects, so the case compares nothing: ' + JSON.stringify(g));
+  // Whether an answer about the FILE is the gate's: its code and its words, or, where the gate's
+  // words are about a pull request (E), its code with words that are not the gate's and say nothing
+  // of a pull request or its label.
+  const asGate = function (said) {
+    if (rc[4] !== true) return JSON.stringify(said) === JSON.stringify(fromGate);
+    return Array.isArray(said) && fromGate !== null && said[0] === fromGate[0] && typeof said[1] === 'string'
+      && said[1] !== fromGate[1] && !/in this pull request|relabel/.test(said[1]);
+  };
+  const w = wordingRefusal(wording);
+  check(asGate(w === null ? null : [w.code, w.reason]),
+    '#3846 ' + name + ': wordingRefusal and the merge gate disagree about the same wording: ' + JSON.stringify(w) + ' against ' + JSON.stringify(g));
+  const file = wordingFile(wording);
+  const before = fs.readFileSync(file);
+  const byFile = cliIn(['announcement-refusal', file]);
+  check(asGate(saidOf(byFile)),
+    '#3846 ' + name + ': the command line, asked of a wording file, and the merge gate disagree about the same wording: ' + JSON.stringify(byFile).slice(0, 600) + ' against ' + JSON.stringify(g));
+  // The exit status says it too, so a caller that reads only the status is never told refused wording passed (L184).
+  check(byFile.status === (fromGate === null ? 0 : 1), '#3846 ' + name + ': the command line exited ' + byFile.status + ' for wording the merge ' + (fromGate === null ? 'takes' : 'refuses'));
+  check(byFile.json && (fromGate === null ? byFile.json.code === null && byFile.json.reason === null : true),
+    '#3846 ' + name + ': an answer that refuses nothing carries a code or a reason: ' + JSON.stringify(byFile.json));
+  const byInput = cliIn(['announcement-refusal', '-'], wording);
+  check(asGate(saidOf(byInput)) && JSON.stringify(saidOf(byInput)) === JSON.stringify(saidOf(byFile)) && byInput.status === byFile.status,
+    '#3846 ' + name + ': the command line asked on standard input (-) did not answer as it does of the file: ' + JSON.stringify(byInput).slice(0, 600));
+  const inBody = cliIn(['announcement-refusal', '--body', '-'], 'Why.\n\n' + SENTENCE + '\n## Announcement\n' + wording + '\n\n## Testing\nran it');
+  check(JSON.stringify(saidOf(inBody)) === JSON.stringify(fromGate),
+    '#3846 ' + name + ': the command line asked of a description (--body) did not judge its block as the merge gate does: ' + JSON.stringify(inBody).slice(0, 600));
+  check(Buffer.compare(before, fs.readFileSync(file)) === 0, '#3846 ' + name + ': the command line changed the wording file it was asked to read');
+});
+// Every rule about markdown has a case above, by the rules' own names: a rule added to the gate with
+// no case here fails this, where a table written by hand would go on passing without it (L96).
+check(Array.isArray(entry.UNMEASURED_MARKDOWN_NAMES) && entry.UNMEASURED_MARKDOWN_NAMES.length >= 8, '#3846 the library does not export the names of its markdown rules, so nothing can tell that each has a case: ' + JSON.stringify(entry.UNMEASURED_MARKDOWN_NAMES));
+(entry.UNMEASURED_MARKDOWN_NAMES || []).forEach(function (ruleName) {
+  check(RULE_CASES.some(function (rc) { return rc[2] === 'ANNOUNCEMENT_MARKDOWN' && rc[3] === ruleName; }),
+    '#3846 the markdown rule "' + ruleName + '" has no case feeding the merge gate and the command line the same wording');
+});
+// What is refused of a wording FILE alone, each with a code or with words of its own (the review of
+// this change, round 2). The gate has no such case: a pull request's block cannot hold what these
+// files hold, or the words the gate gives a block are not true of a file. Each entry: what the file
+// holds, its text, the code, and words the sentence must hold.
+const FILE_CASES = [
+  // B: the block of a pull request ends at the next heading, so a file holding one can never be a
+  // block whole, and the lines below the heading were judged by nothing.
+  ['B a heading below the post', '@here\nSomething changed.\n\n## What to do\n- Do this\n', 'WORDING_FILE_HEADING', 'line 4'],
+  ['B a heading with formatting the gate forbids below it', '@here\nSomething changed.\n### Steps\n> quoted -- twice\n', 'WORDING_FILE_HEADING', '"### Steps"'],
+  ['B the file beginning with its own Announcement heading', '## Announcement\n@here\nSomething changed.\n', 'WORDING_FILE_HEADING', 'line 1'],
+  ['B a heading ended as GitHub ends a line', '@here\r\nSomething changed.\r\n# Title\r\nMore.\r\n', 'WORDING_FILE_HEADING', 'line 3'],
+  // D (the review's L1): the approval refuses a file holding more than two blank lines in a row above
+  // wording, since the window it was opened in showed Dan the lines above and then white space. The
+  // command a session runs first said such a file "refuses nothing", so his Approve then did not count.
+  ['D three blank lines in a row above wording', '@here\nSomething changed.\n\n\n\nMore below.\n', 'WORDING_FILE_BLANK_RUN', '3 blank lines in a row, from line 3'],
+  ['D a long run of lines holding only white space, ended as GitHub ends them', '@here\r\nOne.\r\n \r\n\t\r\n\r\n \r\n\r\nTwo.\r\n', 'WORDING_FILE_BLANK_RUN', '5 blank lines in a row, from line 3'],
+  // E (the review's L2): three sentences that were not true of a file. The refusals stay, each
+  // under the code it had; the words are a file's. An empty file was told "The heading in this pull
+  // request has no post under it ... or relabel this". A file beginning with a byte order mark was
+  // refused for its opener in a sentence quoting a first line that looks exactly like the mention
+  // alone, since the mark is invisible. A file beginning with its own Announcement heading is told
+  // to leave the heading out (B's rule, and B's code).
+  ['E an empty file', '', 'EMPTY_ANNOUNCEMENT', 'The wording file holds no post'],
+  ['E a file holding only blank lines', ' \n\n\t\n', 'EMPTY_ANNOUNCEMENT', 'The wording file holds no post'],
+  ['E a file beginning with a byte order mark', '﻿@here\nSomething changed.\n', 'ANNOUNCEMENT_NO_OPENER', 'begins with a byte order mark'],
+  ['E a file that is a byte order mark and a sentence, with no mention', '﻿Something changed.\n', 'ANNOUNCEMENT_NO_OPENER', 'begins with a byte order mark'],
+  ['E a file beginning with its own Announcement heading above a whole post', '## Announcement\n@here\nSomething changed.\n', 'WORDING_FILE_HEADING', 'leave the Announcement heading out of it'],
+];
+FILE_CASES.forEach(function (fc) {
+  const name = fc[0], text = fc[1], code = fc[2], needle = fc[3];
+  const w = wordingRefusal(text);
+  check(w !== null && w.code === code && typeof w.reason === 'string' && w.reason.indexOf(needle) !== -1,
+    '#3846 ' + name + ': wordingRefusal did not refuse the file as ' + code + ' saying ' + JSON.stringify(needle) + ': ' + JSON.stringify(w));
+  // A sentence about a file says nothing of a pull request or its label, which the reader has not got yet.
+  check(w !== null && !/in this pull request|relabel/.test(w.reason || ''), '#3846 ' + name + ': the sentence for a file speaks of a pull request or its label: ' + JSON.stringify(w));
+  // Nor does it quote a byte order mark, which nobody can see: a line quoted with one reads as the line without it (E).
+  check(w !== null && (w.reason || '').indexOf('﻿') === -1, '#3846 ' + name + ': the sentence for a file holds a byte order mark, which shows as nothing: ' + JSON.stringify(w));
+  const byFile = cliIn(['announcement-refusal', wordingFile(text)]);
+  check(byFile.status === 1 && JSON.stringify(saidOf(byFile)) === JSON.stringify(w === null ? null : [w.code, w.reason]),
+    '#3846 ' + name + ': the command line, asked of the file, did not refuse it as wordingRefusal does and exit 1: ' + JSON.stringify(byFile).slice(0, 600));
+  const byInput = cliIn(['announcement-refusal', '-'], text);
+  check(byInput.status === 1 && JSON.stringify(saidOf(byInput)) === JSON.stringify(saidOf(byFile)),
+    '#3846 ' + name + ': the command line asked on standard input (-) did not answer as it does of the file: ' + JSON.stringify(byInput).slice(0, 600));
+});
+// D: the count is the one the approval reads (blankRunBeforeWording), and the most a file may hold is
+// exported, so the approval library's own number can be held to it (hooks/test-announce-approval.sh).
+check(entry.WORDING_BLANK_RUN === 2, '#3846 D the library does not export the most blank lines in a row a wording file may hold above wording as 2: ' + JSON.stringify(entry.WORDING_BLANK_RUN));
+// D, still possible: two blank lines in a row, and any number after the last line of wording.
+c = cliIn(['announcement-refusal', wordingFile('@here\nSomething changed.\n\n\nMore below.\n\n\n\n\n\n')]);
+check(c.status === 0 && c.json && c.json.refused === false, '#3846 D a file with two blank lines in a row above wording, and more after its last line, was refused: ' + JSON.stringify(c));
+// D: the --body form has no such rule. The merge gate has none, and a block is not a file he was shown.
+c = cliIn(['announcement-refusal', '--body', '-'], 'Why.\n\n' + SENTENCE + '\n## Announcement\n@here\nSomething changed.\n\n\n\nMore below.\n');
+check(c.status === 0 && c.json && c.json.refused === false, '#3846 D a description whose block holds three blank lines in a row was refused in the --body form, which the merge gate does not do: ' + JSON.stringify(c));
+// B: the --body form stays as it was. A description's block ends at the next heading, as it does at
+// the merge, so a heading after the post refuses nothing there.
+c = cliIn(['announcement-refusal', '--body', '-'], 'Why.\n\n' + SENTENCE + '\n## Announcement\n@here\nSomething changed.\n\n## What to do\n- Do this\n');
+check(c.status === 0 && c.json && c.json.refused === false, '#3846 B a description whose block ends at the next heading was refused in the --body form: ' + JSON.stringify(c));
+// B: a line that only looks like a heading (no space after the signs, or the signs inside a line) is none.
+c = cliIn(['announcement-refusal', '-'], '@here\nSee issue #12 and the tag #urgent.\n#nospace\n');
+check(c.status === 0 && c.json && c.json.refused === false, '#3846 B a line that is no heading was refused as one: ' + JSON.stringify(c));
+
+// The refusal of that day's wording quotes the line, so the session can see what to split.
+c = cliIn(['announcement-refusal', wordingFile(SHARED_LINE)]);
+check(c.json && c.json.refused === true && c.json.reason.indexOf('"@here Calls can now be handed back to the queue."') !== -1,
+  '#3846 the refusal of a mention sharing its line does not quote that line: ' + JSON.stringify(c.json));
+// The file is read as the block it becomes: the line endings GitHub gives, spaces at the ends of
+// lines and blank lines around the wording are no part of it, so they refuse nothing.
+c = cliIn(['announcement-refusal', wordingFile('\r\n\r\n@here  \r\n**Handing a call back**\t\r\n\r\nYou can now hand a call back.\r\n\r\n\r\n')]);
+check(c.status === 0 && c.json && c.json.refused === false, '#3846 wording with the line endings GitHub gives, spaces at the ends of lines and blank lines around it was refused: ' + JSON.stringify(c));
+// A description with no Announcement heading holds no post, in the gate's own words for that.
+c = cliIn(['announcement-refusal', '--body', '-'], SENTENCE);
+r = parse(['changelog/announce'], SENTENCE);
+check(c.status === 1 && c.json && c.json.refused === true && c.json.code === 'NO_ANNOUNCEMENT' && r.code === 'NO_ANNOUNCEMENT' && c.json.reason === r.reason,
+  '#3846 a description with no Announcement heading was not refused in the words the record\'s reader gives a pull request: ' + JSON.stringify(c) + ' against ' + JSON.stringify(r));
+// A file that cannot be read is no answer: nothing on standard output, why on standard error, and a
+// status that is neither "takes" nor "refuses", so no reader takes it for wording that passes (L98).
+c = cliIn(['announcement-refusal', path.join(ruleDir, 'not-there.md')]);
+check(c.status === 3 && c.stdout === '' && /not-there\.md/.test(c.stderr || ''), '#3846 a wording file that is not there was answered, or exited as an answer does: ' + JSON.stringify(c));
+c = cliIn(['announcement-refusal', ruleDir]);
+check(c.status === 3 && c.stdout === '', '#3846 a folder named as the wording file was answered: ' + JSON.stringify(c));
+// The usage, for a call naming no file, two files, or a flag nobody defined.
+[['announcement-refusal'], ['announcement-refusal', wordingFile(POST), wordingFile(POST)], ['announcement-refusal', '--something-else', wordingFile(POST)]].forEach(function (args) {
+  c = cliIn(args, POST);
+  check(c.status === 2 && c.json === null && /announcement-refusal/.test(c.stderr || ''), '#3846 ' + JSON.stringify(args.slice(0, 2)) + ' did not print the usage and exit 2: ' + JSON.stringify(c).slice(0, 300));
+});
+fs.rmSync(ruleDir, { recursive: true, force: true });
+
 console.log('  ' + passed + ' passed, ' + failed + ' failed');
 console.log('SUITE-RESULT passed=' + passed + ' failed=' + failed);
 process.exit(failed === 0 ? 0 : 1);

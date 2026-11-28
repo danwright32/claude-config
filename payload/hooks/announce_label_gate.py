@@ -23,6 +23,10 @@ Judged here, each only when the command names the label:
       (Dan, 2026-11-25): the pull request that used an approval keeps it, and any other, or a
       command naming none by number, goes through only while an approval of that wording is
       unused. This hook asks and records nothing; the merge gate records which one uses it.
+      And the wording must be wording the merge would not refuse for what it holds, approved or
+      not (claude-config#3846): the block is put to the merge gate's own judge
+      (lib/changelog-entry.js's announcement-refusal, through the library), and wording it
+      refuses is refused here with the gate's code and words, before any approval is looked for.
   gh api writing to repos/<owner>/<name>/issues/<number>/labels
       The same, from the description GitHub holds. Any other gh api write naming the label is
       refused with the form to use, since nothing here can place it.
@@ -66,6 +70,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 sys.dont_write_bytecode = True
 _HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
@@ -102,7 +107,8 @@ UNREAD_BODY_FLAGS = {"--fill", "-f", "--fill-first", "--fill-verbose", "--templa
 BODY_FLAGS = ("--body", "-b", "--body-file", "-F")
 BODY_BYTES = 1024 * 1024
 # Each bound is this hook's own. ONE command of a call is judged (_one_judgment refuses a second),
-# so the most one run can wait is one read of the remote, one of GitHub, one hash (the library's 5)
+# so the most one run can wait is one read of the remote, one of GitHub, one hash and one judging
+# of the wording by the merge gate's rules (the library's 5 for the two together, claude-config#3846)
 # and the library's check (12): 37 seconds, inside the 45 the hook is registered with. So a slow
 # GitHub is refused in words and never by the harness cutting the hook short. Without the limit of
 # one, each further command in a call brought reads of its own and the sum had no ceiling.
@@ -297,8 +303,19 @@ def _wording_approved(repo, body, payload, notes, pr=None):
     (Dan, 2026-11-25), so the pull request that used one keeps it, and any other, or a command that
     names none by number (a create, an edit by branch that gives its own description), is covered
     only while an approval of that wording is unused. Nothing is recorded here: the merge gate
-    records which pull request uses an approval."""
-    answer, why = approval.hash_of(body, True)
+    records which pull request uses an approval.
+
+    And refuse wording the merge would refuse for what it holds, approved or not
+    (claude-config#3846): the block is judged by the merge gate's own judge, asked through the
+    library (refusal_of), before any approval is looked for. An approval of such wording could
+    never be used, so the label on it only moves the refusal to the merge, where Dan is asked a
+    second time. This is what stops an approval this Mac's record held before that rule, which
+    the record holds as a hash and no wording. An answer of the judge that cannot be read is
+    refused too (L98)."""
+    # One bound for the two questions asked of lib/changelog-entry.js, the hash and the judging,
+    # so this hook's longest wait is what it was (the sum above GITHUB_SECONDS).
+    deadline = time.monotonic() + approval.HASH_SECONDS
+    answer, why = approval.hash_of(body, True, deadline)
     if why is not None:
         raise Refuse("the wording could not be hashed (" + why + "), so whether Dan approved it could not be told.")
     if not answer["found"]:
@@ -308,6 +325,13 @@ def _wording_approved(repo, body, payload, notes, pr=None):
     if not answer["hash"]:
         raise Refuse("the `## Announcement` block of the description it would leave is empty, so there is no wording "
                      "Dan could have approved. " + approval.HOW_TO_ASK)
+    refusal, untold = approval.refusal_of(body, True, deadline)
+    if untold is not None:
+        raise Refuse(untold + ", and the label goes on no wording that nobody could judge. Run the command again.")
+    if refusal["refused"]:
+        raise Refuse(approval.refused_why(refusal) + " No approval of Dan's covers wording the merge would refuse, one "
+                     "he gave of this very wording included, so put the wording right and ask him again. "
+                     + approval.HOW_TO_ASK)
     verdict = approval.check(repo, answer["hash"], payload, pr)
     notes.extend(verdict["notes"])
     if verdict["approved"] is not True:

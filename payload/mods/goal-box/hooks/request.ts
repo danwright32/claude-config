@@ -1,0 +1,163 @@
+import type { GoalBoxPicker } from '../types/index.d.ts'
+import { askFault } from './mod-kit/shown.ts'
+
+// What counts as Dan asking for something, beyond a message he types (claude-config#3843). Pure, so
+// every rule is tested without a session.
+//
+// On 2026-11-27 a session finished a monthly sync and showed the box, then Dan picked a fix in one
+// picker and three follow ups in the end of turn review's picker. All four finished with no box:
+// the box was once per message he typed, and a picker answer is no message. His answer on the
+// issue, the same day: an answer he gives in a picker is a new request only when the session then
+// does work. An answer that only confirms a step changes nothing by itself and earns no box. No list
+// of picker kinds: any picker of the main conversation he answered, followed by work.
+//
+// "Work" is not a list kept here. The end of turn review hooks (session-reflection.sh,
+// feature-issue-review.sh) already decide whether a turn changed something, by hooks/turn-worked.py,
+// whose is_mutating reads a tool's name: an edit, a write, a command, an agent, or a connected tool
+// that acts and does not only read. The mod asks that function, from that file, by running WORK_TEST
+// below. A second list of tools here would drift from that one (L370), and
+// tests/test-goal-box-work-test.sh holds the two together: the command against the real file, and
+// the review hooks still naming that file. Beyond the test, the call must be the main conversation's
+// and must have run: one a guard refused changed nothing. The box's own tool never counts.
+//
+// The review of pull request 3852 (2026-11-27) added three things. A call Claude Code itself marks
+// read only is not work whatever its tool's name: the result a tool.call hook gets carries
+// `isReadOnly: true` "only when the tool held the input it executed read-only by its own check", so
+// a look around after an answer that only confirmed a step opens no second box (the typings' example
+// is Bash `ls`; which commands Bash holds read only was not measured in a session); a result without
+// the mark is judged by the test above, never taken as read only. An answer waits only until the turn it
+// was given in ends, so a turn Dan did not start (a prompt a mod sends, a wake up, a job's notice)
+// cannot do work that counts as picked by an answer from before it. And a run of the test that could
+// not be read is not made again for the same tool's name in that turn, since each run holds the
+// call's result back for up to WORK_TEST_MS.
+
+/** The Python that asks the review's own test about one tool name: the file by path, then the name. */
+export const WORK_TEST = `
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('turn_worked', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print('yes' if module.is_mutating(sys.argv[2]) else 'no')
+`
+
+/** How long one run of the test may take: it imports one file and prints a word. */
+export const WORK_TEST_MS = 10_000
+
+/**
+ * The command: the review's test where the sync installs it, asked about one tool. -B because Python
+ * importing a file by path otherwise leaves a compiled copy in a __pycache__ folder beside it, and a
+ * question should write nothing into the hooks folder (tests/test-goal-box-work-test.sh measures it).
+ */
+export const workTestArgv = (home: string, tool: string): string[] => ['python3', '-I', '-B', '-c', WORK_TEST, `${home.replace(/\/+$/, '')}/.claude/hooks/turn-worked.py`, tool]
+
+/** Whether the tool can change something by the review's test, or why that could not be read. */
+export type WorkRead = { changes: boolean } | { unread: string }
+
+/** The run's answer, held to yes or no: anything else is unread, never taken for no (L10). */
+export const workRead = (r: { exitCode: number; stdout: string; stderr: string }): WorkRead => {
+  const said = r.stdout.trim()
+  if (r.exitCode === 0 && said === 'yes') return { changes: true }
+  if (r.exitCode === 0 && said === 'no') return { changes: false }
+  if (r.exitCode !== 0) return { unread: r.stderr.trim().split('\n').pop() || `python3 exited ${r.exitCode}` }
+  return { unread: `it answered ${JSON.stringify(said.slice(0, 80))}, neither yes nor no` }
+}
+
+/**
+ * Why a picker's call would not have reached Dan as written, or undefined when it would (#3321). His
+ * answer covers only text he could read, and Claude Code's dialog cuts a long question and draws
+ * some characters and markup as nothing. Judged by mod-kit's one check of text a person approves in
+ * a picker (askFault, the copy at hooks/mod-kit/shown.ts): every text the call hands the dialog, in
+ * whatever field. This mod asks no picker and refuses none, so a picker that fails is only left
+ * uncounted: no picked work begins from it. A call that is no object is judged as one with nothing
+ * in it, which has no fault, and its result then decides as before.
+ */
+const unreadAsk = (call: unknown): string | undefined => {
+  const unread = askFault(typeof call === 'object' && call !== null ? (call as Record<string, unknown>) : {})
+  return unread === undefined ? undefined : `${unread.what} would not reach Dan as written: ${unread.fault}`
+}
+
+/**
+ * How a picker's call came back, in one of four ways. `answer`: with an answer of Dan's. `unread`:
+ * to a picker he could not have read whole, with why. `known`: one of the three ways this mod knows
+ * a picker ends without an answer (he dismissed it, it failed, it closed while he was away).
+ * `shape`: none of those, with what the call came back holding, which is how a result whose shape
+ * this mod does not read would look.
+ */
+export type PickerCame = { how: 'answer' } | { how: 'unread'; why: string } | { how: 'known' } | { how: 'shape'; holds: string }
+
+/** A field's name as Claude Code writes one: letters, digits and underscores, shorter than a sentence. */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/
+/** The most names said of one object. */
+const MOST_NAMES = 12
+
+/**
+ * The keys an object holds, for the debug log: its first twelve plain field names, and a count of
+ * the rest. A key that is not a plain field name is counted and never said, because a result keyed
+ * by a question or an answer would put Dan's text in the log. Nothing an object holds under a key
+ * is ever said. What this leaves: a key that is one plain word of his would be said as a name.
+ */
+const names = (o: object): string => {
+  const keys = Object.keys(o)
+  const said = keys.filter(k => FIELD_NAME.test(k)).slice(0, MOST_NAMES)
+  const rest = keys.length - said.length
+  if (keys.length === 0) return 'no keys'
+  if (said.length === 0) return `${rest} ${rest === 1 ? 'key' : 'keys'} not named here`
+  return rest === 0 ? said.join(', ') : `${said.join(', ')}, and ${rest} more not named here`
+}
+
+/** What kind of thing a value is, never the value. */
+const kind = (v: unknown): string => (v === null ? 'null' : v === undefined ? 'nothing' : Array.isArray(v) ? 'a list' : `a ${typeof v}`)
+
+/**
+ * How an AskUserQuestion call came back (PickerCame), as Claude Code's dialog hands it to a
+ * tool.call hook. An answer of Dan's is a result holding `answers` with at least one that is not
+ * empty, or a `response` that is not empty, which is what he typed in place of choosing (Claude
+ * Code's typings of the tool's result: "Freeform text the user typed instead of selecting a
+ * structured option"). Those are his own words, so they are an answer like a choice; which path of
+ * the dialog fills `response` was read from the typings and not measured in a session. A picker he
+ * dismissed (a refusal), one that failed, and one that closed by itself while he was away
+ * (`afkTimeoutMs`) are the known ways it ends with no answer.
+ *
+ * Anything else is no answer either, and is `shape`: a result with no answer in it, or one this mod
+ * cannot read. That shape too was read from the typings and not measured, so if Claude Code hands a
+ * hook something else, every picker Dan answers lands here and the mod would count none. `holds`
+ * says what was seen in its place, by key and kind only (names), for the debug log.
+ *
+ * No answer to a picker he could not read whole counts (unreadAsk, #3321): the call is judged
+ * first, and what came back is read only for a call that passes. `call` is the picker's call as this
+ * mod's hook was handed it, which is what it passed down to the dialog.
+ */
+export const pickerCame = (r: unknown, call: unknown): PickerCame => {
+  const unread = unreadAsk(call)
+  if (unread !== undefined) return { how: 'unread', why: unread }
+  if (r === null || typeof r !== 'object' || Array.isArray(r)) return { how: 'shape', holds: `the call came back as ${kind(r)}` }
+  const o = r as { deny?: unknown; isError?: unknown; result?: unknown }
+  if (o.deny !== undefined || o.isError === true) return { how: 'known' }
+  if (o.result === undefined) return { how: 'shape', holds: `it has no result; the call came back holding: ${names(o)}` }
+  if (o.result === null || typeof o.result !== 'object' || Array.isArray(o.result)) return { how: 'shape', holds: `its result is ${kind(o.result)}, where this mod reads an object; the call came back holding: ${names(o)}` }
+  const out = o.result as { answers?: unknown; response?: unknown; afkTimeoutMs?: unknown }
+  if (out.afkTimeoutMs !== undefined) return { how: 'known' }
+  if (typeof out.response === 'string' && out.response.trim() !== '') return { how: 'answer' }
+  const answers = out.answers
+  const chosen = answers !== null && typeof answers === 'object' && !Array.isArray(answers)
+    && Object.values(answers).some(a => (typeof a === 'string' ? a.trim() !== '' : Array.isArray(a) && a.some(x => typeof x === 'string' && x.trim() !== '')))
+  return chosen ? { how: 'answer' } : { how: 'shape', holds: `its result holds: ${names(out)}` }
+}
+
+/** Whether an AskUserQuestion call came back with an answer of Dan's: pickerCame's `answer`. */
+export const answered = (r: unknown, call: unknown): boolean => pickerCame(r, call).how === 'answer'
+
+/**
+ * Why a second box for one request is refused, by what is known of a picker answer since (L11: each
+ * cause its own words). Every form says when a later call is right: while an answer waits, that it
+ * waits only for the turn it was given in, and where the test could not be read, that the same tool
+ * is not asked about again in that turn, so only a call of another tool can settle it.
+ */
+export const alreadyShownText = (picker: GoalBoxPicker | null | undefined): string => {
+  const again = 'it shows again once Dan has asked for something new: a message he types, or work you do after an answer he gives in a picker'
+  const waits = 'his answer waits only until the turn it was given in ends'
+  if (!picker) return `No box yet: the box was already shown for this request; ${again}.`
+  if (picker.unread !== undefined)
+    return `No box yet: the box was already shown for this request. Dan has answered a picker since, and whether anything has been changed since his answer could not be read (${picker.unread}), so it is not known whether there is new work to show a box for. That is not asked again for the same tool in this turn, so call again after a call of a different tool that changes something, in this turn: ${waits}.`
+  return `No box yet: the box was already shown for this request. Dan has answered a picker since, and nothing has been changed since his answer; an answer alone is not a new request. If his answer asked for work, do it in this turn, then call this tool again: ${waits}.`
+}
