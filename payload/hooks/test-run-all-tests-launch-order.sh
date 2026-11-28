@@ -50,6 +50,15 @@ mk_suite() { # mk_suite <dir> <name> [seconds to sleep]   -- a suite that passes
 key() { printf '%s' "suites/test-$1.sh" | sed 's/%/%25/g; s#/#%2F#g'; }   # the runner's suite_key
 record() { cat "$1/$(key "$2")" 2>/dev/null; }                            # record <store> <name>
 order_of() { printf '%s\n' "$1" | sed -n 's/^run-all-tests: launch order: //p' | awk 'END { print }'; }
+# The part of a launch order #3388 promises holds still (claude-config#3674). `q1` and `q2` are
+# seeded at 0 seconds and finish at once, so each reads 0 or 1 as the clock's second happens to
+# fall, and a reading of 1 against 0 is inside the clock's own resolution: the runner then launches
+# them in either order. That costs nothing, since both take a one slot lane and finish at once. What
+# #3388 promises is that the suites with real recorded cost launch in the same places, so each near
+# zero suite is written as one placeholder: the place every suite launched in is kept, and only the
+# near zero ones may trade places with each other. A lead and runner up that swap, or a near zero
+# suite launched ahead of either, still reads as a different order.
+promised() { printf '%s\n' "$1" | sed 's/test-q[12]\.sh/<near-zero>/g'; }
 # Four suites against four lanes at a budget of 8, so lane 1 is granted 4 slots and the others 2, 1
 # and 1. Every run keeps out of the real cache, the flaky output store and this Mac's full suite slot.
 run_fixture() { # run_fixture <root> <store> [budget] [jobs]
@@ -91,9 +100,9 @@ case "$order_b" in
 esac
 out_c="$(run_fixture "$FX" "$ST")"
 order_c="$(order_of "$out_c")"
-[ -n "$order_b" ] && [ "$order_c" = "$order_b" ] \
-  && check "#3388 and two runs back to back of an unchanged tree launch in the same order" ok \
-  || check "#3388 and two runs back to back of an unchanged tree launch in the same order" "'$order_b' then '$order_c'"
+[ -n "$order_b" ] && [ "$(promised "$order_c")" = "$(promised "$order_b")" ] \
+  && check "#3388 and two runs back to back of an unchanged tree launch every suite with real cost in the same place" ok \
+  || check "#3388 and two runs back to back of an unchanged tree launch every suite with real cost in the same place" "'$order_b' then '$order_c'"
 
 # The record keeps the share its figure was measured at, so a lane 1 time is never read as one from
 # an ordinary lane. Five seconds at one slot (seeded above, not measured), then under a second at
@@ -114,6 +123,46 @@ esac
 case "$out_a$out_b" in
   *"launched first is not the one"*) check "#3388 a lead that finished quickly in lane 1 is not reported as the wrong lead" "out=$out_a $out_b" ;;
   *) check "#3388 a lead that finished quickly in lane 1 is not reported as the wrong lead" ok ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Two near zero suites trading places is not a change of order; a lead and runner up that do is.
+# ---------------------------------------------------------------------------
+# What a busy clock does by chance (claude-config#3674, seen on a CI runner on 2026-11-25), planted
+# here so it happens on every run rather than now and then: one run's records hold `q2` at 1 second
+# and `q1` at 0, the next run's the other way round. Records this file writes, not measured.
+FX5="$TMPROOT/near-zero"
+ST5="$TMPROOT/near-zero-store"
+mkdir -p "$ST5"
+for n in lead runnerup q1 q2; do mk_suite "$FX5/suites" "$n"; done
+printf '# %s\n' "$(head -c 400 /dev/zero | tr '\0' 'x')" >> "$FX5/suites/test-runnerup.sh"
+printf '5 1 1\n' > "$ST5/$(key lead)"
+printf '3 1 1\n' > "$ST5/$(key runnerup)"
+printf '0 1 1\n' > "$ST5/$(key q1)"
+printf '1 1 1\n' > "$ST5/$(key q2)"
+order_p1="$(order_of "$(run_fixture "$FX5" "$ST5")")"
+printf '1 1 1\n' > "$ST5/$(key q1)"
+printf '0 1 1\n' > "$ST5/$(key q2)"
+order_p2="$(order_of "$(run_fixture "$FX5" "$ST5")")"
+# The control: the planted records really did swap the two, so the check below is not passing on
+# two orders that were the same anyway (L1).
+[ "$order_p1" = "test-lead.sh test-runnerup.sh test-q2.sh test-q1.sh" ] \
+  && [ "$order_p2" = "test-lead.sh test-runnerup.sh test-q1.sh test-q2.sh" ] \
+  && check "#3674 the control: records one second apart swap the two near zero suites" ok \
+  || check "#3674 the control: records one second apart swap the two near zero suites" "'$order_p1' then '$order_p2'"
+[ -n "$order_p1" ] && [ "$(promised "$order_p2")" = "$(promised "$order_p1")" ] \
+  && check "#3674 two near zero suites trading places leaves the order #3388 promises unchanged" ok \
+  || check "#3674 two near zero suites trading places leaves the order #3388 promises unchanged" "'$order_p1' then '$order_p2'"
+# And the comparison still sees a real change: runner up recorded slower than the lead launches
+# first, and that must read as a different order, or the placeholder has hidden what #3388 is about.
+printf '9 1 1\n' > "$ST5/$(key runnerup)"
+order_p3="$(order_of "$(run_fixture "$FX5" "$ST5")")"
+case "$order_p3" in
+  "test-runnerup.sh test-lead.sh "*)
+    [ "$(promised "$order_p3")" != "$(promised "$order_p2")" ] \
+      && check "#3674 a lead and runner up that trade places still read as a different order" ok \
+      || check "#3674 a lead and runner up that trade places still read as a different order" "'$order_p2' then '$order_p3' compared as the same" ;;
+  *) check "#3674 a lead and runner up that trade places still read as a different order" "the planted record did not put runner up first: '$order_p3'" ;;
 esac
 
 # ---------------------------------------------------------------------------
