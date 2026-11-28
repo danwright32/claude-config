@@ -2568,18 +2568,37 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   25.
 - **The typed command check's misreads, narrowed rule by rule** (#3865). The second review of pull
   request 3677 and the work MacBook's count of it listed replies read wrongly in both directions.
-  Each is a case in `tests/typed.test.ts`, the two sides of a rule in one test. No longer counted:
-  "you should", "you must" and "you have to" unless "you" leads its sentence or clause, since
-  inside a sentence they suggest or report ("big enough that you should start", "the README says
-  you should run"); "is yours:" followed by a choice that describes the commands; an imperative
-  after a label saying the session will do the work, whatever the label says of Dan ("After you
-  approve the plan I will do two things:"); a command for a time Dan is away ("for the morning",
-  "when you are back", "when you wake", "tomorrow"), read only where it says when to type it (a
-  label before the hand over, the words that hand it over, or after the command and before its
-  reason), so "to load the guard I merged in the morning" is no such time; one offered beside
-  another way ("or start a fresh session"); and one that the sentence right after it puts off or gives another way for,
-  where that sentence speaks of the command or opens with "or" ("and it can wait for the morning",
-  "Or start a fresh session"). Now counted: an imperative after ", then" where the words before
+  Each is a case in `tests/typed.test.ts`, the two sides of a rule in one test. A miss is the fault
+  the check exists to stop and a false hold costs one exchange, so a rule that lets a reply pass
+  recognises one harmless shape and holds everything else. The first build's passing rules were
+  wider than that: the independent review of pull request 3889 wrote 155 invented replies that
+  hand a command over to type now, and that build passed 95 of the 143 main held. Those replies,
+  with main's answer to each, are `tests/typed-replies.ts`; each of the 143 has a test of its
+  own, and the check holds all of them. No longer counted, each by one shape:
+  "you should", "you must" and "you have to" where the words before "you" make it a report ("the
+  README says you should run", "found that you must type", "explains why you should run"), a
+  sentence about another design ("In the old design you must type"), or a suggestion with
+  "should" that names no moment ("big enough that you should start", "I think you should run");
+  however else the sentence opens they are held ("After the merge you must run", "which is why
+  you must run"). "Is yours:" before two commands or more laid out as a choice, by the label's
+  noun ("The call is yours:") or by "or" between them; before one command it is held whatever is
+  said of it. An imperative after a label naming what follows as the session's own work ("After
+  you approve the plan I will do two things:", "What I will do for you next:"), unless the label
+  goes on to speak of Dan ("I will keep going after you do one thing:"). A command for a time
+  Dan is away ("for the morning", "when you are back", "when you wake", "tomorrow"), read in
+  three places only: right after the command, with nothing between but where to type it, and
+  ending its clause ("on the work MacBook tomorrow", "in the morning and the new band will
+  show"); in a label that is nothing but the time ("For the morning:"); or leading the words
+  that hand it over ("When you're back, run"). A word meaning at once in the command's own
+  words wins over any of them ("now", "tonight", "first"), and a time anywhere else is said of
+  something else ("now, the rest can wait for the morning", "in the morning-report tab", "to
+  load the guard I merged in the morning"). One offered beside a new session, named as one after
+  the command ("or start a fresh session"), and never "or" with other words ("or keep seeing the
+  old error"). And one the sentence right after puts off, where that sentence's subject is the
+  command and its verb the putting off ("It can wait for the morning.", "and it can wait for
+  the morning", "I have put that down for the morning"), or offers a new session for ("Or open
+  a new session."); "This cannot wait", "the rest can wait" and "Or leave it and the session
+  ends" are held. Now counted: an imperative after ", then" where the words before
   it are not the session's own; "go ahead and run"; "you'll have to run"; "use" after "your next
   step is to", with a closed list of system folders (`/tmp`, `/usr`) never a command; "before
   anything else", which is no standing rule; a command beside a web word that names something
@@ -2590,13 +2609,25 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   names the command, or the panel a planning command starts, is the command's own step and gets
   no second ask ("Tell me when the panel has finished"); a word of the command's own name is no
   sign of that ("the code" after `/code-review`).
-  Left as built, each pinned by a test named for what it does today, and put to Dan: "you have
-  to" after an opening clause with no comma is missed ("Before I can go on you have to type
-  `/compact`"), since "In the old design you must type `/compact` yourself" has the same shape
-  and must pass; a project folder of one word after "your next step is to use" is held; a loose
-  time ("at your convenience", "before the next build") is held as now; and the session's own
-  plan under a label that names nobody ("Next: run `/code-review` on the diff, then merge.") is
-  held, since "To plan it: type `/plan-lite`" has the same shape and is a hand over.
+  Left as built, each pinned by a test named for what it does today, and put to Dan: a project
+  folder of one word after "your next step is to use" is held; a loose time ("at your
+  convenience", "before the next build") is held as now; the session's own plan under a label
+  that names nobody ("Next: run `/code-review` on the diff, then merge.") or said as imperatives
+  joined by ", then" ("Rebase first, then run `/code-review`, then merge.") is held, since "To
+  plan it: type `/plan-lite`" has the same shape and is a hand over; and a report worded
+  outside the shapes above ("The issue says: you have to type", "tell you that you have to
+  type") is held. So is a command put off in words the rules do not know: by a next sentence
+  whose verb is neither "can wait" nor "have put down" ("That is noted for the morning."), or
+  under a label that names the time among other words ("Something to look for in the
+  morning:"). Of the review's 72 replies that hand nothing over, 11 are held, 7 of them as on
+  main. Three of its hand overs are missed, as on main: "anything new" read as a standing rule,
+  a block fenced with tildes, and "later is too late" read as an offer.
+  The time the check takes is part of what it holds: a hook that never yields is stopped after
+  about six seconds and the turn ends unheld. The first build read "you should" only where "you"
+  led a clause, with a pattern that could start at every "and", "so" or "but" and took 7.7 to
+  8.8 seconds on 40,000 characters of them, against 16 to 20 ms on main. That pattern is gone,
+  the sentence a command sits in is found by reading back from it, and a case times 40,000
+  characters of each such word against plain words of the same length in the same run.
   The notice Claude Code writes itself when the account is out of usage needed no change. Claude
   Code runs its StopFailure hooks there in place of Stop (its own text for that event: "Fires
   instead of Stop when an API error (rate limit, auth failure, etc.) ended the turn"), and of the
@@ -2605,13 +2636,15 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   earlier counts held those turns only because a count reads the record; the count sets them
   apart now.
   Counted on 2026-11-28 over the personal MacBook's 134 interactive sessions of the 30 days
-  before (3,129 turns; the 45 ending in Claude Code's own notice set apart, neither check holding
-  any of them; 3,084 judged): 33 held by both the check as it was and the check as it is, none
-  newly held, 6 newly passed. Read one by one, 4 of the 6 hand the command over for the morning
-  or for when Dan is back and 2 offer it beside starting a new session. Of the 33 still held, 5
-  carry a loose time. Each moved turn is laid to the rule that moved it by running the new check
-  with that one rule put back: 1 to the wordings for later, 1 to another way in the same
-  sentence, 3 to the sentence right after, and 1 that two of those rules each pass.
+  before (3,137 turns; the 45 ending in Claude Code's own notice set apart, neither check holding
+  any of them; 3,092 judged): 35 held by both the check as it was and the check as it is, none
+  newly held, 4 newly passed. Read one by one, 2 of the 4 hand the command over for the morning
+  or for when Dan is back and 2 offer it beside starting a new session. Each moved turn is laid
+  to the rule that moved it by running the new check with that one rule put back: 1 to a time
+  right after the command, 1 to a new session in the same sentence, 1 to the next sentence
+  putting it off and 1 to the next sentence offering a new session. The first build passed 6:
+  the 2 it passed and this one holds are for the morning too, put off in the two wordings named
+  above as left held.
 - **A call the permission check refused is answered by a step pinned after it, or by one line**
   (#3842). On 2026-11-27 the permission check refused a call that set a row of Dan's to do list.
   The session rightly did not send it again, then told him in eight replies that the row was his

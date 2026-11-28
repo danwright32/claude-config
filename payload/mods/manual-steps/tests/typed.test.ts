@@ -3,6 +3,7 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { apartFromTyped, onCard, typedCommands } from '../hooks/typed.ts'
 import { waitingPhrase } from '../hooks/waiting.ts'
 import type { StepsCard } from '../types/index.d.ts'
+import { HELD, PASSED, REPLIES, type Reply } from './typed-replies.ts'
 
 // #3652: a slash command Dan has to type himself, handed over in a reply, is a manual step like any
 // other, and the card is what keeps it in front of him. Only a command HANDED to him counts: one
@@ -184,8 +185,24 @@ describe('typedCommands, the misreads of #3865', () => {
     expect(typedCommands('The queued compact cannot run but you have to type `/compact` before the next turn.')).toEqual(['/compact'])
     expect(typedCommands("I can't type slash commands, so you'll have to run `/reload-plugins`.")).toEqual(['/reload-plugins'])
   })
-  test('as built today, "you have to" after an opening clause with no comma is missed', () => {
-    expect(typedCommands('Before I can go on you have to type `/compact`.')).toEqual([])
+  test('"you have to" and "you must" are held however the sentence opens, with or without a comma', () => {
+    expect(typedCommands('Before I can go on you have to type `/compact`.')).toEqual(['/compact'])
+    expect(typedCommands('After the merge you must run `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands("For this to load you'll have to run `/reload-plugins`.")).toEqual(['/reload-plugins'])
+  })
+  test('"that", "why" and "said" before "you must" are a report only in the wordings of one', () => {
+    expect(typedCommands('The upshot is that you must run `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('I cannot type slash commands, which is why you must run `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('As I said you must run `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('The guide explains why you should run `/sync-config` on both Macs.')).toEqual([])
+    expect(typedCommands('The second review found that you must type `/reload-plugins` twice on that build.')).toEqual([])
+    expect(typedCommands('I told the builder that you should run `/reload-plugins` only after the merge.')).toEqual([])
+  })
+  test('a suggestion with "should" that names a moment to type it is held', () => {
+    expect(typedCommands('I think you should run `/reload-plugins` now.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('This session is long enough that you should type `/compact` right away.')).toEqual(['/compact'])
+    // "Think" and "enough that" excuse "should", never "must" or "have to".
+    expect(typedCommands('I think you have to run `/reload-plugins`.')).toEqual(['/reload-plugins'])
   })
 
   test('"is yours:" followed by a choice between commands passes', () => {
@@ -197,10 +214,24 @@ describe('typedCommands, the misreads of #3865', () => {
     expect(typedCommands('The next step is yours: `/plan-council`.')).toEqual(['/plan-council'])
     expect(typedCommands('The next step is yours: `/plan-council` with the brief below.')).toEqual(['/plan-council'])
   })
+  test('"is yours:" followed by one command is held whatever is said of it, and so are two commands that are two steps', () => {
+    expect(typedCommands('The last step is yours: `/reload-plugins` will load the new guard.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('The choice is yours: `/compact`.')).toEqual(['/compact'])
+    expect(typedCommands('The next two steps are yours: `/compact`, then `/reload-plugins`.')).toEqual(['/compact'])
+    // "Or" between two commands is a choice under any label.
+    expect(typedCommands('Next is yours: `/plan-lite` for a quick plan or `/plan-council` for the panel.')).toEqual([])
+  })
 
-  test('a label that says the session will do the work is its own, whatever it says of Dan', () => {
+  test('a label naming what follows as the session\'s own work is its own, whatever it said of Dan before that', () => {
     expect(typedCommands('After you approve the plan I will do two things: run `/code-review` on the diff and merge it.')).toEqual([])
     expect(typedCommands('What I will do for you next:\n1. Run `/code-review` on the diff.')).toEqual([])
+  })
+  test('a label that says "I will" and then what Dan does hands the command to him', () => {
+    expect(typedCommands('I will keep going after you do one thing: type `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('What I will do after you have done your part: type `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    // "I will" of something other than the list that follows names no work of the session's there.
+    expect(typedCommands("While I'll watch the build for you: run `/reload-plugins`.")).toEqual(['/reload-plugins'])
+    expect(typedCommands('I ask two things:\n1. Run `/reload-plugins`.\n2. Tell me what the band shows.')).toEqual(['/reload-plugins'])
   })
   test('as built today, the session\'s own plan under a label that names nobody is held', () => {
     expect(typedCommands('Next: run `/code-review` on the diff, then merge.')).toEqual(['/code-review'])
@@ -216,6 +247,7 @@ describe('typedCommands, the misreads of #3865', () => {
   test('an imperative after ", then" in a sentence of imperatives is held', () => {
     expect(typedCommands('Close the other tab, then type `/compact`.')).toEqual(['/compact'])
     expect(typedCommands('Run `/reload-plugins`, then type `/compact`.')).toEqual(['/reload-plugins', '/compact'])
+    expect(typedCommands('Close the other tab, and then type `/compact`.')).toEqual(['/compact'])
   })
   test('", then" after the session\'s own work, or after a condition, passes', () => {
     expect(typedCommands("I'll merge it, then run `/code-review`.")).toEqual([])
@@ -240,6 +272,8 @@ describe('typedCommands, the misreads of #3865', () => {
     expect(typedCommands('The route check is fixed. Paste this to plan the rest:\n```\n/plan-council Plan the rest\n```')).toEqual(['/plan-council'])
     expect(typedCommands('You typed this a minute ago:\n\n```\n/compact\n```')).toEqual([])
     expect(typedCommands('Paste the first half. You ran this one already:\n\n```\n/compact\n```')).toEqual([])
+    // An offer in the sentence before says nothing of the block either.
+    expect(typedCommands('You could do the rest by hand. Paste this:\n\n```\n/goal clear\n```')).toEqual(['/goal'])
   })
   test('a list under a line saying what the session needs is Dan\'s, and one under what it did or will do is its own', () => {
     expect(typedCommands('I need two things:\n1. Run `/reload-plugins`.\n2. Tell me what the band shows.')).toEqual(['/reload-plugins'])
@@ -263,6 +297,32 @@ describe('typedCommands, the misreads of #3865', () => {
     expect(typedCommands("When you're back, run `/reload-plugins`.")).toEqual([])
     expect(typedCommands('Type `/reload-plugins` tomorrow.')).toEqual([])
     expect(typedCommands('For the morning, paste this:\n\n```\n/plan-council Plan the import\n```')).toEqual([])
+    expect(typedCommands('Run `/sync-config` on the work MacBook tomorrow.')).toEqual([])
+    expect(typedCommands('Type `/reload-plugins` in the morning and the new band will show.')).toEqual([])
+    expect(typedCommands('Paste this tomorrow:\n\n```\n/plan-council Plan the import\n```')).toEqual([])
+  })
+  test('a word meaning at once beside a time for later is held', () => {
+    expect(typedCommands('For the morning: run `/reload-plugins` now.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Type `/compact` tonight when you are back.')).toEqual(['/compact'])
+    expect(typedCommands("When you're back, run `/reload-plugins` first.")).toEqual(['/reload-plugins'])
+    expect(typedCommands('For the morning, paste this now:\n\n```\n/plan-council Plan the import\n```')).toEqual(['/plan-council'])
+    // Each of two commands is judged by its own words: the one for tomorrow passes.
+    expect(typedCommands('Run `/sync-config` tomorrow and `/compact` now.')).toEqual([])
+    expect(typedCommands('Run `/sync-config` tomorrow, then type `/compact` now.')).toEqual(['/compact'])
+  })
+  test('a time that does not end the words right after the command is said of something else, and held', () => {
+    expect(typedCommands('Run `/reload-plugins` in the morning-report tab.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/compact` in the session that ends tomorrow.')).toEqual(['/compact'])
+    expect(typedCommands('Run `/reload-plugins` or lose the fix by tomorrow.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/reload-plugins` so the guard is live in the morning.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/compact` since the long run starts tomorrow.')).toEqual(['/compact'])
+    expect(typedCommands('Run `/reload-plugins` before you go, then when you get back the band will be there.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Type this in the morning session tab:\n\n```\n/reload-plugins\n```')).toEqual(['/reload-plugins'])
+  })
+  test('a label that says more than the time is no time for later, and held', () => {
+    expect(typedCommands('Tomorrow is too late: run `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Before the morning sync: run `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Your next step for the morning sync is `/sync-config`.')).toEqual(['/sync-config'])
   })
   test('a time said in the reason for the command, or in telling what happened, is not when to type it', () => {
     expect(typedCommands('Run `/reload-plugins` to load the guard I merged in the morning.')).toEqual(['/reload-plugins'])
@@ -282,14 +342,28 @@ describe('typedCommands, the misreads of #3865', () => {
     expect(typedCommands('Type `/compact` now. The merge queue can wait for the morning.')).toEqual(['/compact'])
     expect(typedCommands('Type `/compact` now. It is the only way to shrink this session.')).toEqual(['/compact'])
     expect(typedCommands('Type `/compact` now.\n\nThat list is for the morning.')).toEqual(['/compact'])
+    expect(typedCommands('Run `/reload-plugins`. This cannot wait for the morning.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/reload-plugins`. It can wait no longer.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/reload-plugins`. This branch can wait.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/reload-plugins`. Do it before the review, and that can wait.')).toEqual(['/reload-plugins'])
+    // The command's own sentence says now, which the next sentence cannot take back.
+    expect(typedCommands('Type `/compact` now. It can wait for the morning.')).toEqual(['/compact'])
   })
   test('another way offered in the next sentence makes the command an offer, and a consequence there does not', () => {
     expect(typedCommands('To free some room, type `/compact`. Or open a new session and carry on from the note.')).toEqual([])
     expect(typedCommands('Type `/compact` now. Or the next request will fail.')).toEqual(['/compact'])
+    expect(typedCommands('Type `/compact`. Or leave it and this session ends at the limit.')).toEqual(['/compact'])
+    expect(typedCommands('Run `/reload-plugins`. Or start with the pull, both are needed.')).toEqual(['/reload-plugins'])
   })
   test('a command handed over for a moment that is Dan\'s to choose today is held', () => {
     expect(typedCommands("When you're ready, start `/plan-council` with this brief:")).toEqual(['/plan-council'])
     expect(typedCommands('The old area check is still loaded, so run `/reload-plugins` when you get a moment.')).toEqual(['/reload-plugins'])
+  })
+  test('as built today, a command put off in words the rules do not know is held', () => {
+    // The next sentence puts it off with a verb other than "can wait" and "have put down".
+    expect(typedCommands('The old copy stays loaded until you run `/reload-plugins`. That is noted for the morning.')).toEqual(['/reload-plugins'])
+    // The label names the time among other words.
+    expect(typedCommands('Something to look for in the morning: the old copy stays loaded until you run `/reload-plugins`.')).toEqual(['/reload-plugins'])
   })
   test('as built today, a loose time is read as now and held', () => {
     expect(typedCommands('Run `/reload-plugins` at your convenience.')).toEqual(['/reload-plugins'])
@@ -298,6 +372,82 @@ describe('typedCommands, the misreads of #3865', () => {
   test('a command offered beside another way passes, and one with its consequence after "or" is held', () => {
     expect(typedCommands('Run `/compact`, or start a fresh session.')).toEqual([])
     expect(typedCommands('Run `/reload-plugins` or the new guard stays unloaded.')).toEqual(['/reload-plugins'])
+  })
+  test('"or" with anything but a new session is no other way, and neither is a new session the command is typed in', () => {
+    expect(typedCommands('Run `/reload-plugins`, or keep seeing the old error on every edit.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/reload-plugins`, or leave me stuck here.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/reload-plugins` here, or open a new tab and run it there.')).toEqual(['/reload-plugins'])
+    // Before the command, "or" is said of something else.
+    expect(typedCommands('Stay here or open a new session, as you like: run `/reload-plugins` in it.')).toEqual(['/reload-plugins'])
+    // The words that introduce a block cannot name another way: the block is what they hand over.
+    expect(typedCommands('Paste this, or open a new session:\n\n```\n/reload-plugins\n```')).toEqual(['/reload-plugins'])
+  })
+})
+
+// A hook that never yields is stopped after about six seconds and the turn ends unheld, so the time
+// the check takes is part of what it holds. Each run is judged against plain words of the same
+// length timed in the same run, never against a fixed time, which would measure the Mac's load.
+describe('typedCommands, the cost of a long reply', () => {
+  const fastest = (text: string): number => {
+    let best = Number.POSITIVE_INFINITY
+    for (let i = 0; i < 3; i++) {
+      const t0 = performance.now()
+      typedCommands(text)
+      best = Math.min(best, performance.now() - t0)
+    }
+    return best
+  }
+  const of = (unit: string): string => unit.repeat(Math.ceil(40_000 / unit.length))
+  for (const unit of ['and ', 'so ', 'but ', 'then ', ', so ', ', then ', 'and you must run ', 'you should ', 'or ', 'it can wait ', 'tomorrow ', 'is yours: ']) {
+    test(`40,000 characters of "${unit}" cost no more than twenty times plain words of that length`, () => {
+      const plain = fastest(of('word '))
+      expect(fastest(of(unit)) / plain).toBeLessThan(20)
+    })
+  }
+})
+
+// The review of pull request 3889. A miss (a command to type now left in prose) is the fault the
+// check exists to stop, and a false hold costs one exchange. So a rule that lets a reply pass has to
+// recognise the harmless shape, and every reply of tests/typed-replies.ts that hands a command over
+// to type now and was held before #3865 has a test of its own here.
+const held = ([, kind, , want, text]: Reply): boolean => {
+  const got = typedCommands(text)
+  return kind === 'H' ? want.every(c => got.includes(c)) : got.length > 0
+}
+const ids = (replies: readonly Reply[]): string[] => replies.map(r => r[0])
+
+describe('typedCommands, the table of invented replies', () => {
+  test('the table has 155 commands to type now, 143 of them held before #3865, 72 replies that hand nothing over and 11 for later', () => {
+    expect(REPLIES.filter(r => r[1] === 'H').length).toBe(155)
+    expect(REPLIES.filter(r => r[1] === 'H' && r[2] === HELD).length).toBe(143)
+    expect(REPLIES.filter(r => r[1] === 'N').length).toBe(72)
+    expect(REPLIES.filter(r => r[1] === 'L').length).toBe(11)
+    expect(new Set(ids(REPLIES)).size).toBe(REPLIES.length)
+  })
+  for (const [id, , , want, text] of REPLIES.filter(r => r[1] === 'H' && r[2] === HELD)) {
+    test(`${id}, a command to type now that was held before #3865, is still held`, () => {
+      const got = typedCommands(text)
+      expect(want.filter(c => !got.includes(c))).toEqual([])
+    })
+  }
+  test('of the 12 commands to type now that were missed before #3865, nine are held and three are still missed, as built today', () => {
+    const missedBefore = REPLIES.filter(r => r[1] === 'H' && r[2] === PASSED)
+    expect(ids(missedBefore.filter(held))).toEqual(['H094', 'H108', 'H111', 'H123', 'H124', 'H125', 'H126', 'H127', 'H148'])
+    // "anything new" read as a standing rule, a block fenced with tildes, and "later is too late".
+    expect(ids(missedBefore.filter(r => !held(r)))).toEqual(['H023', 'H112', 'H149'])
+  })
+  test('a command handed over for later or beside a new session passes, and a loose time is held', () => {
+    const later = REPLIES.filter(r => r[1] === 'L')
+    expect(ids(later.filter(held))).toEqual(['L10'])
+  })
+  test('as built today, 11 of the 72 replies that hand nothing over are held, each at the cost of one exchange', () => {
+    const nothing = REPLIES.filter(r => r[1] === 'N')
+    // Held before #3865 as well: a plan under a label naming nobody, a rule or a help text quoted
+    // with no quote marks, and a hand over the session says it made.
+    expect(ids(nothing.filter(r => r[2] === HELD && held(r)))).toEqual(['N26', 'N29', 'N39', 'N44', 'N49', 'N52', 'N70'])
+    // Held since #3865: ", then" after imperatives that are the session's own plan, and a project
+    // folder of one word after "your next step is to use".
+    expect(ids(nothing.filter(r => r[2] === PASSED && held(r)))).toEqual(['N11', 'N25', 'N67', 'N68'])
   })
 })
 
