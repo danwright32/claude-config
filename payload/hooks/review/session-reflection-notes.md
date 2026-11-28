@@ -57,8 +57,8 @@ holds nothing, and one with the session's own work waiting behind it does.
 The line also ended "Not finished: say nothing of it", which hid the decision: a box held back on
 purpose and a box forgotten looked the same to Dan. A session that holds the box now says in one
 line what it waits on, on the turn it first holds it and again only when that changes, so the line
-is not repeated every turn. `tests/test-goal-box-wording.sh` holds this file's line, the issue
-review's last step and the mod's own words to the one rule.
+is not repeated every turn. `tests/test-goal-box-wording.sh` holds the reflection's EITHER WAY
+line, the issue review's last step and the mod's own words to the one rule.
 
 ## Recording that the review was answered
 The box could show before the review's picker, where more work gets chosen: on 2026-11-27 a session

@@ -6050,9 +6050,9 @@ file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.
 - **A box held back is said** (#3864). A session that holds the box for work of its own says in one
   line what the box waits on, on the turn it first holds it and again only when that changes. With
   silence, a box held on purpose and a box forgotten look the same to Dan; said every turn, the
-  line would be noise. The words are one constant (`HELD_SAY`), used by the description and by each
-  prompt of the mod that asks for the box, and both end of turn review instructions ask for it.
-  It is a rule in a prompt: nothing reads whether the line was written.
+  line would be noise. The words are one constant (`HELD_SAY` in `hooks/box.ts`) that the tool's
+  description is built from, and both end of turn review instructions ask for the line too. It is
+  a rule in a prompt: nothing reads whether the line was written.
 - **A steps card worked through** (#3864). The end of turn review asks for the box while a card's
   steps are still open, so the turn the last step is recorded on is often the one the work
   finishes on, after that review has run. Manual steps keeps a record in its state (`emptied`)

@@ -12008,7 +12008,7 @@ while the session has work of its own waiting behind it. The tool refuses for no
 since only the session can tell whose a step is. A session that holds the box back for work of
 its own says in one line what the box waits on, on the turn it first holds it and again only when
 that changes, so Dan can tell a box held on purpose from one forgotten (`NOT_HELD` and `HELD_SAY`
-in `hooks/box.ts`, which the description and the mod's prompts for the box are built from;
+in `hooks/box.ts`, which the tool's description is built from;
 `tests/test-goal-box-wording.sh` holds the two end of turn review instructions to the same rule).
 Refused, naming what, while a `/goal` is still set or cannot be
 read, an agent the session started is still running, is it live's record shows a merge owed its card

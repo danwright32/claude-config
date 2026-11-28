@@ -5,8 +5,8 @@
 # The rule has one home in code, payload/mods/goal-box/hooks/box.ts: NOT_HELD names what does not
 # hold the box (a step only Dan can take, a check /check-later has scheduled, work he declined in a
 # picker), and HELD_SAY is the one line a session gives when it holds the box for work of its own.
-# The tool's description and the mod's prompts are built from those two, and the mod's own tests
-# hold them. The two end of turn review instructions are files a session reads beside the tool,
+# The tool's description is built from those two, and the mod's own tests hold it and the mod's
+# prompts. The two end of turn review instructions are files a session reads beside the tool,
 # payload/hooks/review/session-reflection.md and issue-review.md, written in Dan's voice, so they
 # cannot be built from the constants. This suite holds them to the same rule, and fails when:
 #

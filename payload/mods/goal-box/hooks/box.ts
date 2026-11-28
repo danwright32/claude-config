@@ -38,12 +38,12 @@ export const NOT_HELD =
 export const HELD_SAY = 'say in one line what the box is waiting on, unless you have said so already and it has not changed'
 
 /**
- * When each prompt of this mod that asks for the box says to call it (#3864): only the session's
- * own part of the request has to be finished, so what is left for Dan alone is not counted.
+ * When a prompt asking whether the work is finished says to call the tool (#3864): only the
+ * session's own part of the request has to be finished, so what is left for Dan alone is not counted.
  */
 export const YOURS_DONE = 'every part of what Dan asked for that is yours to do is finished'
 
-/** How each of those prompts ends: what to do when part of the work is still the session's. */
+/** How such a prompt ends: what to do when part of the work is still the session's. */
 export const heldTail = (): string => `If part of it is still yours to do, do not call it, and ${HELD_SAY}.`
 
 export const DESCRIPTION = [

@@ -2417,7 +2417,7 @@ test("no review at the turn's end: the session is asked once to call again, and 
   expect(asked()[0]?.origin).toMatchObject({ kind: 'plugin' })
   expect(asked()[0]?.text).toMatch(/was refused until the end of turn review had run and Dan had answered it\. That turn has ended and no box was shown since\./)
   expect(asked()[0]?.text).toContain(`call ${TOOL} again now`)
-  // #3864: a box held back is said in one line, where this message once asked for silence, and
+  // #3864: a box held back must be said in one line, so Dan can tell it from one forgotten, and
   // only the session's own part of the request has to be finished.
   expect(asked()[0]?.text.endsWith(HELD_TAIL)).toBe(true)
   expect(asked()[0]?.text).toContain(`If ${YOURS_DONE}, call ${TOOL} again now`)
