@@ -121,6 +121,13 @@ has "and names that limit" "$out" "at=output"
 has "and prints no more than that limit" "$out" "over=0"
 has "and what it never printed is not counted" "$out" "refused=0"
 has "and still answers with what the window held" "$out" "texts=1"
+# The line saying it stopped is inside the limit too, wherever the walk's last record ends: nine
+# limits ten bytes apart, so that some leave less room than that line takes.
+overs=""
+for n in 600 610 620 630 640 650 660 670 680; do
+  case " $(read_turn "$W/far.jsonl" 3000 1000000 5000 "$n") " in *" at=output over=0 "*) ;; *) overs="$overs $n" ;; esac
+done
+check "the line saying it stopped is counted in the limit, at nine limits ten bytes apart" "$([ -z "$overs" ] && echo ok || echo "stopped and inside the limit wanted, not so at:$overs")"
 # The window's records come first: where they alone pass the limit, the walk back prints nothing.
 out="$(read_turn "$W/far.jsonl" 3000 1000000 5000 10)"
 has "where the window's records alone pass the limit, the reader says it stopped" "$out" "at=output"
