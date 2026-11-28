@@ -3030,8 +3030,8 @@ test("the review's last step is one command whatever the transcript's path holds
 // ---- What does not hold the box, and what a session says when it holds it (#3864) ----
 // What only Dan can do holds no box: a draft he sends, a check /check-later has scheduled and work
 // he declined in a picker are not the session's unfinished work, and the description says so. A
-// session that holds the box for work of its own is asked for one line, in every prompt, because
-// silence there reads to Dan the same as a box forgotten.
+// session that holds the box for work of its own is asked for one line, because silence there
+// reads to Dan the same as a box forgotten.
 const HELD_TAIL = 'If part of it is still yours to do, do not call it, and say in one line what the box is waiting on, unless you have said so already and it has not changed.'
 const YOURS_DONE = 'every part of what Dan asked for that is yours to do is finished'
 
