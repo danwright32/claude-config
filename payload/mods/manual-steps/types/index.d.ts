@@ -101,8 +101,9 @@ export type StepsEmptied = {
   at: number
   /**
    * How many of the card's steps were done in this session, checked by Claude or taken on Dan's
-   * word, and were this session's own or name no session. None when every step left was taken off
-   * undone, was found done when pinned, or was another session's or another mod's.
+   * word, and were this session's own or name no session. While this session's id cannot be read,
+   * a step naming any session but an earlier one counts too. None when every step left was taken
+   * off undone, was found done when pinned, or was another session's or another mod's.
    */
   done: number
 }

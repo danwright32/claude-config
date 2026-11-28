@@ -345,6 +345,9 @@ const sendHeld = async ($: EngineInterface, id: string, what: string, text: stri
   }
 }
 
+/** What a turn end's question about shipped work came to: it entered, it was tried and did not enter, or there was nothing to ask. */
+type AskedDone = 'sent' | 'failed' | 'none'
+
 /**
  * #2523: with no /goal, asks the session once per request of Dan's (a message he typed, or since
  * #3843 work he picked in a picker) whether the work is finished, when an is it live card was made
@@ -358,32 +361,32 @@ const sendHeld = async ($: EngineInterface, id: string, what: string, text: stri
  * The end of turn review's record is asked first, through `record` (endRecord): a review handed
  * over this turn that Dan has not answered spends the request's question unsent.
  */
-const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<boolean> => {
+const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<AskedDone> => {
   const since = (await $.state.get(requestAtRef)).value
-  if (since === undefined) return false
+  if (since === undefined) return 'none'
   const prompts = (await $.state.get(promptsRef)).value ?? 0
   const asked = await $.state.get(askedDoneRef)
-  if (asked.value !== undefined && asked.value >= prompts) return false
+  if (asked.value !== undefined && asked.value >= prompts) return 'none'
   const facts = mergeFactsOf((await $.state.get(owedRef)).value as unknown, (await $.state.get(verdictsRef)).value as unknown)
   if ('why' in facts) {
     debug($, `is it live's record could not be read (${facts.why}), so whether work shipped since Dan's last message is not known and the session was not asked about the box`)
-    return false
+    return 'none'
   }
   const shown = (await $.state.get(shownRef)).value ?? []
-  if (shown.some(s => s.prompts >= prompts)) return false
-  if (!cardedSince(facts.verdicts, since, Math.max(-Infinity, ...shown.map(s => s.at)))) return false
+  if (shown.some(s => s.prompts >= prompts)) return 'none'
+  if (!cardedSince(facts.verdicts, since, Math.max(-Infinity, ...shown.map(s => s.at)))) return 'none'
   const holds = await boxHolds($)
-  if (holds.length) return false
+  if (holds.length) return 'none'
   const end = await record()
-  if (!(await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet) return false
+  if (!(await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet) return 'none'
   if (end.unanswered) {
     debug($, `${UNANSWERED}, so the session is not asked whether the work is finished for this request`)
-    return false
+    return 'none'
   }
   const failed = await sendHeld($, 'ask-done', 'the prompt asking whether the work is finished', askDoneText())
   if (failed === undefined) {
     if (end.unread !== undefined) $.ui.log(promptedUnreadText(end.unread))
-    return true
+    return 'sent'
   }
   for (let i = 0; i < 10; i++) {
     const held = await $.state.get(askedDoneRef)
@@ -391,7 +394,7 @@ const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>): 
     if ((await $.state.set(askedDoneRef, asked.value ?? -1, { ifVersion: held.version })).isSet) break
   }
   $.ui.log(`Work shipped since Dan's last message, but the session could not be asked whether the work is finished (${failed}); it is asked again at the next turn end.`)
-  return false
+  return 'failed'
 }
 
 // ---- The steps card worked through (#3864) ----
@@ -1149,8 +1152,11 @@ export const register: Register = on => {
     if (goal.state === 'set') await spendCardNow($)
     if (goal.state !== 'none') return r
     if (!goal.met) {
-      if (await askIfDone($, record)) await spendCardNow($)
-      else await askAfterCard($, record)
+      // A question that was tried and did not enter is tried again at the next turn end, and the
+      // card's record waits for that one: a second prompt for the same call is not sent behind it.
+      const askedDone = await askIfDone($, record)
+      if (askedDone === 'sent') await spendCardNow($)
+      else if (askedDone === 'none') await askAfterCard($, record)
       return r
     }
     // A met goal's prompt is not spent by an unanswered review, as the other two are: its box is the

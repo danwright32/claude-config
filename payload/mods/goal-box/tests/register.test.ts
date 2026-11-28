@@ -3269,6 +3269,22 @@ test("one prompt a turn end: where work shipped too, only that question is sent,
   expect(cardAsks(submitted)).toEqual([])
 })
 
+test("one prompt a turn end: a question about shipped work that could not be sent is not followed by the card's prompt, and stands in for it once it is sent (#3864, #2523)", withAll, async ($, on) => {
+  const { submitted, logs } = world(on, { stepsEmptied: EMPTIED, verdicts: CARDED, submitFails: ['drop'] })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+  expect(cardAsks(submitted)).toEqual([])
+  expect(logs.filter(l => /could not be asked/.test(l))).toHaveLength(1)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toHaveLength(1)
+  expect(cardAsks(submitted)).toEqual([])
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+})
+
 test("one prompt a turn end: the message after a refused call stands in for the card's prompt too (#3864, #3843)", withAll, async ($, on) => {
   const { w, submitted } = world(on)
   await start($)
