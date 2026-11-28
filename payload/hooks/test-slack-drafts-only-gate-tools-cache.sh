@@ -371,22 +371,33 @@ if [ -n "$REPO2854" ]; then
 else
   printf 'SUITE-PART-UNMEASURED %s\n' "#2538 claude-sync, load-window and the claude-sync suite: this suite is not in a claude-config checkout"
 fi
-# A machine too slow for the gate's seconds, stood in for by a copy of the gate whose budget is a
-# thousandth of a second, so the run out is seen on every machine and never waited for. Each case
-# is run in a subshell with counts of its own, so what it prints and counts is read here and is no
-# part of this suite's result.
+# A machine too slow for the gate's seconds, stood in for by a copy of the gate with no seconds at
+# all: its budget is spent by the first file it reads, on any machine and however often that file
+# has been judged. Its watchdog stays where the gate's is, so the copy has as long as the gate has
+# to say it ran out. Each case is run in a subshell with counts of its own, so what it prints and
+# counts is read here and is no part of this suite's result.
 slow3863="$T/slow-3863"
 mkdir -p "$slow3863" && cp "$HOOK" "$slow3863/" && cp -R "$DIR/lib" "$slow3863/lib" \
-  && sed 's/^BUDGET_SECONDS = 11$/BUDGET_SECONDS = 0.001/' "$DIR/slack_drafts_only_gate.py" > "$slow3863/slack_drafts_only_gate.py"
-if grep -q '^BUDGET_SECONDS = 0\.001$' "$slow3863/slack_drafts_only_gate.py" 2>/dev/null; then
+  && sed -e 's/^BUDGET_SECONDS = 11$/BUDGET_SECONDS = 0/' -e 's/^HARD_STOP_SECONDS = BUDGET_SECONDS + 2$/HARD_STOP_SECONDS = 13/' \
+       "$DIR/slack_drafts_only_gate.py" > "$slow3863/slack_drafts_only_gate.py"
+if [ "$(grep -c -e '^BUDGET_SECONDS = 11$' -e '^HARD_STOP_SECONDS = BUDGET_SECONDS + 2$' "$DIR/slack_drafts_only_gate.py" 2>/dev/null)" = 2 ] \
+    && [ "$(grep -c -e '^BUDGET_SECONDS = 0$' -e '^HARD_STOP_SECONDS = 13$' "$slow3863/slack_drafts_only_gate.py" 2>/dev/null)" = 2 ]; then
   HOOK="$slow3863/slack-drafts-only-gate.sh" run_bash "bash $DIR/lib/issue-spool.sh"
-  refused "the copy of the gate with a budget of a thousandth of a second refuses an everyday tool (#3863)"
+  refused "the copy of the gate with no seconds refuses an everyday tool (#3863)"
   says "and that refusal is the gate running out of time, the state the cases below are about (#3863)" "ran out of time judging this call"
   got="$(pass=0; fail=0; HOOK="$slow3863/slack-drafts-only-gate.sh"; everyday_tool "bash $DIR/lib/issue-spool.sh" "a tool on a slow machine"; echo "counted $pass $fail")"
   case "$got" in
     "SUITE-PART-UNMEASURED #3863 a tool on a slow machine: "*"ran out of its seconds"*$'\n'"counted 1 0") got=ok ;;
   esac
   check "an everyday tool the gate ran out of its seconds on is judged again on the step clock, passes on that verdict, and says in one line that the seconds were not measured (#3863)" "$got"
+  # The copy runs out on a file however often the gate has judged it, so no case here rests on
+  # being a path's first judgement.
+  HOOK="$slow3863/slack-drafts-only-gate.sh" run_bash "bash $T/sv/posts/lib/x.sh"; twice="$RC ${ERR:0:90}"
+  HOOK="$slow3863/slack-drafts-only-gate.sh" run_bash "bash $T/sv/posts/lib/x.sh"; twice="$twice | $RC ${ERR:0:90}"
+  case "$twice" in
+    "2 BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call"*" | 2 BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call"*) twice=ok ;;
+  esac
+  check "the copy of the gate runs out on a script that posts each time it is judged, the second time as the first (#3863)" "$twice"
   # The failure path: running out is no pass. A script that posts is refused on the step clock too,
   # and the case fails on that refusal.
   got="$(pass=0; fail=0; HOOK="$slow3863/slack-drafts-only-gate.sh"; everyday_tool "bash $T/sv/posts/lib/x.sh" "a script that posts on a slow machine"; echo "counted $pass $fail")"
@@ -395,7 +406,7 @@ if grep -q '^BUDGET_SECONDS = 0\.001$' "$slow3863/slack_drafts_only_gate.py" 2>/
   esac
   check "a script that posts still fails the case after the gate ran out of its seconds on it, on the step clock's own refusal (#3863)" "$got"
 else
-  check "a copy of the gate with a budget of a thousandth of a second is made (#3863)" "none was made in $slow3863, so the run out was never seen: either copying the gate there failed, or $DIR/slack_drafts_only_gate.py has no line 'BUDGET_SECONDS = 11' to shorten"
+  check "a copy of the gate with no seconds is made (#3863)" "none was made in $slow3863, so the run out was never seen: either copying the gate there failed, or $DIR/slack_drafts_only_gate.py no longer has the lines 'BUDGET_SECONDS = 11' and 'HARD_STOP_SECONDS = BUDGET_SECONDS + 2' this suite rewrites"
 fi
 # And a refusal that is not the gate running out is never judged again: with the gate as it is, a
 # script that posts fails the case at once and nothing is called unmeasured.
