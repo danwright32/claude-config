@@ -24,7 +24,7 @@ export const DESCRIPTION = [
   "Shows Dan the green Goal accomplished box: the goal, then what shipped. Call it once, in the turn where the work Dan asked for in this session is finished: every part of his request done, every pull request merged with the merge confirmed, every deploy confirmed live.",
   'With a /goal set, do not call it yourself: when the goal\'s own check finds it met, you are told to call it.',
   'goal: what Dan asked for, in a few words of his own terms. shipped: one short line per thing that shipped, issues closed and pull requests merged and live, each naming its number (for example "#1563 closed: Goal accomplished box", "PR #1700 merged and live").',
-  'It refuses while anything is still in flight (an agent still running, a merge or deploy not confirmed, a pull request this session touched still open), naming what; settle that and call it again. It shows at most once per request.',
+  'It refuses while anything is still in flight (an agent still running, a merge or deploy not confirmed, a pull request this session touched still open), naming what; settle that and call it again. It shows once per thing Dan asked for: once for his message, and again once work he then picked in a picker is finished (an answer you did no work after is not a new request).',
 ].join(' ')
 
 export const SCHEMA = {
@@ -204,8 +204,10 @@ export type Decision = { show: { kind: GoalBoxShown['kind']; key: string; goal: 
  * reading of the session's /goal; `shown` the boxes already shown this session; `holds` what is
  * still in flight. A /goal still set is never shown over (its own check decides); a goal met and not
  * yet shown is shown under its condition; otherwise the box is for the request Dan made, which the
- * claim on the session's record allows once per message of his (register.ts, the one place that
- * rule is kept, since it must be judged and written in one step).
+ * claim on the session's record allows once per request of his (register.ts, the one place that
+ * rule is kept, since it must be judged and written in one step). `prompts` counts his requests: each
+ * message he typed, and each answer he gave in a picker that the session then did work after
+ * (#3843, request.ts).
  */
 export const decide = (q: { goal: ModKitGoal; input: BoxInput; shown: GoalBoxShown[]; prompts: number; holds: Holds }): Decision => {
   const { goal, input, shown, prompts, holds } = q
@@ -219,16 +221,22 @@ export const decide = (q: { goal: ModKitGoal; input: BoxInput; shown: GoalBoxSho
 /**
  * Whether is it live made a card since `since` (Dan's last message, ms): the one measured sign that
  * work shipped in this request (#2523). The verdicts are already held to their contract's shape by
- * mergeFactsOf; whether the deploy is settled is the holds' question, not this one.
+ * mergeFactsOf; whether the deploy is settled is the holds' question, not this one. `boxedAt` is when
+ * the last box was shown, where one was (#3843): a box covers every card made before it, so a card
+ * no later than it says nothing of work Dan picked in a picker afterwards. His message's time stays
+ * the floor, so a picker answered mid turn, before any box, loses none of what shipped before it.
  */
-export const cardedSince = (verdicts: MergeFacts['verdicts'], since: number): boolean => Object.values(verdicts).some(v => v.at >= since)
+export const cardedSince = (verdicts: MergeFacts['verdicts'], since: number, boxedAt = -Infinity): boolean =>
+  Object.values(verdicts).some(v => v.at >= since && v.at > boxedAt)
 
 /**
  * What the session is told, with no /goal, when work shipped since Dan's last message, nothing is in
  * flight and no box was shown (#2523): the reflection's reminder can be folded away, this cannot.
+ * "For what he last asked for" since #3843: a box may have been shown since his message, for the part
+ * before he picked more work in a picker, and this is asked when none was shown for that work.
  */
 export const askDoneText = (): string =>
-  `GOAL ACCOMPLISHED? Since Dan's last message a pull request merged and its is it live card was made, nothing this session started is still in flight, and no Goal accomplished box was shown. If every part of what Dan asked for is finished, call ${TOOL} now with goal set to what he asked for and shipped listing what shipped, one short line each. If part of it is still to do, do not call it and say nothing of the box.`
+  `GOAL ACCOMPLISHED? Since Dan's last message a pull request merged and its is it live card was made, nothing this session started is still in flight, and no Goal accomplished box was shown for what he last asked for (his message, or work he has picked in a picker since). If every part of what Dan asked for is finished, call ${TOOL} now with goal set to what he asked for and shipped listing what shipped, one short line each. If part of it is still to do, do not call it and say nothing of the box.`
 
 /** What the session is told when its /goal's check finds it met: call the tool now. */
 export const askText = (condition: string): string =>
