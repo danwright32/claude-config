@@ -358,6 +358,15 @@ out="$(pre_payload "$REPO" "echo one \\
 two" | bash "$NOLIB/pr-review-push-gate.sh" 2>&1)"; rc=$?
 check_eq "#3739 and passes a command continued over a line that names no push" "0" "$rc"
 check_eq "#3739 saying nothing" "" "$out"
+# Neither reader on PATH: the same.
+NOREADER="$WORKDIR/noreader"; cp -R "$NOCLAUDE" "$NOREADER"; rm -f "$NOREADER"/jq "$NOREADER"/python3*
+out="$(pre_payload "$REPO" "git push" | PATH="$NOREADER" bash "$PUSH_GATE" 2>&1)"; rc=$?
+check_eq "a push gate with neither jq nor python3 refuses a push named whole" "2" "$rc"
+check "and says a reader is missing" "neither jq nor python3" "$out"
+out="$(pre_payload "$REPO" "echo one \\
+two" | PATH="$NOREADER" bash "$PUSH_GATE" 2>&1)"; rc=$?
+check_eq "#3739 and passes a command continued over a line that names no push" "0" "$rc"
+check_eq "#3739 saying nothing" "" "$out"
 
 # 4e. the override: allowed, with a line saying it was skipped.
 reset_state
