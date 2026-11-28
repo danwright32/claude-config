@@ -238,7 +238,8 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
   const [handed, ...more] = r.args
   if (!handed || (more.length && !n.mods)) return 'it is handed more than the one folder it reads'
   if (!handed.path) return `${handed.word} cannot be read as the one folder it is handed`
-  // Neither reason names the word: it goes into the area check's log, and an argument can carry a credential.
+  // The reason names no word, as the one for a name that is no mod, further down, names none: it
+  // goes into the area check's log, and an argument can carry a credential.
   if (more.some(a => !MOD_NAME.test(a.word))) return 'after its folder it is handed a word that is no plain name of a mod in it (letters, digits, dots, dashes and underscores, starting with a letter or a digit)'
   const program = byValueNamed(command, n)
   if (program) return program
