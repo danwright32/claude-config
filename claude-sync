@@ -13387,7 +13387,7 @@ hold_write_rows(){
 # same instant would each write a record without the other's hold in it. Every change happens
 # under this lock, clearing an expired line included; a reading that finds only live holds never
 # takes it. SYNC_HOLD_LOCK_WAIT shortens the wait for the suite.
-hold_lock(){   # $1 = seconds to wait at most (optional; SYNC_HOLD_LOCK_WAIT, else ten)
+hold_lock(){   # $1 = seconds one holder may keep it before this gives up (optional; SYNC_HOLD_LOCK_WAIT, else ten)
   local max="${SYNC_HOLD_LOCK_WAIT:-10}"
   max="$(whole_above_zero "$max")" || max=10
   local want
@@ -13419,8 +13419,10 @@ hold_remaining(){
   rows="$(hold_rows "$now")"
   stale="$(printf '%s\n' "$rows" | awk -F '\037' '$1 != "live"' | grep -c . || true)"
   if [ -n "$rows" ] && [ "${stale:-0}" -eq 0 ]; then hold_live_left; return; fi
-  # One second at most, not the ten a change waits: this is reached from status, which is never
-  # meant to block, and from the watcher's send. Clearing can wait for the next reading.
+  # One second, not the ten a change waits: this is reached from status, which is never meant to
+  # block, and from the watcher's send. Clearing can wait for the next reading. The second is how
+  # long one holder may keep the lock (lib/pid-lock.sh, #3683), so this waits longer only while the
+  # lock is changing hands, which is several runs each changing the record in turn.
   hold_lock 1 || rc=$?
   [ "$rc" = 0 ] || { hold_live_left; return; }
   now="$(date +%s)"

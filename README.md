@@ -5161,7 +5161,10 @@ run), every number is refused, since those read alike and neither says the numbe
 `next-lesson` RESERVES the number it prints for ten minutes (claude-config#1148), so two sessions
 asking before either has written are given two numbers, and asking twice gives two answers. The
 reservations are one line each in `~/.claude/state/lesson-reservations.tsv` (number, band, when it
-lapses, the session that asked), written under a small lock of its own, never the sync lock. That
+lapses, the session that asked), written under a small lock of its own, never the sync lock. An ask
+gives up only when one other ask has kept that lock for ten seconds: the wait starts again each time
+the lock changes hands, so several sessions asking at once on a busy Mac queue rather than refuse
+(`hooks/lib/pid-lock.sh`, claude-config#3683). The reservations
 file is never synced, so a reservation cannot cross Macs. A reservation clears once its lesson is
 written in either copy, and one nobody uses lapses, after which its number is offered again since it
 was never published. `check-lessons` and a pull's renumber skip reserved numbers without reserving
@@ -13797,7 +13800,7 @@ any change to the hold record (#1863)
 
 </td><td>
 
-every other change to it, which waits up to ten seconds (`SYNC_HOLD_LOCK_WAIT`)
+every other change to it, which waits until one holder has kept it for ten seconds (`SYNC_HOLD_LOCK_WAIT`)
 
 </td><td>
 
