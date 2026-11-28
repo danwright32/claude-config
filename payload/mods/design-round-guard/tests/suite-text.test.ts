@@ -54,6 +54,8 @@ test('#3602: a helper that hands on what it was handed, in whatever form it name
 // payload/skills/disk-full/test-disk-full-skill.sh, held on 2026-11-25: its helper and its two
 // loops, whose words are commands the skill's text must hold, each looked for with grep inside a
 // command substitution.
+// The second loop's fourth word in the suite, a file's size and dates asked in the BSD form, is
+// left out: tests/test-stat-order.sh fails on that text in any file outside the disk skill.
 const DISK = [
   'pass=0',
   'fail=0',
@@ -65,7 +67,7 @@ const DISK = [
   '    "$(grep -qxF "$swap_cmd" <<< "$swap_code" && echo ok || echo "not a line in a block of the swap step")"',
   'done',
   "for want in 'python3 ~/.claude/hooks/lib/disk-writers.py' 'lsof +c 0 -n -P +L1' 'lsof -a -n -P -p <pid> +L1' \\",
-  "    \"stat -f 'size %z, links %l, last changed %Sm' /System/Volumes/Data/.fseventsd\" 'memory_pressure | tail -1'; do",
+  "    'memory_pressure | tail -1'; do",
   '  check "the writer step runs: $want" \\',
   '    "$(grep -qF -- "$want" <<< "$writer_code" && echo ok || echo "not in a block of the writer step")"',
   'done',
