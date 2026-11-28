@@ -3932,6 +3932,41 @@ test("a met /goal and a card, the review left unanswered in a turn that ended ab
   expect(seen).toEqual([WAITING_GOAL_LINE])
 })
 
+test("a met /goal whose own prompt was already sent, then a call refused until the review was answered and the review left unanswered: Dan is told in the request's line, since no prompt of the goal's is still to come, and the box is asked for once after his next message (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on, { goal: MET })
+  await start($)
+  await says($, 'Finish issue 1563')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  await turnStarts($, 't2')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/still to come/)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([WAITING_LINE])
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  w.review = reviewSays('none')
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET', 'OWED'])
+})
+
+test("a met /goal whose box was already shown, then a later request's call refused until the review was answered and the review left unanswered: Dan is told in the request's line, never the goal's (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on, { goal: MET })
+  await start($)
+  await says($, 'Finish issue 1563')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  await says($, 'And merge PR 1701')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/still to come/)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([WAITING_LINE])
+  expect(sentKinds(submitted)).toEqual([])
+})
+
 for (const [how, end] of [['with an answer', {}], ['aborted', ABORTED]] as [string, Record<string, unknown>][]) {
   test(`a met /goal whose box was refused until the review was answered, the review then left unanswered in a turn that ended ${how}: Dan is told in the goal's own line, since the goal's prompt is sent at the next turn end (#3843)`, withKit, async ($, on) => {
     const { w, submitted, seen } = world(on, { goal: MET })
@@ -4076,7 +4111,7 @@ test('the record cannot be read at a turn end with nothing waiting: a prompt tha
   expect(seen.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
 })
 
-// ---- Rules of the round before that no test held (#3843) ----
+// ---- The line for a call refused after the one message was used, and one read of the record at each turn end (#3843) ----
 test("a call refused after the request's one message was used, its review left unanswered in a turn that ended aborted: Dan is told there too (#3843)", withKit, async ($, on) => {
   const { w, submitted, seen } = world(on)
   await start($)

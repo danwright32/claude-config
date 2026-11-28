@@ -720,7 +720,9 @@ const reviewNow = async ($: EngineInterface, prompts: number): Promise<ReviewWai
  * record can answer it. No review can be handed over where the reviews are switched off or have
  * stood down (recordNow gives null), which is read as none. A record that cannot be read changes
  * nothing kept, since a box that never shows is the worse fault, and is itself kept, so the first
- * prompt sent before he next types is said to have gone out without knowing (leave).
+ * prompt sent before he next types is said to have gone out without knowing (leave). A later end
+ * that reads cleanly does not end it: that reading is of its own turn, and whether the turn whose
+ * record could not be read left a review unanswered stays unknown.
  *
  * A reading that comes back after a message he typed is dropped: his message ends what a turn
  * before it left, and the reading is of such a turn.
