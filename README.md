@@ -3459,9 +3459,44 @@ ever says neither, and the report's shape count reads the older marks.
 
 `tools/review-score.py` (claude-config#1355) measures how good the review is, not whether it ran:
 its CATCH RATE (the real defects in a fixed set of judged cases that the review finds) and its
-WRONG FINDING RATE (its findings that match one already judged wrong). Run it by hand whenever the
-review's prompt (`ai-review-prompt.txt`, `ai-review-pr-scope.txt`), its runner (`ai-review-run.py`)
-or its model changes, and never per pull request. Keep the change only if neither number gets worse.
+WRONG FINDING RATE (of its CHECKED findings, those matching a judged item, the ones that match an
+item judged wrong). Run it by hand whenever the review's prompt (`ai-review-prompt.txt`,
+`ai-review-pr-scope.txt`), its runner (`ai-review-run.py`) or its model changes, and never per pull
+request. Keep the change only if the comparison does not say REGRESSION, and read CANNOT TELL as
+exactly that.
+
+Every rate carries its count and its 95% Wilson range (#3556), because one catch more or less on a
+case set of a few dozen defects moves the rate by several points, well inside that range. A finding
+matching no judged item is UNCHECKED: it is printed on its own line and kept out of the wrong rate,
+since it is neither right nor wrong until someone judges it. Before #3556 the rate divided by every
+finding, unchecked ones included, which read about ten times better than what had been checked; that
+figure is still printed on the unchecked line, labelled as the floor it is. With several reviews per
+case (`--repeat`), the rates pool them but each range is as wide as one review per case would give,
+since two reviews of one diff are not independent samples, and the repeats are summarised per case:
+how many defects each review caught, and which defects only some reviews caught. "Missed" means no
+review caught it.
+
+A comparison with the baseline is case by case. Each real defect is newly caught, newly missed or
+the same, and each item judged wrong is raised more often, less often or the same (with repeats, by
+how often per review, and both sides' counts are printed; a defect both runs caught in some of their
+reviews is caught more often or less often, never newly caught or missed). An exact two sided sign
+test over the items that changed (for the defects, McNemar's exact test when each run has one review
+per case; an item judged wrong is compared by how many findings matched it) decides the verdict
+at the same 95% level: REGRESSION or IMPROVEMENT only when the change clears it, NO DIFFERENCE when
+nothing changed, and CANNOT TELL otherwise. Six changes all one way is the fewest that can clear it,
+so a change of five catches or fewer is always CANNOT TELL when something changed, however the rates
+move. A case measured in only one of the two runs is named, never dropped silently.
+
+The defects and the known wrong findings are tested apart, each at 5%, and either can give a
+verdict, so a run with no real change is still called a regression or an improvement up to about 1
+time in 10; the output says so. The level stays at 5% for each side, because splitting it between
+the two would raise the fewest changes that can clear it from six to seven on a case set where most
+comparisons already say CANNOT TELL, and would give the verdict a different level from the ranges
+printed beside it. A REGRESSION already asks for a second run before acting on it. Every verdict is
+about the judged items only, so it says NO DIFFERENCE on the judged items, and when the unchecked
+findings rise or fall between the two runs the verdict line says so, since a review that starts
+raising many findings nobody has judged is the likeliest bad change and the judged items cannot see
+it (the review of #3705).
 
     python3 tools/review-score.py run               # a sample of 3 cases, compared with the baseline
     python3 tools/review-score.py run --all         # every case
@@ -3486,16 +3521,20 @@ Each case costs one review by the real runner, and the run reports what it cost 
 measured it. On 2026-10-19 one review of a small invented diff cost about $0.18, nearly all of it
 the lessons index and the prompt (about 62,000 input tokens), so a case costs that plus its diff.
 Results go to `<cases>/results` (or `--results-dir`): one file per run, holding every finding, and
-`baseline.json`. `run --save-baseline` replaces the baseline only with a run that is not worse
-and measured every case the baseline did; anything else takes the `baseline` command, on purpose.
-A comparison re-judges both runs against the case set as it is now, over only the
-cases both measured. The terminal shows ids and counts, never a finding's text; findings that
-match no judged point are counted as unjudged and kept in the run file, to be judged and added to
-the case, after which `review-score.py rescore <run file>` re-scores without another review. One
-run is one sample of a model that answers differently each time, so confirm a regression or an
-improvement with a second run (`--repeat 2` pools two reviews per case). Exit 0 is compared and
-not worse, 1 worse, 2 unmeasured (no case set, or no review succeeded), 3 no baseline covering
-these cases.
+`baseline.json`. `run --save-baseline` replaces the baseline only with a run that is no different
+or better, whose unchecked findings did not move, and that measured every case the baseline did; a
+run that cannot be told apart is refused too, so the yardstick cannot drift down one change inside
+the noise at a time, and a run whose unchecked findings moved waits until they are judged into the
+cases. Anything else takes the `baseline` command, on purpose. A comparison re-judges both runs against the case set as it is
+now, over only the cases both measured. The terminal shows ids and counts, never a finding's text;
+unchecked findings are kept in the run file, to be judged and added to the case, after which
+`review-score.py rescore <run file>` re-scores without another review (and compares with the
+baseline, so `rescore` of the baseline itself must say NO DIFFERENCE). One run is one sample of a
+model that answers differently each time, so confirm a regression or an improvement with a second
+run (`--repeat 2` pools two reviews per case). Exit 0 is compared and no different or better on
+the judged items, 1 worse, 2 unmeasured (no case set, no review succeeded, or the cases compared
+hold no real defect and no item judged wrong), 3 no baseline covering these cases, 4 compared and
+cannot be told apart.
 
 ### What an agent's commands leave running
 
