@@ -3042,9 +3042,9 @@ space. mod-kit's write reader (`eachOf`) writes the loop's word in place inside 
 and gives each piece of a word holding a space as a name of its own, and the guard holds those
 names. The same loop with no quoted text in the substitution
 (`check "$(grep -q "$want" notes.txt && echo ok)"`) is not held.
-A reading for each was built and taken out again after review, because neither was true of every
-script. Writing a piece out and letting it stand where it is only printed let through scripts that
-were held before and do write a screen file:
+Neither is freed by a rule on the body's own words, because such a rule is not true of every
+script. Where a piece is written out and left to stand in a command that only prints it, these
+scripts write a screen file and are no longer held, so a reading has to go on holding each:
 - a piece as the flag, the operand or the subcommand of a command the write reader knows as a
   reader (`sed "${2:0:2}" s/a/b/ app/*` handed `-i`, `sort "${2%X}"` handed `-oapp/page.tsxX`,
   and the same with find, awk, git, curl and dd);
@@ -3057,9 +3057,10 @@ were held before and do write a screen file:
   word of the call (`"$@"`, a bare variable, a pattern, braces, an array, a substitution);
 - a default or a usage check that gives the call's word, where that word is a flag, a program or
   one part of a name (`sed "${2:-x}"` handed `-i`).
-Dropping a name the reader made inside a substitution let through a loop word holding a space
-that the substitution prints (`mystery $(echo $pair)`, `fix "$(echo "$spec" | cut -d' ' -f2)"`),
-and a helper that makes a name of the text the substitution prints.
+A name the reader makes inside a substitution cannot be dropped either: a loop word holding a
+space, which the substitution prints, reaches the program it is handed to
+(`mystery $(echo $pair)`, `fix "$(echo "$spec" | cut -d' ' -f2)"`), and a helper can make a name
+of the text the substitution prints.
 A reading that frees the two suites has to show three things of every script it frees: that the
 helper's commands can do no more than print or compare; that `echo` and `printf` are the shell's
 own, which means reading every file the script reads in (both suites read in
