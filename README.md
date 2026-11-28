@@ -6756,9 +6756,9 @@ sample and 91, and each must give the verdict and the readings of its own rule.
 
 What the line gives up: a rise under about 18 percent on a fast runner passes, where 83.2 caught 3
 to 5 percent there and failed unchanged work with it. With every recorded run made dearer by one
-share, the line catches 11 of the 173 at 10 percent where 83.2 catches 42, nearly all fast
+share, the line catches 11 of the 173 at 10 percent where 83.2 catches 42, 32 of them fast
 runners; 84 against 90 at 20 percent; and 118 against 106 at 25 percent, since slow runners are
-held tighter. The line is two numbers measured on one day (on the two days before, the middle run
+held tighter. A run is counted as caught there when no reading it recorded is inside the limit. The line is two numbers measured on one day (on the two days before, the middle run
 sits within 1 percent of it). When the gate's work for this command or GitHub's processors change
 a lot, fit it again from the notes a passing run prints. macOS keeps 67 by the least sample.
 
