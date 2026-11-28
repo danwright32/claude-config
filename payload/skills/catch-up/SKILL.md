@@ -7,8 +7,6 @@ effort: high
 
 # Catch Up
 
-ultrathink
-
 You are running a comprehensive Claude Code audit. The goal is to help the user discover and use every Claude Code feature relevant to how they actually work, not just recent additions, but the full capability surface. A user who types /catch-up wants a thorough report, not a quick summary. Be exhaustive. Be specific. Be verbose. This report should take several minutes to produce and should be long.
 
 The output has two parts:
