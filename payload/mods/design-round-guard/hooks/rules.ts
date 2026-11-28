@@ -2549,7 +2549,10 @@ export const ownDefinitions = (commands: readonly RunCommand[], name: string): {
  * (`${1:-none}`) as the call's word, or the default where the call gave none; an alternative
  * (`${1:+--flag}`) as its own text where the call gave a word. So a helper that prints the first
  * 1,500 characters of what it compared is read as one that prints it, and one that hands a piece of
- * a name to a program is read as handing that program the name. Which quotes hold a character
+ * a name to a program is read as handing that program the name. The whole word stands for where
+ * the piece goes and never for what the piece spells: a piece that names a screen file the whole
+ * word does not (`${1%.bak}` of `app/page.tsx.bak`) is judged by the whole word's name, as it was
+ * when such a body was not read at all. Which quotes hold a character
  * is read simply here, so the caller reads the result with mod-kit's pipeline and refuses any word
  * still naming what the function was handed.
  */
@@ -2589,7 +2592,9 @@ export const calledWith = (body: string, values: readonly string[]): string | un
       const op = m[6]
       // A count is a number. A default stands only where the call gave no word, and an alternative
       // only where it gave one, neither carrying the word itself. Every other form OWN_FORM reads
-      // gives the word or a piece of it, and is written as the whole word.
+      // gives the word or a piece of it. It is written as the whole word, which stands only for
+      // where the piece goes: the caller asks whether anything it judges is handed it, and where
+      // something is, the call stays judged by the whole word's name, as a refused body's is.
       if (m[3]) out += '0'
       else if (op === '-' || op === ':-') out += value || safeWord(m[7] ?? '')
       else if (op === '+' || op === ':+') out += value ? safeWord(m[7] ?? '') : ''

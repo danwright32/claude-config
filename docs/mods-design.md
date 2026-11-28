@@ -3041,7 +3041,10 @@ count (`${#1}`) as a number; a default (`${1:-none}`) as the
 call's word, or the default where the call gave none; an alternative (`${1:+--flag}`) as its own
 text where the call gave a word. So a helper that prints the first 1,500 characters of what it
 compared is read as one that prints it, and a helper that hands any such form to a program or
-writes to it is read as handing on or writing the call's file, and held. A replacement
+writes to it is read as handing on or writing the call's file, and held. The whole word stands
+for where the piece goes, never for what it spells: a call is still judged by the name of the
+word it hands over, so a piece that names a screen file the whole word does not (`${1%.bak}` of
+`app/page.tsx.bak`) is not caught, as it was not when such a body was left unread. A replacement
 (`${1/a/b}`) and a change of case, which give text the word does not hold, `${!1}`, `${1:=x}`,
 `${0}` and an operand holding an expansion (`${1:-$2}`) are not written out, and a body naming one
 is judged as a program the reader does not know, as is a body that keeps what it was handed in a
