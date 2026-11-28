@@ -2622,8 +2622,8 @@ flat_is "echo 'a${J}b' && git ${J}push" "echo 'a\\; b' && git push" "a pair insi
 flat_is "# note ${J}git ${J}push" "# note \\; git push" "a pair that ends a comment is written as it always was"
 flat_is "cat <<'EOF'"$'\n'"a${J}b"$'\n'"EOF"$'\n'"git ${J}push" "cat <<'EOF'; a\\; b; EOF; git push" "a pair in a quoted heredoc's body is written as it always was"
 flat_is "cat <<EOF"$'\n'"a${J}b"$'\n'"EOF"$'\n'"git ${J}push" "cat <<EOF; a\\; b; EOF; git push" "and so is one in the text of an unquoted heredoc's body"
-flat_is "x=\`git ${J}push\`" "x=\`git push\`" "a pair inside backquotes is taken out as the shell reading the backquotes takes it out (claude-config#3739)"
-flat_is "x=\`echo a${J}b\`" "x=\`echo a\\; b\`" "and where taking it out names no command more, the text is what it always was"
+flat_is "x=\`git ${J}push\`" "x=\`git \\; push\`; x=\`git push\`" "a pair inside backquotes is written as it always was, and the command follows again with the pair taken out as the shell reading the backquotes takes it out (claude-config#3739)"
+flat_is "x=\`echo a${J}b\`" "x=\`echo a\\; b\`; x=\`echo ab\`" "and so it does where the join changes a command's words and no command's name: which words a command has is what a hook judges it by"
 flat_is "cat <<EOF"$'\n'"x${J}EOF"$'\n'"EOF"$'\n'"git ${J}push" "cat <<EOF; x\\; EOF; EOF; git \\; push" "where the reader names a line it is unsure of (a heredoc's marker after a joined line), nothing is joined"
 flat_is "echo \"a${J}b" "echo \"a\\; b" "where the reader cannot read the text to its end (a quote never closed), nothing is joined"
 flat_is "cat <<EOF; echo \"x"$'\n'"EOF"$'\n'"git ${J}push" "cat <<EOF; echo \"x; EOF; git \\; push" "and nothing is joined where only the text as typed cannot be read (a quote opened on a heredoc's opening line), though the flattened text can"
@@ -2741,8 +2741,10 @@ joined_row yes ps_is_git_push "git push" "echo \"\`git ${J}push\`\"" "the same i
 joined_row yes ps_is_git_push "git push" "x=\`git \\${J}push\`" "inside backquotes two backslashes and a line break are a pair to the shell that reads them"
 joined_row yes ps_is_git_commit "git commit" "bash -c 'git ${J}commit -m x'" "a commit written across the pair in a wrapper's string is a commit"
 joined_row no ps_is_git_push "git push" "bash -c 'git \\${J}push'" "quiet twin: two backslashes and a line break in a wrapper's string join nothing"
-joined_row no ps_is_git_push "git push" "x=\`git \\\\${J}push\`" "quiet twin: three backslashes and a line break inside backquotes join nothing"
-joined_row no ps_is_git_push "git push" "echo 'git ${J}push'" "quiet twin: the pair in a single quoted argument of echo runs nothing"
+joined_row yes ps_is_git_push "git push" "x=\`git \\\\${J}push\`" "inside backquotes three backslashes and a line break join the next line too, its first letter escaped (bash 3.2.57 and zsh 5.9, measured 2026-11-28)"
+joined_row yes ps_is_git_push "git push" "echo \"\`git \\\\${J}push\`\"" "the same inside double quotes"
+joined_row no ps_is_git_push "git push" "x=\`git \\\\\\${J}push\`" "quiet twin: after four backslashes inside backquotes the next line is a command of its own, and it is no git"
+joined_row no ps_is_git_push "git push" "x=\`git \\\\\\\\${J}push\`" "quiet twin: after five the next line joins as a word that keeps a backslash, which is no push"joined_row no ps_is_git_push "git push" "echo 'git ${J}push'" "quiet twin: the pair in a single quoted argument of echo runs nothing"
 joined_row no ps_is_git_push "git push" "bash -c 'git ${J}status'" "quiet twin: a status written across the pair in a wrapper's string is no push"
 # What was read before and still is.
 joined_row yes ps_is_git_push "git push" "cat <<EOF${BODY}${NL}git push" "control: a push on a line after the heredoc is a push"
@@ -2763,29 +2765,48 @@ joined_row no ps_is_git_push "git push" "echo \$((1<<2)); git status" "quiet twi
 joined_row no ps_is_git_add "git add" "cat <<EOF; git commit -m x${BODY}" "quiet twin: a commit after the opener is no add"
 
 # The text itself: each body moved up to follow the command that opens it, and written as it always
-# was wherever nothing more is named that way.
-flat_is "cat <<EOF; git push${BODY}" "cat <<EOF; body; EOF; git push" "the body follows the command that opens it, and what stood after the opener follows the body"
-flat_is "cat <<EOF; git push${BODY}${NL}echo done" "cat <<EOF; body; EOF; git push; echo done" "and the lines after the heredoc follow that"
-flat_is "cat <<A <<B; git push${NL}one${NL}A${NL}two${NL}B" "cat <<A <<B; one; A; two; B; git push" "two bodies opened before the ; both move up, in their order"
-flat_is "cat <<A; cat <<B; git push${NL}one${NL}A${NL}two${NL}B" "cat <<A; one; A; cat <<B; two; B; git push; cat <<A; cat <<B; git push; one; A; two; B" "each of two openers either side of a ; is followed by its own body, and the old text follows, which named two words of the second body as commands"
-flat_is "cat <<EOF; git push${BODY}${NL}cat <<X; echo \"q${NL}X" "cat <<EOF; body; EOF; git push; cat <<X; echo \"q; X" "a text that cannot be read to its end as typed (a quote opened on a later line and never closed) has the bodies before that line moved all the same: bash runs those lines before it reaches the quote (measured 2026-11-26; zsh reads the whole text first and runs nothing)"
+# was wherever nothing more is named that way. THE OLD TEXT IS NEVER REPLACED: it is handed over
+# whole and first, and the rewritten command follows it, so a hook is handed every command it was
+# handed before (the review of pull request 3881 found commands the rewritten text alone hid).
+OLD3739="cat <<EOF; git push; body; EOF"
+flat_is "cat <<EOF; git push${BODY}" "$OLD3739; cat <<EOF; body; EOF; git push" "the old text comes first, whole, and then the command with the body following the command that opens it and what stood after the opener following the body"
+flat_is "cat <<EOF; git push${BODY}${NL}echo done" "cat <<EOF; git push; body; EOF; echo done; cat <<EOF; body; EOF; git push; echo done" "and the lines after the heredoc follow that"
+flat_is "cat <<A <<B; git push${NL}one${NL}A${NL}two${NL}B" "cat <<A <<B; git push; one; A; two; B; cat <<A <<B; one; A; two; B; git push" "two bodies opened before the ; both move up, in their order"
+flat_is "cat <<A; cat <<B; git push${NL}one${NL}A${NL}two${NL}B" "cat <<A; cat <<B; git push; one; A; two; B; cat <<A; one; A; cat <<B; two; B; git push" "each of two openers either side of a ; is followed by its own body, after the old text, which named two words of the second body as commands"
+flat_is "cat <<EOF; git push${BODY}${NL}cat <<X; echo \"q${NL}X" "$OLD3739; cat <<X; echo \"q; X; cat <<EOF; body; EOF; git push; cat <<X; echo \"q; X" "a text that cannot be read to its end as typed (a quote opened on a later line and never closed) has the bodies before that line moved all the same: bash runs those lines before it reaches the quote (measured 2026-11-26; zsh reads the whole text first and runs nothing)"
 # That text is not a row of the table above, because the two shells differ on it. Its push is read.
 if asked ps_is_git_push "cat <<EOF; git push${BODY}${NL}cat <<X; echo \"q${NL}X"; then check "#3739 and the push bash runs there is a push" ok
 else check "#3739 and the push bash runs there is a push" "not seen as a push"; fi
-flat_is "cat <<-EOF; git push${NL}${TAB}body${NL}${TAB}EOF" "cat <<-EOF; ${TAB}body; ${TAB}EOF; git push" "the dash form's body moves with its tabs"
-flat_is "x=\$(cat <<EOF; git push${BODY}${NL})" "x=\$(cat <<EOF; body; EOF; git push; )" "inside a substitution the body moves up inside it"
-flat_is "cat <<EOF; git ${J}push${BODY}" "cat <<EOF; body; EOF; git push" "a pair the shell removes is joined first, and then the body moves up"
-flat_is "cat <<EOF; git push; EOF" "cat <<<EOF; git push; EOF" "a heredoc on a command of one line is given no body by any shell, and is written as the here string it amounts to"
-flat_is "echo a${NL}cat <<EOF; git push; EOF" "echo a; cat <<<EOF; git push; EOF" "and so is one opened on the last line of several"
+flat_is "cat <<-EOF; git push${NL}${TAB}body${NL}${TAB}EOF" "cat <<-EOF; git push; ${TAB}body; ${TAB}EOF; cat <<-EOF; ${TAB}body; ${TAB}EOF; git push" "the dash form's body moves with its tabs"
+flat_is "x=\$(cat <<EOF; git push${BODY}${NL})" "x=\$(cat <<EOF; git push; body; EOF; ); x=\$(cat <<EOF; body; EOF; git push; )" "inside a substitution the body moves up inside it"
+flat_is "cat <<EOF; git ${J}push${BODY}" "$OLD3739; cat <<EOF; body; EOF; git push" "a pair the shell removes is joined first, in the old text too, and then the body moves up"
+flat_is "cat <<EOF; git push; EOF" "cat <<EOF; git push; EOF; cat <<<EOF; git push; EOF" "a heredoc on a command of one line is given no body by any shell, and is written again as the here string it amounts to"
+flat_is "echo a${NL}cat <<EOF; git push; EOF" "echo a; cat <<EOF; git push; EOF; echo a; cat <<<EOF; git push; EOF" "and so is one opened on the last line of several"
 flat_is "cat <<EOF${BODY}${NL}git push" "cat <<EOF; body; EOF; git push" "a heredoc with nothing after its opener is written as it always was"
 flat_is "cat <<EOF; # note${BODY}" "cat <<EOF; # note; body; EOF" "where what follows the opener names no command, the text is what it was"
 flat_is "cat <<EOF \"a; b\"${BODY}" "cat <<EOF \"a; b\"; body; EOF" "a ; inside quotes on the opener's line moves nothing"
-flat_is "cat <<EOF; EOF; git push${BODY}" "cat <<EOF; EOF; git push; body; EOF" "where the moved text would lose a command and name nothing new, the text is what it was"
-flat_is "cat <<EOF; cd /tmp/elsewhere${BODY}${NL}git push" "cat <<EOF; cd /tmp/elsewhere; body; EOF; git push; cat <<EOF; body; EOF; cd /tmp/elsewhere; git push" "where it would lose one and name another (a push in the folder a cd after the opener moves to), both are given, the old text first so that its push keeps its folder"
-flat_is "cat <<EOF; echo a${US:-$'\x1f'}b${BODY}" "cat <<EOF; body; EOF; echo a"$'\xef\xbf\xbd'"b" "#2055 a unit separator in a moved command is still written as U+FFFD"
+flat_is "cat <<EOF; EOF; git push${BODY}" "cat <<EOF; EOF; git push; body; EOF" "where the moved text holds no command the old text lacks, the text is what it was"
+flat_is "cat <<EOF; cd /tmp/elsewhere${BODY}${NL}git push" "cat <<EOF; cd /tmp/elsewhere; body; EOF; git push; cat <<EOF; body; EOF; cd /tmp/elsewhere; git push" "a push in the folder a cd after the opener moves to is read there, after the old text, whose push keeps its folder"
+flat_is "cat <<EOF; echo a${US:-$'\x1f'}b${BODY}" "cat <<EOF; echo a"$'\xef\xbf\xbd'"b; body; EOF; cat <<EOF; body; EOF; echo a"$'\xef\xbf\xbd'"b" "#2055 a unit separator in a moved command is still written as U+FFFD"
 flat_is "cat <<EOF; echo \"x${NL}EOF${NL}git push" "cat <<EOF; echo \"x; EOF; git push" "where the text as typed cannot be read to its end and names nothing more, the text is what it was"
+# What the review of pull request 3881 found, as the text itself.
+has_style_skip() { ps_has_override "$1" SKIP_STYLE_CHECK; }
+flat_is "cd a; cat <<EOF; cd b; git push${BODY}${NL}ls" "( cd a; cat <<EOF; body; EOF; cd b; git push; ls; ); cd a; cat <<EOF; cd b; git push; body; EOF; ls" "behind a relative cd the rewritten command goes first, inside a subshell, so that the old text after it starts from the folder it always started from and the push is read in the folder it runs in"
+flat_is "bash -c 'true # c${J}git push; l${J}s'" "bash -c 'true # c\\; git push; l\\; s'; bash -c 'true # c\\; git push; ls'" "in a wrapper's string a pair that ends a comment stays, as the shell reading the string keeps it, so the push on the next line is still read"
+flat_is "echo 'x SKIP_STYLE_${J}CHECK=1 y'; bash -c 'l${J}s'" "echo 'x SKIP_STYLE_\\; CHECK=1 y'; bash -c 'l\\; s'; echo 'x SKIP_STYLE_\\; CHECK=1 y'; bash -c 'ls'" "a single quoted string no shell reads (an argument of echo) is left as typed, so no skip word is put together in it"
+flat_is "bash -c 'true; SKIP_STYLE_${J}CHECK=1 git push'" "bash -c 'true; SKIP_STYLE_\\; CHECK=1 git push'; bash -c 'true; SKIP_STYLE_CHECK=1\\;  git push'" "where a join in a wrapper's string would put a skip word together, the pair is written after the word, which is then no skip word, and the push behind it is read"
+if asked has_style_skip "bash -c 'true; SKIP_STYLE_${J}CHECK=1 git push'"; then check "#3739 and no hook reads that text as holding the skip word" "ps_has_override said it does"
+else check "#3739 and no hook reads that text as holding the skip word" ok; fi
+if asked ps_is_git_push "bash -c 'true; SKIP_STYLE_${J}CHECK=1 git push'"; then check "#3739 while its push is a push" ok
+else check "#3739 while its push is a push" "not seen as a push"; fi
+flat_is "git push; cat <<EOF; ls; SKIP_STYLE_CHECK=1${BODY}" "git push; cat <<EOF; body; EOF; ls; SKIP_STYLE_CHECK=1; git push; cat <<EOF; ls; SKIP_STYLE_CHECK=1; body; EOF" "a NAME=1 word the move would leave where the text ends is no skip word in the old text, so the rewritten command goes first and it is none here either"
+if asked has_style_skip "git push; cat <<EOF; ls; SKIP_STYLE_CHECK=1${BODY}"; then check "#3739 and no hook reads that text as holding the skip word either" "ps_has_override said it does"
+else check "#3739 and no hook reads that text as holding the skip word either" ok; fi
+if asked has_style_skip "cat <<EOF; SKIP_STYLE_CHECK=1 git push${BODY}"; then check "#3739 control: a skip word typed whole in front of a push after the opener is one, as it was before" ok
+else check "#3739 control: a skip word typed whole in front of a push after the opener is one, as it was before" "ps_has_override said it is not"; fi
+flat_is "git commit -m 'a${J}b' && bash -c 'l${J}s'" "git commit -m 'a\\; b' && bash -c 'l\\; s'; git commit -m 'a\\; b' && bash -c 'ls'" "a commit message holding the pair is left as typed in the rewritten command too"
 got="$(flat_of "cat <<EOF; git push${BODY}" /tmp/somewhere)"
-[ "$got" = "cat <<EOF; body; EOF; git push"$'\x1f'"/tmp/somewhere" ] && check "#3739 the folder still follows the one separator" ok \
+[ "$got" = "$OLD3739; cat <<EOF; body; EOF; git push"$'\x1f'"/tmp/somewhere" ] && check "#3739 the folder still follows the one separator" ok \
   || check "#3739 the folder still follows the one separator" "got [$got]"
 got="$(ps_parse_payload "$(payload_for "cat <<EOF; git push${BODY}")" raw)"
 [ "${got%%$'\x1f'*}" = "cat <<EOF; git push${BODY}" ] && check "#3739 raw mode still hands the command over as typed" ok \
@@ -2795,7 +2816,7 @@ got="$(ps_parse_payload "$(payload_for "cat <<EOF; git push${BODY}")" raw)"
 ESC_LT='\u00''3c'; ESC_LT_UP='\u00''3C'; ESC_SEMI='\u00''3b'; ESC_SEMI_UP='\u00''3B'; ESC_BLANK='\u00''20'
 opener_spelled() { # opener_spelled <the command as written inside the JSON string> <description>
   local got; got="$(ps_parse_payload '{"tool_input":{"command":"'"$1"'"},"cwd":""}' segmented)"
-  [ "${got%%$'\x1f'*}" = "cat <<EOF; body; EOF; git push" ] && check "#3739 the opener's line spelled as JSON escapes is read too: $2" ok \
+  [ "${got%%$'\x1f'*}" = "$OLD3739; cat <<EOF; body; EOF; git push" ] && check "#3739 the opener's line spelled as JSON escapes is read too: $2" ok \
     || check "#3739 the opener's line spelled as JSON escapes is read too: $2" "got [${got%%$'\x1f'*}]"
 }
 opener_spelled "cat ${ESC_LT}${ESC_LT}EOF; git push\\nbody\\nEOF" "each < as an escape"
@@ -2807,7 +2828,7 @@ opener_spelled "cat <<EOF; git push${ESC_NL}body\\nEOF" "the line break after th
 # Under each reader alone, as for the pair above: the move is the shared reader's, which is python3.
 opener_payload="$(payload_for "cat <<EOF; git push${BODY}")"
 got="$(PATH="$J3470/py-only" ps_parse_payload "$opener_payload" segmented)"
-[ "${got%%$'\x1f'*}" = "cat <<EOF; body; EOF; git push" ] && check "#3739 (python3 alone) the body moves up" ok \
+[ "${got%%$'\x1f'*}" = "$OLD3739; cat <<EOF; body; EOF; git push" ] && check "#3739 (python3 alone) the body moves up, after the old text" ok \
   || check "#3739 (python3 alone) the body moves up" "got [${got%%$'\x1f'*}]"
 got="$(PATH="$J3470/jq-only" ps_parse_payload "$opener_payload" segmented)"
 [ "${got%%$'\x1f'*}" = "cat <<EOF; git push; body; EOF" ] && check "#3739 (jq alone) with no python3 nothing can move it, and the text is what it was" ok \

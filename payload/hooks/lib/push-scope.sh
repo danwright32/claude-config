@@ -302,11 +302,14 @@ sys.exit(1 if v is None or isinstance(v, str) else 0)' 2>/dev/null
 # neither was `git`, the pair, `push`, nor an add, a commit or a gh pr create written the same way.
 # So a segmented command holding the pair is flattened by lib/shell-words.py (its flatten mode),
 # which takes out each pair the shell removes, leaves one in a comment or a heredoc's body as it
-# was, takes one inside single quotes or backquotes out only where the shell reading that string
-# or those backquotes runs a command the text otherwise hides (claude-config#3739), and never
-# hands back a text naming fewer commands than the plain flattening does. That needs python3 and the reader's file; with either missing, or a command
-# that reader cannot vouch for, the text is flattened as it always was. The pair is found in the
-# raw payload first, by every way JSON can spell it, so a command holding none starts nothing more.
+# was, and never hands back a text naming fewer commands than the plain flattening does. A pair
+# inside a string a wrapper hands a shell, or inside backquotes, is removed by the shell that
+# reads those and by no other, so the text is left as it was and the command is written again
+# after it with those read as that shell reads them (claude-config#3739): what was handed over
+# before is still handed over, whole and first. That needs python3 and the reader's file; with
+# either missing, or a command that reader cannot vouch for, the text is flattened as it always
+# was. The pair is found in the raw payload first, by every way JSON can spell it, so a command
+# holding none starts nothing more.
 #
 # A COMMAND AFTER A HEREDOC'S OPENER, ON THE OPENER'S LINE, IS READ TOO (claude-config#3739). The
 # shell runs every command on the line that opens a heredoc and reads the body from the next line.
@@ -314,14 +317,18 @@ sys.exit(1 if v is None or isinstance(v, str) else 0)' 2>/dev/null
 # `cat <<EOF; git push`, the body and EOF, the push was the body's first line to every hook
 # reading the segmented form, with no backslash anywhere, and the same on a command of one line,
 # which no shell gives a body at all. So a payload in which a ; and a blank follow a << before
-# that line ends is flattened by the same mode of lib/shell-words.py, which moves each body up to
-# follow the command that opens it (the shape this form has always been read right in), and
-# never hands back a text naming fewer commands. The look for it is a pattern over the raw
-# payload, so a heredoc with nothing after its opener, which is nearly every one, starts nothing
-# more: the gap between the << and the ; may hold anything but the two characters JSON writes a
-# line break as (a backslash and an n), and a payload spelling a <, a ; or a blank as an escape of
-# its code point is handed over whatever else it holds.
+# that line ends is flattened by the same mode of lib/shell-words.py, which hands back the text
+# as it always was and, after it, the command with each body moved up to follow the command that
+# opens it (the shape this form has always been read right in). The old text is never replaced,
+# so a hook is handed every command it was handed before. The look for it is a pattern over the
+# raw payload, so a heredoc with nothing after its opener, which is nearly every one, starts
+# nothing more: the gap between the << and the ; may hold anything but the two characters JSON
+# writes a line break as (a backslash and an n), and a payload spelling a <, a ; or a blank as an
+# escape of its code point is handed over whatever else it holds. Under a UTF-8 locale bash's =~
+# stops at a byte that is not UTF-8 (claude-config#1885), so the pattern is asked again under the
+# C locale, which reads every byte as a character: a match is only ever added.
 PS__OPENER_LINE='<<([^\\]|\\[^n])*; '
+ps__opener_line() { [[ $1 =~ $PS__OPENER_LINE ]] && return 0; local LC_ALL=C; [[ $1 =~ $PS__OPENER_LINE ]]; }
 ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
   local payload mode="${2:-segmented}" sep out flatten=""
   case "$mode" in
@@ -337,7 +344,7 @@ ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
     case "$payload" in
       *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*) flatten=1 ;;
       *'\u003'[cCbB]*|*'\u002'[0]*) flatten=1 ;;
-      *'<<'*) [[ "$payload" =~ $PS__OPENER_LINE ]] && flatten=1 ;;
+      *'<<'*) ps__opener_line "$payload" && flatten=1 ;;
     esac
     # Printed only once the reader has finished, the x keeping a line break that ends the text.
     if [ -n "$flatten" ] && command -v python3 >/dev/null 2>&1 && [ -f "${PS_SHELL_WORDS:-}" ]; then
