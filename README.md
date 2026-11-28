@@ -1200,6 +1200,22 @@ same counts do not trade places every month. The page gives the core's size afte
 the cap `core-set` enforces (`SYNC_CORE_CAP`, 20,000), and the exact command to apply it, with
 `SYNC_CORE_OVER_CAP=1` in it when the result is over, which is Dan's call as before.
 
+**The most cited lessons no check holds** (claude-config#3744). Below the moves, the page lists the
+five lessons PR reviews cite most whose entry carries neither a `CHECK:` nor a `NO CHECK:` line,
+each with its review count (both Macs' review column, over the counts' window), and the output
+carries the same as `UNCOVERED Lnnn` lines and a `NEXT:` line. For each one, the session Dan tells
+asks whether a lint or a test can catch it and brings the answer to him in the lesson picker: a
+`CHECK:` line with an issue in the project that needs the lint, or `NO CHECK:` with the reason. An
+entry changes only through that picker; the re-rank writes nothing into `LESSONS.md`. Whether an
+entry carries a line is claude-sync's own reading (`lesson_check_records` and the
+`lesson_entries_render` it calls), which the re-rank takes from claude-sync's text by each
+function's exact definition line and runs, so a renamed or re-signed function stops the list with
+a message rather than being run on a guess. A malformed line is named as `CHECK LINE MALFORMED` and
+counted neither way. When the list cannot be made (the lessons file unreadable, claude-sync without
+the reading, a Mac whose counts say its review ledger was absent or unreadable) the output says
+`UNCOVERED NOT LISTED` with why, the page says the same, and the moves still stand. `--uncovered N`
+changes the length; the job passes `--lessons payload/LESSONS.md`.
+
 **How the counts travel.** Each Mac counts its own transcripts (`tools/lesson-citations.py`, whose
 header now carries `AT`, the UTC instant counted) and records them with
 `claude-sync record-lesson-counts <file>`, which writes `lesson-counts/<host>.tsv` in the repo and

@@ -121,6 +121,7 @@ else
   out="$(python3 "$HERE/lessons-core-rerank.py" --index-dir "$REPO/payload" --core "$REPO/payload/LESSONS-CORE.txt" \
     --counts-dir "$REPO/lesson-counts" --bands-dir "$REPO/lesson-bands" --ages "$TMP/ages.txt" \
     --tags "$REPO/lesson-tags.tsv" ${second[@]+"${second[@]}"} --host "$HOST" --now "$NOW" \
+    --lessons "$REPO/payload/LESSONS.md" \
     --seats "$REPO/lesson-core-seats.txt" --out-seats "$STATE/seats-$MONTH.txt" \
     --out-tsv "$STATE/moves-$MONTH.tsv" --out-html "$PAGE" --out-list "$STATE/core-$MONTH.txt" 2>&1)"; rc=$?
 fi

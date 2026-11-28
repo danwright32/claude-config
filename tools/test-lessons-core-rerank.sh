@@ -371,6 +371,142 @@ check_rc "counts over different windows refuse" 1 "$rc"
 check "naming the windows" "60" "$out"
 fresh_counts
 
+# 10. THE MOST CITED LESSONS NO CHECK HOLDS (claude-config#3744). Beside the moves, the re-rank lists
+#     the lessons PR reviews cite most whose entry carries neither a CHECK: nor a NO CHECK: line, each
+#     with its review count, read from the same counts the rank reads. Whether an entry carries a
+#     line is claude-sync's one reading of it (lesson_check_records), never a second copy here.
+#     Reviews (the fourth column): L4 10, L3 9 + 3, L6 8, L7 2 + 5, L11 6, L10 4, L5 3, L9 2, L8 1.
+SYNC_TOOL="$DIR/../claude-sync"
+LESSONS="$IDX/LESSONS.md"
+{
+  printf '# Lessons\n\n## Proof over green\n\n'
+  for n in 1 2 5 6 7 8 9 11 12; do printf -- '- **L%s. Lesson number %s carries neither line.** body\n  (claude-config#1, 2026-07-16)\n' "$n" "$n"; done
+  printf -- '- **L3. Lesson number 3 is held by a guard.** body\n  (claude-config#1, 2026-07-16)\n  CHECK: hooks/real-guard.sh (full)\n'
+  printf -- '- **L10. Lesson number 10 no check can hold.** body\n  (claude-config#1, 2026-07-16)\n  NO CHECK: it is a judgement no tool can see.\n'
+  printf -- '- **L4. Lesson number 4 has a check line in no shape.** body\n  (claude-config#1, 2026-07-16)\n  CHECK: hooks/real-guard.sh\n'
+} > "$LESSONS"
+review_counts(){
+  counts mac-a "2026-10-05T09:00:00Z" $'L3\t30\t40\t9' $'L7\t18\t20\t2' $'L8\t12\t12\t1' $'L11\t4\t4\t6' $'L5\t2\t2\t3' $'L9\t1\t1\t2' $'L4\t0\t0\t10'
+  counts mac-b "2026-10-01T11:00:00Z" $'L6\t25\t30\t8' $'L8\t10\t10\t0' $'L3\t0\t0\t3' $'L7\t0\t0\t5' $'L10\t0\t0\t4'
+}
+uncovered(){ printf '%s\n' "$1" | awk '/^UNCOVERED L[0-9]+:/ { l = $2; sub(/:$/, "", l); printf "%s ", l }'; }
+review_counts
+out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL")"; rc=$?
+check_rc "a re-rank asked for the list still proposes" 0 "$rc"
+check "the five most cited lessons with neither line are listed, most reviews first, both Macs added" "L6 L7 L11 L5 L9 " "$(uncovered "$out")"
+check "each with its review count" "UNCOVERED L7: cited by 7 reviews" "$out"
+check_not "a lesson a CHECK: line holds is never listed" "L3 " "$(uncovered "$out")"
+check_not "nor one a NO CHECK: line answers" "L10 " "$(uncovered "$out")"
+check_not "the sixth is left out of a list of five" "L8 " "$(uncovered "$out")"
+check_not "and a lesson no review cited is never listed" "L12 " "$(uncovered "$out")"
+check_not "the real claude-sync still holds both functions this list calls, as it calls them" "NOT LISTED" "$out"
+check "the next step is said in words" "NEXT: for each lesson listed, ask whether a lint or a test can catch it" "$out"
+# A malformed line is neither a check nor its absence: it is named, with what is wrong, on its own.
+check_not "an entry whose check line is malformed is not counted as uncovered" "L4 " "$(uncovered "$out")"
+check "it is said on a line of its own, with what is wrong" "CHECK LINE MALFORMED L4: cited by 10 reviews" "$out"
+check "naming the fault claude-sync names" "neither (full) nor (partial)" "$out"
+page="$(cat "$OUT/rerank.html" 2>/dev/null)"
+check "the page carries the list" "Most cited lessons no check holds" "$page"
+check "with each lesson and its count" "<b>L6</b>" "$page"
+check "and what to do next" "can a lint or a test catch it" "$page"
+check "and the malformed line" "<b>L4</b> is cited by 10 reviews and its check line is malformed" "$page"
+out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL" --uncovered 6)"
+check "--uncovered sets the length" "L6 L7 L11 L5 L9 L8 " "$(uncovered "$out")"
+out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL" --uncovered 0)"; rc=$?
+check_rc "a list of no lessons refuses rather than reading as none to list" 1 "$rc"
+# The reading is claude-sync's: a claude-sync whose reading says L6 is held lists it not, though the
+# fixture's entry carries no line (a second copy of the pattern here would still list it).
+cat > "$WORK/stub-sync" <<'EOS'
+lesson_entries_render(){   # $1 = the full lessons file  $2 = index | split | pairs | entries | checks
+  return 0
+}
+lesson_check_records(){   # $1 = the full lessons file
+  printf 'L6\tfull\thooks/x.sh\nL7\tneither\t\nL11\tneither\t\n'
+  return 0
+}
+EOS
+out="$(rerank --lessons "$LESSONS" --sync "$WORK/stub-sync")"
+check "the list is claude-sync's reading of the entries" "L7 L11 " "$(uncovered "$out")"
+check_not "so a lesson claude-sync reads as held is not listed" "L6 " "$(uncovered "$out")"
+# Every way the list cannot be made is said, never a list of none (L98, L11), and the proposal stands.
+out="$(rerank --lessons "$WORK/no-such-LESSONS.md" --sync "$SYNC_TOOL")"; rc=$?
+check_rc "a lessons file that cannot be read still proposes the moves" 0 "$rc"
+check "and says the list was not made, and why" "UNCOVERED NOT LISTED: the lessons file $WORK/no-such-LESSONS.md cannot be read" "$out"
+check_not "listing nothing" "UNCOVERED L" "$out"
+check "the page says so too" "was not made" "$(cat "$OUT/rerank.html" 2>/dev/null)"
+printf '\377\376# Lessons\n\n- **L6. Lesson number 6 carries neither line.** body\n' > "$WORK/not-utf8-LESSONS.md"
+out="$(rerank --lessons "$WORK/not-utf8-LESSONS.md" --sync "$SYNC_TOOL")"; rc=$?
+check_rc "a lessons file that is not UTF-8 still proposes the moves" 0 "$rc"
+check "and says it could not be read as text" "UNCOVERED NOT LISTED: the lessons file $WORK/not-utf8-LESSONS.md cannot be read as text" "$out"
+check_not "never a traceback" "Traceback" "$out"
+printf 'nothing to see\n' > "$WORK/no-reader-sync"
+out="$(rerank --lessons "$LESSONS" --sync "$WORK/no-reader-sync")"
+check "a claude-sync without the reading of check lines is named" "UNCOVERED NOT LISTED: $WORK/no-reader-sync holds no lesson_entries_render, lesson_check_records" "$out"
+# A function whose definition line changed may now be called differently, so it is never run on a
+# guess: the line this list was written against is named beside the one found.
+sed 's/^lesson_check_records(){.*/lesson_check_records(){   # $1 = tree holding LESSONS.md/' "$WORK/stub-sync" > "$WORK/changed-sync"
+out="$(rerank --lessons "$LESSONS" --sync "$WORK/changed-sync")"
+check "a changed signature is said, not run" "UNCOVERED NOT LISTED: $WORK/changed-sync defines lesson_check_records as 'lesson_check_records(){   # \$1 = tree holding LESSONS.md'" "$out"
+check_not "listing nothing" "UNCOVERED L" "$out"
+cat > "$WORK/failing-sync" <<'EOS'
+lesson_entries_render(){   # $1 = the full lessons file  $2 = index | split | pairs | entries | checks
+  return 0
+}
+lesson_check_records(){   # $1 = the full lessons file
+  echo "awk: broken" >&2
+  return 4
+}
+EOS
+out="$(rerank --lessons "$LESSONS" --sync "$WORK/failing-sync")"
+check "a reading that fails is said with its exit and its error" "UNCOVERED NOT LISTED: reading the check lines failed (exit 4: awk: broken)" "$out"
+cat > "$WORK/odd-sync" <<'EOS'
+lesson_entries_render(){   # $1 = the full lessons file  $2 = index | split | pairs | entries | checks
+  return 0
+}
+lesson_check_records(){   # $1 = the full lessons file
+  printf 'L6\tmaybe\t\n'
+  return 0
+}
+EOS
+out="$(rerank --lessons "$LESSONS" --sync "$WORK/odd-sync")"
+check "a reading in no known shape is refused, not guessed at" "UNCOVERED NOT LISTED: the reading of check lines gave a line in no known shape" "$out"
+# The review counts come from each Mac's review ledger. A Mac whose ledger could not be read counted
+# no review at all, which is unknown, not zero, so no list is made from it.
+review_counts
+sed -i.bak 's/ LEDGER read / LEDGER unreadable /' "$REPO/lesson-counts/mac-b.tsv"; rm -f "$REPO/lesson-counts/mac-b.tsv.bak"
+out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL")"; rc=$?
+check_rc "an unreadable review ledger on one Mac still proposes the moves" 0 "$rc"
+check "and names the Mac and the ledger state instead of listing" "UNCOVERED NOT LISTED: mac-b's review ledger was unreadable" "$out"
+check_not "listing nothing" "UNCOVERED L" "$out"
+review_counts
+sed -i.bak 's/ LEDGER read / /' "$REPO/lesson-counts/mac-a.tsv"; rm -f "$REPO/lesson-counts/mac-a.tsv.bak"
+out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL")"
+check "counts that do not say whether the ledger was read are not listed from either" "UNCOVERED NOT LISTED: mac-a's review ledger was not recorded" "$out"
+# A counts file that exists and cannot be opened is unmeasured, named, never a traceback.
+review_counts
+chmod 000 "$REPO/lesson-counts/mac-b.tsv"
+if [ -r "$REPO/lesson-counts/mac-b.tsv" ]; then
+  # Run as root, a mode of 000 still reads, so this case cannot be set up here (L411): said, never a red.
+  chmod 644 "$REPO/lesson-counts/mac-b.tsv"
+  echo "SUITE-PART-UNMEASURED this user reads a file of mode 000 (root?), so a counts file that cannot be read was not set up"
+else
+  out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL")"; rc=$?
+  chmod 644 "$REPO/lesson-counts/mac-b.tsv"
+  check_rc "a counts file that cannot be read is unmeasured" 2 "$rc"
+  check "naming it" "UNMEASURED: mac-b: its counts file cannot be read" "$out"
+  check_not "never a traceback" "Traceback" "$out"
+fi
+# The healthy day says so in words.
+counts mac-a "2026-10-05T09:00:00Z" $'L3\t30\t40\t9'
+counts mac-b "2026-10-01T11:00:00Z" $'L10\t0\t0\t4'
+out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL")"
+check "when every lesson reviews cited carries a line, it says so" "UNCOVERED NONE: every lesson PR reviews cited carries a CHECK: or NO CHECK: line" "$out"
+check_not "with no caveat when no cited lesson's line is malformed" "apart from the malformed" "$out"
+counts mac-a "2026-10-05T09:00:00Z" $'L3\t30\t40\t9' $'L4\t0\t0\t10'
+out="$(rerank --lessons "$LESSONS" --sync "$SYNC_TOOL")"
+check "a cited malformed line keeps the clean day's sentence from claiming it" "line, apart from the malformed ones named here" "$out"
+fresh_counts
+
 # ---------------------------------------------------------------------------------------------------
 # THE JOB: tools/run-lessons-core-rerank.sh, run daily by launchd. Each Mac recounts its own prose
 # citations when its counts are 7 days old and records them through claude-sync, which commits them
@@ -447,6 +583,9 @@ page="$(ls "$STATE"/rerank-2026-10.html 2>/dev/null)"
 check "the page is left in the state folder, by month" "rerank-2026-10.html" "$page"
 check "and the list to apply beside it" "core-2026-10.txt" "$(ls "$STATE" 2>/dev/null)"
 check "and the seats to commit with it" "seats-2026-10.txt" "$(ls "$STATE" 2>/dev/null)"
+check "the job asks for the most cited lessons no check holds (#3744)" "Most cited lessons no check holds" "$(cat "$page" 2>/dev/null)"
+check_not "and the list is made, from the claude-sync beside the tool and the repo's lessons file" "This list was not made" "$(cat "$page" 2>/dev/null)"
+check "listing the one fixture lesson reviews cited that carries no line" "1 lesson, most cited by PR reviews over 60 days on both Macs" "$(cat "$page" 2>/dev/null)"
 out="$(job "2026-10-10T15:00:00Z")"
 check "a second run in the same month does not notify again" "0" "$(notices)"
 

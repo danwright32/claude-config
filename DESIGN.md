@@ -818,6 +818,18 @@ enforces. Choices made, each reversible:
   list of the numbers that existed on 2026-11-19 (`hooks/lib/lessons-before-check-lines.txt`),
   not from a date or a number threshold: the two Macs mint from separate bands, so a higher number
   is not a newer lesson, and an entry's dates are its evidence, not when it was written.
+  Reversed in part by #3744, which Dan accepted on 2026-11-26: the most cited older entries are
+  asked as well. On 2026-11-26 none of the 20 lessons the PR review cites most carried a line, and
+  10 of 905 entries carried either, so the lessons sessions lean on hardest were the ones nobody had
+  asked about. The monthly re-rank now lists the five lessons PR reviews cite most whose entry
+  carries neither line, each with its review count, read from the same counts its rank reads, and
+  says the next step: ask whether a lint or a test can catch it, and bring the answer to Dan in the
+  lesson picker. The frozen list still exempts every other older entry from the warning, and is
+  unchanged. Five, not 10 or 20, was the smaller answer to the issue's open question, so the month
+  adds one short picker; `--uncovered` changes it. Whether an entry carries a line is claude-sync's
+  own reading (`lesson_check_records`), run from its text by the re-rank, never a second copy of the
+  pattern. A malformed line is named on its own and counted neither way, and a list that cannot be
+  made (a lessons file or a review ledger that could not be read) says so, while the moves stand.
 - A named check missing on disk is a warning, not a publish fault. A hook deleted in one pull
   request would otherwise hold the whole lessons file back from both Macs over a line nobody in
   that change touched.
