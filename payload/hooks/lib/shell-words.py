@@ -930,10 +930,10 @@ def heredoc_close(s, j, word, strip_tabs, quoted, line_break="\n"):
 
 
 def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None, joined=None,
-             lines=None, typed=False, quoted=None):
+             lines=None, typed=False, reread=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
 
-    quoted, when a list, is given the text another shell may read differently from this one
+    reread, when a list, is given the text another shell may read differently from this one
     (claude-config#3739), for inner_typed(): ("'", start, end) for the text between each pair of
     single quotes, which a wrapper hands a shell as it is written, and ("`", i, width) for each
     run of backslashes and the line break after it inside backquotes that the shell reading the
@@ -1246,8 +1246,8 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
         nx = s[i + 1] if i + 1 < n else ""
         if k == "'":
             frames.pop()  # c is the closing quote: anything else was gone past above
-            if quoted is not None:
-                quoted.append(("'", f["at"] + 1, i))
+            if reread is not None:
+                reread.append(("'", f["at"] + 1, i))
             i += 1
             continue
         if k == "ansi":
@@ -1263,7 +1263,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
                 held = next(g["k"] for g in reversed(frames) if g["k"] == "hd" or g["k"] in COMMAND_FRAMES)
                 if held != "hd" and not any(g["k"] == "tick" for g in frames):
                     joined.append(i)
-            if quoted is not None and any(g["k"] == "tick" for g in frames):
+            if reread is not None and any(g["k"] == "tick" for g in frames):
                 # Backquotes halve a run of backslashes before the shell inside reads it, so
                 # that shell is left a backslash and the line break, which it removes, after a
                 # run of one or two, and again every four.
@@ -1271,7 +1271,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
                 if width:
                     run = i + width - 1 - len(s[:i + width - 1].rstrip("\\"))
                     if run % 4 == width - 1:
-                        quoted.append(("`", i, width))
+                        reread.append(("`", i, width))
             if unsure is not None and i and escaped != i - 1 and nx in ("\n", "\\"):
                 # An operator this backslash and the line break after it split: the shells do not
                 # agree on whether the two characters either side are joined, so it is named
@@ -3283,7 +3283,7 @@ def inner_typed(s):
     text that cannot be read to its end is rewritten as far as it was read."""
     found = []
     try:
-        commands(s, quoted=found, typed=True)
+        commands(s, reread=found, typed=True)
     except Unreadable:
         pass
     text = s

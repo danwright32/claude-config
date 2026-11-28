@@ -276,10 +276,11 @@ shape=0
 for c in "cd $W && cat <<EOF; git push; EOF${NL}" "cd $W && cat <<EOF; git push; EOF${NL}echo done" \
          "cd $W && bash -c 'cat <<EOF; git push${NL}body${NL}EOF'" "cd $W && bash -c 'cat <<EOF; git push; EOF'" \
          "cd $W && bash -c 'git ${PAIR}push'" "cd $W && eval 'git ${PAIR}push'" \
-         "cd $W && x=\`git ${PAIR}push\`" "cd $W && echo \"\`git ${PAIR}push\`\""; do
+         "cd $W && x=\`git ${PAIR}push\`" "cd $W && echo \"\`git ${PAIR}push\`\"" \
+         "cd $W && cat <<EOF; bash -c 'git ${PAIR}push'${NL}body${NL}EOF"; do
   shape=$((shape + 1))
   run_style_hook "$E2E" "$c"
-  want_style_code 2 "#3739 a forbidden character blocks a push in each shape left (shape $shape of 8: one line ending in a line break; lines after and no closing line; the opener's line in a wrapper's string; that string of one line; the pair in a wrapper's string; in a string eval reads; inside backquotes; inside backquotes in double quotes)"
+  want_style_code 2 "#3739 a forbidden character blocks a push in each shape left (shape $shape of 9: one line ending in a line break; lines after and no closing line; the opener's line in a wrapper's string; that string of one line; the pair in a wrapper's string; in a string eval reads; inside backquotes; inside backquotes in double quotes; the pair in a wrapper's string after an opener on its line)"
 done
 for c in "cd $W && bash -c 'git push'" "cd $W && eval 'git push'" "cd $W && x=\`git push\`"; do
   run_style_hook "$E2E" "$c"
