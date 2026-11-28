@@ -346,17 +346,12 @@ echo "slack drafts only: with the sources refusal on, the everyday tools are rea
 # Switched on, a file sourced by a path the gate cannot work out is refused, so a tool every session
 # runs has to set each path it sources plainly. Before #2538's rewrite run-all-tests.sh took its issue
 # spool library from HOOK_SPOOL_LIB and was refused, and with it plan-council's healthcheck.
-# These cases hold a VERDICT, that the tool is let through, and the gate's real clock decides one
-# only on a machine fast enough to finish inside its seconds. That speed is a state this suite
-# cannot set and can see (L411): on 2026-11-27 a pull request that touched neither the gate nor this
-# suite failed here on GitHub's slowest runner model (run 46063600652, an EPYC 7763 at a load of 4.37
-# on 4 cores), where judging tests/test-claude-sync.sh takes 10.4 to 11.5 s of processor time
-# against the gate's 11 (#3863). So where the gate answers that it ran out of time, and only there,
-# the same command is judged again on the step clock, which no speed can end (L524), and the case
-# passes or fails on that verdict. That the seconds ran out is said in the one shape run-all-tests
-# counts and prints, so a runner where it happens every time is seen. How long the gate takes is
-# held where it is measured, by the cost cases in test-slack-drafts-only-gate.sh, which read a
-# judgement that ran out the same way (#3170). Every other refusal fails the case as it is.
+# These cases hold a verdict, that the tool is let through. The gate's real clock gives one only on
+# a machine fast enough to finish inside its seconds, a state this suite cannot set and can see
+# (#3863). So where the gate answers that it ran out of time, and only there, the command is judged
+# again on the step clock, which no machine's speed can end, and the case is that verdict. The run
+# out is printed as an unmeasured part, so a machine where it always happens is seen. How long the
+# gate takes is held by the cost cases in test-slack-drafts-only-gate.sh.
 everyday_tool() { # everyday_tool <command> <the check's name>: the gate lets the tool through
   run_bash "$1"
   case "$RC $ERR" in
@@ -377,9 +372,9 @@ else
   printf 'SUITE-PART-UNMEASURED %s\n' "#2538 claude-sync, load-window and the claude-sync suite: this suite is not in a claude-config checkout"
 fi
 # A machine too slow for the gate's seconds, stood in for by a copy of the gate whose budget is a
-# thousandth of a second (as test-slack-drafts-only-gate.sh stands one in for its cost cases, #3170),
-# so the run out is seen on every machine and never waited for. Each case is run in a subshell with
-# counts of its own, so what it prints and counts is read here and is no part of this suite's result.
+# thousandth of a second, so the run out is seen on every machine and never waited for. Each case
+# is run in a subshell with counts of its own, so what it prints and counts is read here and is no
+# part of this suite's result.
 slow3863="$T/slow-3863"
 mkdir -p "$slow3863" && cp "$HOOK" "$slow3863/" && cp -R "$DIR/lib" "$slow3863/lib" \
   && sed 's/^BUDGET_SECONDS = 11$/BUDGET_SECONDS = 0.001/' "$DIR/slack_drafts_only_gate.py" > "$slow3863/slack_drafts_only_gate.py"
@@ -400,7 +395,7 @@ if grep -q '^BUDGET_SECONDS = 0\.001$' "$slow3863/slack_drafts_only_gate.py" 2>/
   esac
   check "a script that posts still fails the case after the gate ran out of its seconds on it, on the step clock's own refusal (#3863)" "$got"
 else
-  check "the gate's budget is the line the slow copy shortens (#3863)" "no line 'BUDGET_SECONDS = 11' in $DIR/slack_drafts_only_gate.py, so no slow copy was made and the run out was never seen"
+  check "a copy of the gate with a budget of a thousandth of a second is made (#3863)" "none was made in $slow3863, so the run out was never seen: either copying the gate there failed, or $DIR/slack_drafts_only_gate.py has no line 'BUDGET_SECONDS = 11' to shorten"
 fi
 # And a refusal that is not the gate running out is never judged again: with the gate as it is, a
 # script that posts fails the case at once and nothing is called unmeasured.
