@@ -60,14 +60,14 @@ the program the shell would run is that one for certain:
     lib/shell-words.py's runners), since one can change where the program is looked for;
   * never where an earlier command of the same call wrote, or may have written, the file the
     shell would run: the word's own path, or for a bare name a file of that name in any folder of
-    the session's PATH or of SYSTEM_BIN (written_program, claude-config#3837: `cp ./frob
-    /opt/homebrew/bin/cat; /opt/homebrew/bin/cat calm.sh > run.sh; bash run.sh` was read as
-    calm.sh and allowed on d45aa40ce3, 2026-11-27);
+    the session's PATH or of SYSTEM_BIN (written_program, claude-config#3837: in `cp ./frob
+    /opt/homebrew/bin/cat; /opt/homebrew/bin/cat calm.sh > run.sh; bash run.sh` the cat that
+    runs is the copy, so run.sh is not calm.sh);
   * never where a function or an alias of the name is defined: in a text that runs the command,
     in a file such a text sources before it or one that file sources (sourced_shadow), or
     anywhere in such a text as a name in front of empty brackets, quoted or not, which is how
     `eval 'cat() { ... }'` and a definition after another command on its line are written
-    (named_anywhere). All three were allowed on d45aa40ce3 (claude-config#3837).
+    (named_anywhere, claude-config#3837).
 
 Not looked at, and so still believed: a bare name the session's PATH resolves outside those
 folders, zsh's path array, the shell's hash table (hash -p), PATH set by a file the command
@@ -131,15 +131,14 @@ def named_anywhere(text):
     """Every name text writes in the form `name()`, in front of empty brackets, wherever that
     stands: at the start of a line or after another command, bare or inside quoted words. Only
     that form: the other one, `function name`, the gate's sh_funcs already finds anywhere in a
-    text, quoted or not (`eval 'function cat { ./frob; }'` was refused on d45aa40ce3). It finds
-    `name()` only at the start of a line, so `true; cat() { ./frob; }` and
-    `eval 'cat() { ./frob; }'` each defined a function it did not see (claude-config#3837).
-    Quoted words are counted on purpose:
-    whether a shell ever evaluates them is not something a reading of the text can say, and
-    counting one that is only printed can only make a program doubted, never believed.
+    text, quoted or not. It finds `name()` only at the start of a line, so `true; cat() { ./frob; }`
+    and `eval 'cat() { ./frob; }'` each define a function it does not see (claude-config#3837).
+    Quoted words are counted on purpose: whether a shell ever evaluates them is not something a
+    reading of the text can say, and counting one that is only printed can only make a program
+    doubted, never believed.
 
     One pass over the brackets, never one search for each name: this is asked of every text
-    system_program walks, and tests/test-claude-sync.sh is 1.8 MB."""
+    system_program walks, and a suite's script can be megabytes long."""
     names = set()
     for m in EMPTY_BRACKETS.finditer(text):
         found = NAME_BEFORE.search(text[max(0, m.start() - 120):m.start()].rstrip(" \t"))
@@ -730,12 +729,10 @@ def make(unknown_dir, system_bin):
             changed: the files sourced so far (paths, and how many a sourced file sources), what
             this call wrote each file read from (the gate's made, by the very list it holds), and
             how much the gate has noted of folders copied, paths not worked out, programs that may
-            write and git (the same counts written_program keeps). system_program asks this for
-            every cat, cp, echo and printf of a text, and each asking read what the call wrote for
-            every sourced file again: worked out each time, judging `bash tests/test-claude-sync.sh`
-            took 6.5 to 7.0 s of processor against 5.9 to 6.3 s before the issue, and the run of the
-            gate's own suite 8.1 to 8.7 s against 5.3 to 5.9 s (three readings each, taken in turn,
-            at a load of 94 to 140)."""
+            write and git (written_counts). This is asked once for every command of a text whose
+            program the gate reads by its name, and worked out each time it reads the gate's whole
+            record of what the call wrote for every sourced file, which over a long script is a
+            measurable part of the gate's time budget."""
             nested = self.__dict__.get("_exact_nested", {})
             memo = self.__dict__.setdefault("_exact_sourced_shadow", {})
             key = (tuple(paths), name)
@@ -800,9 +797,8 @@ def make(unknown_dir, system_bin):
             calls and answers at once then. For a bare name the folders are searched once for each
             name while that record is as it was (written_counts). Where only the files written by
             name have grown, and none of them is the file a folder would hold for the name, the
-            answer stands as well: a suite writes a file by name every few commands, and searching
-            every folder again after each one is the same reading of the record made over and over
-            (sourced_shadow has the measurement)."""
+            answer stands as well: a long script writes a file by name every few commands, and
+            searching every folder again after each one reads the same record over and over."""
             if not (self.made or self.made_dirs or self.made_unknown or self.made_maybe or self.made_code
                     or self.made_git):
                 return False

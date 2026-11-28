@@ -574,30 +574,23 @@ NPM_LIFECYCLE = {"test": "test", "t": "test", "tst": "test", "start": "start", "
 PKG_DIR_OPTS = {"--prefix", "-C", "--dir", "--cwd"}
 PKG_EXEC = {"exec", "x", "dlx"}
 MAX_DEPTH = 3
-# How deep a shell script file, a heredoc fed to a shell and text piped to one are read as commands
-# (claude-config#3837). Up to MAX_DEPTH every reading is as it was. Before that issue one standing
-# exactly MAX_DEPTH deep was judged only by whether its own text names a send call, so a script
-# that names none and runs a script that posts passed: `bash h0.sh`, with the post behind four other
-# scripts, was allowed on d45aa40ce3 (2026-11-27). Refusing every script that deep was tried first
-# and refused the run of every suite in this repository, each of which sources lib/suite-deadline.sh,
-# which sources lib/load-average.sh, which sources lib/whole-number.sh (17 of 18 everyday commands
-# tried, 2026-11-27). So these are read on down to this depth, and one standing this deep is refused
-# as a command the gate could not check (too_deep in lib/no-network-route.py). A file that is
-# already being read higher up the same chain (lib/suite-deadline.sh runs itself again) is not read
-# a further time past MAX_DEPTH, and is not refused: its commands are the ones being read. A string
-# a shell is handed (`bash -c`, eval) is not read deeper than MAX_DEPTH, and is refused there, as
-# before.
+# How deep a shell script file, a heredoc fed to a shell and text piped to one are read as commands.
+# Up to MAX_DEPTH every reading is unchanged. Past it, a text is first judged by the names in it, so
+# what that judgement refuses stays refused, and one that names no send call is then read as
+# commands down to this depth, because it can run a script that posts (claude-config#3837). One
+# standing this deep is refused as a command the gate could not check (too_deep in
+# lib/no-network-route.py). The limit is not MAX_DEPTH itself because a suite's ordinary helpers
+# source one another more than MAX_DEPTH deep, and refusing there refuses the run of the suite. A
+# file already being read higher up the same chain (a script that runs itself again) is not read a
+# further time past MAX_DEPTH, and is not refused: its commands are the ones being read. A string a
+# shell is handed (`bash -c`, eval) is not read deeper than MAX_DEPTH, and is refused there.
 FILE_DEPTH = 8
-# The longest text read as commands past MAX_DEPTH. A longer one there is judged as it was before
-# claude-config#3837, by the names in it and what it imports, so a post behind such a script that
-# deep still passes: that part of the issue's route 7 is open, and is Dan's to decide. The gate's own
-# suite reaches tests/test-claude-sync.sh (1.9 MB) three deep, in the words of its cost cases, and
-# with that file read as commands there judging `bash payload/hooks/test-slack-drafts-only-gate.sh`
-# took 13.2 s of processor against 8.8 to 8.9 s with it judged by its names (the least of three
-# readings each, taken in turn at a load of 130 to 180, 2026-11-27), which is past the gate's 11 s,
-# so the gate refused the run of its own suite as one it ran out of time on. Every other script in
-# this repository is under 256 KB, and with scripts up to 1 MB read that deep the same judgement cost
-# what it does with scripts up to 100 KB read (8.9 against 8.9 s).
+# The longest text read as commands past MAX_DEPTH. Reading costs time in proportion to the text,
+# and a suite can reach a script of megabytes that deep through the words of its own cases, which
+# takes the judgement of that suite's run past the gate's budget, so the gate refuses the run as one
+# it ran out of time on. A longer text there is judged by the names in it and what it imports alone,
+# so a post behind a script that long and that deep still passes. Closing that is put off, and is
+# Dan's to decide (claude-config#3837).
 DEEP_FILE_MAX = 256 * 1024
 # A JavaScript or TypeScript script's relative imports are followed (claude-config#2318): repo-digest's
 # `npm run digest` runs src/digest.ts, which names no endpoint and imports src/slack.ts, which does.
@@ -2446,9 +2439,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # may write any file it names, as a program the gate does not know may: with nothing
                 # marked, the less the gate knew of the program the more it believed
                 # (claude-config#3837). Only a word holding a $ or a backquote: `[` is a word with no
-                # value here too, and `[ -x tool ] || swiftc ... -o tool; ./tool` was refused with
-                # every such word counted (two cases of the tools suite, 2026-11-27). Not in a script
-                # on disk, where nothing a program names is marked (note_program).
+                # value here too, and counting it refuses `[ -x tool ] || swiftc ... -o tool; ./tool`.
+                # Not in a script on disk, where nothing a program names is marked (note_program).
                 for a, v in zip(args[1:], vals[1:]):
                     self.note_named(a, v, d, "a program whose name this gate cannot work out")
         elif name in COPIERS:
@@ -3130,12 +3122,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         """The piece every write gains where the text being read could only be read by the crude cut
         (lib/shell-words.py crude_commands), else []. That cut lists whatever MAY be a command,
         words inside quotes included, which a shell only prints. Noted as any other write, such a
-        pretend write replaced what the gate held for the file: `cp post.sh made.sh` and then
-        `echo 'a $(printf true > made.sh) b'`, in a script with a quote left open further down,
-        left made.sh read as `true`, and `bash made.sh` after it was allowed (claude-config#3837,
-        seen on d45aa40ce3, 2026-11-27). So in such a text a write only ever adds: what the file
-        held before is kept, and the file also holds something the gate could not read, which
-        refuses a later run of it as one that could not be checked."""
+        pretend write would replace what the gate holds for the file: after `cp post.sh made.sh`,
+        the line `echo 'a $(printf true > made.sh) b'`, in a script with a quote left open further
+        down, would leave made.sh read as `true`, and `bash made.sh` after it allowed
+        (claude-config#3837). So in such a text a write only ever adds: what the file held before
+        is kept, and the file also holds something the gate could not read, which refuses a later
+        run of it as one that could not be checked."""
         if not self.shell.get("crude"):
             return []
         return [("unknown", None, "" if self.shell.get("on_disk") else
@@ -3243,12 +3235,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         prog = self.reading_shell(shell_hint, sourced, first) if is_shell else None
         binary = self.content(real, part="binary") if is_shell and "\0" in body else b""
         if is_shell and depth >= MAX_DEPTH:
-            # Past MAX_DEPTH (FILE_DEPTH says why, claude-config#3837): first judged exactly as it
-            # was before that issue, by a name in its text and by what it imports, so nothing
-            # refused then passes now. One that passed is then read as commands like any other,
-            # unless it is already being read higher up this chain, or is longer than
-            # DEEP_FILE_MAX, which leaves it judged as before, or stands FILE_DEPTH deep, where it
-            # is refused as a script the gate could not check, not as one that posts.
+            # Past MAX_DEPTH (FILE_DEPTH says why, claude-config#3837): judged first by a name in
+            # its text and by what it imports, so the reading below can only add a refusal to that
+            # judgement, never take one away. One that passes it is then read as commands like any
+            # other, unless it is already being read higher up this chain, or is longer than
+            # DEEP_FILE_MAX, which leaves it with that judgement alone, or stands FILE_DEPTH deep,
+            # where it is refused as a script the gate could not check, not as one that posts.
             found = self.script_named(label, real, d, body, first, lang, hit)
             if found or self.being_read(real) or len(body) > DEEP_FILE_MAX:
                 return found

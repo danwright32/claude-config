@@ -5376,7 +5376,13 @@ as commands like any other, down to eight scripts deep, and one standing eight d
 command the gate could not check, with the same route named: before that issue a script that
 posts, behind four others, was allowed. The same holds for a heredoc fed to a shell and for text
 piped to one. A file already being read higher up the same chain is not read again past three deep
-(`lib/suite-deadline.sh` runs itself). The refusal by a name refused a plain run of
+(`lib/suite-deadline.sh` runs itself). And past three deep only a script or text of up to 256 KB is
+read as commands (`DEEP_FILE_MAX`): a longer one is still judged by the names in it alone, so a post
+behind such a script that deep still passes, which is open and Dan's to decide. The limit is there
+because the gate's own suite reaches `tests/test-claude-sync.sh` (1.9 MB) three deep, and reading it
+there took judging `bash payload/hooks/test-slack-drafts-only-gate.sh` from 5.8 s of processor to
+13.2 s, past the gate's 11 s, so the gate refused the run of its own suite (measured 2026-11-27 at a
+load of 120 to 200; with the limit it takes 6.1 s). The refusal by a name refused a plain run of
 `test-slack-drafts-gate-qos.sh`, which starts itself again under `taskpolicy` and so reaches the
 gate's own script, which names the call it guards, behind three. A shell script binary from its
 first line and run by bash is judged the same way at any depth, alone or behind one script, since

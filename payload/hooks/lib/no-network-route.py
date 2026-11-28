@@ -133,8 +133,8 @@ IMPORTS = ", which imports "
 # (claude-config#3476). The gate reads a shell script's commands wherever it reads the script, and
 # then says it "runs a command that posts". It says a shell script "posts to Slack (it names ...)"
 # only of one it judged by that name before reading it: one behind three other scripts or more (its
-# MAX_DEPTH; since claude-config#3837 one there that names no call is then read as commands, down to
-# its FILE_DEPTH), or one whose binary part names the call, which a script binary from its first line
+# MAX_DEPTH; one there that names no call is then read as commands, down to its FILE_DEPTH,
+# claude-config#3837), or one whose binary part names the call, which a script binary from its first line
 # and run by bash is at any depth, alone or behind one script. SHELL_EXT is the gate's own list of
 # the endings it takes for a shell script, copied here because this file is handed only the gate's
 # folder; the route's suite holds the copy to the gate's.
@@ -153,11 +153,10 @@ IMPORTS = ", which imports "
 SHELL_EXT = (".sh", ".bash", ".zsh", ".command")
 NAMED_UNREAD = re.compile(r"(?:" + "|".join(re.escape(e) for e in SHELL_EXT) + r") posts to Slack \(it names ")
 # What a refusal reads like when a shell script, or text a shell reads as its commands, stands as
-# deep as the gate reads one as commands and so was not read (too_deep, claude-config#3837). Before
-# that issue such a script was judged only by whether its own text names a send call, so one that
-# names none and runs a script that posts passed: `bash h0.sh` with the post behind four scripts was
-# allowed on d45aa40ce3 (2026-11-27). It is refused as a command the gate could not check, and the
-# refusal gains the route below, since a suite that reaches a helper that deep is the everyday case.
+# deep as the gate reads one as commands and so was not read (too_deep, claude-config#3837). Judged
+# only by whether its own text names a send call, one that names none and runs a script that posts
+# would pass. It is refused as a command the gate could not check, and the refusal gains the route
+# below, since a suite that reaches a helper that deep is the everyday case.
 DEEP_UNREAD = "which is as deep as this gate reads a script as commands"
 # What a later file is said to have been written by, where one may have been.
 UNDER = "the command run under the no network wrapper"

@@ -257,7 +257,7 @@ echo "== route 7: a script one step deeper than the gate used to read as command
 
 # chain <name> <how many scripts> <the last script's text> [how each runs the next]: name0.sh runs
 # name1.sh and so on, and the last holds the text given. A script run by the command is 0 deep, the
-# one it runs 1 deep. The gate read commands 0 to 2 deep and now reads them 0 to 7 deep.
+# one it runs 1 deep. The gate reads commands down to one less than its FILE_DEPTH deep.
 chain() {
   local name="$1" n="$2" last="$3" by="${4:-bash }" i=0
   while [ "$i" -lt $((n - 1)) ]; do
@@ -322,11 +322,10 @@ chain w 3 'bash named.sh'
 run_here 'bash w0.sh'
 refused "#3837 route 7: a script three deep that only names an endpoint is still refused by that name, never read past it"
 says "#3837 route 7: and that refusal still names the no network wrapper" "no network wrapper"
-# Three deep or deeper, a script is read as commands only up to the gate's DEEP_FILE_MAX, 256 KB:
-# reading tests/test-claude-sync.sh (1.9 MB) where the gate's own suite reaches it that deep took
-# the judgement of that suite's run from 5.8 to 13.2 s of processor, past the gate's 11 s. A longer
-# one is judged by the names in it, as before the issue, which is left open and put to Dan; the
-# last case holds what the gate answers for it today, so a change is seen.
+# Three deep or deeper, a script is read as commands only up to the gate's DEEP_FILE_MAX: a longer
+# one is judged by the names in it alone, which leaves a post behind it open (claude-config#3837).
+# The last case holds what the gate answers for that, so a change to it is seen. pad adds comment
+# lines of 100 bytes each, so 2000 of them stay under the limit and 2700 pass it.
 pad() { python3 -c 'import sys; sys.stdout.write(("# " + "x" * 97 + "\n") * int(sys.argv[1]))' "$1" >> "$2"; }
 chain lit 4 'bash post.sh'
 pad 2000 "$P/lit3.sh"
