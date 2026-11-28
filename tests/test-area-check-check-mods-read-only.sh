@@ -13,8 +13,12 @@
 #     track is still byte for byte the same, git status is the same, and everything new is under the
 #     ignored tools/typescript/node_modules. Its copies go under the temporary folder and its failure
 #     logs under the cache folder, both seen to be written, so the run did its work (L98, L288).
+#   - Handed its folder and the names of mods in it (#3856), which the area check lets through too,
+#     the real script checks those mods alone and leaves a fresh checkout byte for byte as it was,
+#     with no round and as a part of one (CHECK_MODS_ROUND), whose files go under the home folder.
 #   - Each of those checks is seen to fail (L1): a copy of the script changed to append to a tracked
-#     file, to add a new file, or to plant an ignored one is caught.
+#     file, to add a new file, or to plant an ignored one is caught, and so is one appending to a
+#     tracked file in a run of named mods.
 #   - The rule itself, run on mod-kit's REAL reader of a command and real git
 #     (tests/area-check-named-rule.mjs, shared with the suite of the other script let through by
 #     name, #3082), lets through only that
@@ -177,11 +181,13 @@ mkdir -p "$TMP/home" "$TMP/tmp"
 KEPT="$TMP/home/.cache/claude-config/mod-test-failures"
 # The script as the area check lets it through: `bash tools/check-mods.sh payload/mods` from the root
 # of the checkout. Only the stand ins, and a home and temporary folder of its own, are set around it.
+# NAMES, when set, is the mods named after the folder (#3856), plain words, so it is left unquoted.
+NAMES=""
 run_check(){   # $1 = checkout  rest = more of the environment -> sets out and code
   local repo="$1"; shift
   : > "$CALLS"; : > "$TSC_CALLS"
-  out="$(cd "$repo" && env -u CHECK_MODS_FAILURE_OUTPUT -u CHECK_MODS_TS_DIR -u CHECK_MODS_BYPASS_KNOWN -u TSC_BIN -u XDG_CACHE_HOME \
-    HOME="$TMP/home" TMPDIR="$TMP/tmp" STUB_LOG="$CALLS" CLAUDE_BIN="$CLAUDE" PINNED_TS_OFFLINE=1 "$@" bash tools/check-mods.sh payload/mods 2>&1)"; code=$?
+  out="$(cd "$repo" && env -u CHECK_MODS_FAILURE_OUTPUT -u CHECK_MODS_TS_DIR -u CHECK_MODS_BYPASS_KNOWN -u TSC_BIN -u XDG_CACHE_HOME -u CHECK_MODS_ROUND -u CHECK_MODS_LAST_PASSED \
+    HOME="$TMP/home" TMPDIR="$TMP/tmp" STUB_LOG="$CALLS" CLAUDE_BIN="$CLAUDE" PINNED_TS_OFFLINE=1 "$@" bash tools/check-mods.sh payload/mods $NAMES 2>&1)"; code=$?
 }
 
 REPO="$TMP/repo"
@@ -249,12 +255,45 @@ control "planting an ignored file" "$AFTER_DIR
 mkdir -p tools/typescript/node_modules; : > tools/typescript/node_modules/planted
 " whole "tools/typescript/node_modules/planted"
 
+# 4. Handed its folder and the names of mods in it (#3856), the form the area check also lets
+# through: it checks those mods alone and leaves a fresh checkout as it found it, with no round and
+# as a part of one. A round's files go beside the record of the build the mods last passed on, under
+# the home folder, seen to be written so the run did that work too.
+NAMED_REPO="$TMP/repo-named"; STATE="$TMP/home/.claude/state"
+make_repo "$NAMED_REPO" "" && [ -z "$(status "$NAMED_REPO")" ] && check "a second throwaway checkout is made, clean, for the runs of named mods" ok \
+  || check "a second throwaway checkout is made, clean, for the runs of named mods" "status: $(status "$NAMED_REPO")"
+named_before="$(whole "$NAMED_REPO")"
+rm -rf "$STATE"
+NAMES="fine leaning"
+run_check "$NAMED_REPO" TSC_BIN="$TSC"
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -q '^check-mods: 2 of 4 mods checked in payload/mods: fine, leaning$' \
+  && check "handed two names, the run checks those two mods of the four and passes" ok \
+  || check "handed two names, the run checks those two mods of the four and passes" "exit=$code out=$out"
+[ "$(grep -c "^plugin validate payload/mods/" "$CALLS")" -eq 2 ] && ! grep -qE 'broken-mod|redtest' "$CALLS" && check "it asked claude about the two named mods and no other" ok \
+  || check "it asked claude about the two named mods and no other" "$(cat "$CALLS")"
+[ "$(whole "$NAMED_REPO")" = "$named_before" ] && [ -z "$(status "$NAMED_REPO")" ] && check "handed names, every path in the checkout is byte for byte as it was, none is new, and git status is clean" ok \
+  || check "handed names, every path in the checkout is byte for byte as it was, none is new, and git status is clean" "$(changed "$named_before" "$(whole "$NAMED_REPO")") status: $(status "$NAMED_REPO")"
+[ ! -e "$STATE" ] && check "with no round, a run of named mods records nothing under the home folder's state" ok \
+  || check "with no round, a run of named mods records nothing under the home folder's state" "$(find "$STATE" | paste -sd' ' -)"
+run_check "$NAMED_REPO" TSC_BIN="$TSC" CHECK_MODS_ROUND=r1
+[ "$code" -eq 0 ] && [ -n "$(find "$STATE/mods-last-passed.tsv.rounds/r1" -type f -name 'part.*' 2>/dev/null)" ] \
+  && check "as a part of a round, it keeps its round's file beside the record, under the home folder's state" ok \
+  || check "as a part of a round, it keeps its round's file beside the record, under the home folder's state" "exit=$code under $STATE: $(find "$STATE" 2>/dev/null | paste -sd' ' -) out=$out"
+[ "$(whole "$NAMED_REPO")" = "$named_before" ] && [ -z "$(status "$NAMED_REPO")" ] && check "and as a part of a round the checkout is byte for byte as it was, with git status clean" ok \
+  || check "and as a part of a round the checkout is byte for byte as it was, with git status clean" "$(changed "$named_before" "$(whole "$NAMED_REPO")") status: $(status "$NAMED_REPO")"
+# The control (L1): handed names, a script that writes into the checkout is caught the same way.
+control "a run of named mods appending to a tracked file" "$AFTER_DIR
+printf '// x\\\\n' >> \"\$dir/fine/hooks/register.ts\"
+" tracked "payload/mods/fine/hooks/register.ts"
+NAMES=""
+
 # ---- The rule, on the real reader and real git ----
-# How many checks must run is set here, not measured: 58 of the run's shape and its text (31 before
+# How many checks must run is set here, not measured: 65 of the run's shape and its text (31 before
 # #3093, 19 of settings, runners and changes of folder it added, one of a reader that says less
 # than the rule asks, two of a change of folder that leads nowhere, three of one written with
-# `..`, and two of a variable naming a program it runs written before it, #3154), one for each of
-# the four libraries, and one for the other script let through by name.
-named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 63
+# `..`, two of a variable naming a program it runs written before it, #3154, and seven of names of
+# mods after the folder, #3856), one for each of the four libraries, and one for the other script
+# let through by name.
+named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 70
 
 finish

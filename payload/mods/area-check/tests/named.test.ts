@@ -224,6 +224,10 @@ const facts = (over: Partial<NamedFacts> = {}, asked: string[] = []): NamedFacts
     asked.push(`folder ${path}`)
     return true
   },
+  isFile: async path => {
+    asked.push(`file ${path}`)
+    return true
+  },
   git: async (root, args) => {
     asked.push(`git ${root} ${args.join(' ')}`)
     return 0
@@ -717,4 +721,89 @@ test('a hold for any other reason says nothing of running the script alone, a ch
   const changed = refusal(await bash($ as never, w, 'bash tools/check-mods.sh src/', {}, 'changed'))
   expect(changed).toContain('has changed since this checkout left origin/main')
   expect(changed).not.toContain('only when the command runs nothing else')
+})
+
+// #3856: `bash tools/check-mods.sh <mods folder> <mod> [<mod> ...]` checks only the named mods of the
+// folder (#3622), and was held for being handed more than its one folder. A name is no path the
+// script opens: it reads `<folder>/<name>` and refuses, before it checks anything, a name holding a
+// slash, starting with a dot, or that is no mod there. tests/test-area-check-check-mods-read-only.sh
+// runs the real script in that form.
+const withMods = ($: unknown, on: Parameters<typeof world>[1]) => {
+  const w = both($, on)
+  for (const mod of ['src/manual-steps', 'src/area-check', 'src/lib/mod-kit']) w.files[`${APP}/${mod}/.claude-plugin/plugin.json`] = '{}'
+  w.files[`${APP}/copy/tools/check-mods.sh`] = UNREADABLE
+  return w
+}
+const NAMED_MODS: [string, string, string][] = [
+  ['one mod named after the folder', 'bash tools/check-mods.sh src/ manual-steps', 'src/'],
+  ['by whole paths, as from a worktree', `bash ${APP}/tools/check-mods.sh ${APP}/src manual-steps`, `${APP}/src`],
+  ['two mods named, its output piped to a reader', `bash ${APP}/tools/check-mods.sh ${APP}/src manual-steps area-check 2>&1 | tail -n 40`, `${APP}/src`],
+  ['after a change of folder', 'cd ./src && bash ../tools/check-mods.sh lib mod-kit', 'lib'],
+]
+
+test("this repository's own tools/check-mods.sh handed its folder and the names of mods in it runs, judging no file, on record (#3856)", KIT, async ($, on) => {
+  const w = withMods($, on)
+  const ran: string[] = []
+  for (const [i, [what, command]] of NAMED_MODS.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    ran.push(r.result === 'done' ? `ran: ${what}` : `${what}: ${refusal(r)}`)
+  }
+  expect(ran).toEqual(NAMED_MODS.map(([what]) => `ran: ${what}`))
+  expect(w.judged().length).toBe(0)
+  expect(named(w).map(x => [x.word, x.script, x.decision])).toEqual(NAMED_MODS.map(([, , word]) => [word, `${APP}/tools/check-mods.sh`, 'passed']))
+})
+
+const NOT_NAMES = 'after its folder it is handed a word that is no plain name of a mod in it (letters, digits, dots, dashes and underscores, starting with a letter or a digit)'
+const NO_MOD = 'after its folder it is handed a name that is no mod there (no .claude-plugin/plugin.json in a folder of that name directly inside it)'
+const NOT_MODS: [string, string, string][] = [
+  ['a name that is no mod in the folder', 'bash tools/check-mods.sh src/ nomod', NO_MOD],
+  ['a file of the folder in place of a name', 'bash tools/check-mods.sh src/ big.ts', NO_MOD],
+  ['a mod of the folder, then a name that is none', 'bash tools/check-mods.sh src/ manual-steps nomod', NO_MOD],
+  ['a second folder after it', 'bash tools/check-mods.sh src/ lib/', NOT_NAMES],
+  ['a path into a mod', 'bash tools/check-mods.sh src/ manual-steps/hooks', NOT_NAMES],
+  ['a path to a mod deeper in the folder', 'bash tools/check-mods.sh src/ lib/mod-kit', NOT_NAMES],
+  ['a name that climbs out of the folder', 'bash tools/check-mods.sh src/ ..', NOT_NAMES],
+  ['a name built as the command runs', 'bash tools/check-mods.sh src/ "$MOD"', NOT_NAMES],
+  ['a pattern for the names', 'bash tools/check-mods.sh src/ manual-*', NOT_NAMES],
+  ['a mod named, then a held file by its path', 'bash tools/check-mods.sh src/ manual-steps src/big.ts', NOT_NAMES],
+  ['its round named in front of it', 'CHECK_MODS_ROUND=r1 bash tools/check-mods.sh src/ manual-steps', given('CHECK_MODS_ROUND')],
+  ['a script of the same name in another folder of the checkout', 'bash copy/tools/check-mods.sh src/ manual-steps', 'it is not tools/check-mods.sh at the root of its checkout'],
+  ['the other script let through by name, which takes no names', `bash ${SCAN} src/ manual-steps`, 'it is handed more than the one folder it reads'],
+]
+
+test('handed anything after its folder but the names of mods in it, the named script is held as before, saying why (#3856)', KIT, async ($, on) => {
+  const w = withMods($, on)
+  const held: string[] = []
+  for (const [i, [what, command, why]] of NOT_MODS.entries()) {
+    const said = refusal(await bash($ as never, w, command, {}, `b${i + 1}`))
+    const record = named(w).at(-1)
+    held.push(said.includes('The area check held this Bash command') && said.includes(`was not let through by name: ${why}.`) && record?.decision === 'judged' && record.why === why ? `held: ${what}` : `${what}: ${said}`)
+  }
+  expect(held).toEqual(NOT_MODS.map(([what]) => `held: ${what}`))
+})
+
+test('only tools/check-mods.sh takes names after its folder (#3856)', async () => {
+  // A second script taking names is a second loosening, which is Dan's to sign off: adding one turns this red.
+  expect(NAMED.filter(n => n.mods).map(n => n.script)).toEqual(['tools/check-mods.sh'])
+})
+
+test('a run handed names asks, after its folder, whether each is a mod in it, and one that is none or cannot be looked at leaves the run judged (#3856)', async () => {
+  const RUN_NAMED = 'bash tools/check-mods.sh src/ manual-steps area-check'
+  const about = { script: `${APP}/tools/check-mods.sh`, word: 'src/', folder: `${APP}/src` }
+  const asked: string[] = []
+  expect((await read(RUN_NAMED, facts({}, asked))).named).toEqual([{ ...about, passed: true }])
+  expect(asked).toEqual([
+    `commands ${KNOWN}`,
+    `commands ${RUN_NAMED}`,
+    `checkout ${APP}/tools/check-mods.sh`,
+    `folder ${APP}/src`,
+    `file ${APP}/src/manual-steps/.claude-plugin/plugin.json`,
+    `file ${APP}/src/area-check/.claude-plugin/plugin.json`,
+    `git ${APP} diff --quiet --merge-base origin/main -- ${NAMED_TEXTS}`,
+  ])
+  const w = commandWrites(RUN_NAMED, APP, HOME)
+  const second = await namedReaders(RUN_NAMED, w, facts({ isFile: async path => !path.includes('/area-check/') }))
+  expect([second.writes, second.named]).toEqual([w, [{ ...about, why: NO_MOD }]])
+  const unseen = await namedReaders(RUN_NAMED, w, facts({ isFile: async () => Promise.reject(new Error('EACCES')) }))
+  expect([unseen.writes, unseen.named]).toEqual([w, [{ ...about, why: 'it could not be checked (EACCES)' }]])
 })

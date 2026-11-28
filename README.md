@@ -12353,8 +12353,19 @@ stay where they were. A path that only starts with `..` (`../`, `../../x`) is fo
 A copy of mod-kit loaded before #3093 carries no setting and names no runner, so the rule first
 asks the reader about a line it knows the answer for (`A=1; B=2 env true`), and where the answer
 lacks the setting, the runner or the command that only sets a value, no run is let through.
+Since #3856 the folder may be followed by names of mods in it, the form that checks only those
+(`bash tools/check-mods.sh payload/mods manual-steps`, #3622), which was held for being handed more
+than one folder. Each word after the folder must be a plain name (letters, digits, dots, dashes and
+underscores, starting with a letter or a digit) of a folder directly inside it that holds
+`.claude-plugin/plugin.json`: the script reads `<folder>/<name>` and never opens the name as a
+path. Such a run writes what a whole folder's run writes, less the record of the build the mods
+last passed on. With `CHECK_MODS_ROUND` in the environment it keeps its round's files beside that
+record, under the home folder's state; the command itself can give it no round, since any setting
+holds the run. Only `tools/check-mods.sh` takes names; the other script let through by name is held
+on a second word as before.
 Anything else is judged as before: a script of that name in another repository or elsewhere in the
-checkout, a changed copy, a second argument, a file or a pattern in place of the folder, another
+checkout, a changed copy, a second argument that is no name of a mod in the folder, a file or a
+pattern in place of the folder, another
 shell, the file its output is redirected into, and the script chained with any other command, in a
 loop or in a function, which is judged with that command as before. Each such run is one
 `named-reader` line in the log, `passed` or `judged` with why.

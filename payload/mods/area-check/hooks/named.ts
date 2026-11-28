@@ -33,10 +33,20 @@ type Run = NonNullable<ModKitWrites['runs']>[number]
  * programs are, so a command naming one before the script is held for it by name (byValueNamed). The
  * same suite names each of the seven commands by file, line and variable, and is red when one changes
  * or its variable is missing here.
+ *
+ * `mods` lets the folder be followed by names of mods in it (#3856), the form that checks only those
+ * (`bash tools/check-mods.sh <mods folder> <mod> [<mod> ...]`). A name is no path the script opens:
+ * it reads `<folder>/<name>`, and refuses, before it checks anything, a name holding a slash,
+ * starting with a dot or that is no mod there. Such a run writes what a whole folder's run writes,
+ * less the record of the build the mods last passed on; with CHECK_MODS_ROUND in the environment it
+ * keeps its round's files beside that record, under the home folder's state, and no setting given in
+ * the command is let through. The same suite runs the real script in that form, with and without a
+ * round, and is red when the checkout changes.
  */
 export const CHECK_MODS = {
   repo: 'danwright32/claude-config',
   script: 'tools/check-mods.sh',
+  mods: true,
   texts: ['tools/check-mods.sh', 'tools/lib/pinned-compiler.sh', 'payload/hooks/lib/kept-output.sh', 'payload/hooks/lib/load-average.sh', 'payload/hooks/lib/whole-number.sh'],
   byValue: ['TSC_BIN', 'CLAUDE_BIN', 'LOAD_AVERAGE_CMD', 'PINNED_TS_TEST_BEFORE_REMOVE', 'PINNED_TS_TEST_BEFORE_LINK'],
 } as const
@@ -67,10 +77,11 @@ export const SHARED_PARTS = {
 } as const
 
 /**
- * A script known by name: where it lives, every text a run of it is made of, and the variables naming
- * a program it runs that only the environment sets (#3154), where it has any.
+ * A script known by name: where it lives, every text a run of it is made of, the variables naming
+ * a program it runs that only the environment sets (#3154), where it has any, and whether its folder
+ * may be followed by names of mods in it (#3856).
  */
-export type NamedScript = { readonly repo: string; readonly script: string; readonly texts: readonly string[]; readonly byValue?: readonly string[] }
+export type NamedScript = { readonly repo: string; readonly script: string; readonly texts: readonly string[]; readonly byValue?: readonly string[]; readonly mods?: true }
 
 /** Every script let through by name. Each one is an exemption, so a new one is Dan's to sign off. */
 export const NAMED: readonly NamedScript[] = [CHECK_MODS, SHARED_PARTS]
@@ -96,6 +107,7 @@ export type NamedFacts = {
   /** The checkout a path is in, the GitHub repository it is a clone of, and its default branch. */
   checkout: (path: string) => Promise<{ root: string; github: string | null; defaultBranch: string | null } | { unread: string }>
   isFolder: (path: string) => Promise<boolean>
+  isFile: (path: string) => Promise<boolean>
   /** What a git command exits with, run in a checkout. */
   git: (root: string, args: string[]) => Promise<number>
 }
@@ -150,6 +162,10 @@ const saysHowRun = async (facts: NamedFacts): Promise<boolean> => {
 // what the folder is in ways the reader does not follow (zsh reads `cd old new` as a replacement).
 const FROM_A_FIXED_PLACE = /^(?:\/|\.{1,2}(?:\/|$)|~(?:\/|$))[^$`*?[\]{}()]*$/
 const plainCd = (c: Read): boolean => c.words.length === 2 && FROM_A_FIXED_PLACE.test(c.words[1] as string)
+
+// A word that can only be the name of a folder directly inside the folder a script is handed (#3856):
+// no slash, no leading dot or dash, and nothing the shell expands or matches against files.
+const MOD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 // A path that backs out of a folder it names: a `..` after a named part (`./a/../b`, `../a/../b`,
 // `~/a/..`, `/a/..`). The reader works out where such a change of folder ends from the text alone,
@@ -220,8 +236,10 @@ const byValueNamed = (command: string, n: NamedScript): string | null => {
 // command runs comes back as `beside` (#3417); the rule is the same whichever way it is given.
 const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts): Promise<string | Beside | null> => {
   const [handed, ...more] = r.args
-  if (!handed || more.length) return 'it is handed more than the one folder it reads'
+  if (!handed || (more.length && !n.mods)) return 'it is handed more than the one folder it reads'
   if (!handed.path) return `${handed.word} cannot be read as the one folder it is handed`
+  // Neither reason names the word: it goes into the area check's log, and an argument can carry a credential.
+  if (more.some(a => !MOD_NAME.test(a.word))) return 'after its folder it is handed a word that is no plain name of a mod in it (letters, digits, dots, dashes and underscores, starting with a letter or a digit)'
   const program = byValueNamed(command, n)
   if (program) return program
   // Each named script takes the programs it runs, and where it keeps its copies and logs, from the
@@ -282,6 +300,9 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
   if (r.path !== `${at.root}/${n.script}`) return `it is not ${n.script} at the root of its checkout`
   if (at.github?.toLowerCase() !== n.repo) return `it is in a checkout of ${at.github ?? 'no GitHub repository'}, never ${n.repo}`
   if (!(await facts.isFolder(handed.path))) return `${handed.word} is no folder on the disk`
+  for (const a of more) {
+    if (!(await facts.isFile(`${handed.path}/${a.word}/.claude-plugin/plugin.json`))) return 'after its folder it is handed a name that is no mod there (no .claude-plugin/plugin.json in a folder of that name directly inside it)'
+  }
   if (!at.defaultBranch) return 'origin names no default branch, so its text cannot be compared with the one the suite proved'
   const code = await facts.git(at.root, unchangedArgs(n, at.defaultBranch))
   if (code === 1) return `its text, or that of a file it sources or runs, has changed since this checkout left origin/${at.defaultBranch}, so it is not the text the suite proved`
@@ -292,7 +313,8 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
 /**
  * What a command writes, without the folder a named script only reads. A run is let through when it
  * is the named script itself: run by bash or directly, at its path from the root of a checkout of its
- * repository, handed one folder that is on the disk, in a command that names none of the variables
+ * repository, handed one folder that is on the disk (followed, where the script takes them, only by
+ * names of mods in it, NamedScript.mods, #3856), in a command that names none of the variables
  * its programs are named by before it (byValue, #3154) and gives it no setting (#3093,
  * whySet: for tools/check-mods.sh an equals sign may stand only in a reader of its output, or a
  * comment; for every other named script the command holds no equals sign at all), runs it behind no
@@ -364,6 +386,7 @@ export function engineFacts($: EngineInterface): NamedFacts {
       return { root: b.root, github: (await $.modkit.repo({ root: b.main, remote })).github, defaultBranch: b.defaultBranch }
     },
     isFolder: async path => (await $.fs.exists(path)) && (await $.fs.stat(path, { resolve: true })).kind === 'dir',
+    isFile: async path => (await $.fs.exists(path)) && (await $.fs.stat(path, { resolve: true })).kind === 'file',
     git: async (root, args) => (await $.process.run(['git', '-C', root, ...args], { timeoutMs: GIT_MS })).exitCode,
   }
 }

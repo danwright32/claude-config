@@ -5,7 +5,8 @@
 // <file> a file under payload/mods there, from the root.
 //
 // It lets through only that script at its path from the root of a checkout of its repository, handed
-// one folder, in a command that gives it no setting, names none of the variables its programs are
+// one folder (followed, for tools/check-mods.sh alone, only by names of mods in it, #3856), in a
+// command that gives it no setting, names none of the variables its programs are
 // named by before it (byValue, #3154, even with no equals sign) and runs the script once, behind no runner, with
 // nothing but a change of folder before it (one folder written from /, ./, ../ or ~, which is on
 // the disk) and readers its output is piped into after it, with its texts as the checkout left the
@@ -23,7 +24,7 @@
 // One line a check, PASS or FAIL with the evidence, for tests/area-check-named-reader.sh named_rule,
 // which holds the count to the number its suite states. The checkout is left changed: run it last.
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, copyFileSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, copyFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname } from 'node:path'
 const [namedPath, writesPath, rulesPath, repo, entry, file] = process.argv.slice(2)
 const { NAMED, namedReaders, ...exported } = await import(namedPath)
@@ -43,6 +44,7 @@ const facts = (github, cwd, asks = { assignments: true }) => ({
     return r.status === 0 ? { root: r.stdout.trim(), github, defaultBranch: 'main' } : { unread: 'it is in no checkout' }
   },
   isFolder: async path => existsSync(path) && statSync(path).isDirectory(),
+  isFile: async path => existsSync(path) && statSync(path).isFile(),
   git: async (root, args) => spawnSync('git', ['-C', root, ...args]).status ?? 2,
 })
 const say = (name, ok, evidence) => console.log(ok ? `PASS\t${name}` : `FAIL\t${name}\t${evidence}`)
@@ -65,6 +67,12 @@ const FILE = `${repo}/${file}`
 const RUN = `bash ${S} payload/mods`
 // The one script whose hold on an equals sign Dan loosened (#3093), by the name named.ts exports it by.
 const LOOSENED = entry === 'CHECK_MODS'
+// The one script that takes names of mods after its folder (#3856), stated the same way; the mod the
+// suite's file is in, and another mod of its checkout.
+const TAKES_NAMES = entry === 'CHECK_MODS'
+const MOD = file.split('/')[2]
+const MOD2 = readdirSync(MODS).find(m => m !== MOD && existsSync(`${MODS}/${m}/.claude-plugin/plugin.json`))
+if (!MOD || !MOD2 || !existsSync(`${MODS}/${MOD}/.claude-plugin/plugin.json`)) throw new Error(`the checkout holds no two mods to name under ${MODS}`)
 // Why a command holding an equals sign is judged: for the loosened script the reason the rule gives
 // for that equals sign, and for every other the hold on any equals sign in the command.
 const ANY_EQUALS = 'the command sets a value (it holds an equals sign)'
@@ -83,7 +91,23 @@ mkdirSync(dirname(`${repo}/copy/${S}`), { recursive: true })
 copyFileSync(`${repo}/${S}`, `${repo}/copy/${S}`)
 await judged('a copy elsewhere in the checkout is judged', `bash copy/${S} payload/mods`, [MODS], `not ${S} at the root`)
 await judged('a script of that name in no checkout is judged', `bash /nowhere/${S} payload/mods`, [MODS], 'its checkout cannot be read')
-await judged('handed two folders, both are judged', `bash ${S} payload/mods payload/hooks`, [MODS, `${repo}/payload/hooks`], 'more than the one folder')
+await judged('handed two folders, both are judged', `bash ${S} payload/mods payload/hooks`, [MODS, `${repo}/payload/hooks`], TAKES_NAMES ? 'no plain name of a mod in it' : 'more than the one folder')
+// #3856: names of mods after the folder are let through for the one script that takes them, and
+// only names of mods in that folder. The suite's checkout holds each mod named here.
+const NAMES = TAKES_NAMES ? 'no plain name of a mod in it' : 'more than the one folder'
+const NO_MOD = TAKES_NAMES ? 'a name that is no mod there' : 'more than the one folder'
+if (TAKES_NAMES) {
+  await through('handed its folder and the name of a mod in it, it is let through', `bash ${S} payload/mods ${MOD}`)
+  await through('by whole paths, two mods named, its output piped to a reader', `bash ${repo}/${S} ${MODS} ${MOD} ${MOD2} 2>&1 | tail -n 40`)
+} else {
+  await judged('handed its folder and the name of a mod in it, it is judged', `bash ${S} payload/mods ${MOD}`, [MODS], NAMES)
+  await judged('by whole paths, two mods named, it is judged', `bash ${repo}/${S} ${MODS} ${MOD} ${MOD2} 2>&1 | tail -n 40`, [MODS], NAMES)
+}
+await judged('handed a name that is no mod in its folder, it is judged', `bash ${S} payload/mods no-such-mod`, [MODS], NO_MOD)
+await judged('handed a mod and then a file by its path, both are judged', `bash ${S} payload/mods ${MOD} ${file}`, [MODS, FILE], NAMES)
+await judged('handed a mod named by a pattern, it is judged', `bash ${S} payload/mods ${MOD.slice(0, 2)}*`, [MODS], NAMES)
+await judged('handed a name built as the command runs, it is judged', `bash ${S} payload/mods "$MOD"`, [MODS], NAMES)
+await judged('handed a mod with its round set in front of it, it is judged', `CHECK_MODS_ROUND=r1 bash ${S} payload/mods ${MOD}`, [MODS], TAKES_NAMES ? 'it is run with CHECK_MODS_ROUND set' : NAMES)
 // A reader that leaves out any of what #3093 added answers as one loaded before it, and says nothing
 // of a setting or a runner. Here the real reader is not asked for the commands that only set a
 // value, so the line the rule knows the reading of comes back short and no run is let through.

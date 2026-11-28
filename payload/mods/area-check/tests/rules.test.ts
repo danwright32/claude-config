@@ -37,6 +37,7 @@ import {
   decideProblem,
   holdCard,
   holdRefusal,
+  handBack,
   questionKey,
   reasonProblem,
   restructureQuestion,
@@ -625,6 +626,27 @@ test("a held Bash command is named as a command that writes the file, and is sen
   expect(r).toContain('src/lib/slack.ts')
   expect(r).toContain('Then send the Bash command again, unchanged.')
   expect(r).not.toContain('Before editing it')
+})
+
+// #3856: a subagent whose brief keeps a hold on a command for the main session was told only how to
+// decide it, so it stopped with nothing to hand over.
+const HAND_BACK = ' If your brief does not let you decide a hold on a command, neither decide this one nor send the command another way: stop and hand back to the main session the command as you sent it, the id of this call (toolu_1) and the reason above. The main session can read what the command runs, then run it itself and decide the hold on its own call, or tell you that this one is yours to decide.'
+
+test("a subagent's held command ends with what to hand back to the main session when it may not decide, naming the call's id (#3856)", () => {
+  for (const h of [SHELL, UNREAD, LISTED]) {
+    const mine = holdRefusal(h)
+    const agents = holdRefusal({ ...h, agent: 'ag1' })
+    expect(mine).not.toContain('hand back')
+    expect(agents.endsWith(`Then send the Bash command again, unchanged.${HAND_BACK}`)).toBe(true)
+    expect(handBack({ ...h, agent: 'ag1' })).toBe(HAND_BACK)
+    expect(handBack(h)).toBe('')
+  }
+})
+
+test("a subagent's held edit, which is its own to decide, says nothing of handing back (#3856)", () => {
+  expect(handBack({ ...HELD, agent: 'ag1' })).toBe('')
+  expect(holdRefusal({ ...HELD, agent: 'ag1' })).not.toContain('hand back')
+  expect(holdRefusal({ ...HELD, agent: 'ag1' }).endsWith('Then send the Edit again, unchanged.')).toBe(true)
 })
 
 test('a command whose file cannot be read is held saying so, and with no issue listed can only proceed: there is no file to fold into or restructure', () => {
