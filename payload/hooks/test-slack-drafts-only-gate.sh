@@ -2084,13 +2084,33 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     "the runner's speed could not be measured*" "$(replay_at "$speed_limit" median "$(planted NaN 6.648)")"
   replayed "a case held to a number of units by the least sample fails the same way on a yardstick that read no time (#3863)" \
     "the runner's speed could not be measured*" "$(replay_at 91 least "$(planted 0 6.648)")"
+  # A time below zero is no unit either: dividing by it gives a reading below zero, which is under
+  # every limit.
+  replayed "a yardstick that read a time below zero fails the case the same way, never passing on a reading below zero (#3863)" \
+    "the runner's speed could not be measured*" "$(replay_at "$speed_limit" median "$(planted -0.0822 6.648)")"
+  # cost_case is handed cost.py's answer alone, its first line. With the log line replay_at puts
+  # after it, an answer of ok is no longer the one word check counts as a pass, so every answer but
+  # unmeasured would count as a failure and the count would tell nothing apart.
+  counted() {  # <a record>: the passes and failures cost_case counts for cost.py's answer to it
+    local pass=0 fail=0
+    cost_case "a planted cold case" "$(replay_at "$speed_limit" median "$1" | sed -n 1p)" "#3406" > /dev/null
+    echo "$pass $fail"
+  }
   check "that answer is counted as a failure by cost_case, never as a part this machine could not measure (#3863)" \
-    "$(got="$(pass=0; fail=0; cost_case "a planted cold case" "$(replay_at "$speed_limit" median "$(planted 0 6.648)")" "#3406" > /dev/null; echo "$pass $fail")"; [ "$got" = "0 1" ] && echo ok || echo "cost_case counted $got passes and failures")"
+    "$(got="$(counted "$(planted 0 6.648)")"; [ "$got" = "0 1" ] && echo ok || echo "cost_case counted $got passes and failures")"
+  check "an ordinary reading handed to cost_case the same way is counted as a pass, so that count reads the answer (#3863)" \
+    "$(got="$(counted "$(planted 0.0822 6.648)")"; [ "$got" = "1 0" ] && echo ok || echo "cost_case counted $got passes and failures")"
   # A limit cost.py cannot read is refused, never read as a number or given a default.
   replayed "a line with a number missing is refused (#3863)" \
     "the limit line:1.178:2.25:53.5 is not one this check reads*" "$(replay_at line:1.178:2.25:53.5 median "$(planted 0.0822 6.648)")"
   replayed "a line whose headroom is under 1, which would hold a runner below its own ordinary reading, is refused (#3863)" \
     "the limit line:0.9:2.25:53.5:0.0768 is not one this check reads*" "$(replay_at line:0.9:2.25:53.5:0.0768 median "$(planted 0.0822 6.648)")"
+  # Python reads inf and nan as numbers. A headroom of inf is above zero and over 1, and the limit
+  # it gives is inf, which every reading is under.
+  replayed "a line whose headroom is inf, which would place the limit above every reading, is refused (#3863)" \
+    "the limit line:inf:2.25:53.5:0.0768 is not one this check reads*" "$(replay_at line:inf:2.25:53.5:0.0768 median "$(planted 0.0822 6.648)")"
+  replayed "a line whose headroom is nan, which would give a limit no reading can be compared with, is refused (#3863)" \
+    "the limit line:nan:2.25:53.5:0.0768 is not one this check reads*" "$(replay_at line:nan:2.25:53.5:0.0768 median "$(planted 0.0822 6.648)")"
   replayed "a limit that follows the runner's speed is refused with the least sample, since it is read at the whole run's median (#3863)" \
     "a limit that follows the runner's speed is read at the median yardstick sample*" "$(replay_at "$speed_limit" least "$(planted 0.0822 6.648)")"
   # Where every judgement ran out of the gate's seconds the case is unmeasured as before (#3406),
