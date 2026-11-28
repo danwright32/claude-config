@@ -173,6 +173,38 @@ refuse a command the table lets through and never the reverse:
   * A spelling is used only once the gate's own reader gives back the words it was built for. Where
     neither the words as written nor those words quoted afresh read back so, what python3 runs is
     refused as unread where the command is typed, and left as it was in a script on disk.
+
+WHAT RUNS WITHOUT BEING NAMED (py_cmdline's inspect, py_env_loads, claude-config#3600). Measured on
+main at e4cf5e9919 on 2026-11-25, against what python3 3.14.4 and 3.9.6 themselves ran with stand in
+scripts that only wrote a marker (one run of each shape on each, the two agreeing on every shape):
+each of these ran something that posts and passed.
+
+  * `python3 -i quiet.py < posts.py` runs quiet.py and then the lines of posts.py. With -i among
+    its own option letters (`-i`, `-Bi`, `-ic CODE`, `-im mod`), python3 goes on to run its input
+    once the script, the code given by -c or the module given by -m ends, whether a file, a pipe,
+    a here string or a heredoc feeds it. The gate read that input as data the script is handed.
+    The word -i after the script or the code is their own argument, `-Wi` is -W with the value i,
+    and PYTHONINSPECT with no -i ran nothing from a file or a pipe, so none of those is read so.
+    Now py_own_reading reads what such a command is fed as the gate reads the input of a python3
+    given no script at all (the gate's input_script): a file as the script it is, text as code,
+    and input the gate cannot read is refused as unread.
+  * `PYTHONPATH=onpath PYTHONWARNINGS=error::warnmod.Loud python3 quiet.py` imports warnmod before
+    quiet.py runs. PYTHONWARNINGS is a comma separated list of the filters -W takes one of, and
+    Python imports the module of each class one names, from PYTHONPATH and the standard places.
+    Only the -W form was read (#3539).
+  * `PYTHONSTARTUP=startup.py python3 -i` runs startup.py first, with or without a file fed on its
+    input. With a script, code or a module to run, or with no -i and no terminal, python3 left it
+    alone.
+
+py_env_loads reads both variables wherever a command sets one, whatever program it runs, so more is
+read than runs: -E and -I have python3 ignore both, and PYTHONSTARTUP runs only with -i and nothing
+else to run.
+
+WHAT THAT DOES NOT COVER. A value of either variable that the session's own environment holds and
+the command did not set. The other ways an interpreter loads code as it starts, each measured on
+2026-11-25 as run and as allowed where the file posts: sitecustomize.py and usercustomize.py in a
+folder PYTHONPATH names, RUBYOPT (-r), PERL5OPT (-M), BASH_ENV, ENV for a shell given -i, and
+.zshenv in the folder ZDOTDIR names.
 """
 import ast
 import os
@@ -235,6 +267,19 @@ FOLDER_PATTERN = re.compile(r"[*?\[{]")
 # long option that takes the next word (PYTHON'S OWN OPTIONS above, claude-config#3539).
 PY_VALUE_LETTERS = "cmWX"
 PY_VALUE_LONG = "--check-hash-based-pycs"
+# What python3 was given to run, in the words of a refusal that names what runs after it
+# (py_own_reading, claude-config#3600).
+PY_GIVEN = {"script": "its script", "code": "the code given by -c", "module": "the module given by -m"}
+# The variables whose value has python3 load code as it starts, and what each has it do
+# (py_env_loads, claude-config#3600).
+PY_ENV_LOADERS = {"PYTHONWARNINGS": "import the module of each warning class it names",
+                  "PYTHONSTARTUP": "run the file it names when it is given -i"}
+# One assignment of either among a command's words, and the builtins whose words are assignments.
+PY_ENV_ASSIGN = re.compile(r"(PYTHONWARNINGS|PYTHONSTARTUP)\+?=(.*)\Z", re.S)
+PY_ENV_SETTERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
+# How a refusal names the code an import comes from where a PYTHONWARNINGS value causes it, as "the
+# -W option given to python3" names it for -W.
+PY_WARNED = "the PYTHONWARNINGS value the command sets"
 
 
 def make(py_nodes, unknown_dir):
@@ -697,7 +742,7 @@ def make(py_nodes, unknown_dir):
 
         def py_cmdline(self, words):
             """What python3 itself runs for a command's words, read as its own option reader reads
-            them (PYTHON'S OWN OPTIONS above): (kind, at, cut, end, warns, theirs).
+            them (PYTHON'S OWN OPTIONS above): (kind, at, cut, end, warns, theirs, inspect).
 
             kind is "script" (the word at index at), "code" or "module" (given by -c or -m: the
             word at index at from its character cut on, which is the option's own word where the
@@ -706,8 +751,11 @@ def make(py_nodes, unknown_dir):
             None where Python stops with an error for want of a value. end is the index of the
             first word after the one that names what runs, warns the value of each -W, and
             theirs the indexes of the words that are the shell's (a redirection, its target
-            glued or the next word), never Python's."""
-            mine, theirs, k = [], [], 1
+            glued or the next word), never Python's. inspect says -i is one of Python's own
+            option letters, which has it run its input once what it was given ends (WHAT RUNS
+            WITHOUT BEING NAMED above): a letter before the word that names what runs, and no
+            part of the value of -W or -X (`-Wi` is -W with the value i)."""
+            mine, theirs, k, inspect = [], [], 1, False
             while k < len(words):
                 m = self.sw.REDIRECT_WORD.match(words[k])
                 if m:
@@ -723,29 +771,30 @@ def make(py_nodes, unknown_dir):
                 p += 1
                 if w == "--":
                     if p == len(mine):
-                        return "input", None, 0, at + 1, warns, theirs
+                        return "input", None, 0, at + 1, warns, theirs, inspect
                     at = mine[p]
                     w = words[at]
-                    return ("input" if w == "-" else "script"), at, 0, at + 1, warns, theirs
+                    return ("input" if w == "-" else "script"), at, 0, at + 1, warns, theirs, inspect
                 if w == "-" or not w.startswith("-"):
-                    return ("input" if w == "-" else "script"), at, 0, at + 1, warns, theirs
+                    return ("input" if w == "-" else "script"), at, 0, at + 1, warns, theirs, inspect
                 if w.startswith("--"):
                     p += w == PY_VALUE_LONG
                     continue
                 for cut, ch in enumerate(w[1:], 2):
                     if ch not in PY_VALUE_LETTERS:
+                        inspect = inspect or ch == "i"
                         continue
                     if not w[cut:]:
                         if p == len(mine):
-                            return None, None, 0, len(words), warns, theirs
+                            return None, None, 0, len(words), warns, theirs, inspect
                         at, cut = mine[p], 0
                         p += 1
                     if ch == "W":
                         warns.append(words[at][cut:])
                     if ch in "cm":
-                        return ("code" if ch == "c" else "module"), at, cut, at + 1, warns, theirs
+                        return ("code" if ch == "c" else "module"), at, cut, at + 1, warns, theirs, inspect
                     break
-            return "input", None, 0, len(words), warns, theirs
+            return "input", None, 0, len(words), warns, theirs, inspect
 
         @staticmethod
         def py_respell(words, read):
@@ -755,7 +804,7 @@ def make(py_nodes, unknown_dir):
             name starting with a dash), or -c and the code, or -m and the module, or - for the
             code on its input, then every word after as it was. The options left out load
             nothing the gate reads but a -W value's module, which py_own_reading reads."""
-            kind, at, cut, end, _, theirs = read
+            kind, at, cut, end, _, theirs, _ = read
             if kind == "script":
                 core = [("./" if words[at].startswith("-") else "") + words[at]]
             elif kind in ("code", "module"):
@@ -766,14 +815,16 @@ def make(py_nodes, unknown_dir):
                 return None
             return words[:1] + [words[j] for j in theirs if j < end] + core + words[end:]
 
-        def py_respelled(self, text, want):
+        def py_respelled(self, text, want, spell=None):
             """One command's text spelled so its words read as want (py_respell of its words), or
             None where no spelling the gate can build reads back so. Tried first with the words
             as the command wrote them, quotes and expansions kept, so a path or code the shell
             fills in is still worked out, or refused, as it would be; then with each word of
             want quoted afresh, which is not tried where a word holds something the shell would
             fill in, since quoting it would make it text. What stands before the program
-            (assignments, a runner) is kept as written."""
+            (assignments, a runner) is kept as written. spell, where given, is how the words as
+            written are spelled in place of py_respell, for a command that is not Python's
+            (source_past_dashes in lib/program-runs.py, claude-config#3600)."""
             split = self.py_redirects_split
             rest, assigns = self.rest_of(text)
             if rest and text.endswith(rest):
@@ -781,7 +832,7 @@ def make(py_nodes, unknown_dir):
             else:
                 head = "".join(a + " " for a in assigns.split("\n") if a)
             raw = self.raw_words(text)
-            tries = [self.py_respell(raw, self.py_cmdline(raw))] if raw else []
+            tries = [spell(raw) if spell else self.py_respell(raw, self.py_cmdline(raw))] if raw else []
             if not any(SHELL_FILLS.search(w) for w in want):
                 quoted = []
                 for w in want:
@@ -813,27 +864,122 @@ def make(py_nodes, unknown_dir):
                     out.append(w)
             return out
 
-        def py_own_reading(self, name, words, text, here, judge):
+        @staticmethod
+        def py_warn_module(warn):
+            """The module python3 imports for one warning filter, a -W value or one of the comma
+            separated ones PYTHONWARNINGS holds, or None. A filter is
+            action:message:category:module:lineno with spaces around each field dropped, and a
+            category with a dot in it is a class Python imports the module of
+            (warnings._getcategory). Python imports nothing for a filter whose action it does not
+            know or that has more than five fields (measured 2026-11-25); one is named here all
+            the same, so more is read than runs."""
+            fields = warn.split(":")
+            mod = fields[2].strip().rpartition(".")[0] if len(fields) > 2 else ""
+            return mod if MODULE_NAME.fullmatch(mod) else None
+
+        def py_env_warned(self):
+            """The modules the PYTHONWARNINGS values set so far in this call name, in the order
+            they were read (py_env_loads, which reads each as an import for every command that
+            runs a program from there on, by the PYTHONPATH that command runs with)."""
+            got = self.__dict__.get("_py_env_warned")
+            if got is None:
+                got = self.__dict__["_py_env_warned"] = []
+            return got
+
+        def py_env_loads(self, text, d, depth):
+            """The reason a command that sets PYTHONWARNINGS or PYTHONSTARTUP has python3 load
+            something that posts, or None (WHAT RUNS WITHOUT BEING NAMED above,
+            claude-config#3600). Read wherever the command sets one, in its own prefix, by
+            export, env and their kin, or as a plain assignment, and whatever program it runs,
+            since any of them can start python3 (as node_options reads NODE_OPTIONS in
+            lib/code-loaders.py). The assignments are the command's own, as the shared reader
+            gives them, so the same text inside a quoted word of another command is none.
+
+            The file PYTHONSTARTUP names is read as a Python script where it is set. The module
+            each PYTHONWARNINGS filter names is read as an import by the command it is set for,
+            by the PYTHONPATH that command runs with. One set by export or a plain assignment
+            runs nothing there: it is kept (py_env_warned) and read so by every command from
+            there on that runs a program, since the command whose PYTHONPATH finds the module
+            may come after. A module the gate cannot find is refused, as an import is, where
+            the command runs python3 itself; under any other program the gate cannot tell which
+            Python, if any, would look for it, and only a module found to post refuses.
+
+            A value holding something the shell fills in is worked out where the gate can, the
+            variable's own value left out (it is the session's, which a command adding to it
+            keeps), and one it cannot work out is refused as unread where the command is typed,
+            and left as it was in a script on disk. The session's own value, which the command
+            did not set, is not read."""
+            kept = self.__dict__.get("_py_env_warned")
+            if "PYTHON" not in text and not kept:
+                return None
+            rest, assigns = self.rest_of(text)
+            words = self.words_of(rest)
+            runs = bool(words) and words[0] not in PY_ENV_SETTERS
+            # The reader gives each leading assignment on a line of its own, its quotes taken off.
+            pairs = [a for a in assigns.split("\n") if a] + ([] if runs or not words else words[1:])
+            mods = list(kept or ())
+            for m in filter(None, map(PY_ENV_ASSIGN.match, pairs)):
+                var = m.group(1)
+                value = re.sub(r"\$\{%s\}|\$%s(?!\w)" % (var, var), "", m.group(2))
+                if SHELL_FILLS.search(value):
+                    value = self.sh_value('"%s"' % value.replace("\\", "\\\\").replace('"', '\\"'), d)
+                if value is None:
+                    why = self.unread_typed(
+                        f"it sets {var}, which has python3 {PY_ENV_LOADERS[var]}, to a value the gate cannot "
+                        "work out, so what that loads is not read and whether it posts cannot be checked "
+                        f"(claude-config#3600). Write the value of {var} out in the command")
+                    if why:
+                        return why
+                elif var == "PYTHONSTARTUP":
+                    reason = value and self.script(
+                        value, d, depth, False, "py",
+                        f"the file {value}, which PYTHONSTARTUP has python3 run first when it is given -i,")
+                    if reason:
+                        return reason
+                else:
+                    into = mods if runs else self.py_env_warned()
+                    into.extend(mod for mod in map(self.py_warn_module, value.split(","))
+                                if mod and mod not in into)
+            if not runs:
+                return None
+            here = os.path.abspath(d or os.getcwd())
+            python = bool(self.py_cmd.get("interp"))
+            for mod in mods:
+                noted = len(self.unfollowed)
+                reason = self.imports(PY_WARNED, None, here, f"import {mod}", "py")
+                if reason and not python and any(u in reason for u in self.unfollowed[noted:]):
+                    del self.unfollowed[noted:]  # no module the gate found: left to the Python that looks
+                elif reason:
+                    return reason
+            return None
+
+        def py_own_reading(self, name, words, text, here, judge, fed=None):
             """The reason a Python command posts when it is read as python3 itself reads its
             options, or None (PYTHON'S OWN OPTIONS above, claude-config#3539). words are the
             command's words and text the command, name the program, here the folder it runs in,
-            and judge the gate's judging of one command's text.
+            and judge the gate's judging of one command's text. fed is the gate's reading of
+            what the command is fed on its input as the Python it runs.
 
-            The module a -W value has Python import is read as an import. And where the gate's
-            option table places what runs otherwise than Python does, the command is spelled
-            again so the table reads it as Python does, and judged so. The caller goes on to
-            judge the command as the table reads it, as before, so this can only refuse more."""
+            The module a -W value has Python import is read as an import (the ones a
+            PYTHONWARNINGS value names are read for every command, by py_env_loads). Where -i is
+            one of Python's own options and it was given a script, code or a module to run, what
+            it is fed on its input is read as code it runs after that (claude-config#3600). And
+            where the gate's option table places what runs otherwise than Python does, the
+            command is spelled again so the table reads it as Python does, and judged so. The
+            caller goes on to judge the command as the table reads it, as before, so this can
+            only refuse more."""
             read = self.py_cmdline(words)
-            kind, at, cut, end, warns, theirs = read
+            kind, at, cut, end, warns, theirs, inspect = read
             for warn in warns:
-                # action:message:category:module:lineno, and a category with a dot in it is a
-                # class Python imports the module of (warnings._getcategory).
-                fields = warn.split(":")
-                mod = fields[2].strip().rpartition(".")[0] if len(fields) > 2 else ""
-                if MODULE_NAME.fullmatch(mod):
-                    reason = self.imports(f"the -W option given to {name}", None, here, f"import {mod}", "py")
-                    if reason:
-                        return reason
+                mod = self.py_warn_module(warn)
+                reason = mod and self.imports(f"the -W option given to {name}", None, here, f"import {mod}", "py")
+                if reason:
+                    return reason
+            if inspect and kind in PY_GIVEN and fed is not None:
+                reason = fed()
+                if reason:
+                    return (f"{name} is given -i, so once {PY_GIVEN[kind]} ends it goes on to run what it reads "
+                            f"on its input (claude-config#3600): {reason}")
             if kind is None:
                 return None
             value = words[at][cut:] if at is not None else None

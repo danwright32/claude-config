@@ -6475,10 +6475,34 @@ names is read as an import, and where the table's answer is not Python's the com
 again so the table reads it as Python does, from its words as written, and judged so. The
 table's own reading still follows, so a command refused before is refused still. A spelling the
 gate cannot build is refused as unread where typed, and left as it was in a script on disk.
-Not covered by that reading, each measured on 2026-11-24 as allowed where the file posts:
-`python3 -i quiet.py < posts.py`, which runs the lines on its input after the script;
-`PYTHONWARNINGS`, which names a module as `-W` does; and a shell handed `--` and a script whose
-name starts with a dash (`bash -- -post.sh`), the shells' options being read by the table still.
+Three more routes of that family are read since claude-config#3600, each measured on main on
+2026-11-25 as allowed where the file posts, against what `python3` 3.14.4 and 3.9.6, node
+22.22.2, perl 5.34.1, ruby 2.6.10, bash 3.2.57, zsh 5.9, dash and ksh ran with stand in scripts
+that only wrote a marker (one run of each shape). `python3 -i quiet.py < posts.py` runs the lines
+on its input once the script ends, as it does after code given by `-c` or a module given by
+`-m`: with `-i` among Python's own option letters, what the command is fed (a file, a pipe, a
+here string, a heredoc) is now read as the gate reads the input of a `python3` given no script,
+and input it cannot read is refused as unread. `node -i -e CODE` and `perl -d -e CODE` run
+their input the same way and are read the same way (`input_after_code` in
+`lib/code-loaders.py`); ruby has no such option. `PYTHONWARNINGS` names a module as `-W` does,
+one for each filter of its comma separated list, and `PYTHONSTARTUP` names a file `python3 -i`
+runs first: both are read wherever a command sets one, whatever program it runs
+(`py_env_loads`, beside the reading of `NODE_OPTIONS`), and a value the gate cannot work out is
+refused as unread where typed. And a file whose name starts with a dash is read where the
+program reads no more options of its own (`dash_named` in `lib/program-runs.py`): after `--`,
+after a lone `-`, after the script as its argument, or fed with `<`, so `bash -- -post.sh`,
+`bash - -post.sh`, `ruby -- -post.rb` and a script that runs the file it is handed, handed
+`-post.sh`, are each judged by that file; `source -- post.sh`, where the word `--` was read
+for the file, is judged spelled without it. A word starting with a dash where the program
+still reads its options stays an option. Not covered, each measured on 2026-11-25 as run and as
+allowed where the file posts: `sitecustomize.py` and `usercustomize.py` in a folder
+`PYTHONPATH` names, `RUBYOPT` (`-r`), `PERL5OPT` (`-M`), `BASH_ENV`, `ENV` for a shell given
+`-i`, and `.zshenv` in the folder `ZDOTDIR` names (claude-config#3675); and a `PYTHONWARNINGS`
+or `PYTHONSTARTUP` the session's own environment holds. `node -- -post.js` is judged by the
+file of that name in the folder the command runs in, as it is for the other interpreters, and
+is refused where that file posts, although node 22 did not run that file in the measurement:
+it looked for the name under `node_modules`. A file of that name under `node_modules` is not
+read, and whether node runs one there was not measured.
 Not covered, each measured on 2026-11-22 as allowed where the file posts:
 a Python file on disk that runs a file it names
 (`python3 runner.py`, `import runner`); code the shell fills in whole
