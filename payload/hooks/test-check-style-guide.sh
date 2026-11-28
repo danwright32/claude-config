@@ -267,6 +267,31 @@ want_style_code 0 "#3739 control: a status after the opener is no push"
 W="$(mk_style_repo 'const label = "Loading, please wait";')"
 run_style_hook "$E2E" "cd $W && cat <<EOF; git push${NL}body${NL}EOF"
 want_style_code 0 "#3739 control: clean copy pushed after the opener is allowed"
+# The rest of #3739: a heredoc the text never closes on a line of its own, whose marker word
+# stands on the opener's line; the opener's line inside a wrapper's single quoted string; and the
+# pair (a backslash and a line break) inside a wrapper's single quoted string and inside
+# backquotes, which the shell reading the string or the backquotes removes.
+W="$(mk_style_repo "$BAD")"
+shape=0
+for c in "cd $W && cat <<EOF; git push; EOF${NL}" "cd $W && cat <<EOF; git push; EOF${NL}echo done" \
+         "cd $W && bash -c 'cat <<EOF; git push${NL}body${NL}EOF'" "cd $W && bash -c 'cat <<EOF; git push; EOF'" \
+         "cd $W && bash -c 'git ${PAIR}push'" "cd $W && eval 'git ${PAIR}push'" \
+         "cd $W && x=\`git ${PAIR}push\`" "cd $W && echo \"\`git ${PAIR}push\`\""; do
+  shape=$((shape + 1))
+  run_style_hook "$E2E" "$c"
+  want_style_code 2 "#3739 a forbidden character blocks a push in each shape left (shape $shape of 8: one line ending in a line break; lines after and no closing line; the opener's line in a wrapper's string; that string of one line; the pair in a wrapper's string; in a string eval reads; inside backquotes; inside backquotes in double quotes)"
+done
+for c in "cd $W && bash -c 'git push'" "cd $W && eval 'git push'" "cd $W && x=\`git push\`"; do
+  run_style_hook "$E2E" "$c"
+  want_style_code 2 "#3739 control: a forbidden character blocks the same push written whole (a wrapper's string, a string eval reads, backquotes)"
+done
+run_style_hook "$E2E" "cd $W && echo 'git ${PAIR}push'"
+want_style_code 0 "#3739 control: the pair in a single quoted argument of echo is no push"
+run_style_hook "$E2E" "cd $W && bash -c 'git ${PAIR}status'"
+want_style_code 0 "#3739 control: a status written across the pair in a wrapper's string is no push"
+W="$(mk_style_repo 'const label = "Loading, please wait";')"
+run_style_hook "$E2E" "cd $W && bash -c 'git ${PAIR}push'"
+want_style_code 0 "#3739 control: clean copy pushed across the pair in a wrapper's string is allowed"
 
 # --- what the push would actually CARRY, not what happens to be lying about ----
 #

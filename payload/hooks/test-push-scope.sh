@@ -2714,7 +2714,37 @@ joined_row yes ps_is_git_commit "git commit" "cat <<EOF; git commit -m x${BODY}"
 joined_row yes ps_is_git_add "git add" "cat <<EOF; git add -A${BODY}" "an add after the opener is an add"
 joined_row yes ps_is_gh_pr_create "gh pr create" "cat <<EOF; gh pr create --fill${BODY}" "a pull request creation after the opener is one"
 joined_row yes ps_is_git_push "git push" "cat <<EOF; git push; EOF" "a push after an opener on a command of one line, which gives the heredoc no body, is a push"
-joined_row yes ps_is_git_push "git push" "echo a${NL}cat <<EOF; git push; EOF" "and so is one after an opener on the last line of several"# What was read before and still is.
+joined_row yes ps_is_git_push "git push" "echo a${NL}cat <<EOF; git push; EOF" "and so is one after an opener on the last line of several"
+# A heredoc the text never closes on a line of its own is fed the rest of the text, and every
+# command on its opener's line runs. The segmented form closed it at a marker word standing on
+# that same line, which is every one line command that ends in a line break.
+joined_row yes ps_is_git_push "git push" "cat <<EOF; git push; EOF${NL}" "a push after an opener on a command of one line that ends in a line break is a push"
+joined_row yes ps_is_git_push "git push" "cat <<EOF; git push; EOF${NL}${NL}" "and so is one before two line breaks"
+joined_row yes ps_is_git_push "git push" "cat <<EOF; git push; EOF${NL}echo done" "and so is one with lines after it, none of them the closing line"
+joined_row yes ps_is_git_push "git push" "( cat <<EOF; git push; EOF )${NL}echo done" "and so is one in a subshell on such a line"
+joined_row yes ps_is_git_push "git push" "cat <<A <<EOF; git push; EOF${NL}one${NL}A${NL}two" "and so is one after two openers, the first closed and the second never"
+# The same line inside the string a wrapper hands a shell, which reads it as typed.
+joined_row yes ps_is_git_push "git push" "bash -c 'cat <<EOF; git push${BODY}'" "a push after the opener in a wrapper's single quoted string is a push"
+joined_row yes ps_is_git_push "git push" "bash -c 'cat <<EOF; git push; EOF'" "and so is one where that string is one line"
+joined_row yes ps_is_git_push "git push" "bash -c 'cat <<EOF; git push; EOF${NL}'" "and so is one where that string ends in a line break"
+joined_row yes ps_is_git_push "git push" "eval 'cat <<EOF; git push${BODY}'" "and so is one in a string eval reads"
+# The pair inside a wrapper's single quoted string, and inside backquotes: the outer shell keeps
+# it, and the shell that reads the string, or the backquotes, removes it.
+joined_row yes ps_is_git_push "git push" "bash -c 'git ${J}push'" "a push written across the pair in a wrapper's single quoted string is a push"
+joined_row yes ps_is_git_push "git push" "bash -c 'git${J} push origin main'" "the same with the blank after the pair"
+joined_row yes ps_is_git_push "git push" "sh -c 'echo ok && ${J}git push'" "a push on the line after && and the pair in a wrapper's string is a push"
+joined_row yes ps_is_git_push "git push" "eval 'git ${J}push'" "a push written across the pair in a string eval reads is a push"
+joined_row yes ps_is_git_push "git push" "bash -c 'bash -c \"git ${J}push\"'" "a push written across the pair two wrappers deep is a push"
+joined_row yes ps_is_git_push "git push" "x=\`git ${J}push\`" "a push written across the pair inside backquotes is a push"
+joined_row yes ps_is_git_push "git push" "echo \`git ${J}push origin main\`" "the same in the argument of another command"
+joined_row yes ps_is_git_push "git push" "echo \"\`git ${J}push\`\"" "the same inside double quotes"
+joined_row yes ps_is_git_push "git push" "x=\`git \\${J}push\`" "inside backquotes two backslashes and a line break are a pair to the shell that reads them"
+joined_row yes ps_is_git_commit "git commit" "bash -c 'git ${J}commit -m x'" "a commit written across the pair in a wrapper's string is a commit"
+joined_row no ps_is_git_push "git push" "bash -c 'git \\${J}push'" "quiet twin: two backslashes and a line break in a wrapper's string join nothing"
+joined_row no ps_is_git_push "git push" "x=\`git \\\\${J}push\`" "quiet twin: three backslashes and a line break inside backquotes join nothing"
+joined_row no ps_is_git_push "git push" "echo 'git ${J}push'" "quiet twin: the pair in a single quoted argument of echo runs nothing"
+joined_row no ps_is_git_push "git push" "bash -c 'git ${J}status'" "quiet twin: a status written across the pair in a wrapper's string is no push"
+# What was read before and still is.
 joined_row yes ps_is_git_push "git push" "cat <<EOF${BODY}${NL}git push" "control: a push on a line after the heredoc is a push"
 joined_row yes ps_is_git_push "git push" "cat <<EOF && git push${BODY}" "control: a push after the opener by && is a push"
 joined_row yes ps_is_git_push "git push" "cat <<EOF;git push${BODY}" "control: a push after the opener by a ; with no blank is a push"
