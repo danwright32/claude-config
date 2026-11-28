@@ -386,6 +386,14 @@ want_style_code 2 "#3879 a new file added by name is judged when a message only 
 want_says "app/copy.ts" "#3879 and that refusal names the new file"
 run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qm 'a b' && git push"$'\n''echo "never closed'
 want_style_code 2 "#3879 control: the same command nobody can read, its message naming no add, judges the new file"
+#     An add whose -u is taken back by --no-update stages the new file it names, so it is judged.
+W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
+run_style_hook "$E2E" "cd $W && git add -u --no-update app/copy.ts && git commit -qm copy && git push"
+want_style_code 2 "#3879 a new file named by an add whose -u is taken back by --no-update is judged"
+want_says "app/copy.ts" "#3879 and that refusal names the new file too"
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && git add -u --no-update app/copy.ts && git commit -qm copy && git push"
+want_style_code 0 "#3879 control: the same add does not take an untracked file nobody named"
 #     A named path that is not there, beside an add -u or a commit -a, pinned as it answers: the
 #     tracked changes are read and the stranger nobody named is not. Reading the whole working
 #     tree here would also count a stranger's untracked test as this push's test at the test gate.

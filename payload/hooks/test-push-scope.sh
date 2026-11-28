@@ -1266,6 +1266,41 @@ want_scope "git add -- -u new.ts && git commit -qm x && git push" "TRACKED|new.t
   "#3879 after a double dash a -u is a file's name, so the paths beside it are still named"
 want_scope "git add new.ts && git add -u && git commit -qam x && git push" "TRACKED|new.ts" \
   "#3879 an add -u, an add naming a path and a commit -a name the path once"
+want_scope "git add --update sub && git add new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 the path of the add that carries --update itself is not named either"
+# The paths of an add with -u are left out only when its other words are all paths. Another flag
+# can take the -u back: git stages the new file named after `-u --no-update`, and takes any short
+# form of that flag. So any other flag keeps the paths, whatever git does with it.
+want_scope "git add -u --no-update new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 an add whose -u is taken back by --no-update still names its path"
+want_scope "git add --update --no-upd sub && git commit -qm x && git push" "TRACKED|sub" \
+  "#3879 the same with --update and a short form of the flag"
+want_scope "git add --no-update -u new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 the same with the other flag before the -u"
+want_scope "git add -u -v sub && git commit -qm x && git push" "TRACKED|sub" \
+  "#3879 any other flag beside the -u keeps the path, whatever git does with it"
+want_scope "git add -u -- sub && git commit -qm x && git push" "TRACKED|sub" \
+  "#3879 a double dash after the -u keeps the path too"
+# A quoted word of plain characters is the word itself, so it answers as the unquoted one does. A
+# quote holding anything else, a backtick or a variable, and the paths are kept.
+want_scope "git add -u \"sub\" && git commit -qm x && git push" "TRACKED" \
+  "#3879 a folder in double quotes after -u answers as the unquoted folder does"
+want_scope "git add -u 'sub' && git commit -qm x && git push" "TRACKED" \
+  "#3879 and so does one in single quotes"
+want_scope "git add -u \"sub dir\" && git add new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 and one holding a space, beside another add naming a path"
+want_scope "git add -u \"--no-update\" new.ts && git commit -qm x && git push" "TRACKED|new.ts" \
+  "#3879 a flag in quotes is still a flag, so the path beside it is named"
+want_scope "git add -u '*.ts' && git commit -qm x && git push" "TRACKED|*.ts" \
+  "#3879 a glob in quotes is not a plain word, so it is kept"
+want_scope "git add -u \"\$D\" && git commit -qm x && git push" "TRACKED|\$D" \
+  "#3879 a variable in quotes is not a plain word, so it is kept"
+want_scope "git add -u \$D && git commit -qm x && git push" "TRACKED|\$D" \
+  "#3879 nor is a bare variable"
+want_scope "git add -u \`echo sub\` && git commit -qm x && git push" "TRACKED|\`echo|sub\`" \
+  "#3879 a backtick in the segment keeps its words"
+want_scope "git add -u \"a'b\" && git commit -qm x && git push" "TRACKED|a'b" \
+  "#3879 one kind of quote inside the other is not a plain word, so it is kept"
 
 # The commonest commit there is: a heredoc message whose body has an apostrophe. The whole command
 # was tokenised at once, the unbalanced quote failed it, and the add's scope came back UNKNOWN, so
@@ -1360,6 +1395,17 @@ want_pending "git add -u && git commit -qm x && git push" "EXACT|tracked.txt" \
   "#3879 control: an add -u alone takes tracked changes and no untracked file"
 want_pending "git add -u sub && git commit -qm x && git push" "EXACT|tracked.txt" \
   "#3879 control: an add -u naming a directory takes no untracked file under it"
+want_pending "git add -u \"sub\" && git commit -qm x && git push" "EXACT|tracked.txt" \
+  "#3879 control: nor does one naming the directory in double quotes, the same answer as unquoted"
+want_pending "git add -u 'sub' && git add named.txt && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 control: nor one naming it in single quotes, the other add's file is read"
+# An add whose -u is taken back by --no-update stages the new file it names, so that file is read.
+want_pending "git add -u --no-update named.txt && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 a new file named by an add whose -u is taken back by --no-update is read"
+want_pending "git add --update --no-u sub && git commit -qm x && git push" "EXACT|sub/new.txt|tracked.txt" \
+  "#3879 the same with --update, a short form of the flag and a directory"
+want_pending "git add -u \"--no-update\" 'named.txt' && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
+  "#3879 the same with the flag and the file in quotes"
 # The pretend add: a command the reader gives up on (a quote left open on a later line) has the
 # words inside its quotes listed too, so an add -u written inside a commit message is counted as
 # one. Whatever else that reading lists, the file the real add names must be in it.
