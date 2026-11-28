@@ -3043,8 +3043,8 @@ and gives each piece of a word holding a space as a name of its own, and the gua
 names. The same loop with no quoted text in the substitution
 (`check "$(grep -q "$want" notes.txt && echo ok)"`) is not held.
 Neither is freed by a rule on the body's own words, because such a rule is not true of every
-script. Where a piece is written out and left to stand in a command that only prints it, these
-scripts write a screen file and are no longer held, so a reading has to go on holding each:
+script. A piece that stands in a command that only prints it can still be the cause of a write
+to a screen file, so a reading that writes a piece out has to hold each of these:
 - a piece as the flag, the operand or the subcommand of a command the write reader knows as a
   reader (`sed "${2:0:2}" s/a/b/ app/*` handed `-i`, `sort "${2%X}"` handed `-oapp/page.tsxX`,
   and the same with find, awk, git, curl and dd);
