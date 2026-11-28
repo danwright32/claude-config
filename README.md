@@ -11881,11 +11881,22 @@ introduced by before, when or if, #1680, "yours to do", "the one step left is yo
 it's done", "still open is ... described above", an imperative click on a named thing or type of a
 named value, "In Settings, ...", "go to ... and click", two or more numbered lines that each begin
 with an action at a screen such as open, click, press or paste, #1811, a file edit closed by ", then
-tell me", "Tell me it's done", "Save the file" or "press Cmd+S", #1955, never one negated right
-before it or quoted) with no unfinished step on a card he can see is blocked once, telling Claude to
-check the step and pin it with the `steps` tool; never twice in one turn (the turn's own transcript
-shows the block), and never in a -p run. A transcript that cannot be read is said in the log, and
-the last message alone is judged, never twice in one chain of turn ends (`stop_hook_active`). A page
+tell me", "Tell me it's done", "Save the file" or "press Cmd+S", #1955, the two wordings of #3842
+that caught steps when counted, "One step left for you" and "the one only you can do", never one
+negated right before it or quoted) with no unfinished step on a card he can see is blocked once,
+telling Claude to check the step and pin it with the `steps` tool; never twice in one turn (the
+turn's own transcript shows the block), and never in a -p run. A transcript that cannot be read is
+said in the log, and the last message alone is judged, never twice in one chain of turn ends
+(`stop_hook_active`). A call the permission check refused in the turn (#3842) is judged
+whatever the reply says: it is read from
+the session record's own `toolDenialKind` (`automode-blocked` alone, never no verdict, a hook's or a
+rule's refusal, or a prompt Dan declined), and with no call of the `steps` tool after it the turn is
+blocked once, in about 40 words since Dan reads them too, telling Claude to put what the refusal
+left for Dan on the steps card or to say in one line that nothing from it is his ("Nothing from the
+refusal is yours to do."). Three things answer it: a step the main conversation pins after the
+refusal, that line, and the line that answers every ask of this check, "None of these steps are
+yours to do now." A subagent's refusal is in its own
+record and holds nothing, and a turn that could not be read names no refusal. A page
 published with the Artifact tool is judged as it is published, read from the file it came from
 (#1811, `hooks/page.ts`): two list items, numbered or bulleted, that each begin with a thing to do
 at a screen, or any two of ticks, Copy buttons and such a thing to do, make it a page of steps for
@@ -11899,7 +11910,7 @@ not judged. Behaviour in `docs/mods-design.md`, "Manual steps behaviour".
 
 </td><td>
 
-#614, #707, #708, #863, #886, #939, #1215, #1239, #1245, #1608, #1613, #1811
+#614, #707, #708, #863, #886, #939, #1215, #1239, #1245, #1608, #1613, #1811, #1955, #3652, #3842
 
 </td></tr>
 <tr><td>
