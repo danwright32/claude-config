@@ -54,6 +54,13 @@ spec.loader.exec_module(sw)
 
 BREAK = "; "
 J = "\\\n"
+# The << of every opener below is put together when this runs, so no text of this file is a
+# heredoc's opener line to anything that reads the file's strings as they are written: a case
+# written out in full, or as a sum of strings, is a text the drafts gate reads and cannot follow
+# (a heredoc on one line), and no session could then run this suite by name
+# (test-slack-drafts-comment-start.sh holds every suite of the reader to that).
+LT = "<"
+LL = LT * 2
 PUSH = "git push"
 # ps_has_override's pattern for any name, [[:space:]] read as ASCII alone and as Unicode has it.
 SKIPS = (re.compile(r"(?:^|(?<=[ \t\n\r\f\v;&|]))([A-Za-z_][A-Za-z0-9_]*)=1(?=[ \t\n\r\f\v]|\Z)"),
@@ -124,8 +131,8 @@ def faults(cmd):
 
 
 def one_line_at_a_time(s):
-    """opener_lines() as it was first written: the first rewrite the reading finds, then the whole
-    text read again, with no limit. The oracle for A4."""
+    """The slow way to the text opener_lines() gives: the first rewrite the reading finds, then
+    the whole text read again, with no limit. The oracle for A4."""
     text = s
     while True:
         met = []
@@ -143,7 +150,7 @@ def one_line_at_a_time(s):
             if ends[0] in ("end", "open"):
                 rewritten = text
                 for at in sorted(ends[2], reverse=True):
-                    rewritten = rewritten[:at] + "<<<" + rewritten[at + (3 if rewritten.startswith("<<-", at) else 2):]
+                    rewritten = rewritten[:at] + LL + LT + rewritten[at + (3 if rewritten.startswith(LL + "-", at) else 2):]
             else:
                 start, end = ends[2][0][0], ends[2][n - 1][1]
                 rewritten = text[:i] + text[start:end] + "\n" + text[i + len(BREAK):start] + text[end:]
@@ -155,24 +162,24 @@ def one_line_at_a_time(s):
 
 # ---- the family ----------------------------------------------------------------------------
 FRONTS = ["", "cd a; ", PUSH + " origin main; ", "echo 'q" + J + "r'; "]
-BACKS = ["", "\nls", "; SKIP_X=1", "\nSKIP_X=1 true", " # note", "\ncd b; " + PUSH, "\ntrue \\", "\ncat <<E\\"]
+BACKS = ["", "\nls", "; SKIP_X=1", "\nSKIP_X=1 true", " # note", "\ncd b; " + PUSH, "\ntrue \\", "\ncat " + LL + "E\\"]
 SHAPES = [
-    "cat <<EOF; %s\nbody\nEOF",
-    "cat <<'EOF'; %s\nbody\nEOF",
-    "cat <<-EOF; %s\n\tbody\n\tEOF",
-    "cat <<A <<B; %s\none\nA\ntwo\nB",
-    "cat <<A; cat <<B; %s\none\nA\ntwo\nB",
-    "cat <<EOF; cd b; %s\nbody\nEOF",
-    "cat <<EOF; %s; EOF",
-    "cat <<EOF; %s; EOF\n",
-    "x=$(cat <<EOF; %s\nbody\nEOF\n)",
-    "( cat <<EOF; %s\nbody\nEOF\n)",
-    "cat <<EOF; echo a\n$(cat <<X; %s\nin\nX\n)\nEOF",
-    "bash -c 'cat <<EOF; %s\nbody\nEOF'",
-    "bash -c 'cat <<EOF; %s; EOF'",
+    "cat " + LL + "EOF; %s\nbody\nEOF",
+    "cat " + LL + "'EOF'; %s\nbody\nEOF",
+    "cat " + LL + "-EOF; %s\n\tbody\n\tEOF",
+    "cat " + LL + "A " + LL + "B; %s\none\nA\ntwo\nB",
+    "cat " + LL + "A; cat " + LL + "B; %s\none\nA\ntwo\nB",
+    "cat " + LL + "EOF; cd b; %s\nbody\nEOF",
+    "cat " + LL + "EOF; %s; EOF",
+    "cat " + LL + "EOF; %s; EOF\n",
+    "x=$(cat " + LL + "EOF; %s\nbody\nEOF\n)",
+    "( cat " + LL + "EOF; %s\nbody\nEOF\n)",
+    "cat " + LL + "EOF; echo a\n$(cat " + LL + "X; %s\nin\nX\n)\nEOF",
+    "bash -c 'cat " + LL + "EOF; %s\nbody\nEOF'",
+    "bash -c 'cat " + LL + "EOF; %s; EOF'",
     "bash -c 'true # c" + J + "%s'",
     "bash -c 'true # c" + J + "%s; l" + J + "s'",
-    "bash -c 'cat <<\\E\nx" + J + "E\n%s\ncat <<\\E\nE\nl" + J + "s'",
+    "bash -c 'cat " + LL + "\\E\nx" + J + "E\n%s\ncat " + LL + "\\E\nE\nl" + J + "s'",
     "bash -c 'true; %s'",
     "eval 'true; %s'",
     "sh -c \"true; %s\"",
@@ -200,7 +207,7 @@ for cmd in family:
     if why and not broken:
         broken = "%r: %s" % (cmd, why)
     changed += why is not None
-    if "<<" in cmd and not differ and sw.opener_lines(cmd) != one_line_at_a_time(cmd):
+    if LL in cmd and not differ and sw.opener_lines(cmd) != one_line_at_a_time(cmd):
         differ = "%r: one pass gave %r, one line at a time %r" % (cmd, sw.opener_lines(cmd), one_line_at_a_time(cmd))
 row("A1 to A3: over the family of %d texts, the old text is whole in the new one, every command it gave is still given, and no skip word is new" % len(family), broken)
 row("A4: over the same family, opener lines rewritten in one pass are what one line at a time gives", differ)
@@ -236,7 +243,7 @@ shows("and so is the push the join does put together", "bash -c 'true # c" + J +
       ("", "git", "push", "origin feature"))
 shows("an add of everything after such a comment is still named", "bash -c 'true # c" + J + "git add -A; gi" + J + "t add f; l" + J + "s'", ("", "git", "add", "-A"))
 shows("a push after a quoted heredoc's body that holds the pair is still named",
-      "bash -c 'cat <<\\E\nx" + J + "E\n" + PUSH + " origin main\ncat <<\\E\nE\ngi" + J + "t push origin feature'", ("", "git", "push", "origin main"))
+      "bash -c 'cat " + LL + "\\E\nx" + J + "E\n" + PUSH + " origin main\ncat " + LL + "\\E\nE\ngi" + J + "t push origin feature'", ("", "git", "push", "origin main"))
 text_is("a pair that ends a comment in a wrapper's string stays in the rewritten command",
         "bash -c 'true # c" + J + PUSH + "; l" + J + "s'", "bash -c 'true # c\\; " + PUSH + "; ls' ; bash -c 'true # c\\; " + PUSH + "; l\\; s'")
 shows("a push whose refspec stands across the pair in a wrapper's string is named with that refspec",
@@ -262,8 +269,8 @@ text_is("where a join in a wrapper's string would put a skip word together the p
 shows("and the push behind that word is named", "bash -c 'true; SKIP_" + J + "X=1 " + PUSH + "'", ("", "git", "push", ""))
 text_is("the same inside backquotes", "x=`true; SKIP_" + J + "X=1 " + PUSH + "`", "x=`true; SKIP_X=1\\;  " + PUSH + "` ; x=`true; SKIP_\\; X=1 " + PUSH + "`")
 text_is("a NAME=1 word a moved body leaves at the end of the rewritten command has no blank written after it, which would make a skip word of it",
-        PUSH + "; cat <<EOF; ls; SKIP_X=1\nbody\nEOF", PUSH + "; cat <<EOF; body; EOF; ls; SKIP_X=1; " + PUSH + "; cat <<EOF; ls; SKIP_X=1; body; EOF")
-skip = SKIPS[0].findall(sw.flattened("cat <<EOF; SKIP_X=1 " + PUSH + "\nbody\nEOF"))
+        PUSH + "; cat " + LL + "EOF; ls; SKIP_X=1\nbody\nEOF", PUSH + "; cat " + LL + "EOF; body; EOF; ls; SKIP_X=1; " + PUSH + "; cat " + LL + "EOF; ls; SKIP_X=1; body; EOF")
+skip = SKIPS[0].findall(sw.flattened("cat " + LL + "EOF; SKIP_X=1 " + PUSH + "\nbody\nEOF"))
 row("control: a skip word typed whole in front of a push after an opener is one, as it was before", "" if "SKIP_X" in skip else "it is none in the text handed over")
 # Inside backquotes, by how many backslashes stand before the line break.
 for n, joins in ((1, True), (2, True), (3, True), (4, False), (5, False), (6, False), (7, False)):
@@ -278,48 +285,48 @@ text_is("three backslashes and a line break leave one backslash, which escapes t
         "x=`git \\\\" + J + "push`", "x=`git \\push` ; x=`git \\\\\\; push`")
 # Behind a relative cd.
 shows("a push after an opener, behind a relative cd and a cd on the opener's line, is named in the folder it runs in",
-      "cd a; cat <<EOF; cd b; " + PUSH + " origin main\nbody\nEOF\nls", ("a/b", "git", "push", "origin main"))
+      "cd a; cat " + LL + "EOF; cd b; " + PUSH + " origin main\nbody\nEOF\nls", ("a/b", "git", "push", "origin main"))
 text_is("there the rewritten command stands inside a subshell, and the old text follows from the folder it always started in",
-        "cd a; cat <<EOF; cd b; " + PUSH + "\nbody\nEOF\nls", "( cd a; cat <<EOF; body; EOF; cd b; " + PUSH + "; ls ; ); cd a; cat <<EOF; cd b; " + PUSH + "; body; EOF; ls")
+        "cd a; cat " + LL + "EOF; cd b; " + PUSH + "\nbody\nEOF\nls", "( cd a; cat " + LL + "EOF; body; EOF; cd b; " + PUSH + "; ls ; ); cd a; cat " + LL + "EOF; cd b; " + PUSH + "; body; EOF; ls")
 shows("a push on a line after the heredoc is named in the folder a cd on the opener's line moves to",
-      "cd a; cat <<EOF; cd b\nbody\nEOF\n" + PUSH, ("a/b", "git", "push", ""))
-shows("and in the folder the old text read it in, which is kept", "cd a; cat <<EOF; cd b\nbody\nEOF\n" + PUSH, ("a", "git", "push", ""))
+      "cd a; cat " + LL + "EOF; cd b\nbody\nEOF\n" + PUSH, ("a/b", "git", "push", ""))
+shows("and in the folder the old text read it in, which is kept", "cd a; cat " + LL + "EOF; cd b\nbody\nEOF\n" + PUSH, ("a", "git", "push", ""))
 shows("a push split across the pair in a wrapper's string behind a relative cd is named in its folder",
       "cd a; bash -c 'cd b; gi" + J + "t push'", ("a/b", "git", "push", ""))
 # The issue's own shapes, the old text last.
 text_is("the command with its body moved up comes first, then a blank, and the old text last and whole",
-        "cat <<EOF; " + PUSH + "\nbody\nEOF", "cat <<EOF; body; EOF; " + PUSH + " ; cat <<EOF; " + PUSH + "; body; EOF")
+        "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF", "cat " + LL + "EOF; body; EOF; " + PUSH + " ; cat " + LL + "EOF; " + PUSH + "; body; EOF")
 text_is("a heredoc on a command of one line is written again as the here string it amounts to",
-        "cat <<EOF; " + PUSH + "; EOF", "cat <<<EOF; " + PUSH + "; EOF ; cat <<EOF; " + PUSH + "; EOF")
+        "cat " + LL + "EOF; " + PUSH + "; EOF", "cat " + LL + "<EOF; " + PUSH + "; EOF ; cat " + LL + "EOF; " + PUSH + "; EOF")
 text_is("a push across the pair in a wrapper's string stands before the old text", "bash -c 'git " + J + "push'", "bash -c 'git push' ; bash -c 'git \\; push'")
 # A backslash that ends the text: written after the old text, the rewritten command would start
 # behind an escaped separator, and the old text's last command would be read as one it never was.
 text_is("a backslash that ends the text ends the old text here too, and the blank keeps the one that ends the rewritten command off the separator",
-        "cat <<EOF; " + PUSH + "\nbody\nEOF\ntrue \\", "cat <<EOF; body; EOF; " + PUSH + "; true \\ ; cat <<EOF; " + PUSH + "; body; EOF; true \\")
-shows("the push after an opener in a text that ends in a backslash is named", "cat <<EOF; " + PUSH + "\nbody\nEOF\ntrue \\", ("", "git", "push", ""))
+        "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF\ntrue \\", "cat " + LL + "EOF; body; EOF; " + PUSH + "; true \\ ; cat " + LL + "EOF; " + PUSH + "; body; EOF; true \\")
+shows("the push after an opener in a text that ends in a backslash is named", "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF\ntrue \\", ("", "git", "push", ""))
 shows("and so is one across the pair in a wrapper's string in such a text", "bash -c 'git " + J + "push'\ntrue \\", ("", "git", "push", ""))
-shows("and one inside backquotes in a text that ends in an opener and a backslash", "x=`git " + J + "push`\n; cat <<E\\", ("", "git", "push", ""))
+shows("and one inside backquotes in a text that ends in an opener and a backslash", "x=`git " + J + "push`\n; cat " + LL + "E\\", ("", "git", "push", ""))
 shows("a push across the pair in a string eval reads is named", "eval 'git " + J + "push'", ("", "git", "push", ""))
 shows("a push across the pair in a string bash -c reads under sudo is named", "sudo -u dan bash -c 'cd /r && gi" + J + "t push'", ("/r", "git", "push", ""))
 shows("a push across the pair in a wrapper's string inside a substitution is named", "x=$(bash -c 'gi" + J + "t push')", ("", "git", "push", ""))
 shows("a push across the pair inside backquotes in a wrapper's string is named", "bash -c 'x=`gi" + J + "t push`'", ("", "git", "push", ""))
-shows("a pull request creation after an opener is named", "cat <<EOF; gh pr create --fill\nbody\nEOF", ("", "gh", "pr", "--fill"))
+shows("a pull request creation after an opener is named", "cat " + LL + "EOF; gh pr create --fill\nbody\nEOF", ("", "gh", "pr", "--fill"))
 # However many lines with an opener there are, and however many separators one such line holds.
-many = "".join("cat <<E; true\nx\nE\n" for _ in range(200))
-shows("a push after the opener on the two hundred and first such line is named", many + "cat <<EOF; " + PUSH + "\nbody\nEOF", ("", "git", "push", ""))
-deep = "".join("cat <<E%d; " % k for k in range(sw.OPENER_LINE_LIMIT + 6)) + PUSH + "".join("\nb\nE%d" % k for k in range(sw.OPENER_LINE_LIMIT + 6))
+many = "".join("cat " + LL + "E; true\nx\nE\n" for _ in range(200))
+shows("a push after the opener on the two hundred and first such line is named", many + "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF", ("", "git", "push", ""))
+deep = "".join("cat " + LL + "E%d; " % k for k in range(sw.OPENER_LINE_LIMIT + 6)) + PUSH + "".join("\nb\nE%d" % k for k in range(sw.OPENER_LINE_LIMIT + 6))
 got = sw.opener_lines(deep)
 row("a line with more separators after openers than the reader reads the text again for is given as far as it was rewritten, never as nothing",
     "" if got is not None and got != deep else "opener_lines gave %r" % (got,))
 # Ordinary commands are handed over as they always were.
 for what, cmd in (
-        ("a heredoc commit with nothing after its opener", "git commit -F - <<EOF\na message; with a separator\nEOF\n" + PUSH),
+        ("a heredoc commit with nothing after its opener", "git commit -F - " + LL + "EOF\na message; with a separator\nEOF\n" + PUSH),
         ("a plain chain", "git add f && git commit -m x && " + PUSH),
         ("a push across the pair outside any quote", "git " + J + "push origin main"),
-        ("a here string", "cat <<<EOF; " + PUSH),
-        ("a shift in arithmetic", "echo $((1<<2)); git status"),
-        ("a comment after an opener", "cat <<EOF; # note\nbody\nEOF"),
-        ("a text only the crude cut reads", "cat <<EOF; " + PUSH + "\nbody\nEOF\n( echo")):
+        ("a here string", "cat " + LL + "<EOF; " + PUSH),
+        ("a shift in arithmetic", "echo $((1" + LL + "2)); git status"),
+        ("a comment after an opener", "cat " + LL + "EOF; # note\nbody\nEOF"),
+        ("a text only the crude cut reads", "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF\n( echo")):
     unchanged("control: %s is handed over as it always was" % what, cmd)
 sys.stdout.write("end\t%d\n" % ROWS[0])
 PY

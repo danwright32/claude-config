@@ -929,8 +929,7 @@ def heredoc_close(s, j, word, strip_tabs, quoted, line_break="\n"):
         pos = m.end()
 
 
-def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None, joined=None,
-             lines=None, typed=False, reread=None):
+def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None, joined=None, lines=None, typed=False, reread=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
 
     reread, when a list, is given the text another shell may read differently from this one

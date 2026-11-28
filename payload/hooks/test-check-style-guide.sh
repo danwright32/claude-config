@@ -306,6 +306,8 @@ W="$(mk_style_repo "$BAD")"
 CLEAN="$(mk_style_repo 'const label = "Loading, please wait";')"
 run_style_hook "$E2E" "cd $W && bash -c 'true # c${PAIR}git push; gi${PAIR}t push --dry-run; l${PAIR}s'"
 want_style_code 2 "#3739 a push the old text named is still named beside the rewritten text (on the line after a comment that ends in a backslash, in a wrapper's string, with a dry run of the same name after it)"
+run_style_hook "$E2E" "cd $W && bash -c 'true # c${PAIR}gi${PAIR}t push'"
+want_style_code 2 "#3739 a forbidden character blocks a push written across the pair on the line after such a comment: the pair that ends the comment stays, so the line after it is still a command in the rewritten text, which alone names this push"
 # With the second push a real one of another repository, the text now holds a push from each, as
 # the shells run one from each. Every gate that judges one repository then stands aside, this
 # one too, and push-scope-notice.sh refuses the command for all of them (claude-config#1062),
@@ -359,9 +361,9 @@ for c in "bash -c 'true # c${PAIR}git -C $CLEAN push; gi${PAIR}t -C $CLEAN push;
   [ "$NOTICE_CODE" = 0 ] || STYLE_CODE="notice:$NOTICE_CODE"
   want_style_code 0 "#3739 control: the same shapes pushing clean copy alone are allowed by both gates, so the refusal above is for the other repository's push"
 done
-# A skip word the typed command does not hold stands no gate down. The join put one together
-# from two halves in a string no shell reads, inside backquotes and in a wrapper's string, and
-# moving a body up left one that was typed whole standing where the text ends.
+# A skip word the typed command does not hold stands no gate down: neither one a join would put
+# together from two halves (in a string no shell reads, inside backquotes, in a wrapper's
+# string), nor one typed whole that a moved body would leave standing where a blank follows it.
 shape=0
 for c in "cd $W && git push; echo 'x SKIP_STYLE_${PAIR}CHECK=1 y'; bash -c 'l${PAIR}s'" \
          "cd $W && git push; x=\`echo SKIP_STYLE_${PAIR}CHECK=1 y; l${PAIR}s\`" \
