@@ -2502,10 +2502,12 @@ const HANDED = /\$(?:[1-9@*]|\{[#!]?[0-9@*])/
 // One mention this reading writes a call's word in place of (calledWith), from its `$`: `$1`, `$@`,
 // `${1}`, `${12}`, a count (`${#1}`, `${#@}`), and a word named through one operator whose operand
 // holds no expansion, quote or brace of its own: a default or an alternative (`${1:-none}`,
-// `${2:+--flag}`, `${1:?usage}`), a piece (`${3:0:1500}`, `${@:2}`), an end taken off (`${1%.bak}`,
-// `${1##*/}`), a replacement (`${1//a/b}`) or a change of case. `${!1}`, which names another variable
-// by the word, `${1:=x}`, which the shell refuses, and `${0}` are none of them.
-const OWN_FORM = String.raw`\$(?:([1-9])|([@*])|\{(?:(#)([1-9][0-9]?|[@*])|([1-9][0-9]?|[@*])(?:(:?[-+?]|:(?!=)|##?|%%?|\/\/?|\^\^?|,,?)([^$${'`'}{}"'\\]*))?)\})`
+// `${2:+--flag}`, `${1:?usage}`), a piece (`${3:0:1500}`, `${@:2}`) or an end taken off (`${1%.bak}`,
+// `${1##*/}`). Each gives the word, a piece of it, or the operand's own text. A replacement
+// (`${1/a/b}`) and a change of case give text the word does not hold, so they are none of them, and
+// nor are `${!1}`, which names another variable by the word, `${1:=x}`, which the shell refuses,
+// and `${0}`.
+const OWN_FORM = String.raw`\$(?:([1-9])|([@*])|\{(?:(#)([1-9][0-9]?|[@*])|([1-9][0-9]?|[@*])(?:(:?[-+?]|:(?!=)|##?|%%?)([^$${'`'}{}"'\\]*))?)\})`
 const HANDED_PLAIN = new RegExp(OWN_FORM, 'g')
 const HANDED_AT = new RegExp(OWN_FORM, 'y')
 const ASSIGNS = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/
@@ -2586,8 +2588,8 @@ export const calledWith = (body: string, values: readonly string[]): string | un
       const value = all ? values.join(' ') : values[Number(which) - 1]
       const op = m[6]
       // A count is a number. A default stands only where the call gave no word, and an alternative
-      // only where it gave one, neither carrying the word itself. Every other form gives the word
-      // or a piece of it, and is written as the whole word: more than the shell hands on, never less.
+      // only where it gave one, neither carrying the word itself. Every other form OWN_FORM reads
+      // gives the word or a piece of it, and is written as the whole word.
       if (m[3]) out += '0'
       else if (op === '-' || op === ':-') out += value || safeWord(m[7] ?? '')
       else if (op === '+' || op === ':+') out += value ? safeWord(m[7] ?? '') : ''
@@ -2680,7 +2682,7 @@ const wholeGroup = async (io: OwnCallIo, inner: string): Promise<readonly RunCom
  *   anything but a comment or a `;` (a redirect there is applied with each call's words), or holds a
  *   heredoc, a function, or shift, set, getopts, eval, source, trap, alias or unset;
  * - a body that keeps what it was handed in a variable (`local f="$1"`, `for f in "$@"`), names it
- *   in a form calledWith does not write out (`${!1}`, `${1:-$2}`), runs it as a command, or hands it to a command the
+ *   in a form calledWith does not write out (`${!1}`, `${1/a/b}`, `${1:-$2}`), runs it as a command, or hands it to a command the
  *   reader marks unread or one that runs its words later (RUNS_LATER);
  * - a word that joins what was handed to another value (`"$ROOT/$1"`), where the joined name has
  *   the shape of a file the guard holds.

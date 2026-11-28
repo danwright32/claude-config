@@ -3035,13 +3035,14 @@ both ways. Not established: the work MacBook's records, and any call older than 
 the design round guard.** Two readings of a script's own text, both in `rules.ts`.
 `calledWith` writes a call's word in place of each mention the body makes of it, and that covers a
 word named through one operator whose operand holds no expansion, quote or brace of its own
-(`OWN_FORM`): a piece (`${3:0:1500}`, `${@:2}`), an end taken off (`${1%.bak}`, `${1##*/}`), a
-replacement, a change of case and `${1:?usage}` are written as the whole word, since the shell
-hands on that word or part of it; a count (`${#1}`) as a number; a default (`${1:-none}`) as the
+(`OWN_FORM`): a piece (`${3:0:1500}`, `${@:2}`), an end taken off (`${1%.bak}`, `${1##*/}`) and
+`${1:?usage}` are written as the whole word, since the shell hands on that word or part of it; a
+count (`${#1}`) as a number; a default (`${1:-none}`) as the
 call's word, or the default where the call gave none; an alternative (`${1:+--flag}`) as its own
 text where the call gave a word. So a helper that prints the first 1,500 characters of what it
 compared is read as one that prints it, and a helper that hands any such form to a program or
-writes to it is read as handing on or writing the call's file, and held. `${!1}`, `${1:=x}`,
+writes to it is read as handing on or writing the call's file, and held. A replacement
+(`${1/a/b}`) and a change of case, which give text the word does not hold, `${!1}`, `${1:=x}`,
 `${0}` and an operand holding an expansion (`${1:-$2}`) are not written out, and a body naming one
 is judged as a program the reader does not know, as is a body that keeps what it was handed in a
 variable.

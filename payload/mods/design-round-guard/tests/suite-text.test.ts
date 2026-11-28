@@ -3,16 +3,15 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { SKIP_QUESTION, calledWith, fromInsideOutput, handedToUnknown } from '../hooks/rules.ts'
 import { call, refusalOf, withKit, world } from './world.ts'
 
-// #3602: a plain run of a test suite, held because text inside the suite file was read as a write
-// of a screen file. Each case is the suite's own lines as they stood on the day it was held, at
-// the path it was run by, and beside each stands a script that does write what it names, which is
-// held before and after.
+// #3602: a plain run of a test suite must not be held for text inside the suite file that only
+// names a screen file. Each case holds lines copied from a suite of this repository, placed at the
+// suite's own path, and beside each stands a script that does write what it names, which is held.
 
 const run = async ($: Parameters<typeof call>[0], path: string) => refusalOf(await call($, { tool: 'Bash', command: `bash ${path}` }))
 const files = (scripts: Record<string, string>) => ({ '/w/slate/app/page.tsx': 'x\n', ...Object.fromEntries(Object.entries(scripts).map(([path, text]) => [`/w/slate/${path}`, `${text}\n`])) })
 
-// tools/test-lessons-core-rerank.sh, held twice on the night of 2026-11-26: line 30's helper, and
-// the lines that hand it a page's name as the text a listing is expected to hold.
+// From tools/test-lessons-core-rerank.sh: a helper that compares two strings and prints the start
+// of one, and the lines that hand it a page's name as the text a listing is expected to hold.
 const RERANK_CHECK = 'check(){ if [[ "$3" == *"$2"* ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1"; echo "  expected to contain: $2"; echo "  actual: ${3:0:1500}"; fi; }'
 const RERANK = [
   'pass=0; fail=0',
@@ -40,6 +39,9 @@ test('#3602: a helper that hands on what it was handed, in whatever form it name
     'tools/test-trimmed.sh': 'save(){ printf x > "${1%.bak}"; }\nsave app/globals.css',
     'tools/test-length.sh': 'save(){ printf "${#1}" > "$1"; }\nsave app/globals.css',
     'tools/test-rest.sh': 'show(){ prettier --write "${@:2}"; }\nshow x app/page.tsx',
+    // A replacement can spell a name the word does not hold, so its body is not read at all.
+    'tools/test-replaced.sh': 'save(){ printf x > "${1/page.tsx/globals.css}"; }\nsave app/page.tsx',
+    'tools/test-replaced-prints.sh': 'show(){ echo "${1/page.tsx/globals.css}"; }\nshow app/page.tsx',
     // Run as a command, and kept in a variable the body then writes.
     'tools/test-runs.sh': 'go(){ ${1:0:1500} --write app/page.tsx; }\ngo prettier',
     'tools/test-kept.sh': 'save(){ local f="${1:0:1500}"; printf x > "$f"; }\nsave app/globals.css',
@@ -51,9 +53,9 @@ test('#3602: a helper that hands on what it was handed, in whatever form it name
   expect(w.ran).toEqual([])
 })
 
-// payload/skills/disk-full/test-disk-full-skill.sh, held on 2026-11-25: its helper and its two
-// loops, whose words are commands the skill's text must hold, each looked for with grep inside a
-// command substitution.
+// From payload/skills/disk-full/test-disk-full-skill.sh: its helper and its two loops, whose words
+// are commands the skill's text must hold, each looked for with grep inside a command substitution.
+// Nothing in them writes a file.
 // The second loop's fourth word in the suite, a file's size and dates asked in the BSD form, is
 // left out: tests/test-stat-order.sh fails on that text in any file outside the disk skill.
 const DISK = [
@@ -76,7 +78,7 @@ const DISK = [
 test("#3602: the words of a suite's own for loop, named inside a command substitution, are no files it writes", withKit, async ($, on) => {
   const w = world($, on, { files: files({ 'payload/skills/disk-full/test-disk-full-skill.sh': DISK }) })
   expect(await run($, 'payload/skills/disk-full/test-disk-full-skill.sh')).toBe('')
-  // With its output sent to a notes file, as the held call ran it.
+  // With its output sent to a file in the scratchpad.
   expect(refusalOf(await call($, { tool: 'Bash', command: 'bash payload/skills/disk-full/test-disk-full-skill.sh > /tmp/claude-501/-w-slate/s1/scratchpad/tests.txt 2>&1' }))).toBe('')
   expect(w.ran.length).toBe(2)
 })
@@ -121,10 +123,13 @@ test('#3602: handedToUnknown gives no plain name made inside a substitution, and
 })
 
 test('#3602: calledWith writes a word named through an operator as the whole word, and leaves what it cannot write', () => {
-  expect(calledWith('echo "${3:0:1500}" "${1:-none}" "${2:+--flag}" ${#1} "${@:2}" "${1%.bak}" "${4:-none}" "${5:+x}" "${2//b/c}" "${12}" "${1:?usage}"', ['a', 'b', 'c'])).toBe(
+  expect(calledWith('echo "${3:0:1500}" "${1:-none}" "${2:+--flag}" ${#1} "${@:2}" "${1%.bak}" "${4:-none}" "${5:+x}" "${2##*/}" "${12}" "${1:?usage}"', ['a', 'b', 'c'])).toBe(
     `echo "c" "a" "--flag" 0 "a b c" "a" "none" "" "b" "${calledWith('$9', [])}" "a"`,
   )
-  // A variable named by the word, an assignment the shell refuses, the script's own name, and an
-  // operand holding an expansion of its own are left for the caller to refuse.
-  expect(calledWith('echo "${!1}" "${1:=x}" "${0}" "${1:-$2}" "${1:-"x"}"', ['a', 'b'])).toBe('echo "${!1}" "${1:=x}" "${0}" "${1:-b}" "${1:-"x"}"')
+  // A variable named by the word, an assignment the shell refuses, the script's own name, an
+  // operand holding an expansion of its own, and a replacement or a change of case, whose text the
+  // word does not hold, are left for the caller to refuse.
+  expect(calledWith('echo "${!1}" "${1:=x}" "${0}" "${1:-$2}" "${1:-"x"}" "${1/a/app/page.tsx}" "${2//b/c}" "${1^^}" "${1,}"', ['a', 'b'])).toBe(
+    'echo "${!1}" "${1:=x}" "${0}" "${1:-b}" "${1:-"x"}" "${1/a/app/page.tsx}" "${2//b/c}" "${1^^}" "${1,}"',
+  )
 })

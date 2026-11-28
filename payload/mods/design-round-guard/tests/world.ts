@@ -7,6 +7,7 @@ import { readBranch, type Run } from './mod-kit/hooks/branch.ts'
 import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
+import { never } from './mod-kit/tests/hang-ceiling.ts'
 
 // The stand-in Mac and Claude Code every test file of this mod runs the guard in: mod-kit standing
 // in, the disk, git, the mod's store and Claude Code's question dialog. A test file imports what it
