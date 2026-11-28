@@ -3264,17 +3264,17 @@ def second_reading(s):
     before this reading existed, a hook judges it alone, and this text is judged by a second run
     of the same hook that can only refuse (lib/push-scope.sh, ps_both_readings).
 
-    The first of the rewritings (_reread) that names a command flattened(s) does not, and that is
-    read to its end. Nothing is given for a text whose flattened form only the crude cut reads."""
+    The first of the rewritings (_reread) that names a command flattened(s) does not. Either
+    text may be one only the crude cut reads: a quoted word that runs over the lines after an
+    opener makes the flattened form one, and a line left open after a later opener makes the
+    rewriting one, and the shell runs what each hides all the same. A hook reads such a text
+    with the crude cut, as it reads any other text nothing can vouch for."""
     plain = s.replace("\n", FLAT_BREAK)
     typed, flat = _pairs_joined(s, plain) if "\\\n" in s else (s, plain)
-    was, crude = _held(flat)
-    if crude:
-        return None
+    was = _held(flat)
     for other in _reread(typed):
         text = other.replace("\n", FLAT_BREAK)
-        now, rough = _held(text)
-        if not rough and _named_more(now, was):
+        if _named_more(_held(text), was):
             return text
     return None
 
@@ -3297,16 +3297,16 @@ def _reread(typed):
 
 
 def _held(text):
-    """(records, crude) for a flattened text: a count of every command its reading gives a hook,
-    a wrapper's commands with it, each as (directory, text, wrapper, depth), and whether the text
-    could only be read by the crude cut. Every field read mode prints is made from those four.
+    """A count of every command the reading of a flattened text gives a hook, a wrapper's
+    commands with it, each as (directory, text, wrapper, depth), whether the whole text was read
+    or the crude cut made the reading. Every field read mode prints is made from those four.
     The blanks in front of a command's text say where it stood, not what it is."""
-    records, crude = _records(text, "", 0, fields=False)
+    records, _ = _records(text, "", 0, fields=False)
     held = {}
     for d, t, wrap, _, _, _, depth in records:
         key = (d, t.lstrip(), wrap, depth)
         held[key] = held.get(key, 0) + 1
-    return held, crude
+    return held
 
 
 # What ends a word either side of a join, for _joined_at(), besides a blank: an operator or a

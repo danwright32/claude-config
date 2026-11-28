@@ -12,7 +12,8 @@
 #   B1  the first reading is the text a hook was handed before any second reading existed, byte
 #       for byte (worked out here by a copy of how it was made then);
 #   B2  a second reading is read to its end, names a command the first does not, and is no part
-#       of the first, nor the first of it;
+#       of the first, nor the first of it (read to its end is held of this family alone: a
+#       rewriting only the crude cut reads is given all the same, and is held row by row below);
 #   A4  the rewrite of opener lines made in one pass gives what one line at a time gives.
 # And, row by row, that the commands the rewrite exists to show are shown, in the folder they run
 # in, and that a string no shell reads is left as typed.
@@ -342,6 +343,17 @@ shows("a push across the pair in a string bash -c reads under sudo is named", "s
 shows("a push across the pair in a wrapper's string inside a substitution is named", "x=$(bash -c 'gi" + J + "t push')", ("", "git", "push", ""))
 shows("a push across the pair inside backquotes in a wrapper's string is named", "bash -c 'x=`gi" + J + "t push`'", ("", "git", "push", ""))
 shows("a pull request creation after an opener is named", "cat " + LL + "EOF; gh pr create --fill\nbody\nEOF", ("", "gh", "pr", "--fill"))
+# A reading only the crude cut reads is a reading all the same: a quoted word that runs over the
+# lines after an opener leaves the first one so, and an open parenthesis after a later opener
+# leaves the second one so.
+QUOTED_OVER = "cat " + LL + "EOF; echo 'a\nb\nEOF\n'; "
+shows("a push across the pair in a wrapper's string is named where a quoted word runs over an opener's body, so the first reading is the crude cut's",
+      QUOTED_OVER + "bash -c 'git " + J + "push origin feat'", ("", "git", "push", "origin feat"))
+shows("and so is one inside backquotes there", QUOTED_OVER + "echo `git " + J + "push origin feat`", ("", "git", "push", "origin feat"))
+shows("and one after a double quoted word that runs over the body",
+      "cat " + LL + "EOF; echo \"a\nb\nEOF\n\"; bash -c 'git " + J + "push origin feat'", ("", "git", "push", "origin feat"))
+shows("a push after an opener is named where the last lines leave a parenthesis open, so the second reading is the crude cut's",
+      "cat " + LL + "EOF; " + PUSH + " origin feat\nbody\nEOF\ncat " + LL + "B; (\nB", ("", "git", "push", "origin feat"))
 # However many lines with an opener there are, and however many separators one such line holds.
 many = "".join("cat " + LL + "E; true\nx\nE\n" for _ in range(200))
 shows("a push after the opener on the two hundred and first such line is named", many + "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF", ("", "git", "push", ""))

@@ -300,6 +300,23 @@ run_hook "bash -c 'git ${PAIR}push'"
 [ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && check "a push across the pair in a wrapper's string is refused, by the second reading" ok \
   || check "a push across the pair in a wrapper's string is refused, by the second reading" "exit $RC, said [$ERR]"
 
+# A reading only the crude cut reads is a reading all the same. A quoted word that runs over the
+# lines after an opener leaves the first reading one the crude cut alone reads, and an open
+# parenthesis after a later opener leaves the second so; the push each hides is judged.
+QUOTED_OVER="cat <<EOF; echo 'a${NL}b${NL}EOF${NL}'"
+run_hook "$QUOTED_OVER; bash -c 'git ${PAIR}push origin feat'"
+[ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && check "a push across the pair in a wrapper's string, after a quoted word that runs over an opener's body, is refused by the second reading" ok \
+  || check "a push across the pair in a wrapper's string, after a quoted word that runs over an opener's body, is refused by the second reading" "exit $RC, said [$ERR], judged [$(judged)]"
+run_hook "$QUOTED_OVER; echo \`git ${PAIR}push origin feat\`"
+[ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && check "and so is one inside backquotes there" ok \
+  || check "and so is one inside backquotes there" "exit $RC, said [$ERR], judged [$(judged)]"
+run_hook "cat <<EOF; echo \"a${NL}b${NL}EOF${NL}\"; bash -c 'git ${PAIR}push origin feat'"
+[ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && check "and one after a double quoted word that runs over the body" ok \
+  || check "and one after a double quoted word that runs over the body" "exit $RC, said [$ERR], judged [$(judged)]"
+run_hook "cat <<EOF; $PUSH origin feat${NL}body${NL}EOF${NL}cat <<B; (${NL}B"
+[ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && check "a push after an opener, in a command whose last lines leave a parenthesis open, is refused by the second reading" ok \
+  || check "a push after an opener, in a command whose last lines leave a parenthesis open, is refused by the second reading" "exit $RC, said [$ERR], judged [$(judged)]"
+
 # The first reading's refusal stands whatever the second holds, and the second is never started.
 for c in "cat <<EOF; cd docs${NL}body${NL}EOF${NL}$PUSH" "bash -c 'git com${PAIR}mit -m x'; $PUSH" \
          "cat <<EOF; SKIP_STYLE_CHECK=1 true${NL}body${NL}EOF${NL}$PUSH" "cat <<EOF; exit 0${NL}body${NL}EOF${NL}$PUSH"; do
