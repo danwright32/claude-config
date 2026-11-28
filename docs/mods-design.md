@@ -2643,8 +2643,10 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   was read or the one line settles it. A stretch never read and a clean turn no longer look alike.
   A transcript perl names as one it could not open still asks nothing, as before. What the engine
   answers for a process stopped at its time limit is not in its types and its test engine runs no
-  process, so any failure that is not perl's own reason (which begins with the path) counts as a
-  read that did not finish. A refusal after this mod's own hold in the same turn was never asked
+  process, so every failure counts as a read that did not finish except perl's failure to open the
+  transcript. That reason alone begins with the bare path (`<path>: No such file or directory`); a
+  failure once perl is reading begins `reading <path>:` and counts as unfinished like the rest.
+  A refusal after this mod's own hold in the same turn was never asked
   about, since a turn is held once; it is now asked about once more, and only what Claude wrote
   after it can answer it, so the line said for the first refusal does not answer the second. Each
   further hold needs a call refused since the last, so it cannot loop. A `steps` call that failed
