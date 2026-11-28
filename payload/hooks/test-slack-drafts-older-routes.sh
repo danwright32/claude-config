@@ -120,6 +120,19 @@ run_here '. ./defs-alias.sh; cat calm.sh > run.sh; bash run.sh'
 refused "#3837 route 1: an alias called cat in a sourced file is refused"
 run_here 'true; cat() { ./frob "$@"; }; cat calm.sh > run.sh; bash run.sh'
 refused "#3837 route 1: a function called cat defined after another command on its line is refused"
+run_here 'true; function cat { ./frob "$@"; }; cat calm.sh > run.sh; bash run.sh'
+refused "#3837 route 1: the same written with the word function is refused, as before"
+printf '%s\n' 'echo ok' > "$P/locked.sh"
+chmod 000 "$P/locked.sh"
+run_here '. ./locked.sh; cat calm.sh > run.sh; bash run.sh'
+if [ -r "$P/locked.sh" ]; then
+  check "#3837 route 1: a sourced file the gate cannot open leaves cat doubted (not measured: this user reads any file)" ok
+else
+  refused "#3837 route 1: a sourced file the gate cannot open leaves cat doubted"
+fi
+chmod 644 "$P/locked.sh"
+run_here '. ./not-there.sh 2>/dev/null; cat calm.sh > run.sh; bash run.sh'
+allowed "#3837 route 1: a sourced file that is not there leaves cat believed"
 run_here '. ./defs.sh; cp calm.sh run.sh; bash run.sh'
 allowed "#3837 route 1: cp after a sourced file that defines only cat still passes"
 run_here '. ./defs-calm.sh; cat calm.sh > run.sh; bash run.sh'

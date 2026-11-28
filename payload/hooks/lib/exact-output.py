@@ -123,13 +123,18 @@ BUILTINS = frozenset({"echo", "printf"})
 # Empty brackets, and the name a function would have that ends just before them (named_anywhere).
 EMPTY_BRACKETS = re.compile(r"\(\s*\)")
 NAME_BEFORE = re.compile(r"[A-Za-z_][\w:.-]*\Z")
+# The most of a sourced file that is read for a function or an alias of a name (sourced_text).
+SOURCED_MAX = 2 * 1024 * 1024
 
 
 def named_anywhere(text):
-    """Every name text writes in front of empty brackets, wherever it stands: at the start of a
-    line or after another command, bare or inside quoted words. The gate's sh_funcs finds `name()`
-    only at the start of a line, so `true; cat() { ./frob; }` and `eval 'cat() { ./frob; }'` each
-    defined a function it did not see (claude-config#3837). Quoted words are counted on purpose:
+    """Every name text writes in the form `name()`, in front of empty brackets, wherever that
+    stands: at the start of a line or after another command, bare or inside quoted words. Only
+    that form: the other one, `function name`, the gate's sh_funcs already finds anywhere in a
+    text, quoted or not (`eval 'function cat { ./frob; }'` was refused on d45aa40ce3). It finds
+    `name()` only at the start of a line, so `true; cat() { ./frob; }` and
+    `eval 'cat() { ./frob; }'` each defined a function it did not see (claude-config#3837).
+    Quoted words are counted on purpose:
     whether a shell ever evaluates them is not something a reading of the text can say, and
     counting one that is only printed can only make a program doubted, never believed.
 
@@ -726,18 +731,23 @@ def make(unknown_dir, system_bin):
                     continue
                 seen.add(real)
                 text = self.sourced_text(real)
-                if text and self.exact_shadowed(text, name):
-                    return True
+                if text is None or (text and self.exact_shadowed(text, name)):
+                    return True  # one the gate could not read whole may define anything
                 todo.extend(nested.get(real, ()))
             return False
 
         def sourced_text(self, real):
-            """The text of a sourced file, read once unless this call wrote it."""
+            """The text of a sourced file, read once unless this call wrote it. "" for one that is
+            not there, which a shell sources nothing from. None for one that is there and that the
+            gate could not read, or could not read whole (past SOURCED_MAX): a shell may still read
+            it, so sourced_shadow takes it to define a function of any name, and the program is
+            doubted, never believed (the lessons review of 4817ab3, 2026-11-27)."""
             def work():
                 try:
-                    return self.content(real).decode("utf-8", "replace")
+                    data = self.content(real, limit=SOURCED_MAX + 1)
                 except (OSError, ValueError):
-                    return ""  # unreadable to us is unreadable to the shell that would source it
+                    return None if os.path.lexists(real) else ""
+                return None if len(data) > SOURCED_MAX else data.decode("utf-8", "replace")
             return work() if self.made_from(real) is not None else self.exact_once(("sourced text", real), work)
 
         def written_program(self, word, name, bare):

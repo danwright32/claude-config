@@ -132,8 +132,9 @@ IMPORTS = ", which imports "
 # What one reads like when a shell script was judged by a name in it and not by its commands
 # (claude-config#3476). The gate reads a shell script's commands wherever it reads the script, and
 # then says it "runs a command that posts". It says a shell script "posts to Slack (it names ...)"
-# only of one it did not read: one behind three other scripts, the most it reads in a chain (its
-# MAX_DEPTH), or one whose binary part names the call, which a script binary from its first line
+# only of one it judged by that name before reading it: one behind three other scripts or more (its
+# MAX_DEPTH; since claude-config#3837 one there that names no call is then read as commands, down to
+# its FILE_DEPTH), or one whose binary part names the call, which a script binary from its first line
 # and run by bash is at any depth, alone or behind one script. SHELL_EXT is the gate's own list of
 # the endings it takes for a shell script, copied here because this file is handed only the gate's
 # folder; the route's suite holds the copy to the gate's.
@@ -231,8 +232,8 @@ def make(here):
         @staticmethod
         def too_deep(what, limit):
             """Why what, a shell script or text a shell reads as its commands, cannot be judged: it
-            stands limit steps deep in what the command runs (the gate's MAX_DEPTH), where the gate
-            reads nothing as commands, so a script it runs is never seen (DEEP_UNREAD). The words
+            stands limit steps deep in what the command runs (the gate's FILE_DEPTH, past which it
+            reads nothing as commands), so a script it runs is never seen (DEEP_UNREAD). The words
             are made here because route_note looks for them."""
             return (f"{what} is {limit} steps deep in what this command runs, {DEEP_UNREAD}, so what it runs "
                     "cannot be checked")
@@ -246,7 +247,8 @@ def make(here):
             """The sentence a refusal gains when what the gate found is not a command it read: a
             file's imports are what reach code that posts, or a shell script was judged by a name
             in it, unread (NAMED_UNREAD, claude-config#3476: a plain run of the gate's own priority
-            suite, which reaches the gate's script behind three others). It is the route by which a
+            suite, which reaches the gate's script behind three others), or a script or text stood
+            too deep to be read as commands (DEEP_UNREAD, claude-config#3837). It is the route by which a
             test or a check can still be run. "" for any other refusal, and where no wrapper is
             installed, since a route that is not there must not be named (L111). It is asked only
             once a call is refused and adds words to that refusal, so it moves no verdict."""
