@@ -66,6 +66,8 @@ import {
   heldUnder,
   shellKey,
   shellTargets,
+  handedTo,
+  HANDED_BUILT,
   scriptProgram,
   scriptReach,
   argsMove,
@@ -639,7 +641,7 @@ const judgeUnread = async ($: EngineInterface, id: string, t: Extract<ShellTarge
     shown: issues.state === 'unread' ? [] : repoIssues(issues.issues),
     issues: issues.state === 'unread' ? { state: 'unread', why: issues.why } : { state: issues.state },
     growth: { unread: 'no file is named, so no growth is read' },
-    unread: { why: t.unread, key },
+    unread: { why: t.unread, key, ...(t.handed ? { handed: t.handed } : {}) },
     ...(declined ? { declined } : {}),
   }
   await updateHeld($, list => [...list.filter(x => x.id !== id), h].slice(-HELD_MAX))
@@ -811,12 +813,18 @@ const allPlaced = async ($: EngineInterface, runs: readonly ShellRun[], folder: 
   return placedCost(out.flat()) > FOLDER_JUDGE_MAX ? null : out
 }
 
+// The mark for a write that cannot be named whose word the command only hands to scripts (#3550).
+const handedIf = (runs: readonly ShellRun[] | undefined, why: string): { handed?: { to: string; why: string } } => (runs?.length ? { handed: { to: handedTo(runs), why } } : {})
+
 // A path a command writes, judged as its first edit would be; then, for a write marked `tree` or a
 // path the disk says is a folder (#2321), each file under it the area check could hold, which refuses
 // the command naming that file. A folder whose files cannot be listed, too many of them to judge one
 // by one, or a path that may be a folder but cannot be read, comes back as a write that cannot be
 // named, held as one (fail closed: one decision lets it through, where letting it pass would let a
 // write into a held file go unasked). A judging that throws passes, said, as gate's own does.
+// Where the path is one the command only hands to scripts (`runs`), that write comes back marked
+// `handed` (#3550), so its hold says the path was handed on and that whether anything is written
+// there could not be read, where it said the command writes it. The mark changes no verdict.
 const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, { path: string }>, agent: string | null, declined?: string): Promise<{ deny: string } | typeof PASS | Unread> => {
   const v = await gate($, 'Bash', id, t.path, agent, declined)
   if ('deny' in v) return v
@@ -830,7 +838,7 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
       return PASS
     }
     if (kind === false) return PASS
-    if ('unread' in kind) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at }
+    if ('unread' in kind) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at, ...handedIf(t.runs, `it may be a folder that cannot be read (${kind.unread})`) }
     at = kind.dir
     // A folder handed only to scripts each of whose writes is placed is judged only where those writes
     // land (#2407, #2565): every one of them is read, and any one with a write that cannot be placed, or
@@ -849,7 +857,7 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
     await failed($, t.path, err)
     return PASS
   }
-  if ('unread' in under) return { word: t.word, unread: `${t.word} reaches every file under it, and ${under.unread}`, folder: t.path }
+  if ('unread' in under) return { word: t.word, unread: `${t.word} reaches every file under it, and ${under.unread}`, folder: t.path, ...handedIf(t.runs, under.unread) }
   return gateFolder($, id, t.word, under.paths, agent, declined)
 }
 
@@ -938,7 +946,8 @@ const gateShell = async ($: EngineInterface, id: string, command: string, agent:
     // A hold on what a named script that was not let through reaches says why it was not (#3162).
     const declined = declinedNote(named, (target.runs ?? []).map(r => r.path))
     const r = 'path' in target ? await gatePath($, id, target, agent, declined) : target.runs ? await gateHanded($, id, { ...target, runs: target.runs }, agent, declined) : null
-    if (r === null) t = target as Unread
+    // A word built as the command runs that the command only hands to scripts is said so (#3550).
+    if (r === null) t = { ...(target as Unread), ...handedIf(target.runs, HANDED_BUILT) }
     else if ('deny' in r) return r
     else if ('pass' in r) continue
     else t = r

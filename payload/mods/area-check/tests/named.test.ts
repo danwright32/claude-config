@@ -203,7 +203,8 @@ test('the named script in any other shape, and every command chained with it, is
   for (const [i, [what, command]] of SHAPES.entries()) {
     const r = await bash($ as never, w, command, {}, `b${i + 1}`)
     const why = r.result === 'done' ? 'ran' : refusal(r)
-    held.push(/which writes (src\/big\.ts|\$MODS)\./.test(why) ? `held: ${what}` : `${what}: ${why}`)
+    // A word built as the command runs, only handed to the script, is said to be handed on (#3550).
+    held.push(/which writes src\/big\.ts\.|A bash script file is handed \$MODS, /.test(why) ? `held: ${what}` : `${what}: ${why}`)
   }
   expect(held).toEqual(SHAPES.map(([what]) => `held: ${what}`))
 })
