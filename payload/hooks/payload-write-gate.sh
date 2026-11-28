@@ -1271,6 +1271,10 @@ for at, seg in enumerate(segments):
     for m in (re.finditer(MAYBE_PATH, seg) if WRITE_SCRIPT else ()):
         if m.group(1) not in placed:
             add_maybe(m.group(1), base)
+    # A redirection among these words is placed with them, unlike in place_link below: this loop
+    # and plain_writes judge a command as it is typed, and a typed link command with 2>/dev/null
+    # run inside a payload folder is refused for that word. Taking it out here lets through
+    # commands this gate has always refused, so it waits for an answer of its own (claude-config#3775).
     for m in re.finditer(LN_STRING, seg):
         for w in m.group(1).split()[1:]:
             if not w.startswith("-"):
@@ -1488,16 +1492,15 @@ def script_links(text, base, bare):
         place_link(m.group(1), base, True)
 
 # A REDIRECTION IS NO WORD OF A LINK COMMAND (claude-config#3775). The shell takes every
-# redirection out of a command before the program is given its words. Read with them left in, a
-# link command of a script file had 2>/dev/null placed as a file it writes, in the folder the
-# command runs in, so a suite run from inside a payload folder was refused for a file nothing
-# makes. The shared reader takes them out (unredirected, which tells a quoted > from the operator).
+# redirection out of a command before the program is given its words, so one left among them is
+# placed as a file the command writes: 2>/dev/null is relative, and lands in the folder the
+# command runs in. The shared reader takes them out (unredirected, which tells a quoted > from
+# the operator).
 #
-# What a redirection WRITES is still judged, because it was refused before, under the name of the
-# operator, and is a real write: the file an output redirection names. One that only reads, or
-# copies or closes a descriptor, writes no file. Where the words cannot say what is written (the
-# target holds a value, or the redirection runs a command, or it is written in a form not read
-# here) its words are placed exactly as they were before, so no refusal is dropped for those.
+# What a redirection WRITES is a write: the file an output redirection names is placed. One that
+# only reads, or copies or closes a descriptor, writes no file. Where the words cannot say what
+# is written (the target holds a value, the redirection runs a command, or its form is not read
+# here) every word of it is placed, the reading that sees more writes, never fewer.
 def redirection_writes(r, crude):
     """The words to place for one redirection of a link command, as it is written."""
     m = _sw.REDIRECT_WORD.match(r)

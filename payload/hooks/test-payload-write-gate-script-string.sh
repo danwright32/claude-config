@@ -778,6 +778,13 @@ runbash "bash \"\$S\"" "$HOOKS_DIR"
 refused "#3775 control: a script file named by a value, run inside the payload folder"
 says "#3775 in words that say it could not read the script" "could not read the script file"
 
+# The same word typed directly is judged by the reading of a typed command, which main has too
+# and which refuses it. Taking it out there lets through commands main refuses, so it is left.
+runbash "ln -s \"\$A\" \"\$B/t\" 2>/dev/null" "$HOOKS_DIR"
+refused "#3775 kept until decided: a link command typed directly with its errors sent to /dev/null, inside a payload folder"
+runbash "python3 -c 'import os; os.system(\"ln -s \$A \$B/t 2>/dev/null\")'" "$HOOKS_DIR"
+refused "#3775 kept until decided: and an inline script typed directly that runs it as one string"
+
 # KEPT UNTIL DECIDED (claude-config#3775). Two more words of a script are taken for a write that
 # may be none, and for neither is there a reading that is right for every script, so both are
 # refused as they were and the choice is Dan's (the pull request that added these lines).

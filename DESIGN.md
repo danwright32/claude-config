@@ -2611,6 +2611,13 @@ function as a quoted string is read as an inline script that makes a link, since
 may run it: the write gate's own two suites are refused from a primary checkout for that, and
 are the two refusals `tests/test-suite-runs-pass-write-gate.sh` lists as expected.
 
+The redirection is taken out only where a script file is read. A link command typed directly
+with `2>/dev/null`, or an inline script typed directly that runs one as a string, is judged by
+the reading of a typed command, which places the redirection as before: inside a payload folder
+both are refused, as they always were (asked of main's gate and of this one with made up
+commands on 2026-11-28). Taking it out there lets through commands the gate refuses today, so it
+is a choice of its own and is pinned by two cases until it is made.
+
 Measured 2026-11-26 on the personal MacBook at a load of about 8 to 10, two rounds of 15 samples
 an arm: a command with no interpreter went from a median of 127 to 128 ms to 133 to 134 ms; a
 copy typed directly from 197 to about 210 ms (the real path step now loads two more modules); an
