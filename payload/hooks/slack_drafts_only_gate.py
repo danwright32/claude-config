@@ -2055,6 +2055,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # them in the order the commands run; made_from reads them.
         self.made = {}
         self.made_dirs = {}
+        # For a directory that a text the reader gave up on names a copy to (note_one): {directory:
+        # [(a directory it was noted as copied from before, its name)]}, which such a copy never
+        # replaces, and the directories that only such a text makes one, each of which may still be
+        # the file it was before (dir_unsure, claude-config#3878).
+        self.made_dirs_kept = {}
+        self.made_dirs_unsure = set()
         # [(a pattern, what wrote it)] for files written where the path cannot be worked out
         # (claude-config#2721): every path it matches is unreadable from then on.
         self.made_unknown = []
@@ -2250,12 +2256,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if parent == head:
                 break
             if parent in self.made_dirs:
-                src_dir, label = self.made_dirs[parent]
                 rel = os.path.relpath(real, parent)
-                src = os.path.join(src_dir, rel)
-                found = list(self.made_from(src, depth + 1) or [])
-                if os.path.isfile(src) and not any(p[1] == src for p in found):
-                    found.append(("file", src, os.path.join(label, rel)))
+                found = []
+                # Each directory it was noted as copied from before a text the reader gave up on
+                # named another copy to it (note_one), then the one it was copied from last.
+                for src_dir, label in self.made_dirs_kept.get(parent, []) + [self.made_dirs[parent]]:
+                    src = os.path.join(src_dir, rel)
+                    under = list(self.made_from(src, depth + 1) or [])
+                    if os.path.isfile(src) and not any(p[1] == src for p in under):
+                        under.append(("file", src, os.path.join(label, rel)))
+                    found += under
                 return found or None
             head = parent
         return None
@@ -2955,6 +2965,20 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         real = os.path.realpath(self.resolve(word, d))
         return os.path.isdir(real) or real in self.made_dirs
 
+    def dir_unsure(self, real):
+        """Whether real is a directory only by a note that a text the reader gave up on made, or
+        that was made from such a one (note_one). The copy that note stands for may be words a shell
+        only prints, so the path may still be the file it was before, and a copy to it or from it
+        is noted both ways (claude-config#3878)."""
+        return real in self.made_dirs_unsure and not os.path.isdir(real)
+
+    def copied_onto(self):
+        """The piece a path gains where a copy into it as a directory may be a copy onto it as a
+        file (dir_unsure): which of the two a shell does cannot be told, so what the path holds
+        from then on cannot be read."""
+        return [("unknown", None, "" if self.shell.get("on_disk") else
+                 "a copy to a path that only text this gate could not read as commands for certain makes a folder")]
+
     def copy_target_may_be(self, name, args, vals, i):
         """Whether args[i], a word worked out of a copy, link or move (COPIERS) another word of which
         is not, can be the file it writes (claude-config#2683). The target is the last word, or the
@@ -3032,6 +3056,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         relative = linker and "r" in flags
         symbolic = "s" in flags
         no_dir = "T" in flags and not installer
+        onto = False
         if target_dir is not None:
             srcs, dest, into = ops, target_dir, True
         elif len(ops) == 1 and linker:
@@ -3041,33 +3066,53 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         else:
             srcs, dest = ops[:-1], ops[-1]
             into = not no_dir and (len(srcs) > 1 or dest.endswith("/") or self.is_dir(dest, d))
+            # Into a directory that may still be a file (dir_unsure): the copy may write that path.
+            onto = into and len(srcs) == 1 and not dest.endswith("/") \
+                and self.dir_unsure(os.path.realpath(self.resolve(dest, d)))
         for src in srcs:
             targets = [os.path.join(dest, os.path.basename(src.rstrip("/")) or src)] if into else [dest]
             if into and recursive and src.endswith("/") and len(srcs) == 1:
                 targets.append(dest)  # BSD cp -R src/ copies what is in src; GNU copies src itself
             if destdir:  # also where the gate recorded it before #2742, so nothing refused then passes
                 targets += [os.path.join(destdir, t.lstrip("/")) for t in targets]
-            for target in targets:
+            for target, doubt in [(t, None) for t in targets] + ([(dest, self.copied_onto())] if onto else []):
                 # A symbolic link's own text is read from the directory the link is in.
                 where = d
                 if linker and symbolic and not relative and not os.path.isabs(os.path.expanduser(src)):
                     where = os.path.dirname(self.resolve(target, d))
-                self.note_one(src, where, target, d)
+                self.note_one(src, where, target, d, doubt)
 
-    def note_one(self, src, where, target, d):
-        """One source copied to one target: a directory to every file under it, a file to its text."""
+    def note_one(self, src, where, target, d, doubt=None):
+        """One source copied to one target: a directory to every file under it, a file to its text.
+        doubt is the piece the target gains where the copy may not write it (copied_onto): it is
+        then noted as a write in a text the reader gave up on is, added to what the target held."""
         src_real = os.path.realpath(self.resolve(src, where))
         real = os.path.realpath(self.resolve(target, d))
         if src_real == real:
             return
-        roughly = self.read_roughly()
+        roughly = self.read_roughly() or list(doubt or [])
         if os.path.isdir(src_real) or src_real in self.made_dirs:
-            if roughly:
-                # Never in the place of a folder noted before: every file under it is unread.
-                self.made_unknown.append((glob.escape(real.rstrip("/")) + "/*", roughly[0][2]))
+            came = (src_real, src.rstrip("/") or src)
+            # A source that may still be a file (dir_unsure) leaves a target that may be one too.
+            maybe_file = self.dir_unsure(src_real)
+            if not doubt:  # onto a path that is a file, a directory is not copied at all
+                if roughly:
+                    # The copy may be words a shell only prints, so it never stands in the place of
+                    # what the directory was noted as copied from before: that is kept beside it
+                    # (made_from_known), and every file under it is also unread. The directory is
+                    # still noted as one, copied from this source, so that a later copy, move or run
+                    # of it is followed to the source as it is in text read whole (#3878).
+                    was = self.made_dirs.get(real)
+                    if was and was != came and was not in self.made_dirs_kept.setdefault(real, []):
+                        self.made_dirs_kept[real].append(was)
+                    self.made_unknown.append((glob.escape(real.rstrip("/")) + "/*", roughly[0][2]))
+                self.made_dirs[real] = came
+                if roughly or maybe_file:
+                    # Never taken back: a later copy of a directory onto a path that is a file
+                    # fails, so no copy read whole shows the path to be a directory.
+                    self.made_dirs_unsure.add(real)
+            if not maybe_file:
                 return
-            self.made_dirs[real] = (src_real, src.rstrip("/") or src)
-            return
         pieces = self.pieces_of(src, where)
         if pieces:
             self.made[real] = (self.pieces_of(target, d) if roughly else []) + pieces + roughly
@@ -3100,7 +3145,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         is read the same way: a suite runs one hook by a variable hundreds of times, and each of those
         is now a read of the hook and of everything it runs and sources (claude-config#2678). The same
         way is the file, whether it is sourced, the word, label and directory it is read by, the
-        depth, the program, and where the Python it starts looks for imports and what it is handed.
+        depth, the program, where the Python it starts looks for imports and what it is handed, and
+        whether the text that reads it is one the reader gave up on (read_roughly).
         What a sourced file exports is kept with it and put back, since that reaches the commands
         after it. Nothing is kept while an earlier command of this call has written a file
         (made_from), since what a file reads as then depends on that write. Every reading under such
@@ -3154,7 +3200,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             key = (real, sourced, word, label, d if there else None, depth, shell_hint, lang,
                    self.sh_cwd(d) != SH_UNKNOWN_DIR, repr(sorted(py.items())), repr(self.exported),
                    self.shell.get("program") if sourced else None,
-                   self.script_reads_by(word, sourced, real))  # its $0, the words it is handed (#3395)
+                   self.script_reads_by(word, sourced, real),  # its $0, the words it is handed (#3395)
+                   # In a text the reader gave up on, an export the file makes is added to what was
+                   # exported, never put in its place (exported_path), so the export kept from a
+                   # reading in text read whole is not the one to put back there (#3878).
+                   bool(self.read_roughly()))
             if key in self.clean:
                 if sourced:
                     self.exported = self.clean[key]
@@ -6150,9 +6200,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             for w in words[1:]:
                 if w.startswith("PYTHONPATH="):
                     named = self.py_path(self.sh_pythonpath(w[len("PYTHONPATH="):], text, d), d)
-                    self.exported = self.exported_path(named, d)
+                    self.exported = self.exported_path(named)
         elif not words and value is not None:
-            self.exported = self.exported_path(self.py_path(value, d), d)
+            self.exported = self.exported_path(self.py_path(value, d))
         here = os.path.abspath(d or os.getcwd())
         if value is not None:
             path = self.py_path(value, d)
@@ -6193,16 +6243,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if not sourced:
                 self.exported = saved_exported
 
-    def exported_path(self, named, d):
+    def exported_path(self, named):
         """What an export of PYTHONPATH naming the folders named leaves exported. In a text the
         reader gave up on (read_roughly) the export may be words a shell only prints, or a real one
-        whose value the crude cut split, so it never takes the place of what was exported before
-        (claude-config#3878): its folders are added to those, behind PY_PATH_UNREAD, the entry at
-        which a later Python's imports stop being placed (resolve_py)."""
-        if not self.read_roughly():
-            return named
-        before = self.exported if self.exported is not None else self.py_path(os.environ.get("PYTHONPATH", ""), d)
-        return [PY_PATH_UNREAD] + [p for p in before + named if p != PY_PATH_UNREAD]
+        whose value the crude cut split, so which folders are exported after it is not known
+        (claude-config#3878): the path is PY_PATH_UNREAD alone, the entry at which a later Python's
+        imports stop being placed (resolve_py). No folder is kept beside it, the ones exported
+        before included: every reader of the path stops at that entry, so one would decide nothing."""
+        return [PY_PATH_UNREAD] if self.read_roughly() else named
 
     def rest_of(self, text):
         """The shared reader's command_rest(text), worked out once for each text. What it gives
