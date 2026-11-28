@@ -26,4 +26,8 @@ which rtk             # Verify correct binary
 All other commands are automatically rewritten by the Claude Code hook.
 Example: `git status` → `rtk git status` (transparent, 0 tokens overhead)
 
+A subagent's commands are left as typed, so their output is not shortened: a rewritten call can be
+refused by auto mode's check with no verdict, and those refusals fall almost only on subagents
+(claude-config#3548).
+
 Refer to CLAUDE.md for full command reference.

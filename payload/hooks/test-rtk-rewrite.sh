@@ -162,6 +162,69 @@ printf 'not json' > "$TMPROOT/payload.json"
   || check "a payload that does not parse passes through silently" "it emitted something"
 
 # ---------------------------------------------------------------------------
+# A subagent's call is left as typed (claude-config#3548). A rewritten call can be refused by auto
+# mode's check with no verdict, and those refusals fall almost only on subagents. Who is calling is
+# read as every subagent gate here reads it: the PRESENCE of agent_id in the payload, which only a
+# subagent's carries, so an empty or null one is still a subagent (playwright-subagent-gate.sh).
+# A session started with --agent carries agent_type on its main thread with no agent_id, and that
+# is a main session. The shape is the one measured there on Claude Code 2.1.274.
+# ---------------------------------------------------------------------------
+# agent_payload <command> <agent_id JSON or -> [agent_type]: '-' leaves agent_id out altogether.
+agent_payload() {
+  python3 -c 'import json,sys
+d={"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[1],"description":"d"}}
+if sys.argv[2] != "-": d["agent_id"]=json.loads(sys.argv[2])
+if len(sys.argv) > 3: d["agent_type"]=sys.argv[3]
+print(json.dumps(d))' "$@" > "$TMPROOT/payload.json"
+}
+run_payload() { PATH="$BIN:$PATH" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null; }
+printf 'rtk git status\n' > "$TMPROOT/rewrite"
+agent_payload 'git status' '"a3211051898ed98b1"' general-purpose
+out3548="$(run_payload)"; code3548=$?
+[ -z "$out3548" ] && [ "$code3548" -eq 0 ] \
+  && check "#3548 a subagent's git status is left as typed, with nothing said and a clean exit" ok \
+  || check "#3548 a subagent's git status is left as typed, with nothing said and a clean exit" "exit=$code3548 out=$out3548"
+agent_payload 'git status' '-'
+[ "$(run_payload | rewritten_to)" = "rtk git status" ] \
+  && check "#3548 the control: the same payload with no agent_id is a main session's and is rewritten" ok \
+  || check "#3548 the control: the same payload with no agent_id is a main session's and is rewritten" "got [$(run_payload)]"
+agent_payload 'git status' '-' general-purpose
+[ "$(run_payload | rewritten_to)" = "rtk git status" ] \
+  && check "#3548 a main thread started with --agent (agent_type, no agent_id) is still rewritten" ok \
+  || check "#3548 a main thread started with --agent (agent_type, no agent_id) is still rewritten" "got [$(run_payload)]"
+agent_payload 'git status' '""' general-purpose
+[ -z "$(run_payload)" ] \
+  && check "#3548 an agent_id that is present but empty is still a subagent's call, left as typed" ok \
+  || check "#3548 an agent_id that is present but empty is still a subagent's call, left as typed" "got [$(run_payload)]"
+agent_payload 'git status' 'null'
+[ -z "$(run_payload)" ] \
+  && check "#3548 an agent_id that is present but null is still a subagent's call, left as typed" ok \
+  || check "#3548 an agent_id that is present but null is still a subagent's call, left as typed" "got [$(run_payload)]"
+# The field is read as a key of the payload, never as text in it: a main session's command that
+# merely names agent_id is rewritten like any other.
+printf 'rtk grep agent_id x.json\n' > "$TMPROOT/rewrite"
+agent_payload 'grep "\"agent_id\"" x.json' '-'
+[ "$(run_payload | rewritten_to)" = "rtk grep agent_id x.json" ] \
+  && check "#3548 a main session's command that names agent_id in its text is still rewritten" ok \
+  || check "#3548 a main session's command that names agent_id in its text is still rewritten" "got [$(run_payload)]"
+# Only the rewrite stops. Every warning the hook gives still reaches a subagent's caller: an rtk too
+# old to rewrite, and a missing shared reader that leaves a gh or git log rewrite unjudged.
+printf 'rtk 0.22.0\n' > "$TMPROOT/version"; printf 'rtk git status\n' > "$TMPROOT/rewrite"
+agent_payload 'git status' '"a3211051898ed98b1"' general-purpose
+out3548="$(run_payload)"
+case "$out3548" in *'"systemMessage"'*'too old'*) check "#3548 a subagent's call still gets the warning that rtk is too old" ok ;;
+  *) check "#3548 a subagent's call still gets the warning that rtk is too old" "it said: [$out3548]" ;; esac
+printf 'rtk 0.31.0\n' > "$TMPROOT/version"
+NOLIB3548="$TMPROOT/nolib3548"; mkdir -p "$NOLIB3548"; cp "$H" "$NOLIB3548/rtk-rewrite.sh"
+printf 'rtk gh api repos/o/r\n' > "$TMPROOT/rewrite"
+agent_payload 'gh api repos/o/r' '"a3211051898ed98b1"' general-purpose
+out3548="$(PATH="$BIN:$PATH" bash "$NOLIB3548/rtk-rewrite.sh" < "$TMPROOT/payload.json" 2>/dev/null)"
+case "$out3548" in *updatedInput*) check "#3548 with no shared reader a subagent's call still says rtk did not run, and rewrites nothing" "it rewrote: [$out3548]" ;;
+  *'"systemMessage"'*"DID NOT RUN"*"lib/push-scope.sh"*) check "#3548 with no shared reader a subagent's call still says rtk did not run, and rewrites nothing" ok ;;
+  *) check "#3548 with no shared reader a subagent's call still says rtk did not run, and rewrites nothing" "it said: [$out3548]" ;; esac
+printf 'rtk git status\n' > "$TMPROOT/rewrite"
+
+# ---------------------------------------------------------------------------
 # A version of rtk too old to have `rewrite` at all. It must WARN and pass through, never rewrite
 # and never fail the command: an unusable tool has to be visible, and the person's command still
 # has to run (L11).
