@@ -5477,8 +5477,19 @@ imports reach code
 that posts names the route and the path to write, in full, and `skills/orchestrate/agent-rules.md`
 lets an agent run a refused command again that way when the refusal says so. Since #3476 one more
 refusal names it: that of a shell script the gate judged by a name in it and did not read as
-commands. The gate reads the commands of three scripts in a chain, and a shell script behind those
-three is refused where it names a send call, whatever it does. That refused a plain run of
+commands. A shell script behind three others in a chain is first judged by a name in it, and is
+refused where it names a send call, whatever it does. Since #3837 one that names none is then read
+as commands like any other, down to eight scripts deep, and one standing eight deep is refused as a
+command the gate could not check, with the same route named: before that issue a script that
+posts, behind four others, was allowed. The same holds for a heredoc fed to a shell and for text
+piped to one. A file already being read higher up the same chain is not read again past three deep
+(`lib/suite-deadline.sh` runs itself). And past three deep only a script or text no longer than the
+gate's `DEEP_FILE_MAX` is read as commands: a longer one is still judged by the names in it alone, so
+a post behind such a script that deep still passes, which is open and Dan's to decide (#3837). The
+limit is there because reading costs time in proportion to the text, and a suite can reach a very
+long script that deep through the words of its own cases: read as commands there, it takes the
+judgement of that suite's plain run past the gate's time, and the gate refuses the run as one it
+ran out of time on. The refusal by a name refused a plain run of
 `test-slack-drafts-gate-qos.sh`, which starts itself again under `taskpolicy` and so reaches the
 gate's own script, which names the call it guards, behind three. A shell script binary from its
 first line and run by bash is judged the same way at any depth, alone or behind one script, since
@@ -6509,7 +6520,22 @@ What a program writes is believed only where the program the shell would run is 
 system's own (`system_program` there, the gate's one judgement of it, claude-config#3440): by a
 path only in a folder the gate takes for the system's, by a bare name only where the session's
 PATH holds whole paths and no text that runs the command names PATH, never behind a word that
-runs it for the shell, and never where a function or an alias has the name. That holds for sed
+runs it for the shell, and never where a function or an alias has the name. Since
+claude-config#3837 a function or alias counts wherever it is defined: in a file the command
+sources (or one that file sources), after another command on its line, or as a name in front of
+empty brackets inside quoted words, which is how `eval 'cat() { ... }'` is written. And a program
+is never believed where an earlier command of the same call wrote, or may have written, the file
+the shell would run: `cp ./frob /opt/homebrew/bin/cat; /opt/homebrew/bin/cat calm.sh > run.sh;
+bash run.sh` was allowed. Three more things changed with that issue. A program whose word the
+gate cannot work out (`"$TOOL" +x run.sh`) marks each file it names as one it may have written,
+as a program the gate does not know does, on the line that was typed. A curl config written by
+name with something the gate could not read (a program it does not know, a download, a word it
+cannot work out) is refused as a check that could not be made, where before only a config in
+which an endpoint was found was refused. And in a text or a string the shared reader gave up on,
+which it then cuts crudely into whatever may be a command, quoted words included, a write only
+ever adds to what a file was noted to hold and leaves it unread: a pretend write inside quotes
+used to replace the note, and the file was then run as what the pretend write said. The rule that a
+program is believed only where it is for certain the system's own holds for sed
 and git, and for what printf, echo and cat print, what tee writes and what cp, mv, ln, install
 and link copy: `./cat calm.sh > run.sh; bash run.sh` is refused as a check that could not be
 made. echo and printf by their bare names are the shell's builtins, which PATH does not move.

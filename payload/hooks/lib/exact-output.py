@@ -57,11 +57,21 @@ the program the shell would run is that one for certain:
     or relative entry is the folder the command runs in), and no text that runs the command, the
     line itself or a script around it, names PATH in any way, set or only read;
   * with no word in front that runs it for the shell (env, exec, command, sudo, nice, xargs:
-    lib/shell-words.py's runners), since one can change where the program is looked for.
+    lib/shell-words.py's runners), since one can change where the program is looked for;
+  * never where an earlier command of the same call wrote, or may have written, the file the
+    shell would run: the word's own path, or for a bare name a file of that name in any folder of
+    the session's PATH or of SYSTEM_BIN (written_program, claude-config#3837: in `cp ./frob
+    /opt/homebrew/bin/cat; /opt/homebrew/bin/cat calm.sh > run.sh; bash run.sh` the cat that
+    runs is the copy, so run.sh is not calm.sh);
+  * never where a function or an alias of the name is defined: in a text that runs the command,
+    in a file such a text sources before it or one that file sources (sourced_shadow), or
+    anywhere in such a text as a name in front of empty brackets, quoted or not, which is how
+    `eval 'cat() { ... }'` and a definition after another command on its line are written
+    (named_anywhere, claude-config#3837).
 
 Not looked at, and so still believed: a bare name the session's PATH resolves outside those
-folders, a file an earlier command wrote into a PATH folder, zsh's path array, the shell's hash
-table (hash -p), and a PATH or function set by a file the command sources.
+folders, zsh's path array, the shell's hash table (hash -p), PATH set by a file the command
+sources, and a function whose name eval or source is handed through a variable.
 
 That judgement is system_program, and it is the gate's one judgement of it (claude-config#3440).
 The gate's older readings took a program by the last part of its word in the same way: with a
@@ -126,6 +136,31 @@ BUILTINS = frozenset({
     "shift", "for", "select", "case", "esac", "in", "while", "until", "if", "then", "elif", "else", "fi",
     "do", "done", "function", "{", "}", "!", "let", "read", "getopts", "alias", "builtin", "command",
     "exec", "eval", "trap", "ulimit", "umask", "time"})
+# Empty brackets, and the name a function would have that ends just before them (named_anywhere).
+EMPTY_BRACKETS = re.compile(r"\(\s*\)")
+NAME_BEFORE = re.compile(r"[A-Za-z_][\w:.-]*\Z")
+# The most of a sourced file that is read for a function or an alias of a name (sourced_text).
+SOURCED_MAX = 2 * 1024 * 1024
+
+
+def named_anywhere(text):
+    """Every name text writes in the form `name()`, in front of empty brackets, wherever that
+    stands: at the start of a line or after another command, bare or inside quoted words. Only
+    that form: the other one, `function name`, the gate's sh_funcs already finds anywhere in a
+    text, quoted or not. It finds `name()` only at the start of a line, so `true; cat() { ./frob; }`
+    and `eval 'cat() { ./frob; }'` each define a function it does not see (claude-config#3837).
+    Quoted words are counted on purpose: whether a shell ever evaluates them is not something a
+    reading of the text can say, and counting one that is only printed can only make a program
+    doubted, never believed.
+
+    One pass over the brackets, never one search for each name: this is asked of every text
+    system_program walks, and a suite's script can be megabytes long."""
+    names = set()
+    for m in EMPTY_BRACKETS.finditer(text):
+        found = NAME_BEFORE.search(text[max(0, m.start() - 120):m.start()].rstrip(" \t"))
+        if found:
+            names.add(found.group(0))
+    return names
 
 
 class Outside(Exception):
@@ -589,15 +624,19 @@ def make(unknown_dir, system_bin):
 
         def system_doubt(self, word, name, text, scripts=True):
             """system_program's judgement with its reason: None where the program is for certain
-            the system's own, else which of the five things said it may not be, for the refusal
-            to name (not_the_systems): "path", "session", "runner", "shadowed" or "PATH". A
-            caller that words a refusal asks it after system_program has said no."""
+            the system's own, else what said it may not be, for the refusal to name
+            (not_the_systems): "path", "session", "written", "runner", "shadowed", "sourced" or
+            "PATH". A caller that words a refusal asks it after system_program has said no."""
             bare = "/" not in word
             builtin = bare and name in BUILTINS
             if not bare and os.path.dirname(word) not in system_bin:
                 return "path"
             if bare and not builtin and not self.exact_session_path():
                 return "session"
+            # A file this call wrote where the shell finds the program is not the system's (#3837).
+            # A builtin by its bare name is not looked for in any folder.
+            if not builtin and self.written_program(word, name, bare):
+                return "written"
             # A text that begins with the program's own word has no word in front of it, so the
             # shared reader is asked only of the others: asked of every cat and cp of a long
             # script, it took judging `bash tests/test-claude-sync.sh` past its cost limit
@@ -610,6 +649,8 @@ def make(unknown_dir, system_bin):
             while ctx is not None:
                 if self.exact_shadowed(ctx["text"], name):
                     return "shadowed"  # a function or an alias of that name is not the program
+                if ctx.get("sourced") and self.sourced_shadow(ctx["sourced"], name):
+                    return "sourced"  # nor is one a file this text sourced defines (#3837)
                 if bare and not builtin and (scripts or not ctx.get("on_disk")) \
                         and self.exact_names_path(ctx["text"]):
                     return "PATH"
@@ -680,6 +721,14 @@ def make(unknown_dir, system_bin):
             elif doubt == "shadowed":
                 why = f"this command defines a function or an alias named {name}"
                 fix = f"with that function or alias under another name, {name} is taken for the system's own"
+            elif doubt == "written":
+                why = ("an earlier command of this call wrote, or may have written, the file the shell "
+                       "would run for it")
+                fix = f"in a call that writes no such file, {name} is taken for the system's own"
+            elif doubt == "sourced":
+                why = (f"a file this command sources defines a function or an alias named {name}, or "
+                       "could not be read whole")
+                fix = f"with no such file sourced before it, {name} is taken for the system's own"
             else:
                 why = ("the word PATH appears in this command, and PATH decides where the shell finds "
                        "a bare name")
@@ -721,10 +770,134 @@ def make(unknown_dir, system_bin):
                 # text, not once for each name: since claude-config#3440 this is asked of echo,
                 # printf, cat, cp and the rest too, and tests/test-claude-sync.sh is 1.8 MB (its
                 # cost case read 62.1 and 63.5 units against 57.0 with the search made per name).
-                funcs = self.exact_once(("functions", text), lambda: self.sh_funcs(text))
+                # With every name in front of empty brackets, which sh_funcs sees only at the start
+                # of a line (named_anywhere, claude-config#3837).
+                funcs = self.exact_once(("functions", text), lambda: self.sh_funcs(text) | named_anywhere(text))
                 aliases = self.exact_once(("alias lines", text), lambda: "\n".join(ALIAS_LINE.findall(text)))
                 memo[key] = name in funcs or bool(aliases and re.search(ALIAS % re.escape(name), aliases))
             return memo[key]
+
+        def note_sourced(self, path):
+            """Called by the gate's script() for each file a source or . command reads: the text
+            being read gains the file, for sourced_shadow, since what a sourced file defines stays
+            defined for the commands after it. A file sourced by a sourced file is kept against
+            that file as well, so it is found again where the outer file's reading was kept from an
+            earlier read and its commands are not walked a second time (the gate's clean)."""
+            real = os.path.realpath(path)
+            if not isinstance(self.shell, dict):
+                return
+            self.shell.setdefault("sourced", []).append(real)
+            ran = self.shell.get("ran")
+            if ran and ran[1] is None:  # the text being read is itself a sourced file's
+                nested = self.__dict__.setdefault("_exact_nested", {})
+                nested.setdefault(os.path.realpath(ran[0]), []).append(real)
+                # How many such there are, for sourced_shadow, which keeps its answer while none is added.
+                self.__dict__["_exact_nested_count"] = self.__dict__.get("_exact_nested_count", 0) + 1
+
+        def sourced_shadow(self, paths, name):
+            """Whether one of the sourced files paths, or a file one of them sources, defines a
+            function or an alias called name (claude-config#3837). Each is read as the gate reads
+            any file, so one an earlier command of this call wrote is read as what was written.
+
+            The answer is kept for the files and the name while nothing it was worked out from has
+            changed: the files sourced so far (paths, and how many a sourced file sources), what
+            this call wrote each file read from (the gate's made, by the very list it holds), and
+            how much the gate has noted of folders copied, paths not worked out, programs that may
+            write and git (written_counts). This is asked once for every command of a text whose
+            program the gate reads by its name, and worked out each time it reads the gate's whole
+            record of what the call wrote for every sourced file, which over a long script is a
+            measurable part of the gate's time budget."""
+            nested = self.__dict__.get("_exact_nested", {})
+            memo = self.__dict__.setdefault("_exact_sourced_shadow", {})
+            key = (tuple(paths), name)
+            stamp = (self.__dict__.get("_exact_nested_count", 0),) + self.written_counts()[1:]
+            # Never with a folder copied: a file under one is read as the file it was copied from,
+            # which is not among the files kept here.
+            kept = None if self.made_dirs else memo.get(key)
+            if kept and kept[1] == stamp and all(self.made.get(real) is was and (was is None or len(was) == n)
+                                                 for real, (was, n) in kept[2]):
+                return kept[0]
+            seen, todo, answer = {}, list(paths), False
+            while todo:
+                real = todo.pop()
+                if real in seen:
+                    continue
+                was = self.made.get(real)
+                seen[real] = (was, None if was is None else len(was))
+                text = self.sourced_text(real)
+                if text is None or (text and self.exact_shadowed(text, name)):
+                    answer = True  # one the gate could not read whole may define anything
+                    break
+                todo.extend(nested.get(real, ()))
+            memo[key] = (answer, stamp, tuple(seen.items()))
+            return answer
+
+        def sourced_text(self, real):
+            """The text of a sourced file, read once unless this call wrote it. "" only for one
+            that is not there and that nothing in this call wrote, which a shell sources nothing
+            from. None for one the gate could not read, or could not read whole: one that is there
+            and cannot be opened, one past SOURCED_MAX, and one this call wrote where any part of
+            what it was written from is not text the gate holds or a file it can open (a copy of a
+            file it cannot open reads as nothing, which is not the same as holding nothing). A
+            shell may still read such a file, so sourced_shadow takes it to define a function of
+            any name, and the program is doubted, never believed."""
+            made = self.made_from(real)
+
+            def work():
+                for kind, value, _ in made or ():
+                    if kind == "text":
+                        continue
+                    if kind != "file" or not os.path.isfile(value) or not os.access(value, os.R_OK):
+                        return None
+                try:
+                    data = self.content(real, limit=SOURCED_MAX + 1)
+                except (OSError, ValueError):
+                    return None if made is not None or os.path.lexists(real) else ""
+                return None if len(data) > SOURCED_MAX else data.decode("utf-8", "replace")
+            return work() if made is not None else self.exact_once(("sourced text", real), work)
+
+        def written_counts(self):
+            """How much the gate has noted of what this call wrote, as one value to compare: the
+            files written by name, then the folders copied, the paths not worked out, the programs
+            that may write, the code that names files and the git commands. Each only ever grows."""
+            return (len(self.made), len(self.made_dirs), len(self.made_unknown), len(self.made_maybe),
+                    len(self.made_code), len(self.made_git))
+
+        def written_program(self, word, name, bare):
+            """Whether an earlier command of this call wrote, or may have written, the file the
+            shell would run for word (claude-config#3837): the path itself, or for a bare name a
+            file called name in a folder of the session's PATH or of the gate's SYSTEM_BIN. Asked
+            of the gate's own record of what the call wrote (made_from), which is empty for most
+            calls and answers at once then. For a bare name the folders are searched once for each
+            name while that record is as it was (written_counts). Where only the files written by
+            name have grown, and none of them is the file a folder would hold for the name, the
+            answer stands as well: a long script writes a file by name every few commands, and
+            searching every folder again after each one reads the same record over and over."""
+            if not (self.made or self.made_dirs or self.made_unknown or self.made_maybe or self.made_code
+                    or self.made_git):
+                return False
+            if not bare:
+                return self.made_from(word) is not None
+            memo = self.__dict__.setdefault("_exact_written_program", {})
+            counts = self.written_counts()
+            kept = memo.get(name)
+            if kept is None:
+                folders = set(system_bin) | {e for e in (os.environ.get("PATH") or "").split(os.pathsep)
+                                             if os.path.isabs(e)}
+                places = [os.path.join(folder, name) for folder in sorted(folders)]
+                # As made_from finds a file written by name: by the path with every link followed.
+                kept = memo[name] = [None, None, places, {os.path.realpath(place) for place in places}]
+            if kept[1] == counts:
+                return kept[0]
+            # With a folder copied, a file under it is read as the file it was copied from, which a
+            # later write by name can be, so there the folders are searched again.
+            if kept[0] is False and not self.made_dirs and kept[1][1:] == counts[1:] \
+                    and not any(real in self.made for real in kept[3]):
+                kept[1] = counts
+                return False
+            kept[0] = any(self.made_from(place) is not None for place in kept[2])
+            kept[1] = counts
+            return kept[0]
 
         def exact_once(self, key, work):
             """work()'s answer for key, worked out once: each of the three askings below depends
