@@ -3040,8 +3040,11 @@ test("the description says what does not hold the box: a step that is Dan's alon
   await start($)
   const said = tools[0]?.description ?? ''
   expect(said).toMatch(/These do not hold the box, since none is work of yours: a step only Dan can take \(a draft he sends, a command he types, a setting he changes\), a check \/check-later has put on the To Do list, and work he declined in a picker\./)
-  // The picked answer to the issue's first question: his step holds the box only with work behind it.
+  // His step holds the box only with work behind it.
   expect(said).toMatch(/A step of his on the steps card holds the box only while work of your own waits behind it\./)
+  // The opening sentence asks for the session's own part, so it does not contradict the list above.
+  expect(said).toMatch(/is finished: every part of his request that is yours to do done, every pull request merged/)
+  expect(said).not.toMatch(/every part of his request done/)
   // What the tool itself refuses for is said as before.
   expect(said).toMatch(/It refuses while anything is still in flight \(an agent still running, a merge or deploy not confirmed, a pull request this session touched still open\)/)
 })

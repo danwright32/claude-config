@@ -47,7 +47,7 @@ export const YOURS_DONE = 'every part of what Dan asked for that is yours to do 
 export const heldTail = (): string => `If part of it is still yours to do, do not call it, and ${HELD_SAY}.`
 
 export const DESCRIPTION = [
-  "Shows Dan the green Goal accomplished box: the goal, then what shipped. Call it once, in the turn where the work Dan asked for in this session is finished: every part of his request done, every pull request merged with the merge confirmed, every deploy confirmed live.",
+  "Shows Dan the green Goal accomplished box: the goal, then what shipped. Call it once, in the turn where the work Dan asked for in this session is finished: every part of his request that is yours to do done, every pull request merged with the merge confirmed, every deploy confirmed live.",
   NOT_HELD,
   `If you hold the box back because part of the request is still yours to do, ${HELD_SAY}.`,
   'With a /goal set, do not call it yourself: when the goal\'s own check finds it met, you are told to call it.',

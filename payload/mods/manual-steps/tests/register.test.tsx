@@ -2291,3 +2291,16 @@ test('the record cannot be kept: the step is recorded all the same, and the debu
   expect(stored(w.mem)).toBeUndefined()
   expect(w.logs.filter(l => l.startsWith('manual-steps: could not record that the last step on the card was recorded, so the goal box is not told: '))).toHaveLength(1)
 })
+
+test('a step finished in an earlier session, pinned again here as already done, is not counted as done in this session (#3864)', withKit, async ($, on) => {
+  mock.clock(on, { now: EMPTIED_AT })
+  const sets = emptiedSets(on)
+  const kept: StepsCard = { heading: 'Chrome sign out', steps: [{ title: 'Sign out', url: 'https://a.example', finished: 'per-you', finishedAt: EMPTIED_AT - 3 * 86_400_000 }, { title: 'Sign in again', url: 'https://b.example' }] }
+  const w = world(on, {}, { [`card:${ROOT}`]: kept })
+  await start($)
+  await hand($, [step({ title: 'Sign out', url: 'https://a.example', checked: 'already-done' }), step({ title: 'Clear the cookies' })], 'Chrome sign out')
+  // The carried step keeps how it finished, marked as an earlier session's; the new one is this session's.
+  expect(stored(w.mem)?.steps[0]).toMatchObject({ finished: 'per-you', isEarlier: true })
+  expect(await call($, VERDICT, { step: 2, checked: 'checked' })).toMatch(/card is gone/)
+  expect(sets).toEqual([{ at: EMPTIED_AT, done: 1 }])
+})
