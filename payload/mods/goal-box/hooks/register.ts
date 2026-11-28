@@ -1224,8 +1224,8 @@ export const register: Register = on => {
       await askIfDone($, record, goal.state === 'none')
       return r
     }
-    // A met goal's prompt is not spent by an unanswered review, as a request's prompts are: its box is the
-    // one Dan set a /goal for, so it is sent at the first later turn end with no such review.
+    // An unanswered review spends a request's prompts and does not spend a met goal's: its box is
+    // the one Dan set a /goal for, so it is sent at the first later turn end with no such review.
     // Asked about already, or its box already shown (markAsked's own two tests): nothing to send, so
     // the record is not asked either.
     const metId = goal.met.id
