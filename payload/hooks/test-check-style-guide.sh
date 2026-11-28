@@ -311,10 +311,9 @@ want_style_code 2 "#3739 a forbidden character blocks a push written across the 
 # With the second push a real one of another repository, the rewritten text holds a push from
 # each, as the shells run one from each. A gate that judges one repository stands aside for such
 # a text, this one too, and push-scope-notice.sh refuses it for all of them (claude-config#1062),
-# with no override. Written into one text with the old one, that stood this gate down on a
-# command it refuses when handed the old text alone. Judged apart, this gate still refuses the
-# old text's push and the notice gate refuses the rewritten text: both are held below, beside
-# the same two pushes typed whole, where this gate does stand aside.
+# with no override. The two texts are judged apart, so this gate refuses the old text's push
+# whatever the rewritten text holds, and the notice gate refuses the rewritten text: both are
+# held below, beside the same two pushes typed whole, where this gate does stand aside.
 NOTICE_HOOK="$DIR/push-scope-notice.sh"
 run_notice_hook() {
   # $1 cwd, $2 command -> sets NOTICE_CODE and NOTICE_MSG, as run_style_hook does
@@ -456,11 +455,11 @@ for c in "cd $W && cat <<\"EOF\"; git push${NL}body${NL}EOF" "cd $W && cat <<\\E
   want_style_code 2 "#3739 a forbidden character blocks a push after an opener whose marker the payload writes with an escape (shape $shape of 2: in double quotes; quoted by a backslash)"
 done
 
-# THE TWO READINGS NEVER CHANGE EACH OTHER (claude-config#3739). Written into one text, a cd or a
-# push the rewritten text held, in a folder below the top of the same repository, chose the
-# folder this gate read for the push the old text named: it read that folder alone and the
-# character in a file beside it went out, with every gate silent. Each command below is refused
-# on the old text alone, which is how it is judged first.
+# THE TWO READINGS NEVER CHANGE EACH OTHER (claude-config#3739). A cd or a push the rewritten
+# text holds, in a folder below the top of the same repository, chooses no folder for the push
+# the old text names: this gate reads the old text alone first, from the folder the command
+# starts in, so a character in a file beside that folder is still found. Each command below is
+# refused on the old text alone.
 W="$(mk_style_repo "$BAD")"
 mkdir -p "$W/docs"
 shape=0

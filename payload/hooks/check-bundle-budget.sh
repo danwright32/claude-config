@@ -111,8 +111,9 @@ BB_NOTE=""
 say_and_allow(){ hook_allow_notice "${BB_NOTE:+$BB_NOTE }$1"; }
 
 payload="$(ps_read_payload)"
-# What the segmented form hides is judged in a run of its own (claude-config#3739).
-ps_both_readings "$payload"
+# What the segmented form hides is judged in a run of its own, in what is left of this hook's
+# registered time limit, which is the number here (claude-config#3739).
+ps_both_readings "$payload" 30
 
 # THE MEASURER'S OWN READER, asked before anything is measured (claude-config#486, L490).
 #

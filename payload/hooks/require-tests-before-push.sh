@@ -174,8 +174,9 @@ gate_clock() {
 # 1. Parse the hook payload (JSON on stdin) -> command + cwd.
 # ---------------------------------------------------------------------------
 payload="$(ps_read_payload)"
-# What the segmented form hides is judged in a run of its own (claude-config#3739).
-ps_both_readings "$payload"
+# What the segmented form hides is judged in a run of its own, in what is left of this hook's
+# registered time limit, which is the number here (claude-config#3739).
+ps_both_readings "$payload" 120
 
 parsed="$(ps_parse_payload "$payload" segmented)" || fail_open "hook payload did not parse"
 cmd="${parsed%%$'\x1f'*}"

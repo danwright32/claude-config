@@ -304,8 +304,8 @@ for n, joins in ((1, True), (2, True), (3, True), (4, False), (5, False), (6, Fa
         shows("inside backquotes a push across %d backslash(es) and a line break is named" % n, cmd, ("", "git", "push", ""))
     else:
         hides("inside backquotes %d backslashes and a line break make no push (four start a new command, more leave the word a backslash)" % n, cmd, "git", "push")
-hides("after three backslashes a separator that starts the next line is escaped in the second reading",
-      "x=`echo a \\\\" + J + "; true`", "git", "push")
+readings_are("after three backslashes a separator that starts the next line is escaped in the second reading",
+             "x=`echo a \\\\" + J + "; true`", "x=`echo a \\\\\\; ; true`", "x=`echo a \\; true`")
 readings_are("three backslashes and a line break leave one backslash, which escapes the next line's first letter",
              "x=`git \\\\" + J + "push`", "x=`git \\\\\\; push`", "x=`git \\push`")
 # Behind a relative cd: each reading starts from the folder the command starts in.

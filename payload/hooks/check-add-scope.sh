@@ -65,8 +65,10 @@ SRW_LOADED=0
 { . "$HOOK_DIR/lib/script-run-words.sh" 2>/dev/null && declare -F srw_may_run_script >/dev/null && SRW_LOADED=1; } || true
 
 payload="$(ps_read_payload)"
-# What the segmented form hides is judged in a run of its own (claude-config#3739).
-ps_both_readings "$payload"
+# What the segmented form hides is judged in a run of its own, in what is left of this hook's
+# time limit. Its registration sets none, so the number here is 60, which is no more than the
+# limit Claude Code gives a hook that names none (claude-config#3739).
+ps_both_readings "$payload" 60
 # A payload a reader is present for and still cannot parse names its add only in its raw text, so it
 # is judged by that, as a missing library is above (claude-config#1922). With no reader at all the
 # branch below says so in its own words.

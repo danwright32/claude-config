@@ -84,8 +84,9 @@ fi
 # anything parses it: a lone surrogate escape made jq read nothing (claude-config#1944). A payload
 # still unreadable is judged by its words (#1922).
 payload="$(ps_clean_payload "$payload")"
-# What the segmented form hides is judged in a run of its own (claude-config#3739).
-ps_both_readings "$payload"
+# What the segmented form hides is judged in a run of its own, in what is left of this hook's
+# registered time limit, which is the number here (claude-config#3739).
+ps_both_readings "$payload" 150
 parsed="$(ps_parse_payload "$payload" segmented)" \
   || ps_unparsed_refuse "$payload" pr-review-push-gate.sh SKIP_PR_REVIEW "a push" '*push*'
 command="${parsed%%$'\x1f'*}"

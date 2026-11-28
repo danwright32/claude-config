@@ -4,11 +4,13 @@
 #
 # Two things are held here:
 #   1. THE SCAN. Every hook that reads the segmented form calls ps_both_readings once, at its top
-#      level, before its first such read. A hook that reads the form without it judges the first
-#      reading alone, and what the form hides goes unjudged with nothing said.
+#      level, before its first such read, and hands it the time limit its registration gives it.
+#      A hook that reads the form without it judges the first reading alone, and what the form
+#      hides goes unjudged with nothing said.
 #   2. THE HELPER, against a stand in hook whose answer is a function of the text it is handed:
 #      the first reading is judged first, alone and as it always was; the second is judged only
-#      once the first has passed, and can only refuse; who says which reading a run is.
+#      once the first has passed, in what the first left of the hook's time limit, and can only
+#      refuse; who says which reading a run is.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -38,7 +40,7 @@ echo "both readings: the scan"
 scan_file() {
   awk '
     /^[[:space:]]*#/ { next }
-    /^ps_both_readings "\$payload"[[:space:]]*$/ { calls++; if (!read_at) before = 1; next }
+    /^ps_both_readings "\$payload" [0-9]+[[:space:]]*$/ { calls++; if (!read_at) before = 1; next }
     /ps_both_readings/ { stray = NR }
     /ps_parse_payload[[:space:]]+"/ && !/ps_parse_payload[[:space:]]+"[^"]*"[[:space:]]+raw/ { if (!read_at) read_at = NR }
     END {
@@ -59,13 +61,15 @@ reads_segmented() { # reads_segmented <file>: whether the file reads the segment
 mkdir -p "$T/scan"
 printf '%s\n' 'payload="$(cat)"' 'parsed="$(ps_parse_payload "$payload" segmented)"' > "$T/scan/none.sh"
 printf '%s\n' 'payload="$(cat)"' 'parsed="$(ps_parse_payload "$payload")"' > "$T/scan/default-mode.sh"
-printf '%s\n' 'payload="$(cat)"' 'parsed="$(ps_parse_payload "$payload" segmented)"' 'ps_both_readings "$payload"' > "$T/scan/after.sh"
-printf '%s\n' 'payload="$(cat)"' 'if true; then' '  ps_both_readings "$payload"' 'fi' 'parsed="$(ps_parse_payload "$payload" segmented)"' > "$T/scan/nested.sh"
-printf '%s\n' 'payload="$(cat)"' 'ps_both_readings "$payload"' 'ps_both_readings "$payload"' 'parsed="$(ps_parse_payload "$payload" segmented)"' > "$T/scan/twice.sh"
-printf '%s\n' 'payload="$(cat)"' '# ps_both_readings "$payload"' 'parsed="$(ps_parse_payload "$payload" segmented)"' > "$T/scan/commented.sh"
-printf '%s\n' 'payload="$(cat)"' 'ps_both_readings "$payload"' 'parsed="$(ps_parse_payload "$payload" segmented)"' > "$T/scan/right.sh"
+printf '%s\n' 'payload="$(cat)"' 'parsed="$(ps_parse_payload "$payload" segmented)"' 'ps_both_readings "$payload" 30' > "$T/scan/after.sh"
+printf '%s\n' 'payload="$(cat)"' 'if true; then' '  ps_both_readings "$payload" 30' 'fi' 'parsed="$(ps_parse_payload "$payload" segmented)"' > "$T/scan/nested.sh"
+printf '%s\n' 'payload="$(cat)"' 'ps_both_readings "$payload" 30' 'ps_both_readings "$payload" 30' 'parsed="$(ps_parse_payload "$payload" segmented)"' > "$T/scan/twice.sh"
+printf '%s\n' 'payload="$(cat)"' '# ps_both_readings "$payload" 30' 'parsed="$(ps_parse_payload "$payload" segmented)"' > "$T/scan/commented.sh"
+printf '%s\n' 'payload="$(cat)"' 'ps_both_readings "$payload"' 'parsed="$(ps_parse_payload "$payload" segmented)"' > "$T/scan/no-limit.sh"
+printf '%s\n' 'payload="$(cat)"' 'ps_both_readings "$payload" "$LIMIT"' 'parsed="$(ps_parse_payload "$payload" segmented)"' > "$T/scan/limit-not-written.sh"
+printf '%s\n' 'payload="$(cat)"' 'ps_both_readings "$payload" 30' 'parsed="$(ps_parse_payload "$payload" segmented)"' > "$T/scan/right.sh"
 printf '%s\n' 'payload="$(cat)"' 'parsed="$(ps_parse_payload "$payload" raw)"' 'declare -F ps_parse_payload >/dev/null' > "$T/scan/raw.sh"
-for f in none default-mode after nested twice commented; do
+for f in none default-mode after nested twice commented no-limit limit-not-written; do
   why="$(scan_file "$T/scan/$f.sh")"
   [ -n "$why" ] && check "the scan fails a hook that gets it wrong ($f)" ok || check "the scan fails a hook that gets it wrong ($f)" "it passed"
 done
@@ -73,6 +77,51 @@ for f in right raw; do
   why="$(scan_file "$T/scan/$f.sh")"
   [ -z "$why" ] && check "the scan passes a hook that has it right ($f)" ok || check "the scan passes a hook that has it right ($f)" "$why"
 done
+
+# The limit a hook hands over is the one its registration gives it, so the second run is given
+# what is left of the time Claude Code really allows. limit_fault <hook file> <settings file>
+# prints why it is not, or nothing. A hook whose registration sets no limit runs under Claude
+# Code's own, and says UNSET_LIMIT, which is no more than that one.
+UNSET_LIMIT=60
+limit_fault() {
+  local said declared name="${1##*/}"
+  said="$(sed -n 's/^ps_both_readings "\$payload" \([0-9][0-9]*\)[[:space:]]*$/\1/p' "$1")"
+  declared="$(jq -r --arg n "/$name" '[.hooks[][].hooks[]? | select((.command // "") | endswith($n)) | (.timeout // "none") | tostring] | unique | join(" ")' "$2" 2>/dev/null)" \
+    || { printf 'the registration in %s could not be read' "$2"; return 0; }
+  case "$declared" in
+    '') printf 'no registration names it, so there is no limit to hold the %s it says against' "${said:-nothing}" ;;
+    *' '*) printf 'it is registered with more than one limit (%s)' "$declared" ;;
+    none) [ "$said" = "$UNSET_LIMIT" ] || printf 'its registration sets no limit, so it must say %s, and it says %s' "$UNSET_LIMIT" "${said:-nothing}" ;;
+    *) [ "$said" = "$declared" ] || printf 'its registration gives it %s seconds and it says %s' "$declared" "${said:-nothing}" ;;
+  esac
+  return 0
+}
+have_jq=no; command -v jq >/dev/null 2>&1 && have_jq=yes
+if [ "$have_jq" = yes ]; then
+  cat > "$T/scan/settings.json" <<'JSON'
+{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+  {"type": "command", "command": "__CLAUDE_HOME__/hooks/right.sh", "timeout": 30},
+  {"type": "command", "command": "__CLAUDE_HOME__/hooks/unset.sh"},
+  {"type": "command", "command": "__CLAUDE_HOME__/hooks/unset-wrong.sh"},
+  {"type": "command", "command": "__CLAUDE_HOME__/hooks/other.sh", "timeout": 45},
+  {"type": "command", "command": "__CLAUDE_HOME__/hooks/two.sh", "timeout": 30}]}],
+ "PostToolUse": [{"matcher": "Bash", "hooks": [
+  {"type": "command", "command": "__CLAUDE_HOME__/hooks/two.sh", "timeout": 15}]}]}}
+JSON
+  printf '%s\n' 'ps_both_readings "$payload" 60' > "$T/scan/unset.sh"
+  for f in unset-wrong other two stranger; do cp "$T/scan/right.sh" "$T/scan/$f.sh"; done
+  for f in right unset; do
+    why="$(limit_fault "$T/scan/$f.sh" "$T/scan/settings.json")"
+    [ -z "$why" ] && check "the limit check passes a hook that says its registered limit ($f)" ok || check "the limit check passes a hook that says its registered limit ($f)" "$why"
+  done
+  for f in unset-wrong other two stranger no-limit; do
+    why="$(limit_fault "$T/scan/$f.sh" "$T/scan/settings.json")"
+    [ -n "$why" ] && check "the limit check fails a hook that says another limit than its registered one ($f)" ok || check "the limit check fails a hook that says another limit than its registered one ($f)" "it passed"
+  done
+fi
+REG=""
+# shellcheck source=/dev/null
+. "$DIR/lib/settings-file.sh" 2>/dev/null && REG="$(hook_settings_file "$DIR/..")"
 
 # Every hook and library here, the library that holds the helper aside.
 readers=0
@@ -85,7 +134,17 @@ for f in "$DIR"/*.sh "$DIR"/lib/*.sh; do
   [ "${f##*/}" = check-style-guide.sh ] && seen_style=yes
   why="$(scan_file "$f")"
   [ -z "$why" ] && check "${f##*/} judges both readings" ok || check "${f##*/} judges both readings" "$why"
+  if [ "$have_jq" = yes ] && [ -n "$REG" ]; then
+    why="$(limit_fault "$f" "$REG")"
+    [ -z "$why" ] && check "${f##*/} gives the second reading what is left of its registered time limit" ok \
+      || check "${f##*/} gives the second reading what is left of its registered time limit" "$why"
+  fi
 done
+if [ "$have_jq" != yes ]; then
+  echo "SUITE-PART-UNMEASURED each hook's limit against its registration: jq is not on PATH to read the registration with"
+elif [ -z "$REG" ]; then
+  echo "SUITE-PART-UNMEASURED each hook's limit against its registration: no settings.hooks.json or settings.json in $DIR/.. to read"
+fi
 # A scan that found no reader would pass every file by finding none (L100).
 [ "$seen_style" = yes ] && [ "$readers" -ge 2 ] && check "the scan found the hooks that read the segmented form, check-style-guide.sh among them" ok \
   || check "the scan found the hooks that read the segmented form, check-style-guide.sh among them" "it found $readers, check-style-guide.sh among them: $seen_style"
@@ -96,21 +155,29 @@ done
 echo "both readings: the helper"
 command -v python3 >/dev/null 2>&1 || { check "python3 is here to make the payloads and the second reading" "python3 is not on PATH"; }
 
-# The stand in refuses a text that runs a push, says a note for one that runs `note`, and exits 3
-# for one that runs `crash`. Every run writes which reading it was told it is and what it read.
+# The stand in refuses a text that runs a push, says a note for one that runs `git status`, exits
+# 3 for one that runs `git gc`, and for one that runs `git fsck` takes 20 seconds and then passes.
+# Every run writes which reading it was told it is and what it read. Its time limit is BR_LIMIT
+# where a row names one, and the time it has used is read from the file BR_CLOCK names where a
+# row names one, so no row waits out a real limit. BR_LIB is the library it reads.
 HOOK="$T/stand-in.sh"
 cat > "$HOOK" <<HOOKEND
 #!/bin/bash
-. "$DIR/lib/push-scope.sh" || exit 9
+. "\${BR_LIB:-$DIR/lib}/push-scope.sh" || exit 9
+[ -z "\${BR_CLOCK-}" ] || ps__elapsed() { cat "\$BR_CLOCK"; }
 payload="\$(ps_read_payload)"
 echo "start" >> "\$BR_LOG"
-ps_both_readings "\$payload"
+ps_both_readings "\$payload" \${BR_LIMIT-600}
 parsed="\$(ps_parse_payload "\$payload" segmented)" || { echo "the stand in could not parse its payload" >&2; exit 2; }
 cmd="\${parsed%%\$'\\x1f'*}"
 printf 'judged|%s|%s|%s\\n' "\${PS__READING:-alone}" "\${PS_READING-unset}" "\$cmd" >> "\$BR_LOG"
 if ps__runs_git_sub "\$cmd" gc; then echo "crashed on the \${PS__READING:-alone} reading" >&2; exit 3; fi
 if ps__runs_git_sub "\$cmd" status; then echo "a note from the \${PS__READING:-alone} reading"; fi
 if ps_is_git_push "\$cmd"; then echo "refused on the \${PS__READING:-alone} reading" >&2; exit 2; fi
+if ps__runs_git_sub "\$cmd" fsck; then
+  i=0; while [ "\$i" -lt 80 ]; do sleep 0.25; i=\$((i + 1)); done
+  printf 'finished|%s\\n' "\${PS__READING:-alone}" >> "\$BR_LOG"
+fi
 exit 0
 HOOKEND
 
@@ -215,6 +282,74 @@ short="$(python3 -c 'import sys; sys.stdout.write("x" * 12000)')"
 run_hook "cat <<EOF; $PUSH${NL}${short}${NL}EOF"
 [ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && check "under that length the hidden push is read and refused" ok \
   || check "under that length the hidden push is read and refused" "exit $RC, said [${ERR:0:200}]"
+
+# The second run is given what the first left of the hook's time limit, and no more.
+run_timed() { # run_timed <seconds used, by the stand in's clock> <limit> <command text>
+  : > "$T/log"
+  printf '%s' "$1" > "$T/clock"
+  payload_for "$3" | BR_CLOCK="$T/clock" BR_LIMIT="$2" BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
+  OUT="$(cat "$T/out")"; ERR="$(cat "$T/err")"
+}
+SLOW="cat <<EOF; git fsck${NL}body${NL}EOF"
+run_timed 500 600 "$HIDDEN"
+[ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && check "with time left of the hook's limit the second reading is judged, and its refusal is the answer" ok \
+  || check "with time left of the hook's limit the second reading is judged, and its refusal is the answer" "exit $RC, said [${ERR:0:300}]"
+run_timed 599 600 "$HIDDEN"
+case "$RC:$ERR" in
+  2:BLOCKED*"leaves too little"*"line of its own"*) check "when the first run leaves too little of the hook's time limit the command is refused, saying so and how to write it" ok ;;
+  *) check "when the first run leaves too little of the hook's time limit the command is refused, saying so and how to write it" "exit $RC, said [${ERR:0:300}]" ;;
+esac
+[ "$(judged)" = first ] && check "and there the second run is never started" ok || check "and there the second run is never started" "judged [$(judged)]"
+run_timed 700 600 "$HIDDEN"
+case "$RC:$ERR" in
+  2:BLOCKED*"leaves too little"*) check "a first run that says it used more than the limit is refused the same way" ok ;;
+  *) check "a first run that says it used more than the limit is refused the same way" "exit $RC, said [${ERR:0:300}]" ;;
+esac
+run_timed 595 600 "$SLOW"
+case "$RC:$ERR" in
+  2:BLOCKED*"did not finish in the 2 seconds left"*"line of its own"*) check "a second run that does not finish in what is left is stopped, and the command refused saying so and how to write it" ok ;;
+  *) check "a second run that does not finish in what is left is stopped, and the command refused saying so and how to write it" "exit $RC, said [${ERR:0:300}]" ;;
+esac
+[ "$(judged)" = "first second" ] && ! grep -q '^finished|' "$T/log" && check "there the second run was started and did not reach its end" ok \
+  || check "there the second run was started and did not reach its end" "judged [$(judged)], finished [$(grep -c '^finished|' "$T/log")]"
+[ "$ERR" = "${ERR#*Terminated}" ] && [ "$ERR" = "${ERR#*Killed}" ] && check "and the refusal is all that is said, with no line from the shell about the run it stopped" ok \
+  || check "and the refusal is all that is said, with no line from the shell about the run it stopped" "said [${ERR:0:300}]"
+run_timed "soon" 600 "$HIDDEN"
+case "$RC:$ERR" in
+  2:BLOCKED*"could not tell how long"*) check "a clock that answers with no number is a refusal, never time to spare" ok ;;
+  *) check "a clock that answers with no number is a refusal, never time to spare" "exit $RC, said [${ERR:0:300}]" ;;
+esac
+for lim in "" soon 0; do
+  run_timed 0 "$lim" "$HIDDEN"
+  case "$RC:$ERR:$(judged)" in
+    2:BLOCKED*"did not say how long"*:) check "a hook that hands over no time limit judges nothing of a command with two readings, and says so (limit '$lim')" ok ;;
+    *) check "a hook that hands over no time limit judges nothing of a command with two readings, and says so (limit '$lim')" "exit $RC, said [${ERR:0:300}], judged [$(judged)]" ;;
+  esac
+done
+run_timed 0 "" "$PUSH"
+[ "$RC" = 2 ] && [ "$ERR" = "refused on the alone reading" ] && check "with no limit handed over, a command with one reading is still judged as it always was" ok \
+  || check "with no limit handed over, a command with one reading is still judged as it always was" "exit $RC, said [${ERR:0:300}]"
+
+# A reader that fails is not a reader saying there is no second reading.
+mkdir -p "$T/lib-fails"
+cp -R "$DIR/lib/." "$T/lib-fails/"
+cat > "$T/lib-fails/shell-words.py" <<PYEND
+import os, sys
+if sys.argv[1:2] == ["second"]:
+    sys.exit(1)
+os.execv(sys.executable, [sys.executable, "$DIR/lib/shell-words.py"] + sys.argv[1:])
+PYEND
+: > "$T/log"
+payload_for "$HIDDEN" | BR_LIB="$T/lib-fails" BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
+ERR="$(cat "$T/err")"
+case "$RC:$ERR:$(judged)" in
+  2:BLOCKED*"failed with exit 1"*:) check "a reader that fails to say whether a command hides another is a refusal saying so, with nothing judged on the first reading alone" ok ;;
+  *) check "a reader that fails to say whether a command hides another is a refusal saying so, with nothing judged on the first reading alone" "exit $RC, said [${ERR:0:300}], judged [$(judged)]" ;;
+esac
+: > "$T/log"
+payload_for "$PUSH" | BR_LIB="$T/lib-fails" BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
+[ "$RC" = 2 ] && [ "$(cat "$T/err")" = "refused on the alone reading" ] && check "with that reader, a command that asks it nothing is judged as it always was" ok \
+  || check "with that reader, a command that asks it nothing is judged as it always was" "exit $RC, said [$(cat "$T/err")]"
 
 # Where the second reading cannot be made, the hook is what it always was, and says so where it must.
 mkdir -p "$T/no-python"
