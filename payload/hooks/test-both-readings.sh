@@ -156,7 +156,8 @@ echo "both readings: the helper"
 command -v python3 >/dev/null 2>&1 || { check "python3 is here to make the payloads and the second reading" "python3 is not on PATH"; }
 
 # The stand in refuses a text that runs a push, says a note for one that runs `git status`, exits
-# 3 for one that runs `git gc`, and for one that runs `git fsck` takes 20 seconds and then passes.
+# 3 for one that runs `git gc`, and for one that runs `git fsck` sleeps in short steps, far longer
+# than any row gives it, and then passes.
 # Every run writes which reading it was told it is and what it read. Its time limit is BR_LIMIT
 # where a row names one, and the time it has used is read from the file BR_CLOCK names where a
 # row names one, so no row waits out a real limit. BR_LIB is the library it reads.
