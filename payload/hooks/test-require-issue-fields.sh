@@ -900,6 +900,168 @@ denies "#3252 control: no category, a redirection glued to create" "gh issue cre
 denies "#3252 control: no milestone, the first command of a function's body" "f() { gh issue create --title \"T\" $P $C; }; f"
 allows "#3252 control: a complete create with a redirection glued to gh" "gh>/dev/null issue create --title \"T\" $ALL"
 
+# ---------------------------------------------------------------------------
+# claude-config#3690: a command naming neither issue nor pr leaves before python3 starts. This gate
+# runs before every Bash call, and on 2026-11-25 every call started issue_field_gate.py (0.09 s of
+# processor time each, most of it python3 starting and compiling the shared reader) to learn that
+# `uptime; date` files no issue. While the Mac was busy, that start was part of what took the gates
+# on a read only call past their time limits. Every command this gate judges runs gh issue or gh pr,
+# so its letters spell issue or pr once quotes, backslashes and line breaks are taken out, or it
+# holds a $ or a backtick, whose expansion could spell anything (lib/command-screen.sh). Every other
+# command now leaves before python3, with the answer the gate gave it. The rows below pin both
+# halves: spellings the gate reads as a create are still refused, and ordinary commands start nothing.
+# ---------------------------------------------------------------------------
+SHIM3690="$TMP_DIR/shim3690"
+mkdir -p "$SHIM3690"
+REAL_PY3690="$(command -v python3)"
+printf '#!/bin/sh\necho started >> "%s/log"\nexec "%s" "$@"\n' "$SHIM3690" "$REAL_PY3690" > "$SHIM3690/python3"
+chmod +x "$SHIM3690/python3"
+
+# starts_python <description> <yes|no> <command>: whether the hook started python3 for this command.
+starts_python() {
+  local payload got=no
+  payload="$(printf '%s' "$3" | python3 -c '
+import sys, json
+json.dump({"tool_name": "Bash", "tool_input": {"command": sys.stdin.read()}}, sys.stdout)
+')"
+  : > "$SHIM3690/log"
+  printf '%s' "$payload" | env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_BRIDGE_SESSION_ID PATH="$SHIM3690:$PATH" bash "$HOOK" >/dev/null 2>&1
+  [ -s "$SHIM3690/log" ] && got=yes
+  if [ "$got" = "$2" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); echo "FAIL: $1 (wanted python3 started: $2, got: $got)"; fi
+}
+
+# Still judged, and refused. A row naming a joined word spells it nowhere else, so no priority label
+# (priority spells pr) and no path under the scratch folder (/private/tmp spells pr): with the screen
+# not joining quotes, each of them leaves early and fails (review of #3690).
+denies "#3690 a quote inside the group word is still read as a create" "gh is''sue create --title \"T\" $M $C"
+denies "#3690 a quoted group word and the new alias are still read as a create" "gh \"issue\" new --title \"T\" $P $C"
+denies "#3690 a create inside bash -c is still read" "bash -c 'gh issue create --title T $P $C'"
+PAYLOAD_CWD="$TMP_DIR"
+denies "#3690 a quote inside pr is still read as a pr create with an empty body file" "gh p''r create --title t --body-file empty.md"
+PAYLOAD_CWD=""
+denies "#3690 a create with a quote that never closes is still refused" "gh issue create --title 'T $ALL"
+# Left early, with the answer the gate gave them.
+allows "#3690 uptime; date passes" 'uptime; date'
+allows "#3690 a sed of a file passes" "sed -n '40,57p' /tmp/notes.txt"
+allows "#3690 a git log passes" 'git log --oneline -3'
+starts_python "#3690 uptime; date starts no python3" no 'uptime; date'
+starts_python "#3690 a sed of a file starts no python3" no "sed -n '40,57p' /tmp/notes.txt"
+starts_python "#3690 a grep with a quoted word starts no python3" no 'grep -n "timeout" /tmp/settings.json | head -20'
+# Controls: each command that may name issue or pr still reaches the gate, so the rows above measure
+# the early exit and not a shim that never records (L1).
+starts_python "#3690 control: gh issue create starts the gate" yes "gh issue create --title \"T\" $ALL"
+starts_python "#3690 control: a quote inside the group word starts the gate" yes "gh is''sue create --title \"T\" $M $C"
+starts_python "#3690 control: a command holding a \$ starts the gate" yes 'echo "$HOME"'
+
+# The early exit is taken only while python3 and the gate's three files are there (review of
+# #3690). With python3 or a gate file missing, a command naming neither issue nor pr must still get
+# the notice that the gate did not run, as on main, where every call went to the python3 half and
+# that half failed. Each copy below is whole but for the one thing taken away, so lib/push-scope.sh
+# and lib/command-screen.sh load and the screen would answer no to `uptime; date`.
+# missing_gate <description> <what to take away: a file under the copy, or python3>
+missing_gate() {
+  local copy="$TMP_DIR/missing-$2" path_for="$PATH" out
+  mkdir -p "$copy"
+  cp "$HOOK" "$DIR/issue_field_gate.py" "$DIR/gh_issue_scan.py" "$copy/"
+  cp -R "$DIR/lib" "$copy/lib"
+  if [ "$2" = python3 ]; then
+    # jq stays, so the payload is parsed and the screen is reached: without jq and python3 the
+    # payload goes unparsed and never gets that far.
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "SUITE-PART-UNMEASURED $1 (no jq here, so a missing python3 never reaches the screen)"; return
+    fi
+    mkdir -p "$copy/bin"
+    for b in bash mktemp cat tr printf jq; do ln -sf "$(command -v "$b")" "$copy/bin/$b"; done
+    path_for="$copy/bin"
+  else
+    rm "$copy/$2"
+  fi
+  out="$(cd "$copy" && printf '{"tool_input":{"command":"uptime; date"}}' \
+    | env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_BRIDGE_SESSION_ID PATH="$path_for" bash "$copy/require-issue-fields.sh" 2>&1)"
+  if [[ "$out" == *"ISSUE FIELD GATE DID NOT RUN"* && "$out" != *'"deny"'* ]]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); echo "FAIL: $1 (wanted the did not run notice, got: ${out:-<silence>})"; fi
+}
+missing_gate "#3690 with python3 missing, uptime; date still says the gate did not run" python3
+missing_gate "#3690 with issue_field_gate.py missing, uptime; date still says the gate did not run" issue_field_gate.py
+missing_gate "#3690 with gh_issue_scan.py missing, uptime; date still says the gate did not run" gh_issue_scan.py
+# Without lib/shell-words.py main's python3 half printed nothing for a command naming neither issue
+# nor pr (the reader is missing, so it judges by the command's raw words and finds none), so there is
+# no notice to keep. What the condition keeps is that half being asked, as on main: it is the one
+# that refuses a create it cannot read for want of the reader.
+SW_COPY="$TMP_DIR/missing-shell-words"
+mkdir -p "$SW_COPY"
+cp "$HOOK" "$DIR/issue_field_gate.py" "$DIR/gh_issue_scan.py" "$SW_COPY/"
+cp -R "$DIR/lib" "$SW_COPY/lib"
+rm "$SW_COPY/lib/shell-words.py"
+: > "$SHIM3690/log"
+sw_out="$(printf '{"tool_input":{"command":"uptime; date"}}' \
+  | env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_BRIDGE_SESSION_ID PATH="$SHIM3690:$PATH" bash "$SW_COPY/require-issue-fields.sh" 2>&1)"
+if [ -s "$SHIM3690/log" ] && [[ "$sw_out" != *'"deny"'* ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: #3690 with lib/shell-words.py missing, uptime; date still goes to the python3 half (python3 started: $([ -s "$SHIM3690/log" ] && echo yes || echo no), output: ${sw_out:-<silence>})"; fi
+
+# The hook's own cost on a large command (review of #3690). The command was cut from the parsed
+# payload with ${parsed%%$'\x1f'*}, which is quadratic on bash 3.2 (macOS /bin/bash): on 2026-11-27, 15 s of
+# processor time for a 306 KB command, past this hook's 15 s limit, where main's copy, which made no
+# such cut, took 0.5 s. So the hook, under /bin/bash, on a 300 KB command naming neither issue nor pr,
+# must cost no more than three times what main's copy spends on it, its python3 half reading the
+# payload, measured in the same run (0.4 s here; the quadratic cut was over thirty times that).
+# Processor time, not wall time, so load moves it little; the reference is sampled three times, and
+# when those samples spread more than threefold the Mac is too busy to tell and the row says
+# UNMEASURED. Under a bash that is not quadratic (bash 5, CI's /bin/bash) the row passes either way.
+BIG3690="$TMP_DIR/big3690.json"
+python3 -c '
+import json, sys
+line = "the quick brown fox jumps over the lazy dog, '"'"'quoted'"'"' and \"double\" words here\n"
+body = (line * (300 * 1024 // len(line) + 1))[:300 * 1024]
+json.dump({"tool_name": "Bash", "tool_input": {"command": "cat > notes.txt <<'"'"'EOF'"'"'\n" + body + "EOF"},
+           "cwd": "/w/app"}, open(sys.argv[1], "w"))
+' "$BIG3690"
+BASH3690=/bin/bash
+[ -x "$BASH3690" ] || BASH3690="$(command -v bash)"
+cost3690="$(env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_BRIDGE_SESSION_ID GATE_DIR="$DIR" python3 -c '
+import os, resource, signal, subprocess, sys
+bash, hook, gate, payload = sys.argv[1:5]
+data = open(payload, "rb").read()
+
+def cost(argv, limit):
+    """Processor seconds of argv and everything it starts, or None past limit seconds of wall time."""
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    try:
+        p.communicate(data, timeout=limit)
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL)
+        p.wait()
+        return None
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return after.ru_utime - before.ru_utime + after.ru_stime - before.ru_stime
+
+ref = [cost(["python3", gate], 60) for _ in range(3)]
+if None in ref or min(ref) <= 0:
+    print("UNSURE the python3 half alone could not be timed (%s)" % ref); sys.exit()
+if max(ref) > 3 * min(ref):
+    print("UNSURE the python3 half alone spread from %.2f to %.2f s, too busy to tell" % (min(ref), max(ref)))
+    sys.exit()
+bound = 3 * min(ref)
+limit = max(10 * bound, 5)
+got = []
+for _ in range(3):
+    c = cost([bash, hook], limit)
+    if c is None:
+        print("FAIL the hook ran past %.0f s of wall time; main costs %.2f s of processor time" % (limit, min(ref)))
+        sys.exit()
+    got.append(c)
+verdict = "PASS" if min(got) <= bound else "FAIL"
+print("%s the hook cost %.2f s against %.2f s for main (bound %.2f s)" % (verdict, min(got), min(ref), bound))
+' "$BASH3690" "$HOOK" "$DIR/issue_field_gate.py" "$BIG3690" 2>&1)"
+case "$cost3690" in
+  PASS*) pass=$((pass + 1)) ;;
+  UNSURE*) echo "SUITE-PART-UNMEASURED #3690 a 300 KB command under $BASH3690: ${cost3690#UNSURE }" ;;
+  *) fail=$((fail + 1)); echo "FAIL: #3690 a 300 KB command under $BASH3690 costs no more than main (${cost3690#FAIL })" ;;
+esac
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

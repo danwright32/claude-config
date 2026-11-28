@@ -313,6 +313,58 @@ unparsed_run "#3280 control: a payload no reader parses naming git 2>/dev/null s
 
 rm -rf "$NOPY_ROOT"
 
+# --- claude-config#3690: a command naming neither pr nor commit leaves before python3 starts -----
+# This gate runs before every Bash call, and on 2026-11-25 every call started the shared reader's
+# python3 here (0.07 s of processor time each) to learn that `uptime; date` writes no pull request
+# body and no commit message. While the Mac was busy, that start was part of what took the gates on
+# a read only call past their time limits. A command can only run gh pr or git commit as the reader
+# reads it when its letters spell pr or commit once quotes, backslashes and line breaks are taken
+# out, or when it holds a $ or a backtick, whose expansion could spell anything
+# (lib/command-screen.sh). Every other command now leaves before the reader starts, with the same
+# answer it got from the reader. The rows below pin both halves: the spellings the reader joins into
+# pr (a quote or a line break inside the word) are still judged, and ordinary commands start nothing.
+SHIM3690="$WORK/shim3690"
+mkdir -p "$SHIM3690"
+REAL_PY3690="$(command -v python3)"
+printf '#!/bin/sh\necho started >> "%s/log"\nexec "%s" "$@"\n' "$SHIM3690" "$REAL_PY3690" > "$SHIM3690/python3"
+chmod +x "$SHIM3690/python3"
+
+# starts_python <description> <yes|no> <command>: whether the hook started python3 for this command.
+starts_python() {
+  local desc="$1" want="$2" command="$3" payload got=no
+  payload="$(python3 -c '
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1]}, "cwd": sys.argv[2]}))
+' "$command" "$RUN_CWD")"
+  : > "$SHIM3690/log"
+  printf '%s' "$payload" | PATH="$SHIM3690:$PATH" "$HOOK" >/dev/null 2>&1
+  [ -s "$SHIM3690/log" ] && got=yes
+  if [ "$got" = "$want" ]; then pass=$((pass+1));
+  else fail=$((fail+1)); echo "FAIL: $desc (wanted python3 started: $want, got: $got)"; fi
+}
+
+ASKED3690='--title x --body "Tidies the follow up fix #12 asked for"'
+SAID3690="not at the start of a line or sentence"
+# Still judged, and refused: the reader joins each of these into gh pr create.
+run "#3690 a quote inside the group word is still read as gh pr create" $BLOCK "gh p''r create $ASKED3690" "$SAID3690"
+run "#3690 a line break after a backslash inside the group word is still read" $BLOCK $'gh p\\\nr create '"$ASKED3690" "$SAID3690"
+run "#3690 a quoted group word is still read" $BLOCK "gh \"pr\" create $ASKED3690" "$SAID3690"
+run "#3690 gh pr new is still read as the create it is" $BLOCK "gh pr new $ASKED3690" "$SAID3690"
+run "#3690 a create inside bash -c is still read" $BLOCK "bash -c 'gh pr create --title x --body \"Tidies the follow up fix #12 asked for\"'" "$SAID3690"
+run "#3690 a commit is still read" $BLOCK 'git commit -m "Tidies the follow up fix #12 asked for"' "$SAID3690"
+# Left early, with the answer the reader gave them.
+run "#3690 uptime; date passes" $ALLOW 'uptime; date'
+run "#3690 a sed of a file passes" $ALLOW "sed -n '40,57p' /tmp/notes.txt"
+run "#3690 a grep with a quoted word passes" $ALLOW 'grep -n "timeout" /tmp/settings.json | head -20'
+starts_python "#3690 uptime; date starts no python3" no 'uptime; date'
+starts_python "#3690 a sed of a file starts no python3" no "sed -n '40,57p' /tmp/notes.txt"
+starts_python "#3690 a grep with a quoted word starts no python3" no 'grep -n "timeout" /tmp/settings.json | head -20'
+# Controls: each command that may name pr or commit still goes to the reader, so the rows above
+# measure the early exit and not a shim that never records (L1).
+starts_python "#3690 control: gh pr create starts the reader" yes "gh pr create $ASKED3690"
+starts_python "#3690 control: a quote inside the group word starts the reader" yes "gh p''r create $ASKED3690"
+starts_python "#3690 control: a command holding a \$ starts the reader" yes 'echo "$HOME"'
+
 echo
 echo "passed: $pass   failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

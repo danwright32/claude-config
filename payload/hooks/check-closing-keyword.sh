@@ -114,6 +114,16 @@ cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0
 
+# A command whose letters spell neither pr nor commit, as the reader reads them, runs neither gh pr
+# nor git commit, so it leaves here before the reader's python3 starts (claude-config#3690). That
+# start, on every Bash call, was 0.05 s of this hook's 0.07 s of processor time and part of what took the gates
+# on a read only call past their limits while the Mac was busy. The answer is the one the reader
+# gave: is_target stayed 0 for every such command (test-check-closing-keyword-hook.sh, #3690). A
+# library that cannot load is no answer, so then the reader runs as before.
+if . "$HOOK_DIR/lib/command-screen.sh" 2>/dev/null && declare -F cs_may_name >/dev/null; then
+  cs_may_name "$cmd" '*[pP][rR]*' '*[cC][oO][mM][mM][iI][tT]*' || exit 0
+fi
+
 # The repository a gh command names with -R or --repo, from the words gh itself reads as the
 # subcommand's (PS_RUN_ARGS, set by ps_runs_gh), never the string: a body quoting "--repo x/y" names
 # nothing. HOST/OWNER/REPO keeps its last two parts.
