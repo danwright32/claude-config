@@ -70,6 +70,8 @@ did_not_run() {
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || did_not_run "shared push-scope library missing"
 
 payload="$(ps_read_payload)"
+# What the segmented form hides is judged in a run of its own (claude-config#3739).
+ps_both_readings "$payload"
 # A payload nothing can parse is not a push with no assets (claude-config#1922): one whose raw text
 # names a push is let through saying so, the way this gate lets through anything it could not measure.
 parsed="$(ps_parse_payload "$payload" segmented)" || {

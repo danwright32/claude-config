@@ -100,6 +100,8 @@ COOLDOWN=90
 
 # Cleaned before anything parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
 payload="$(ps_clean_payload "$payload")"
+# What the segmented form hides is judged in a run of its own (claude-config#3739).
+ps_both_readings "$payload"
 parsed="$(ps_parse_payload "$payload" segmented)" \
   || did_not_run "could not parse its hook payload as JSON (neither jq nor python3 read it)"
 cmd="${parsed%%$'\x1f'*}"

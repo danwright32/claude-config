@@ -301,37 +301,17 @@ sys.exit(1 if v is None or isinstance(v, str) else 0)' 2>/dev/null
 # words: `echo ok &&`, the pair, `git push` was no push to any hook reading the segmented form, and
 # neither was `git`, the pair, `push`, nor an add, a commit or a gh pr create written the same way.
 # So a segmented command holding the pair is flattened by lib/shell-words.py (its flatten mode),
-# which takes out each pair the shell removes, leaves one in a comment or a heredoc's body as it
-# was, and never hands back a text naming fewer commands than the plain flattening does. A pair
-# inside a string a wrapper hands a shell, or inside backquotes, is removed by the shell that
-# reads those and by no other, so the text is left as it was and the command is written again
-# beside it with those read as that shell reads them (claude-config#3739): what was handed over
-# before is still handed over, whole and last, with the rewritten command before it, so that
-# nothing follows the old text for its end to escape. That needs python3 and the reader's file; with
-# either missing, or a command that reader cannot vouch for, the text is flattened as it always
-# was. The pair is found in the raw payload first, by every way JSON can spell it, so a command
-# holding none starts nothing more.
+# which takes out each pair the shell removes, leaves one inside single quotes, a comment or a
+# heredoc's body as it was, and never hands back a text naming fewer commands than the plain
+# flattening does. That needs python3 and the reader's file; with either missing, or a command
+# that reader cannot vouch for, the text is flattened as it always was. The pair is found in the
+# raw payload first, by every way JSON can spell it, so a command holding none starts nothing more.
 #
-# A COMMAND AFTER A HEREDOC'S OPENER, ON THE OPENER'S LINE, IS READ TOO (claude-config#3739). The
-# shell runs every command on the line that opens a heredoc and reads the body from the next line.
-# With that line break written as "; " the reader cannot tell it from a ; after the opener, so in
-# `cat <<EOF; git push`, the body and EOF, the push was the body's first line to every hook
-# reading the segmented form, with no backslash anywhere, and the same on a command of one line,
-# which no shell gives a body at all. So a payload in which a ; and a blank follow a << before
-# that line ends is flattened by the same mode of lib/shell-words.py, which hands back the text
-# as it always was and, beside it, the command with each body moved up to follow the command that
-# opens it (the shape this form has always been read right in). The old text is never replaced,
-# so a hook is handed every command it was handed before. The look for it is a pattern over the
-# raw payload, so a heredoc with nothing after its opener, which is nearly every one, starts
-# nothing more: the gap between the << and the ; may hold anything but the two characters JSON
-# writes a line break as (a backslash and an n), and a payload spelling a <, a ; or a blank as an
-# escape of its code point is handed over whatever else it holds. Under a UTF-8 locale bash's =~
-# stops at a byte that is not UTF-8 (claude-config#1885), so the pattern is asked again under the
-# C locale, which reads every byte as a character: a match is only ever added.
-PS__OPENER_LINE='<<([^\\]|\\[^n])*; '
-ps__opener_line() { [[ $1 =~ $PS__OPENER_LINE ]] && return 0; local LC_ALL=C; [[ $1 =~ $PS__OPENER_LINE ]]; }
+# WHAT THAT TEXT STILL HIDES IS A SECOND READING, NEVER PART OF THIS ONE (claude-config#3739). See
+# ps_both_readings below. In the second run it starts, PS__READING is "second" and the segmented
+# form is the second reading alone; everywhere else it is the text above, as it always was.
 ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
-  local payload mode="${2:-segmented}" sep out flatten=""
+  local payload mode="${2:-segmented}" sep out
   case "$mode" in
     segmented) sep="; " ;;
     raw)       sep="" ;;
@@ -341,19 +321,22 @@ ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
   esac
   # A caller that captured the payload some other way still gets it cleaned (#1944).
   payload="$(ps_clean_payload "${1:-}")"
+  if [ "$mode" = segmented ] && [ "$PS__READING" = second ]; then
+    out="$(printf '%s' "$payload" | python3 "${PS_SHELL_WORDS:-}" second 2>/dev/null && printf x)" \
+      && [ "${out: -1}" = x ] || return 1
+    printf '%s' "${out%x}"; return 0
+  fi
   if [ "$mode" = segmented ]; then
     case "$payload" in
-      *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*) flatten=1 ;;
-      *'\u003'[cCbB]*|*'\u002'[0]*) flatten=1 ;;
-      *'<<'*) ps__opener_line "$payload" && flatten=1 ;;
+      *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*)
+        # Printed only once the reader has finished, the x keeping a line break that ends the text.
+        if command -v python3 >/dev/null 2>&1 && [ -f "${PS_SHELL_WORDS:-}" ]; then
+          if out="$(printf '%s' "$payload" | python3 "$PS_SHELL_WORDS" flatten 2>/dev/null && printf x)" \
+            && [ "${out: -1}" = x ]; then
+            printf '%s' "${out%x}"; return 0
+          fi
+        fi ;;
     esac
-    # Printed only once the reader has finished, the x keeping a line break that ends the text.
-    if [ -n "$flatten" ] && command -v python3 >/dev/null 2>&1 && [ -f "${PS_SHELL_WORDS:-}" ]; then
-      if out="$(printf '%s' "$payload" | python3 "$PS_SHELL_WORDS" flatten 2>/dev/null && printf x)" \
-        && [ "${out: -1}" = x ]; then
-        printf '%s' "${out%x}"; return 0
-      fi
-    fi
   fi
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$payload" | jq -j --arg sep "$sep" '
@@ -380,6 +363,115 @@ if sep:
 cmd = cmd.replace("\x1f", "\ufffd")
 sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 ' 2>/dev/null
+}
+
+# A COMMAND THE SEGMENTED FORM HIDES IS JUDGED BY A SECOND RUN OF THE HOOK (claude-config#3739).
+#
+# Two shapes hide a command from the text above. The shell runs every command on the line that
+# opens a heredoc and reads the body from the next line, and with that line break written as "; "
+# no reader can tell it from a ; after the opener: in `cat <<EOF; git push`, the body and EOF, the
+# push was the body's first line to every hook. And a backslash and line break inside a string a
+# wrapper hands a shell, or inside backquotes, is removed by the shell that reads those and by no
+# other, so `bash -c 'git`, the pair and `push'` named no push. lib/shell-words.py's second mode
+# writes the command as those shells read it.
+#
+# That text is never written into the first one. Joined into one text, each changed how a hook
+# read the other: a cd or a push the second held chose the folder a gate read for the push the
+# first named, a commit it held moved where a gate's range starts, a second repository stood a
+# gate aside, a backslash that ended one took the separator. So the two are judged apart:
+#   1. the hook is run on the payload with the first reading, which is ps_parse_payload exactly
+#      as it was before any of this, alone, with nothing before or after it. What that run says
+#      is this hook's answer whenever it is not a pass, so every refusal made before is made;
+#   2. only once that run has passed and finished, the hook is run again with the second
+#      reading in the first's place. It can turn the pass into a refusal and nothing else.
+# The first run is over before the second starts, so nothing the second writes (a record, a
+# cached judgement) is there for the first to read.
+#
+# A hook calls this once, at its top level, before its first `ps_parse_payload ... segmented`,
+# with the payload as it read it; test-both-readings.sh fails for a hook that reads the segmented
+# form without it. It returns at once, having started nothing, for a command with no second
+# reading, which is nearly every one: the look is three patterns over the raw payload (a pair
+# beside a quote, a backquote or a <; a ; and a blank after a << before that line ends; a <, a ;
+# or a blank spelled as an escape of its code point) and only then the reader. Under a UTF-8
+# locale bash's =~ stops at a byte that is not UTF-8 (claude-config#1885), so the opener's pattern
+# is asked again under the C locale, which reads every byte as a character.
+#
+# The run that does the judging is told which reading it is by PS_READING, "first" or "second"
+# and the process id of the hook that started it, and believes it only from its own parent: the
+# same words in the environment of any other process change nothing, and a hook that finds them
+# there when it has two readings to start refuses, since it cannot tell whether it is already
+# inside one. A command longer than PS__SECOND_MAX that has a second reading is refused unread:
+# what the library does with a command grows with the square of its length, and two runs of a
+# long one end at the hook's time limit, which is a refusal that says nothing.
+#
+#   ps_both_readings <payload>   returns 0 to carry on with one reading; otherwise it exits with
+#                                 the answer of the two runs and never returns.
+[ "${PS__READING_OF-}" = "$$" ] || { PS__READING=""; PS__READING_OF=$$; }
+PS__SECOND_MAX=16384
+PS__OPENER_LINE='<<([^\\]|\\[^n])*; '
+ps__opener_line() { [[ $1 =~ $PS__OPENER_LINE ]] && return 0; local LC_ALL=C; [[ $1 =~ $PS__OPENER_LINE ]]; }
+# A single quote and a backquote, written by their codes so no reader of this file meets one open.
+PS__QUOTE=$'\047'; PS__TICK=$'\140'
+ps__may_hide() {   # $1 = the cleaned payload
+  case "$1" in *'\u003'[cCbB]*|*'\u002'[0]*) return 0 ;; esac
+  case "$1" in *'<<'*) ps__opener_line "$1" && return 0 ;; esac
+  case "$1" in
+    *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*)
+      case "$1" in *"$PS__QUOTE"*|*"$PS__TICK"*|*'<'*|*'\u002'[7]*|*'\u006'[0]*) return 0 ;; esac ;;
+  esac
+  return 1
+}
+PS__CHILD=""
+ps__run_reading() {   # $1 = first | second  $2 = the hook's file  $3 = the working folder
+  PS_READING="$1:$$" "${BASH:-/bin/bash}" "$2" < "$3/in" > "$3/out.$1" 2> "$3/err.$1" &
+  PS__CHILD=$!
+  wait "$PS__CHILD"
+}
+ps__say_reading() {   # $1 = first | second  $2 = the working folder
+  cat "$2/out.$1" 2>/dev/null
+  cat "$2/err.$1" >&2 2>/dev/null
+}
+ps_both_readings() {   # $1 = the payload as the hook read it
+  local payload="${1-}" hook="${BASH_SOURCE[1]-}" clean work rc name
+  # Taken out of the environment once read, so nothing this run starts is told it is a reading.
+  case "${PS_READING-}" in
+    "first:$PPID") PS__READING=first; unset PS_READING; return 0 ;;
+    "second:$PPID") PS__READING=second; unset PS_READING; return 0 ;;
+  esac
+  PS__READING=""
+  [ -n "$hook" ] && [ -f "$hook" ] || return 0
+  clean="$(ps_clean_payload "$payload")"
+  ps__may_hide "$clean" || return 0
+  command -v python3 >/dev/null 2>&1 && [ -f "${PS_SHELL_WORDS:-}" ] || return 0
+  printf '%s' "$clean" | python3 "$PS_SHELL_WORDS" second >/dev/null 2>&1 || return 0
+  name="${hook##*/}"
+  if [ "${#clean}" -gt "$PS__SECOND_MAX" ]; then
+    printf 'BLOCKED: %s: this command runs something a plain reading of it hides (a command after a heredoc opener on the same line, or one written across a backslash and line break inside a string handed to a shell or inside backquotes), and at %s characters it is longer than the %s a gate reads a second time within its time limit, so what it hides was not judged. Write that command on a line of its own, after the heredoc closing line, or send the long text in a command of its own (claude-config#3739).\n' \
+      "$name" "${#clean}" "$PS__SECOND_MAX" >&2
+    exit 2
+  fi
+  if [ -n "${PS_READING-}" ]; then
+    printf 'BLOCKED: %s: this command has two readings to judge, and PS_READING is already set in this hook environment by something that is not the hook that started it, so it cannot tell whether it is one of the two runs already. Nothing was judged. Unset PS_READING where Claude Code is started (claude-config#3739).\n' "$name" >&2
+    exit 2
+  fi
+  work="$(mktemp -d "${TMPDIR:-/tmp}/ps-readings.XXXXXX" 2>/dev/null)" && [ -d "$work" ] \
+    && printf '%s' "$payload" > "$work/in" || {
+    [ -z "${work:-}" ] || rm -rf "$work"
+    printf 'BLOCKED: %s: this command has two readings to judge and no working folder could be made under %s to hold them, so what it hides was not judged (claude-config#3739).\n' "$name" "${TMPDIR:-/tmp}" >&2
+    exit 2
+  }
+  # shellcheck disable=SC2064 # the folder is named now, on purpose
+  trap "rm -rf '$work'" EXIT
+  trap 'kill -TERM "$PS__CHILD" 2>/dev/null; wait "$PS__CHILD" 2>/dev/null; exit 143' TERM HUP INT
+  ps__run_reading first "$hook" "$work"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    ps__say_reading first "$work"; exit "$rc"
+  fi
+  ps__run_reading second "$hook" "$work"; rc=$?
+  if [ "$rc" -ne 0 ] || { [ ! -s "$work/out.first" ] && [ ! -s "$work/err.first" ]; }; then
+    ps__say_reading second "$work"; exit "$rc"
+  fi
+  ps__say_reading first "$work"; exit 0
 }
 
 # WHETHER the machine holds a reader at all, and the sentence a gate refuses with when it does not

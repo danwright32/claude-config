@@ -53,6 +53,8 @@ command -v python3 >/dev/null 2>&1 \
 # Taken raw above so the commonest call leaves before anything loads, and cleaned before anything
 # parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
 payload="$(ps_clean_payload "$payload")"
+# What the segmented form hides is judged in a run of its own (claude-config#3739).
+ps_both_readings "$payload"
 parsed="$(ps_parse_payload "$payload" segmented)" \
   || not_judged "it could not read the hook payload (neither jq nor python3 could parse it as JSON)"
 cmd="${parsed%%$'\x1f'*}"

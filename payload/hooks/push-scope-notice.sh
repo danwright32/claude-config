@@ -100,6 +100,8 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 }
 
 payload="$(ps_read_payload)"
+# What the segmented form hides is judged in a run of its own (claude-config#3739).
+ps_both_readings "$payload"
 parsed="$(ps_parse_payload "$payload" segmented)" \
   || ps_unparsed_refuse "$payload" push-scope-notice.sh - "a push" '*push*'
 cmd="${parsed%%$'\x1f'*}"

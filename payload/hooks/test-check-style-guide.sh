@@ -294,10 +294,10 @@ W="$(mk_style_repo 'const label = "Loading, please wait";')"
 run_style_hook "$E2E" "cd $W && bash -c 'git ${PAIR}push'"
 want_style_code 0 "#3739 control: clean copy pushed across the pair in a wrapper's string is allowed"
 
-# THE TEXT A HOOK IS HANDED MAY ONLY ADD TO WHAT IT WAS HANDED BEFORE (claude-config#3739). The
-# rewritten text is never handed over in place of the old one: a hook gets the old text, or the
-# old text and the rewritten one together. Each command below is refused on the old text alone,
-# and the rewritten text alone would pass it.
+# THE SECOND READING MAY ONLY ADD A REFUSAL (claude-config#3739). The rewritten text is never
+# handed over in place of the old one, nor written into it: the hook judges the old text alone,
+# as it always did, and then the rewritten text in a run of its own. Each command below is
+# refused on the old text alone, and the rewritten text alone would pass it.
 # A pair the string's own shell keeps (it ends a comment, or stands in a quoted heredoc's body)
 # stays in a wrapper's string: taken out, it makes the next line part of the comment or of the
 # body. The push of $W on that line runs in bash and zsh, and a second push after it gives the
@@ -308,12 +308,13 @@ run_style_hook "$E2E" "cd $W && bash -c 'true # c${PAIR}git push; gi${PAIR}t pus
 want_style_code 2 "#3739 a push the old text named is still named beside the rewritten text (on the line after a comment that ends in a backslash, in a wrapper's string, with a dry run of the same name after it)"
 run_style_hook "$E2E" "cd $W && bash -c 'true # c${PAIR}gi${PAIR}t push'"
 want_style_code 2 "#3739 a forbidden character blocks a push written across the pair on the line after such a comment: the pair that ends the comment stays, so the line after it is still a command in the rewritten text, which alone names this push"
-# With the second push a real one of another repository, the text now holds a push from each, as
-# the shells run one from each. Every gate that judges one repository then stands aside, this
-# one too, and push-scope-notice.sh refuses the command for all of them (claude-config#1062),
-# with no override. So this gate exits 0 on a command it refuses when handed the old text
-# alone, and the command is refused all the same: both halves are held below, beside the same
-# two pushes typed whole.
+# With the second push a real one of another repository, the rewritten text holds a push from
+# each, as the shells run one from each. A gate that judges one repository stands aside for such
+# a text, this one too, and push-scope-notice.sh refuses it for all of them (claude-config#1062),
+# with no override. Written into one text with the old one, that stood this gate down on a
+# command it refuses when handed the old text alone. Judged apart, this gate still refuses the
+# old text's push and the notice gate refuses the rewritten text: both are held below, beside
+# the same two pushes typed whole, where this gate does stand aside.
 NOTICE_HOOK="$DIR/push-scope-notice.sh"
 run_notice_hook() {
   # $1 cwd, $2 command -> sets NOTICE_CODE and NOTICE_MSG, as run_style_hook does
@@ -343,8 +344,8 @@ for c in "bash -c 'true # c${PAIR}git -C $W push; gi${PAIR}t -C $CLEAN push; l${
   run_notice_hook "$E2E" "$c"
   want_push_refused "$W" "#3739 a push the old text named is still answered for when the rewritten text names a push of another repository (shape $shape of 3: on the line after a comment that ends in a backslash, in a wrapper's string; after a quoted heredoc's body that holds the pair; after such a comment, with an opener's line below it and no word split)"
   case "$STYLE_CODE:$NOTICE_CODE:$NOTICE_MSG" in
-    0:2:*"more than one repository"*) pass=$((pass+1)) ;;
-    *) fail=$((fail+1)); echo "FAIL: #3739 and it is judged as the push from two repositories it is, the style gate standing aside for the notice gate, which refuses it (shape $shape of 3): the style gate exited $STYLE_CODE and the notice gate $NOTICE_CODE, saying [${NOTICE_MSG:0:200}]" ;;
+    2:2:*"more than one repository"*) pass=$((pass+1)) ;;
+    *) fail=$((fail+1)); echo "FAIL: #3739 and each reading is judged apart, the style gate refusing the old text's push as it always did and the notice gate refusing the rewritten text as the push from two repositories it is (shape $shape of 3): the style gate exited $STYLE_CODE and the notice gate $NOTICE_CODE, saying [${NOTICE_MSG:0:200}]" ;;
   esac
 done
 c="git -C $W push; git -C $CLEAN push"
@@ -391,23 +392,23 @@ for c in "cd $W && x=\`git \\\\\\${PAIR}push\`" "cd $W && x=\`git \\\\\\\\${PAIR
   run_style_hook "$E2E" "$c"
   want_style_code 0 "#3739 control: after four backslashes the next line is a command of its own, and after five the word keeps a backslash, so neither is a push"
 done
-# The issue's own shape behind a relative cd. Written one after the other, the second copy's cd
-# starts from where the first ended, so the rewritten command goes first inside a subshell and
-# the old text starts from the folder it always started from.
+# The issue's own shape behind a relative cd. Each reading starts from the folder the command
+# starts in, since neither is written after the other.
 W="$(mk_style_repo "$BAD")"
 ROOT3739="${W%/work}"
 run_style_hook "$(dirname "$ROOT3739")" "cd $(basename "$ROOT3739"); cat <<EOF; cd work; git push${NL}body${NL}EOF${NL}ls"
 want_style_code 2 "#3739 a forbidden character blocks a push behind a relative cd and a cd on the opener's line"
-# PINNED AS IT WAS. With the push on a line after the heredoc, the old text reads it in the
-# folder the first cd names, which the cd on the opener's line had left, and that reading stays
-# beside the right one. Here that folder is no repository, so no gate can judge the command and
-# the notice gate refuses it, before the rewrite and with it.
+# With the push on a line after the heredoc, the old text reads it in the folder the first cd
+# names, which the cd on the opener's line had left. Here that folder is no repository, so on
+# the old text no gate can judge the command and the notice gate refuses it, as it did before
+# the second reading existed. The second reading has the push in the folder it runs in, and
+# there this gate refuses it for the character it carries.
 c="cd $(basename "$ROOT3739"); cat <<EOF; cd work${NL}body${NL}EOF${NL}git push"
 run_style_hook "$(dirname "$ROOT3739")" "$c"
 run_notice_hook "$(dirname "$ROOT3739")" "$c"
 case "$STYLE_CODE:$NOTICE_CODE:$NOTICE_MSG" in
-  0:2:*"no push gate could judge this push"*) pass=$((pass+1)) ;;
-  *) fail=$((fail+1)); echo "FAIL: #3739 pinned: a push after the heredoc, in the folder a cd on the opener's line moves to, is still read in the old folder too, and refused by the notice gate as it was: the style gate exited $STYLE_CODE and the notice gate $NOTICE_CODE, saying [${NOTICE_MSG:0:200}]" ;;
+  2:2:*"no push gate could judge this push"*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL: #3739 a push after the heredoc, in the folder a cd on the opener's line moves to, is refused by the notice gate on the old text as it was, and by the style gate on the second reading, which has it in the folder it runs in: the style gate exited $STYLE_CODE and the notice gate $NOTICE_CODE, saying [${NOTICE_MSG:0:200}]" ;;
 esac
 W="$(mk_style_repo 'const label = "Loading, please wait";')"
 ROOT3739="${W%/work}"
@@ -420,10 +421,8 @@ many=""; n=0
 while [ "$n" -lt 100 ]; do many="${many}cat <<E; true${NL}x${NL}E${NL}"; n=$((n + 1)); done
 run_style_hook "$E2E" "cd $W${NL}${many}cat <<EOF; git push${NL}body${NL}EOF"
 want_style_code 2 "#3739 a forbidden character blocks a push after the opener on the hundred and first such line"
-# A backslash that ends the text escapes whatever is written after it, so the old text goes
-# last and nothing is: written first, its last command took the separator and the rewritten
-# command's first words for its own, the two were no longer the commands of each, and the old
-# text was handed over alone with the push unread.
+# A backslash that ends the text escapes whatever is written after it. Nothing is written after
+# either reading now, so the one that ends in it takes nothing of the other's.
 shape=0
 for c in "cd $W && cat <<EOF; git push${NL}body${NL}EOF${NL}true \\" "cd $W && bash -c 'git ${PAIR}push'${NL}true \\" \
          "cd $W && x=\`git ${PAIR}push\`${NL}cat <<E\\"; do
@@ -448,6 +447,53 @@ raw_style_hook "cd $W && echo ok; cat <<EOF; git push\\nbody\\nEOF"
 want_style_code 2 "#3739 control: the push after the opener is blocked with the payload written raw and no such byte"
 raw_style_hook "cd $W && echo "$'\xff'"; cat <<EOF; git push\\nbody\\nEOF"
 want_style_code 2 "#3739 a byte that is not UTF-8 in front of the opener does not hide the push after it"
+# A marker in double quotes, or quoted by a backslash, puts a JSON escape between the << and
+# the ; in the raw payload, which the look for an opener's line must go past.
+shape=0
+for c in "cd $W && cat <<\"EOF\"; git push${NL}body${NL}EOF" "cd $W && cat <<\\EOF; git push${NL}body${NL}EOF"; do
+  shape=$((shape + 1))
+  run_style_hook "$E2E" "$c"
+  want_style_code 2 "#3739 a forbidden character blocks a push after an opener whose marker the payload writes with an escape (shape $shape of 2: in double quotes; quoted by a backslash)"
+done
+
+# THE TWO READINGS NEVER CHANGE EACH OTHER (claude-config#3739). Written into one text, a cd or a
+# push the rewritten text held, in a folder below the top of the same repository, chose the
+# folder this gate read for the push the old text named: it read that folder alone and the
+# character in a file beside it went out, with every gate silent. Each command below is refused
+# on the old text alone, which is how it is judged first.
+W="$(mk_style_repo "$BAD")"
+mkdir -p "$W/docs"
+shape=0
+for c in "cd $W${NL}cat <<EOF; cd docs${NL}body${NL}EOF${NL}git push" \
+         "cd $W${NL}false && bash -c 'cd docs && git pu${PAIR}sh'; git push" \
+         "cd $W${NL}: \`cd docs && git pu${PAIR}sh --dry-run\`; git push" \
+         "cd $W${NL}cat <<EOF; git -C docs push --dry-run${NL}body${NL}EOF${NL}git push"; do
+  shape=$((shape + 1))
+  run_style_hook "$E2E" "$c"
+  want_style_code 2 "#3739 a forbidden character blocks a push typed in the open whatever folder a hidden command names (shape $shape of 4: a cd after an opener on its line; a push across the pair in a wrapper's string behind a cd, never run; the same inside backquotes, a dry run; a dry run with -C after an opener)"
+done
+run_style_hook "$E2E" "cd $W${NL}git push"
+want_style_code 2 "#3739 control: the same push with nothing hidden is blocked"
+CLEAN="$(mk_style_repo 'const label = "Loading, please wait";')"
+mkdir -p "$CLEAN/docs"
+run_style_hook "$E2E" "cd $CLEAN${NL}cat <<EOF; cd docs${NL}body${NL}EOF${NL}git push"
+want_style_code 0 "#3739 control: clean copy pushed after a cd on an opener's line is allowed"
+# A commit the old text hid moved where this gate's range starts: in a repository level with
+# its upstream a command that commits is read from HEAD, and one that does not from where the
+# branch left the default one. The old text names no commit, and is judged as it always was.
+W="$(mk_style_repo "$BAD")"
+git -C "$W" checkout -q -b feat >/dev/null 2>&1
+git -C "$W" push -q -u origin feat >/dev/null 2>&1
+shape=0
+for c in "cd $W${NL}bash -c 'git com${PAIR}mit -m x'; git push" "cd $W${NL}echo \`git com${PAIR}mit -m x\`; git push"; do
+  shape=$((shape + 1))
+  run_style_hook "$E2E" "$c"
+  want_style_code 2 "#3739 a commit only the second reading names moves no range for the push the old text names (shape $shape of 2: across the pair in a wrapper's string; inside backquotes)"
+done
+run_style_hook "$E2E" "cd $W${NL}git push"
+want_style_code 2 "#3739 control: the same push with no commit beside it is blocked"
+run_style_hook "$E2E" "cd $W${NL}bash -c 'git commit -m x'; git push"
+want_style_code 0 "#3739 pinned as it was: with the commit typed whole the range starts at HEAD, which is level with its upstream, and nothing is left to read"
 
 # --- what the push would actually CARRY, not what happens to be lying about ----
 #

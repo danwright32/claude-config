@@ -95,6 +95,8 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 SCANNER="$HOOK_DIR/lib/doc-issue-refs.py"
 
 payload="$(ps_read_payload)"
+# What the segmented form hides is judged in a run of its own (claude-config#3739).
+ps_both_readings "$payload"
 
 # THE DETECTOR'S OWN READER, asked before anything is measured (claude-config#486, L490).
 #

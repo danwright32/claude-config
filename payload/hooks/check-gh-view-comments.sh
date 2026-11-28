@@ -46,6 +46,8 @@ command -v python3 >/dev/null 2>&1 \
   || not_judged "python3 is not on PATH, and the command's words are read with it"
 
 payload="$(ps_clean_payload "$payload")"
+# What the segmented form hides is judged in a run of its own (claude-config#3739).
+ps_both_readings "$payload"
 parsed="$(ps_parse_payload "$payload" segmented)" \
   || not_judged "it could not read the hook payload (neither jq nor python3 could parse it as JSON)"
 cmd="${parsed%%$'\x1f'*}"

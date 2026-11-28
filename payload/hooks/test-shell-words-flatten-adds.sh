@@ -1,24 +1,21 @@
 #!/usr/bin/env bash
-# The flattened form the push hooks read only ever ADDS to what a hook was handed before
-# (lib/shell-words.py flattened(), claude-config#3739).
+# What the flattened form hides is a SECOND READING, never written into the first
+# (lib/shell-words.py flattened() and second_reading(), claude-config#3739).
 #
 # A command after a heredoc's opener on its line, or split across a backslash and a line break in
 # a wrapper's string or inside backquotes, was hidden from every hook reading the flattened form.
-# The reader rewrites the command so that form shows it. The rewritten text alone can hide a
-# command the old text names (a comment ending in a backslash in a wrapper's string swallows the
-# next line once the pair is taken out) and can put a skip word together from two halves no shell
-# joins, so it is only ever handed over beside the old text.
+# The reader writes the command again so that form shows it. Joined into one text with the old
+# one, each changed how a hook read the other, so the two are kept apart: a hook judges the old
+# text alone, as it always did, and then the rewritten one in a run of its own.
 #
 # What this suite holds, for every text of a family of made up commands:
-#   A1  the text a hook was handed before is in the new text whole, at its start or at its end;
-#   A2  every command the old text's reading gives a hook, the new text's reading gives too, with
-#       the same folder, text and wrapper, as many times;
-#   A3  the new text holds no NAME=1 word (what ps_has_override matches) the old text lacks;
+#   B1  the first reading is the text a hook was handed before any second reading existed, byte
+#       for byte (worked out here by a copy of how it was made then);
+#   B2  a second reading is read to its end, names a command the first does not, and is no part
+#       of the first, nor the first of it;
 #   A4  the rewrite of opener lines made in one pass gives what one line at a time gives.
 # And, row by row, that the commands the rewrite exists to show are shown, in the folder they run
 # in, and that a string no shell reads is left as typed.
-# The old text is worked out here by the part of the reader that made it before the rewrite
-# existed (_pairs_joined); the count over recorded commands compares against main's own reader.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -40,12 +37,12 @@ T="$(mktemp -d "${TMPDIR:-/tmp}/flatten-adds.XXXXXXXX")" || exit 1
 case "${T%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$T'" >&2; exit 2 ;; esac
 trap 'rm -rf "$T"' EXIT
 
-echo "the flattened form: the rewritten command is added to the old text, never put in its place (claude-config#3739)"
+echo "the flattened form: what it hides is a second reading, never written into the first (claude-config#3739)"
 
 # One line for each check: "ok<TAB>description" or "FAIL<TAB>description<TAB>why".
 python3 -B - "$SW" > "$T/rows.tsv" <<'PY'
 import importlib.util
-import re
+import json
 import sys
 
 spec = importlib.util.spec_from_file_location("shell_words", sys.argv[1])
@@ -62,9 +59,6 @@ J = "\\\n"
 LT = "<"
 LL = LT * 2
 PUSH = "git push"
-# ps_has_override's pattern for any name, [[:space:]] read as ASCII alone and as Unicode has it.
-SKIPS = (re.compile(r"(?:^|(?<=[ \t\n\r\f\v;&|]))([A-Za-z_][A-Za-z0-9_]*)=1(?=[ \t\n\r\f\v]|\Z)"),
-         re.compile(r"(?:^|(?<=[\s;&|]))([A-Za-z_][A-Za-z0-9_]*)=1(?=\s|\Z)"))
 
 
 ROWS = [0]
@@ -77,10 +71,37 @@ def row(what, why=""):
     sys.stdout.write(("FAIL\t%s\t%s\n" % (what, why)) if why else ("ok\t%s\n" % what))
 
 
-def old_text(cmd):
-    """What a hook was handed before the rewrite: the plain flattening, or the join of #3470."""
-    plain = cmd.replace("\n", BREAK)
-    return sw._pairs_joined(cmd, plain)[1] if J in cmd else plain
+def old_text(s):
+    """What a hook was handed before any second reading existed: the plain flattening, or the
+    join of #3470. A copy of how flattened() was written then, so B1 is held against it and not
+    against the function under test."""
+    plain = s.replace("\n", BREAK)
+    if J not in s:
+        return plain
+    joined, unsure = [], []
+    try:
+        sw.commands(s, unsure=unsure, joined=joined)
+    except sw.Unreadable:
+        return plain
+    if [m for m in unsure if not sw.split_operator(s, m[0])] or not joined:
+        return plain
+    kept, at = [], 0
+    for i in sorted(set(joined)):
+        kept.append(s[at:i])
+        at = i + 2
+    kept.append(s[at:])
+    joint = "".join(kept).replace("\n", BREAK)
+    was, now = sw._named(plain), sw._named(joint)
+    if was is None or now is None:
+        return plain
+    if not sw._named_more(was, now):
+        return joint
+    if not sw._named_more(now, was):
+        return plain
+    both = joint + BREAK + plain
+    held_ = sw._named(both)
+    either = {k: max(was.get(k, 0), now.get(k, 0)) for k in set(was) | set(now)}
+    return both if held_ is not None and not sw._named_more(either, held_) else plain
 
 
 def held(text):
@@ -99,7 +120,9 @@ def held(text):
 
 def named(text):
     """(folder, tool, subcommand, arguments) of each git, gh or rtk command a flattened text's
-    reading gives a hook."""
+    reading gives a hook; nothing for no text."""
+    if text is None:
+        return []
     out, _ = sw.read(text)
     found = []
     for line in out.split("\x1e"):
@@ -112,21 +135,20 @@ def named(text):
 
 
 def faults(cmd):
-    """Why the text handed over for cmd breaks A1, A2 or A3; nothing where it holds them, and
-    None where it is the old text itself."""
-    was, now = old_text(cmd), sw.flattened(cmd)
-    if now == was:
+    """Why the two readings of cmd break B1 or B2; nothing where they hold them, and None where
+    there is no second reading and the first holds B1."""
+    was, first, second = old_text(cmd), sw.flattened(cmd), sw.second_reading(cmd)
+    if first != was:
+        return "B1: the first reading is %r, and the text a hook was always handed is %r" % (first, was)
+    if second is None:
         return None
-    if not (now.startswith(was + BREAK) or now.endswith(BREAK + was)):
-        return "A1: the old text %r is not whole at either end of %r" % (was, now)
-    after = held(now)
-    lost = [k for k, n in held(was).items() if n > after.get(k, 0)]
-    if lost:
-        return "A2: %r is no longer read from %r" % (lost[0].split("\x1c")[1], now)
-    for pattern in SKIPS:
-        extra = set(pattern.findall(now)) - set(pattern.findall(was))
-        if extra:
-            return "A3: %s=1 is a skip word in %r and in nothing a hook was handed before" % (sorted(extra)[0], now)
+    if second in first or first in second:
+        return "B2: one reading is written into the other: first %r, second %r" % (first, second)
+    if sw._records(second, "", 0, fields=False)[1]:
+        return "B2: the second reading %r is one only the crude cut reads" % second
+    before, after = held(first), held(second)
+    if not [k for k, n in after.items() if n > before.get(k, 0)]:
+        return "B2: the second reading %r names nothing the first, %r, does not" % (second, first)
     return ""
 
 
@@ -198,7 +220,7 @@ ACTS = [
     "gh pr " + J + "create --fill", "git status",
 ]
 family = [front + shape % act + back for front in FRONTS for shape in SHAPES for act in ACTS for back in BACKS]
-broken, changed, differ = "", 0, ""
+broken, seconds, differ = "", 0, ""
 for cmd in family:
     try:
         why = faults(cmd)
@@ -206,72 +228,75 @@ for cmd in family:
         why = "the reader raised %s: %s" % (type(e).__name__, e)
     if why and not broken:
         broken = "%r: %s" % (cmd, why)
-    changed += why is not None
+    seconds += why is not None
     if LL in cmd and not differ and sw.opener_lines(cmd) != one_line_at_a_time(cmd):
         differ = "%r: one pass gave %r, one line at a time %r" % (cmd, sw.opener_lines(cmd), one_line_at_a_time(cmd))
-row("A1 to A3: over the family of %d texts, the old text is whole in the new one, every command it gave is still given, and no skip word is new" % len(family), broken)
+row("B1 and B2: over the family of %d texts, the first reading is the text a hook was always handed, and a second reading is read to its end, names a command the first does not and is never written into it" % len(family), broken)
 row("A4: over the same family, opener lines rewritten in one pass are what one line at a time gives", differ)
-row("the family is not read as unchanged throughout: the rewrite adds to at least a third of it",
-    "" if changed * 3 >= len(family) else "only %d of %d texts were handed over changed" % (changed, len(family)))
+row("the family is not read as holding nothing throughout: at least a third of it has a second reading",
+    "" if seconds * 3 >= len(family) else "only %d of %d texts have a second reading" % (seconds, len(family)))
 
 # ---- row by row ------------------------------------------------------------------------------
-def shows(what, cmd, want):
-    """The text handed over for cmd names want, a (folder, tool, subcommand, arguments)."""
-    got = named(sw.flattened(cmd))
-    row(what, "" if want in got else "wanted %r among %r, from %r" % (want, got, sw.flattened(cmd)))
+def shows(what, cmd, want, where="second"):
+    """The reading named (first, second, or either) of cmd names want, a (folder, tool,
+    subcommand, arguments)."""
+    first, second = sw.flattened(cmd), sw.second_reading(cmd)
+    got = {"first": named(first), "second": named(second), "either": named(first) + named(second)}[where]
+    row(what, "" if want in got else "wanted %r among %r, from first %r and second %r" % (want, got, first, second))
 
 
 def hides(what, cmd, tool, sub):
-    """The text handed over for cmd names no command of that tool and subcommand."""
-    got = [g for g in named(sw.flattened(cmd)) if g[1] == tool and g[2] == sub]
-    row(what, "" if not got else "it names %r, from %r" % (got, sw.flattened(cmd)))
+    """Neither reading of cmd names a command of that tool and subcommand."""
+    first, second = sw.flattened(cmd), sw.second_reading(cmd)
+    got = [g for g in named(first) + named(second) if g[1] == tool and g[2] == sub]
+    row(what, "" if not got else "it names %r, from first %r and second %r" % (got, first, second))
 
 
-def text_is(what, cmd, want):
-    got = sw.flattened(cmd)
-    row(what, "" if got == want else "got %r, wanted %r" % (got, want))
+def readings_are(what, cmd, first, second):
+    got = (sw.flattened(cmd), sw.second_reading(cmd))
+    row(what, "" if got == (first, second) else "got first %r and second %r, wanted %r and %r" % (got[0], got[1], first, second))
 
 
-def unchanged(what, cmd):
-    text_is(what, cmd, old_text(cmd))
+def one_reading(what, cmd):
+    readings_are(what, cmd, old_text(cmd), None)
 
 
 # A pair the string's own shell keeps is not taken out.
-shows("a push on the line after a comment that ends in a backslash, in a wrapper's string, is still named",
+shows("a push on the line after a comment that ends in a backslash, in a wrapper's string, is named by both readings",
       "bash -c 'true # c" + J + PUSH + " origin main --force; gi" + J + "t push origin feature; l" + J + "s'", ("", "git", "push", "origin main --force"))
-shows("and so is the push the join does put together", "bash -c 'true # c" + J + PUSH + " origin main --force; gi" + J + "t push origin feature; l" + J + "s'",
+shows("the first among them, as it always was", "bash -c 'true # c" + J + PUSH + " origin main --force; gi" + J + "t push origin feature; l" + J + "s'",
+      ("", "git", "push", "origin main --force"), "first")
+shows("and the second names the push the join puts together", "bash -c 'true # c" + J + PUSH + " origin main --force; gi" + J + "t push origin feature; l" + J + "s'",
       ("", "git", "push", "origin feature"))
 shows("an add of everything after such a comment is still named", "bash -c 'true # c" + J + "git add -A; gi" + J + "t add f; l" + J + "s'", ("", "git", "add", "-A"))
 shows("a push after a quoted heredoc's body that holds the pair is still named",
       "bash -c 'cat " + LL + "\\E\nx" + J + "E\n" + PUSH + " origin main\ncat " + LL + "\\E\nE\ngi" + J + "t push origin feature'", ("", "git", "push", "origin main"))
-text_is("a pair that ends a comment in a wrapper's string stays in the rewritten command",
-        "bash -c 'true # c" + J + PUSH + "; l" + J + "s'", "bash -c 'true # c\\; " + PUSH + "; ls' ; bash -c 'true # c\\; " + PUSH + "; l\\; s'")
+readings_are("a pair that ends a comment in a wrapper's string stays in the second reading",
+             "bash -c 'true # c" + J + PUSH + "; l" + J + "s'", "bash -c 'true # c\\; " + PUSH + "; l\\; s'", "bash -c 'true # c\\; " + PUSH + "; ls'")
 shows("a push whose refspec stands across the pair in a wrapper's string is named with that refspec",
       "bash -c '" + PUSH + " origin " + J + "main'", ("", "git", "push", "origin main"))
 # No skip word is put together, and a string no shell reads is left as typed.
-unchanged("a commit message holding the pair, with nothing else to rewrite, is handed over as it always was", "git commit -m 'a" + J + "b' && " + PUSH)
-unchanged("an argument of echo holding the pair is handed over as it always was", "echo 'gi" + J + "t push'")
-unchanged("a string ssh hands another machine is handed over as it always was", "ssh host 'gi" + J + "t push'")
-text_is("an argument of echo is left as typed beside a wrapper's string that is rewritten",
-        "echo 'x SKIP_X" + J + "=1 y'; bash -c 'l" + J + "s'", "echo 'x SKIP_X\\; =1 y'; bash -c 'ls' ; echo 'x SKIP_X\\; =1 y'; bash -c 'l\\; s'")
-text_is("an argument of echo holding the very text a wrapper beside it is handed is left as typed too",
-        "echo 'l" + J + "s'; bash -c 'l" + J + "s'", "echo 'l\\; s'; bash -c 'ls' ; echo 'l\\; s'; bash -c 'l\\; s'")
-text_is("and so is one after the wrapper, and one in a substitution among the wrapper's own words",
-        "bash -c 'l" + J + "s' $(echo 'l" + J + "s'); echo 'l" + J + "s'",
-        "bash -c 'ls' $(echo 'l\\; s'); echo 'l\\; s' ; bash -c 'l\\; s' $(echo 'l\\; s'); echo 'l\\; s'")
+one_reading("a commit message holding the pair, with nothing else to rewrite, has no second reading", "git commit -m 'a" + J + "b' && " + PUSH)
+one_reading("nor has an argument of echo holding the pair", "echo 'gi" + J + "t push'")
+one_reading("nor a string ssh hands another machine", "ssh host 'gi" + J + "t push'")
+readings_are("an argument of echo is left as typed beside a wrapper's string that is rewritten",
+             "echo 'x SKIP_X" + J + "=1 y'; bash -c 'l" + J + "s'", "echo 'x SKIP_X\\; =1 y'; bash -c 'l\\; s'", "echo 'x SKIP_X\\; =1 y'; bash -c 'ls'")
+readings_are("an argument of echo holding the very text a wrapper beside it is handed is left as typed too",
+             "echo 'l" + J + "s'; bash -c 'l" + J + "s'", "echo 'l\\; s'; bash -c 'l\\; s'", "echo 'l\\; s'; bash -c 'ls'")
+readings_are("and so is one after the wrapper, and one in a substitution among the wrapper's own words",
+             "bash -c 'l" + J + "s' $(echo 'l" + J + "s'); echo 'l" + J + "s'",
+             "bash -c 'l\\; s' $(echo 'l\\; s'); echo 'l\\; s'", "bash -c 'ls' $(echo 'l\\; s'); echo 'l\\; s'")
 for cmd in ("a; b && c | d\ne || f", "bash -c 'l" + J + "s'; echo \"q", "x=$(a; b) ; `c; d`", ""):
     pieces = sw._crude_pieces(cmd)
     row("the crude cut's pieces with where they stand are the pieces the crude cut gives: %r" % cmd,
         "" if sorted(t for _, _, _, cut in pieces for _, t in cut) == sorted(t for _, t in sw.crude_commands(cmd))
         and all(cmd[a:b] == cut[0][1] for a, b, _, cut in pieces) else "got %r, and the crude cut gives %r" % (pieces, sw.crude_commands(cmd)))
-text_is("where a join in a wrapper's string would put a skip word together the pair is written after the word",
-        "bash -c 'true; SKIP_" + J + "X=1 " + PUSH + "'", "bash -c 'true; SKIP_X=1\\;  " + PUSH + "' ; bash -c 'true; SKIP_\\; X=1 " + PUSH + "'")
+readings_are("where a join in a wrapper's string would put a skip word together the pair is written after the word",
+             "bash -c 'true; SKIP_" + J + "X=1 " + PUSH + "'", "bash -c 'true; SKIP_\\; X=1 " + PUSH + "'", "bash -c 'true; SKIP_X=1\\;  " + PUSH + "'")
 shows("and the push behind that word is named", "bash -c 'true; SKIP_" + J + "X=1 " + PUSH + "'", ("", "git", "push", ""))
-text_is("the same inside backquotes", "x=`true; SKIP_" + J + "X=1 " + PUSH + "`", "x=`true; SKIP_X=1\\;  " + PUSH + "` ; x=`true; SKIP_\\; X=1 " + PUSH + "`")
-text_is("a NAME=1 word a moved body leaves at the end of the rewritten command has no blank written after it, which would make a skip word of it",
-        PUSH + "; cat " + LL + "EOF; ls; SKIP_X=1\nbody\nEOF", PUSH + "; cat " + LL + "EOF; body; EOF; ls; SKIP_X=1; " + PUSH + "; cat " + LL + "EOF; ls; SKIP_X=1; body; EOF")
-skip = SKIPS[0].findall(sw.flattened("cat " + LL + "EOF; SKIP_X=1 " + PUSH + "\nbody\nEOF"))
-row("control: a skip word typed whole in front of a push after an opener is one, as it was before", "" if "SKIP_X" in skip else "it is none in the text handed over")
+readings_are("the same inside backquotes", "x=`true; SKIP_" + J + "X=1 " + PUSH + "`", "x=`true; SKIP_\\; X=1 " + PUSH + "`", "x=`true; SKIP_X=1\\;  " + PUSH + "`")
+readings_are("a NAME=1 word a moved body leaves where the second reading ends is in that reading alone: the first is the text it always was",
+             PUSH + "; cat " + LL + "EOF; ls; SKIP_X=1\nbody\nEOF", PUSH + "; cat " + LL + "EOF; ls; SKIP_X=1; body; EOF", PUSH + "; cat " + LL + "EOF; body; EOF; ls; SKIP_X=1")
 # Inside backquotes, by how many backslashes stand before the line break.
 for n, joins in ((1, True), (2, True), (3, True), (4, False), (5, False), (6, False), (7, False)):
     cmd = "x=`git " + "\\" * n + "\npush`"
@@ -279,30 +304,36 @@ for n, joins in ((1, True), (2, True), (3, True), (4, False), (5, False), (6, Fa
         shows("inside backquotes a push across %d backslash(es) and a line break is named" % n, cmd, ("", "git", "push", ""))
     else:
         hides("inside backquotes %d backslashes and a line break make no push (four start a new command, more leave the word a backslash)" % n, cmd, "git", "push")
-hides("after three backslashes a separator that starts the next line is escaped in the rewritten command",
+hides("after three backslashes a separator that starts the next line is escaped in the second reading",
       "x=`echo a \\\\" + J + "; true`", "git", "push")
-text_is("three backslashes and a line break leave one backslash, which escapes the next line's first letter",
-        "x=`git \\\\" + J + "push`", "x=`git \\push` ; x=`git \\\\\\; push`")
-# Behind a relative cd.
+readings_are("three backslashes and a line break leave one backslash, which escapes the next line's first letter",
+             "x=`git \\\\" + J + "push`", "x=`git \\\\\\; push`", "x=`git \\push`")
+# Behind a relative cd: each reading starts from the folder the command starts in.
 shows("a push after an opener, behind a relative cd and a cd on the opener's line, is named in the folder it runs in",
       "cd a; cat " + LL + "EOF; cd b; " + PUSH + " origin main\nbody\nEOF\nls", ("a/b", "git", "push", "origin main"))
-text_is("there the rewritten command stands inside a subshell, and the old text follows from the folder it always started in",
-        "cd a; cat " + LL + "EOF; cd b; " + PUSH + "\nbody\nEOF\nls", "( cd a; cat " + LL + "EOF; body; EOF; cd b; " + PUSH + "; ls ; ); cd a; cat " + LL + "EOF; cd b; " + PUSH + "; body; EOF; ls")
-shows("a push on a line after the heredoc is named in the folder a cd on the opener's line moves to",
+readings_are("there neither reading is written after the other, so each starts from the folder the command starts in",
+             "cd a; cat " + LL + "EOF; cd b; " + PUSH + "\nbody\nEOF\nls", "cd a; cat " + LL + "EOF; cd b; " + PUSH + "; body; EOF; ls", "cd a; cat " + LL + "EOF; body; EOF; cd b; " + PUSH + "; ls")
+shows("a push on a line after the heredoc is named by the second reading in the folder a cd on the opener's line moves to",
       "cd a; cat " + LL + "EOF; cd b\nbody\nEOF\n" + PUSH, ("a/b", "git", "push", ""))
-shows("and in the folder the old text read it in, which is kept", "cd a; cat " + LL + "EOF; cd b\nbody\nEOF\n" + PUSH, ("a", "git", "push", ""))
+shows("and by the first in the folder it always read it in", "cd a; cat " + LL + "EOF; cd b\nbody\nEOF\n" + PUSH, ("a", "git", "push", ""), "first")
+hides_first = [g for g in named(sw.flattened("cd a; cat " + LL + "EOF; cd b\nbody\nEOF\n" + PUSH)) if g[0] == "a/b"]
+row("and the first reading names nothing in the folder only the second reads, so a cd the second holds chooses no folder for the first", "" if not hides_first else "the first reading names %r" % (hides_first,))
 shows("a push split across the pair in a wrapper's string behind a relative cd is named in its folder",
       "cd a; bash -c 'cd b; gi" + J + "t push'", ("a/b", "git", "push", ""))
-# The issue's own shapes, the old text last.
-text_is("the command with its body moved up comes first, then a blank, and the old text last and whole",
-        "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF", "cat " + LL + "EOF; body; EOF; " + PUSH + " ; cat " + LL + "EOF; " + PUSH + "; body; EOF")
-text_is("a heredoc on a command of one line is written again as the here string it amounts to",
-        "cat " + LL + "EOF; " + PUSH + "; EOF", "cat " + LL + "<EOF; " + PUSH + "; EOF ; cat " + LL + "EOF; " + PUSH + "; EOF")
-text_is("a push across the pair in a wrapper's string stands before the old text", "bash -c 'git " + J + "push'", "bash -c 'git push' ; bash -c 'git \\; push'")
-# A backslash that ends the text: written after the old text, the rewritten command would start
-# behind an escaped separator, and the old text's last command would be read as one it never was.
-text_is("a backslash that ends the text ends the old text here too, and the blank keeps the one that ends the rewritten command off the separator",
-        "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF\ntrue \\", "cat " + LL + "EOF; body; EOF; " + PUSH + "; true \\ ; cat " + LL + "EOF; " + PUSH + "; body; EOF; true \\")
+# The issue's own shapes.
+readings_are("the first reading is the old text, and the second the command with its body moved up",
+             "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF", "cat " + LL + "EOF; " + PUSH + "; body; EOF", "cat " + LL + "EOF; body; EOF; " + PUSH)
+readings_are("a heredoc on a command of one line is written again as the here string it amounts to",
+             "cat " + LL + "EOF; " + PUSH + "; EOF", "cat " + LL + "EOF; " + PUSH + "; EOF", "cat " + LL + "<EOF; " + PUSH + "; EOF")
+readings_are("a push across the pair in a wrapper's string is the second reading's", "bash -c 'git " + J + "push'", "bash -c 'git \\; push'", "bash -c 'git push'")
+# A commit only the second reading names is no commit to a hook judging the first.
+commit = "bash -c 'git com" + J + "mit -m x'; " + PUSH
+row("a commit written across the pair in a wrapper's string is named by the second reading alone, so it moves no range for the push the first names",
+    "" if [g for g in named(sw.second_reading(commit)) if g[2] == "commit"] and not [g for g in named(sw.flattened(commit)) if g[2] == "commit"]
+    else "first %r, second %r" % (named(sw.flattened(commit)), named(sw.second_reading(commit))))
+# A backslash that ends the text ends each reading, and nothing is written after either.
+readings_are("a backslash that ends the text ends each reading, with nothing after it to escape",
+             "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF\ntrue \\", "cat " + LL + "EOF; " + PUSH + "; body; EOF; true \\", "cat " + LL + "EOF; body; EOF; " + PUSH + "; true \\")
 shows("the push after an opener in a text that ends in a backslash is named", "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF\ntrue \\", ("", "git", "push", ""))
 shows("and so is one across the pair in a wrapper's string in such a text", "bash -c 'git " + J + "push'\ntrue \\", ("", "git", "push", ""))
 shows("and one inside backquotes in a text that ends in an opener and a backslash", "x=`git " + J + "push`\n; cat " + LL + "E\\", ("", "git", "push", ""))
@@ -318,7 +349,7 @@ deep = "".join("cat " + LL + "E%d; " % k for k in range(sw.OPENER_LINE_LIMIT + 6
 got = sw.opener_lines(deep)
 row("a line with more separators after openers than the reader reads the text again for is given as far as it was rewritten, never as nothing",
     "" if got is not None and got != deep else "opener_lines gave %r" % (got,))
-# Ordinary commands are handed over as they always were.
+# Ordinary commands have one reading, the one they always had.
 for what, cmd in (
         ("a heredoc commit with nothing after its opener", "git commit -F - " + LL + "EOF\na message; with a separator\nEOF\n" + PUSH),
         ("a plain chain", "git add f && git commit -m x && " + PUSH),
@@ -327,7 +358,27 @@ for what, cmd in (
         ("a shift in arithmetic", "echo $((1" + LL + "2)); git status"),
         ("a comment after an opener", "cat " + LL + "EOF; # note\nbody\nEOF"),
         ("a text only the crude cut reads", "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF\n( echo")):
-    unchanged("control: %s is handed over as it always was" % what, cmd)
+    one_reading("control: %s has one reading, the text it always was" % what, cmd)
+
+
+# The two modes a hook's library asks, as it asks them: a payload on standard input.
+def payload_modes(cmd):
+    text = json.dumps({"tool_input": {"command": cmd}, "cwd": "/w"})
+    return sw.flattened_payload(text), sw.second_payload(text)
+
+
+first, second = payload_modes("cat " + LL + "EOF; " + PUSH + "\nbody\nEOF")
+row("for a command after an opener the flatten mode hands over nothing, since the text holds no pair and the first reading is the other readers' to make as they always did",
+    "" if first is None else "it printed %r" % (first,))
+row("and the second mode hands over the second reading, then the separator and the folder",
+    "" if second == "cat " + LL + "EOF; body; EOF; " + PUSH + "\x1f/w" else "it printed %r" % (second,))
+first, second = payload_modes("bash -c 'git " + J + "push'")
+row("for a pair in a wrapper's string the flatten mode hands over the text as it always was",
+    "" if first == "bash -c 'git \\; push'\x1f/w" else "it printed %r" % (first,))
+row("and the second mode the string as its shell reads it", "" if second == "bash -c 'git push'\x1f/w" else "it printed %r" % (second,))
+first, second = payload_modes("git commit -F - " + LL + "EOF\na message\nEOF\n" + PUSH)
+row("for a heredoc with nothing after its opener both modes hand over nothing", "" if (first, second) == (None, None) else "they printed %r and %r" % (first, second))
+row("a payload that is no JSON has no second reading", "" if sw.second_payload("not json " + LL + "EOF; x\n") is None else "it printed one")
 sys.stdout.write("end\t%d\n" % ROWS[0])
 PY
 py_rc=$?

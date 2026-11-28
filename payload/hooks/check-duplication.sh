@@ -105,6 +105,8 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 DETECTOR="$HOOK_DIR/lib/duplication.py"
 
 payload="$(ps_read_payload)"
+# What the segmented form hides is judged in a run of its own (claude-config#3739).
+ps_both_readings "$payload"
 
 parsed="$(ps_parse_payload "$payload" segmented)" \
   || ps_unparsed_refuse "$payload" check-duplication.sh SKIP_DUPLICATION_CHECK "a push" '*push*'
