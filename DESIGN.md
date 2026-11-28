@@ -2606,26 +2606,56 @@ they are placed exactly as before.
 Inside a payload folder that refusal covered more than the word (found in review on 2026-11-28,
 by asking main's gate, 3808's head and this branch about made up commands). Every script holding
 a link command with a redirection was refused there whatever else it did, so a reading that no
-longer places the word lets through each real write the refusal covered. Those a rule true of
-every script can read are read for themselves. A link command given one name makes the link in
-the folder it runs in, so the last part of that name is placed there, with a redirection or
-without (the folder itself where that part is a value). A redirection written against the target
+longer places the word lets through each real write the refusal covered. Some of those are read
+for themselves, each with forms it does not reach. A link command given one name makes the link
+in the folder it runs in, so the last part of that name is placed there, with a redirection or
+without (the folder itself where that part is a value). Three forms of one name are not read so
+and are let through: in a string, a second command written against the redirection
+(`2>/dev/null;true b`) is read into the target, and its word is counted as a second name; a
+value beside the name (`ln $FLAGS a`) is counted as a name; and a name that starts with a dash
+after `--` is dropped as an option. A redirection written against the target
 of the one before it (`</dev/null>out.txt`) is spaced before the redirections are taken out: in
 the two readings of text the second was part of the target of the first, and so a read. A string
 the script cuts into words itself (`"ln -s a <b".split()`) is run with no shell, so each word is
 placed as written; so is a string that stops at a quote mark unlike the one it opened with,
-which is not read to its end. What an output redirection of any command of a shell script file
+which is not read to its end. What an output redirection of a command of a shell script file
 writes is placed where its words say it, by the same reading (`echo hi > out.txt` in a script
-run inside a payload folder, which main lets through). And a descriptor written as a name in
-braces (`{fd}>/dev/null`) is read as one written as a number.
+run inside a payload folder, which main lets through). Four forms of it are not placed and are
+let through: a target that holds a value, though a relative one (`out.$$`, `"$PWD/out.txt"`)
+still lands in the folder; `>|`, which the reader cuts at its `|`; a redirection of a line that
+opens with a `[[ ]]` test or an arithmetic, which is not read for redirections at all; and a
+relative target after a move the reading follows and the shell does not make (a `cd` that
+fails, one in a branch not taken, one in a stage of a pipe). And a descriptor written as a name
+in braces (`{fd}>/dev/null`) is read as one written as a number.
 
-Two kinds of write that refusal covered are not read, because no rule says where they land. One
-is what a program writes by its own arguments: a `touch`, a `tee`, a `cp`, an inline script, any
-line of a script too large for the shared reader, a python file that opens a file. The other is
-a link whose name is a value, which the pull request of #3689 left unjudged and which the link
-commands of this repository's suites are. Main lets both through, 3808's head refused them only
-for the redirection word, and the report after the call names what they change. The suite pins
-each as let through until Dan decides. A redirection whose target is a value, its operator a
+Two forms of bash and zsh in which a `>` writes nothing are read as such only in a script file
+one of those two shells is named to run: the old arithmetic (`$[ 1 > 0 ]`), where every `<` and
+`>` of the line stands inside one, and the second half of a test whose first half holds its
+`]]` only inside quotes. A shell with neither form runs the same line as a command with a
+redirection, so for a script run by its path, by `sh`, by `source` or by another shell both
+stay refused, as does any line where a real redirection stands beside the form.
+
+A reading of a line's redirections that fails refuses in its own words and is never taken for a
+line with no redirection, but only where the gate speaks of what it could not tell: when the
+command names a payload path or runs inside a payload folder. From the root, in a call that
+names no payload path, a failed reading of a script's line passes with nothing said. No input
+was found that makes the reading fail, so that limit is read from the code and was not run.
+
+That refusal was an accident of one misread word, and it covered any script holding a link
+command with a redirection, whatever else the script did. So no list of rules gives all of it
+back, and the kinds below are what made up cases found, not all there is. The first 355 cases
+found two kinds of real write or link that 3808's head refuses inside a payload folder and this
+reading lets through (16 cases). One is what a program writes by its own arguments: a `touch`,
+a `tee`, a `cp`, an inline script, any line of a script too large for the shared reader, a
+python file that opens a file. The other is a link whose name is a value, which the pull
+request of #3689 left unjudged and which the link commands of this repository's suites are. A
+second review put 271 more cases and found seven more kinds (32 cases): the three forms of one
+name and the four forms of an output redirection named above. Main lets every one of the nine
+through, each needs a script run inside a payload folder, and the report after the call names
+what it changes. The suite pins a case of each kind as let through today, which is no statement
+that it should be: whether any is refused before the call is Dan's choice.
+
+A redirection whose target is a value, its operator a
 word of its own (`2> "$T/err"`), is still placed as before and refused inside a payload folder,
 though written against its operator the same target is let through by every gate: letting the
 spaced spelling through lets a write to a value through that 3808's head refuses.

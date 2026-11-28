@@ -1519,6 +1519,13 @@ def script_links(text, base, bare):
 # What a program writes by its own arguments (touch, tee, cp, an inline script) is not read from a
 # script file, and a link whose name is a value is not judged: no rule says where either lands, so
 # both are named after the call, and the suite pins them as let through until Dan decides.
+#
+# WHAT THOSE THREE READINGS DO NOT REACH. Each is let through, and pinned in the suite the same way:
+#   one name in a string with a second command written against the redirection (2>/dev/null;true b),
+#   whose word is counted as a second name; one name beside a value (ln $FLAGS a), which is counted
+#   as a name; a name that starts with a dash after --, which is dropped as an option;
+#   an output redirection whose target holds a value (out.$$), one written >|, one of a line that
+#   opens with a test or an arithmetic, and a relative one after a move the shell does not make.
 CUT_BY_THE_SCRIPT = re.compile(r"\s*\.\s*split\b")
 NAMED_DESCRIPTOR = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}(?=[<>])")
 
@@ -1603,15 +1610,55 @@ def shell_links(text, base):
 # that opens a test to the one that closes it nothing is read as a redirection.
 inside_test = [False]
 
-def shell_redirections(text, base):
+# Two forms of bash and zsh in which a > is no redirection, read so only for a command of a script
+# file one of those two is named to run (bash_reads): a shell with neither form runs the same
+# line as a command with a redirection, which writes. Each is read only where the reading above
+# would go on to place a redirection, and only where nothing else in the line can write.
+#   The old arithmetic, $[ 1 > 0 ]. A line is taken to hold no redirection only when every < and
+#   > in it stands inside one, and the line holds no quote, backslash, parenthesis or brace, so
+#   that nothing in it makes the $[ text or runs a command. A $[ after a $ opens none.
+#   A test whose first piece holds ]] only inside quotes is still open there. The command right
+#   after it is the rest of that test when it ends at the one ]] it holds, so that no redirection
+#   follows the closing brackets inside it. Quotes are read flat, which is how the shell reads
+#   them only where nothing nests: a piece holding a substitution, a ${ } or a parenthesis, or a
+#   quote left open, is read as it was.
+OLD_ARITHMETIC = re.compile(r"(?<![$\\])\$\[[^\[\]]*\]")
+NOT_PLAIN = re.compile(r"[\\\x27\"`(){}]")
+QUOTED_PIECE = re.compile(r"\\[\s\S]|\x27[^\x27]*\x27|\"(?:[^\"\\]|\\[\s\S])*\"")
+ENDS_THE_TEST = re.compile(r"(?:^|\s)\]\]\s*\Z")
+open_past_quotes = [0]
+
+def outside_quotes(piece):
+    """piece with each quoted or escaped run written as one letter, or None where its quotes
+    cannot be read flat."""
+    if re.search(r"[`(]|\$[{\x27]", piece):
+        return None
+    bare = QUOTED_PIECE.sub("Q", piece)
+    return None if re.search(r"[\\\x27\"]", bare) else bare
+
+def shell_redirections(text, base, bash_reads=False, depth=0):
     """What the output redirections of one command of a shell script file write, each placed where
-    its words say it. One whose words cannot say is left, as the name of a link that is a value is."""
+    its words say it. One whose words cannot say is left, as the name of a link that is a value is.
+    depth is how many wrappers the command is inside: a test one file leaves open is no test of
+    the file that ran it."""
+    still_open, open_past_quotes[0] = open_past_quotes[0] == depth + 1, 0
     try:
         whole = _sw.spaced(text)
         rest = _sw.command_rest(whole)[0]
         opens = rest.lstrip().startswith("[[")
         if opens or inside_test[0]:
+            opened_here = not inside_test[0]
             inside_test[0] = "]]" not in whole
+            if bash_reads and opened_here and not inside_test[0] and re.match(r"\[\[\s", rest.lstrip()):
+                bare = outside_quotes(whole)
+                open_past_quotes[0] = depth + 1 if bare is not None and "]]" not in bare else 0
+            return
+        if bash_reads and still_open:
+            bare = outside_quotes(whole)
+            if bare is not None and bare.count("]]") == 1 and ENDS_THE_TEST.search(bare):
+                return
+        if (bash_reads and "$[" in text and not NOT_PLAIN.search(text)
+                and not re.search(r"[<>]", OLD_ARITHMETIC.sub("", text))):
             return
         # A redirection written before the command name is no part of the rest.
         before = whole[:len(whole) - len(rest)] if rest and whole.endswith(rest) else ("" if rest else whole)
@@ -1657,6 +1704,10 @@ try:
         left[(d, text, depth)] = left.get((d, text, depth), 0) + 1
     files_read, unread, own_scripts = 0, [], []
     readings = set()
+    # The shell named to run the script file whose commands stand one wrapper deeper, "" for any
+    # other wrapper: the commands of a file follow its record, so the last record at the depth
+    # above is the one that runs them.
+    runner = {}
     for d, text, wrapper, why, depth in every:
         b = move(d, cwd) if d else cwd
         is_own = left.get((d, text, depth), 0) > 0
@@ -1665,8 +1716,13 @@ try:
         else:
             # A command of a script file: a link it makes, and what its output redirections write.
             shell_links(text, b)
-            shell_redirections(text, b)
+            shell_redirections(text, b, runner.get(depth) in ("bash", "zsh"), depth)
             script_links(text, b, bool(TICK_LANGUAGE.search(text)))
+        if wrapper or is_own:
+            # A test left open by one file covers no command of another.
+            open_past_quotes[0] = 0
+        if wrapper:
+            runner[depth + 1] = wrapper.rsplit("/", 1)[-1] if _sw.script_file(why) else ""
         path = _sw.script_file(why) if wrapper else None
         head = ""
         if path is None:

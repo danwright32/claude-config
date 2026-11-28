@@ -941,6 +941,69 @@ allowed "#3775 control: a line writing a relative file after the script moves to
 runbash "bash $FIX/scripts/l2.sh" "$FIX/elsewhere"
 allowed "#3775 control: the line that writes a relative file, run outside any checkout"
 
+# Two forms of bash and zsh in which a > writes nothing: the old square bracket arithmetic, and a
+# test whose first half holds its closing brackets only inside quotes. Both are read so only in a
+# script file bash or zsh is named to run. A shell with neither form runs the same line as a
+# command with a redirection, so there it stays refused, and so does every line where a real
+# redirection stands beside the form.
+# shellcheck disable=SC2016  # the made up lines reach the script as written
+mkscript l7.sh 'echo $[ 1 > 0 ]'
+runbash "bash $FIX/scripts/l7.sh" "$HOOKS_DIR"
+allowed "#3775 a > inside the old square bracket arithmetic, in a script bash is named to run, is no redirection"
+runbash "dash $FIX/scripts/l7.sh" "$HOOKS_DIR"
+refused "#3775 the same line in a script a shell with no such arithmetic is named to run"
+# shellcheck disable=SC2016
+mkscript l7b.sh 'echo $[ 1 > 0 ] > out.txt'
+runbash "bash $FIX/scripts/l7b.sh" "$HOOKS_DIR"
+refused "#3775 an old arithmetic and then a redirection that writes a file there"
+# shellcheck disable=SC2016
+mkscript l7c.sh 'echo hi > out$[ 1 > 0 ]'
+runbash "bash $FIX/scripts/l7c.sh" "$HOOKS_DIR"
+refused "#3775 a redirection whose target holds an old arithmetic"
+# shellcheck disable=SC2016
+mkscript l7d.sh 'echo $$[ 1 > 0 ]'
+runbash "bash $FIX/scripts/l7d.sh" "$HOOKS_DIR"
+refused "#3775 a bracket after the process number opens no arithmetic, so the > is a redirection"
+# shellcheck disable=SC2016
+mkscript l7e.sh 'echo \$[ 1 > 0 ]'
+runbash "bash $FIX/scripts/l7e.sh" "$HOOKS_DIR"
+refused "#3775 nor does one after an escaped dollar sign"
+# shellcheck disable=SC2016
+mkscript l7f.sh "echo '\$[' 1 > out.txt ']'"
+runbash "bash $FIX/scripts/l7f.sh" "$HOOKS_DIR"
+refused "#3775 nor do the two characters inside quotes, where the > after them is a redirection"
+# shellcheck disable=SC2016
+mkscript l8.sh '[[ $a == "]]" || $b > c ]] && echo y'
+runbash "bash $FIX/scripts/l8.sh" "$HOOKS_DIR"
+allowed "#3775 a test whose first half holds its closing brackets only in quotes is still open in its second half"
+runbash "dash $FIX/scripts/l8.sh" "$HOOKS_DIR"
+refused "#3775 the same line in a script a shell with no such test is named to run"
+# shellcheck disable=SC2016
+mkscript l8b.sh '[[ $a == "]]" || $b > c ]] > out.txt'
+runbash "bash $FIX/scripts/l8b.sh" "$HOOKS_DIR"
+refused "#3775 such a test with a redirection after its closing brackets"
+# shellcheck disable=SC2016
+mkscript l8c.sh '[[x "]]" || echo hi > c ]]'
+runbash "bash $FIX/scripts/l8c.sh" "$HOOKS_DIR"
+refused "#3775 a command whose name only starts with two brackets opens no test"
+# shellcheck disable=SC2016
+mkscript l8d.sh '[[ $a == "]]"'
+mkscript l8e.sh 'echo hi > out.txt ]]'
+runbash "bash $FIX/scripts/l8d.sh; bash $FIX/scripts/l8e.sh" "$HOOKS_DIR"
+refused "#3775 a test left open at the end of one script file covers no line of the next"
+mkscript l8f.sh "bash $FIX/scripts/l8d.sh" 'echo hi > out.txt ]]'
+runbash "bash $FIX/scripts/l8f.sh" "$HOOKS_DIR"
+refused "#3775 nor a line of the script file that ran it"
+# Quotes that nest are not read flat: read so, every ]] of the first line stands inside quotes,
+# and the test it closes would be taken to cover the line after it.
+cat > "$FIX/scripts/l8g.sh" <<'L8G'
+#!/bin/bash
+[[ "$(echo '"')" == x ]] > "$(echo '"').txt"
+echo hi > out2.txt ]]
+L8G
+runbash "bash $FIX/scripts/l8g.sh" "$HOOKS_DIR"
+refused "#3775 a closed test whose quotes nest leaves the line after it read"
+
 # LET THROUGH UNTIL DECIDED (claude-config#3775). 3808's head refused each of these inside a
 # payload folder, only for the redirection word of the link command beside it; main lets each
 # through, and so does this gate with no link command in the script. What a program writes by its
@@ -966,6 +1029,48 @@ allowed "#3775 let through until decided: a link whose name is a value, with a r
 mkscript u6.sh "ln -s $FIX/elsewhere/a.txt \"\$N\""
 runbash "bash $FIX/scripts/u6.sh" "$HOOKS_DIR"
 allowed "#3775 control: the same link with no redirection is let through, as it was"
+
+# LET THROUGH UNTIL DECIDED, SEVEN MORE KINDS (claude-config#3775). Each of these makes a link or
+# writes a file in the payload folder it is run in. 3808's head refused each only for the
+# redirection word of the link command it holds; main lets each through, and so does this gate.
+# Each case asserts the answer given today and no intended one: refusing any of them before the
+# call is Dan's choice (the pull request that added these lines).
+# 1. One name in a string, with a second command written against the redirection: the target is
+#    read to the next blank, so what follows is counted as a second name.
+printf 'import os\nos.system("ln -s %s/elsewhere/a.txt 2>/dev/null;true %s/elsewhere/b")\n' "$FIX" "$FIX" > "$FIX/scripts/v1.py"
+runbash "python3 $FIX/scripts/v1.py" "$HOOKS_DIR"
+allowed "#3775 let through until decided: one name in a python string, a second command written against its redirection"
+# 2. One name beside a value that holds the options: the value is counted as a name.
+# shellcheck disable=SC2016  # the name reaches the made up script with its value unfilled
+mkscript v2.sh 'ln $LN_FLAGS '"$FIX"'/elsewhere/a.txt 2>/dev/null'
+runbash "bash $FIX/scripts/v2.sh" "$HOOKS_DIR"
+allowed "#3775 let through until decided: one name beside a value that holds the options, with a redirection"
+# 3. A name that starts with a dash after --: every word starting with a dash is dropped as an option.
+mkscript v3.sh "ln -s -- -a 2>/dev/null"
+runbash "bash $FIX/scripts/v3.sh" "$HOOKS_DIR"
+allowed "#3775 let through until decided: a link named by a word starting with a dash after --, with a redirection"
+# 4. An output redirection whose target holds a value and still lands in the folder: the link
+#    command's own, and another line's.
+# shellcheck disable=SC2016
+mkscript v4.sh "ln -s $FIX/elsewhere/a.txt $FIX/elsewhere/b 2>/dev/null >out."'$$'
+runbash "bash $FIX/scripts/v4.sh" "$HOOKS_DIR"
+allowed "#3775 let through until decided: a link command whose second redirection names a relative file ending in a value"
+# shellcheck disable=SC2016
+mkscript v4b.sh "ln -s $FIX/elsewhere/a.txt $FIX/elsewhere/b 2>/dev/null" 'echo hi > out.$$'
+runbash "bash $FIX/scripts/v4b.sh" "$HOOKS_DIR"
+allowed "#3775 let through until decided: a link command with a redirection, then a line writing a relative file ending in a value"
+# 5. >| on another line: the shared reader cuts the line at the | of the operator.
+mkscript v5.sh "ln -s $FIX/elsewhere/a.txt $FIX/elsewhere/b 2>/dev/null" "echo hi >| out.txt"
+runbash "bash $FIX/scripts/v5.sh" "$HOOKS_DIR"
+allowed "#3775 let through until decided: a link command with a redirection, then a line writing a file there with >|"
+# 6. An output redirection of a test: a line that opens with a test is not read for redirections.
+mkscript v6.sh "ln -s $FIX/elsewhere/a.txt $FIX/elsewhere/b 2>/dev/null" "[[ -d x ]] > out.txt"
+runbash "bash $FIX/scripts/v6.sh" "$HOOKS_DIR"
+allowed "#3775 let through until decided: a link command with a redirection, then a test whose output is sent to a file there"
+# 7. A write after a move this gate follows and the shell does not make.
+mkscript v7.sh "ln -s $FIX/elsewhere/a.txt $FIX/elsewhere/b 2>/dev/null" "cd $FIX/elsewhere/no-such-folder 2>/dev/null || true" "echo hi > out.txt"
+runbash "bash $FIX/scripts/v7.sh" "$HOOKS_DIR"
+allowed "#3775 let through until decided: a link command with a redirection, a move to a folder that is not there, then a line writing a file"
 
 # Three readings no case above holds: a quoted name is one word, &> in a large script is read to
 # its end, and an input copied from a descriptor or closed is a read.
