@@ -2444,6 +2444,7 @@ const OWN_NONE = `\${${OWN_MARK}none}`
 // out; the reading that follows lets such a piece stand only where it is printed (pieceReaches).
 export const OWN_PIECE = `/${OWN_MARK}piece/`
 export const OWN_PIECE_END = `/${OWN_MARK}end`
+const OWN_PIECES = new RegExp(`${OWN_PIECE}[\\s\\S]*?${OWN_PIECE_END}`, 'g')
 const OWN_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 const OWN_DEPTH = 3
 // A body longer than this, or with more closing braces before its own than this, is not looked for.
@@ -3107,22 +3108,20 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
   // Whether a piece of a word, or a count of it, stands anywhere in a written body but in a command
   // that can only print it. What the piece spells is not worked out, so it may be the flag that
   // makes a program write, one part of a file's name, or a program's name. It reaches something
-  // where its command runs its words, is run through another program, is named by the piece, sets a
-  // variable, is a function of the script, feeds a pipe, or holds a word with the shape of a file
-  // the guard holds, the piece's own word among them.
-  const pieceReaches = async (cmds: readonly RunCommand[]): Promise<boolean> => {
-    if (cmds.some(c => holdsPiece(c.pipedFrom) || holdsPiece(c.env))) return true
-    for (const c of cmds) {
-      if (!holdsPiece(c.words)) continue
+  // where its command is named by the piece, sets a variable, feeds a pipe, or holds a word with
+  // the shape of a file the guard holds (the piece's own word among them) or a word the shell has
+  // still to expand, which may name such a file. A piece handed to a program that runs its words,
+  // to one the reader does not know, or to another function of the script, and a piece written
+  // to, are in what the write reader gives for the body, which the caller checks first.
+  const pieceReaches = (cmds: readonly RunCommand[]): boolean =>
+    cmds.some(c => holdsPiece(c.pipedFrom)) ||
+    cmds.some(c => {
+      if (!holdsPiece(c.words)) return false
       const first = c.words[0] ?? ''
-      if (c.unread || !plainCall(c) || RUNS_LATER.test(first) || first === 'command' || first.includes(OWN_PIECE)) return true
+      if (first.includes(OWN_PIECE)) return true
       if (OWN_SETS.has(first) && (first !== 'printf' || c.words.some(w => /^-v/.test(w)))) return true
-      if (c.words.some(w => heldShape(w.split(OWN_PIECE).join('').split(OWN_PIECE_END).join('')))) return true
-      const typed = ownDefinitions(commands, first)
-      if (typed.braces.length || typed.other || (await own(first)) !== undefined) return true
-    }
-    return false
-  }
+      return c.words.some(w => heldShape(w.split(OWN_PIECE).join('').split(OWN_PIECE_END).join('')) || /[$`]/.test(w.replace(OWN_PIECES, '')))
+    })
   // The marks of the call's files that the body, read with `values` in place, hands to something
   // the reader judges; every mark where that cannot be told.
   const kept = async (fn: Own, values: readonly string[], marks: readonly string[], call: number, depth: number): Promise<Set<string>> => {
@@ -3131,7 +3130,7 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
     if (written === undefined) return all
     const cmds = await io.pipeline(written)
     const read = await io.writes(written)
-    if (written.includes(OWN_PIECE) && (JSON.stringify(read).includes(OWN_PIECE) || (await pieceReaches(cmds)))) return all
+    if (written.includes(OWN_PIECE) && (JSON.stringify(read).includes(OWN_PIECE) || pieceReaches(cmds))) return all
     const out = new Set<string>()
     for (const c of cmds) {
       const said = c.words.join(' ')

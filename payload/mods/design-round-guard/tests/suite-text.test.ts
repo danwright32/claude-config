@@ -54,8 +54,8 @@ test('#3602: a helper that hands on what it was handed, in whatever form it name
 })
 
 test('#3602: a helper whose body spells a name, a flag or a count through an operator, where the reader cannot see what it spells, is still held', withKit, async ($, on) => {
-  // Each call hands the helper a screen file it does not touch, which is why it was held before
-  // such a body was read at all, and each body really writes another screen file.
+  // Each call hands the helper a screen file the body does not touch, and each body really writes
+  // another screen file, or may.
   const scripts: Record<string, string> = {
     // An alternative's or a default's own text, as the whole name, one part of it, or a flag.
     'tools/test-alt-text.sh': 'save(){ printf y > ${1:+app/page.tsx}; }\nsave app/site.tsx',
@@ -70,16 +70,25 @@ test('#3602: a helper whose body spells a name, a flag or a count through an ope
     'tools/test-piece-flag.sh': 'fmt(){ sed "${2:0:2}" s/a/b/ app/page.tsx; }\nfmt app/site.tsx -i',
     'tools/test-piece-flag-word.sh': 'fmt(){ sed "${2:0:2}" s/a/b/ "$1"; }\nfmt app/page.tsx -i',
     'tools/test-piece-flag-piece.sh': 'fmt(){ sed "${2:0:2}" s/a/b/ "${1:0:100}"; }\nfmt app/page.tsx -i',
+    // Beside a name the reader cannot follow, and as a name it cannot follow itself.
+    'tools/test-piece-flag-unknown.sh': 'fmt(){ sed "${2:0:2}" s/a/b/ "$f"; }\nfmt app/site.tsx -i',
+    'tools/test-piece-write-unknown.sh': 'save(){ printf y > "${2%.bak}"; }\nsave app/site.tsx "$name"',
+    'tools/test-piece-touch-unknown.sh': 'save(){ touch "${2%.bak}"; }\nsave app/site.tsx "$name"',
     // A piece that spells a screen file the whole word does not, written beside a word the call
-    // hands and the body leaves alone (lessons review of this change).
+    // hands and the body leaves alone.
     'tools/test-trim-other.sh': 'save(){ printf y > "${2%.bak}"; }\nsave app/site.tsx app/page.tsx.bak',
     'tools/test-offset-other.sh': 'save(){ printf y > "${2:0:12}"; }\nsave app/site.tsx app/page.tsxZZ',
     // A piece run as the command, run later, handed to another helper, piped on, or kept.
     'tools/test-piece-runs.sh': 'go(){ "${2:0:8}" --write "$3"; }\ngo app/site.tsx prettier "$f"',
     'tools/test-piece-later.sh': 'go(){ xargs "${2:0:8}" --write; }\ngo app/site.tsx prettier',
+    'tools/test-piece-shell.sh': 'go(){ bash -c "${2:0:40}"; }\ngo app/site.tsx "$cmd"',
+    'tools/test-piece-remote.sh': 'go(){ ssh "$3" "${2:0:40}"; }\ngo app/site.tsx "$cmd" "$host"',
+    'tools/test-piece-command.sh': 'go(){ command "${2:0:8}" --write "$3"; }\ngo app/site.tsx prettier "$f"',
+    'tools/test-piece-behind.sh': 'go(){ timeout 5 "${2:0:8}" --write "$3"; }\ngo app/site.tsx prettier "$f"',
     'tools/test-piece-inner.sh': 'fmt(){ sed "$1" s/a/b/ "$f"; }\nshow(){ fmt "${2:0:2}"; }\nshow app/site.tsx -i',
     'tools/test-piece-piped.sh': 'go(){ echo "${2:0:12}" | xargs touch; }\ngo app/site.tsx app/page.tsxZZ',
     'tools/test-piece-kept.sh': 'save(){ printf -v f %s "${2:0:12}"; printf y > "$f"; }\nsave app/site.tsx app/page.tsxZZ',
+    'tools/test-piece-read.sh': 'save(){ read -r f <<< "${2:0:12}"; printf y > "$f"; }\nsave app/site.tsx app/page.tsxZZ',
   }
   const w = world($, on, { files: files(scripts) })
   for (const path of Object.keys(scripts)) expect({ path, held: (await run($, path)).includes(SKIP_QUESTION) }).toEqual({ path, held: true })
@@ -89,7 +98,7 @@ test('#3602: a helper whose body spells a name, a flag or a count through an ope
 test('#3602: a helper that only prints a piece of a word, its length, or the word with a default, runs unasked', withKit, async ($, on) => {
   const scripts: Record<string, string> = {
     'tools/test-prints-piece.sh': 'show(){ echo "first: ${2:0:3} of ${#2}"; printf \'%s\\n\' "${1:-none}" "${3:-}" "${1:?usage}" "${4:+}"; }\nshow app/page.tsx "$x"',
-    'tools/test-prints-rest.sh': 'show(){ echo "got: ${@:2}"; echo "${3##*/}"; }\nshow app/page.tsx one "$two"',
+    'tools/test-prints-rest.sh': 'show(){ echo "got: ${@:2}"; printf \'%s\\n\' "${3##*/}"; }\nshow app/page.tsx one "$two"',
   }
   const w = world($, on, { files: files(scripts) })
   for (const path of Object.keys(scripts)) expect({ path, said: await run($, path) }).toEqual({ path, said: '' })

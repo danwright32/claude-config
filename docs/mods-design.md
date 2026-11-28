@@ -3041,20 +3041,22 @@ count (`${#1}`) are written as the whole word, or `0`, between two marks (`OWN_P
 `-i`), one part of a name (`"app/${2:0:4}.tsx"`), or a screen file the whole word does not name
 (`${2%.bak}` of `app/page.tsx.bak`). So the call goes unjudged only where every piece stands in a
 command that can do no more than print it (`pieceReaches`): the body is not read for the call
-where a piece shows up in what mod-kit's write reader gives for the body, or stands in a command
-that runs its words, is run through another program, is named by the piece, sets a variable, is a
-function of the script, feeds a pipe, or holds a word with the shape of a file the guard holds.
+where a piece shows up in what mod-kit's write reader gives for the body (a piece written to, or
+handed to a program that runs its words, to one the reader does not know, or to another function
+of the script), or stands in a command that is named by the piece, sets a variable (`read`,
+`printf -v`), feeds a pipe, or holds a word with the shape of a file the guard holds or a word the
+shell has still to expand (`sed "${2:0:2}" s/a/b/ "$f"`).
 A default, an alternative and `${1:?usage}` are written only where the shell gives the call's word
 as typed, or nothing (`${1:-none}` where the call typed a first word, `${4:+--flag}` where it typed
 no fourth). Where the shell may give the operand's own text (`${2:-app/page.tsx}` called with one
 word, or with a second the shell has still to expand) the body is not read for that call: that
 text is in no word of the call, and the reader of the script's own lines does not see it either.
 So a helper that prints the first 1,500 characters of what it compared runs, and a helper that
-hands a piece to a program, writes to it, or spells a name or a flag with it is held, as it was
-when such a body was left unread. One case is the same before and after, and not caught: a helper
-handed only a name that is no screen file, which writes a screen file a piece of that name spells
-(`save(){ printf y > "${1%.bak}"; }; save app/page.tsx.bak`). No call is read unless it hands the
-helper a file the guard holds, and the same write typed with no helper is not caught either. A replacement
+hands a piece to a program, writes to it, or spells a name or a flag with it is held. Not caught: a
+helper handed only a name that is no screen file, which writes a screen file a piece of that name
+spells (`save(){ printf y > "${1%.bak}"; }; save app/page.tsx.bak`). A call is read only where it
+hands the helper a file the guard holds, and the same write typed with no helper is not caught
+either. A replacement
 (`${1/a/b}`) and a change of case, which give text the word does not hold, `${!1}`, `${1:=x}`,
 `${0}` and an operand holding an expansion (`${1:-$2}`) are not written out, and a body naming one
 is judged as a program the reader does not know, as is a body that keeps what it was handed in a
