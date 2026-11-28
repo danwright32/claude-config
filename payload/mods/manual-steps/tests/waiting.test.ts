@@ -455,4 +455,25 @@ describe('saysNothingFromRefusal (#3842)', () => {
     expect(saysNothingFromRefusal(['The push was refused.', 'Nothing from the refusal is yours to do.'])).toBe(true)
     expect(saysNothingFromRefusal([])).toBe(false)
   })
+
+  // #3860: the hold for a turn that could not be read whole asks for a line that is true when no
+  // call was refused at all.
+  test('the sentence the unread turn\'s hold asks for, and its plain variants, count', () => {
+    for (const said of [
+      'No refused call left you anything to do.',
+      'I read back through the turn. No refused call left you anything to do.',
+      'no refused calls left you anything to do',
+      'No refused call in this turn left you anything to do.',
+    ])
+      expect(saysNothingFromRefusal([said])).toBe(true)
+  })
+
+  test('that sentence quoted, or a call said to have left him something, does not', () => {
+    for (const said of [
+      'The hold asks me to say "No refused call left you anything to do." when that is true.',
+      'One refused call left you something to do.',
+      'No call was refused.',
+    ])
+      expect(saysNothingFromRefusal([said])).toBe(false)
+  })
 })

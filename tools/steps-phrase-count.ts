@@ -163,19 +163,33 @@ export type Denied = { file: string; isRead: boolean }
 /**
  * Take in the lines of one session record that hold the sentence, beside what the mod's reader
  * printed for the same record. A result is read as a refused call when the reader kept its line
- * whole and turnIn counts that line, which are the mod's own two steps and no test of this tool's.
+ * whole and turnIn counts that line, which are the mod's own two steps and no test of this tool's,
+ * or when the reader printed the record cut down under the same record id and turnIn counts that.
  * A result met again under its record id, in the copy of a session kept under a second folder, is
  * taken once.
  */
 export const takeDenied = (found: Map<string, Denied>, file: string, lines: string, readerOut: string): void => {
   const kept = new Set(readerOut.split('\n'))
+  // A record too long to keep whole is printed cut down, under the record's own id (#3860).
+  const cutDown = new Set([...kept].flatMap(line => (line.includes(CUT_DOWN) && turnIn(line).refusedMet === 1 ? [uuidOf(line)] : [])))
   lines.split('\n').forEach((line, n) => {
     if (!line.trim()) return
     const d = deniedResult(line)
     if (!d) return
     const key = d.id ?? `${file} line ${n}`
-    if (!found.has(key)) found.set(key, { file, isRead: kept.has(line) && turnIn(line).refusedMet === 1 })
+    if (!found.has(key)) found.set(key, { file, isRead: (kept.has(line) && turnIn(line).refusedMet === 1) || (d.id !== null && cutDown.has(d.id)) })
   })
+}
+
+/** How the mod's reader marks a refused call's record it cut down to its top level fields. */
+const CUT_DOWN = '"isCutDown":true'
+const uuidOf = (line: string): string | null => {
+  try {
+    const id = (JSON.parse(line) as { uuid?: unknown }).uuid
+    return typeof id === 'string' ? id : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -186,7 +200,8 @@ export const takeDenied = (found: Map<string, Denied>, file: string, lines: stri
  */
 export const takeRead = (read: Map<string, boolean>, file: string, readerOut: string): void => {
   readerOut.split('\n').forEach((line, n) => {
-    if (!line.includes('toolDenialKind') || turnIn(line).refusedMet !== 1) return
+    // A record the reader cut down no longer holds its result, so it cannot be checked here.
+    if (!line.includes('toolDenialKind') || line.includes(CUT_DOWN) || turnIn(line).refusedMet !== 1) return
     let id: unknown
     try {
       id = (JSON.parse(line) as { uuid?: unknown }).uuid

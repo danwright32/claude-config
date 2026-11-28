@@ -1456,10 +1456,12 @@ test('a transcript that cannot be read is said in the log, and the last message 
   expect((await turnStop($, PROSE_STEP, true)).block).toBeUndefined()
 })
 
-test('output the engine cut short is said in the log rather than read as the whole turn (#1608)', withKit, async ($, on) => {
+// #3860: a read that did not finish is no longer passed in silence, since a refused call in the
+// part never read would pass with it. The turn end is told once that the turn went unread.
+test('output the engine cut short is said in the log and to the turn end, rather than read as the whole turn (#1608, #3860)', withKit, async ($, on) => {
   const w = world(on, { turn: 'truncated' })
   await start($)
-  expect((await turnStop($, 'The tests pass.')).block).toBeUndefined()
+  expect((await turnStop($, 'The tests pass.')).block).toMatch(/^Manual steps could not read this whole turn, /)
   expect(w.logs.some(l => /more than could be read whole/.test(l))).toBe(true)
 })
 
@@ -2397,6 +2399,120 @@ test('where nobody is at the prompt, or the turn could not be read, a refused ca
   await start($)
   w.turn = { fails: '/t: No such file or directory' }
   expect((await turnStop($, ROW_REPLY)).block).toBeUndefined()
+})
+
+// ---- #3860: what the refused call check could not see ----
+
+const heldOnce = JSON.stringify({ type: 'user', promptId: 'p1', isOurs: true })
+const NOTHING_LINE = 'Nothing from the refusal is yours to do.'
+const UNREAD_LINE = 'No refused call left you anything to do.'
+const UNREAD_HOLD =
+  'Manual steps could not read this whole turn, so a call the permission check refused in it may have gone unseen. If one was refused and left Dan something to do, put that on the steps card (mcp__manual-steps__steps). If not, say exactly: "No refused call left you anything to do."'
+const readerStopped = JSON.stringify({ type: 'reader', isCutShort: true, at: 'bytes' })
+
+test('a call refused after this mod already held the turn is asked about once more, and never a third time (#3860)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY), heldOnce, wrote(NOTHING_LINE), refusedCall(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  expect((await turnStop($, ROW_REPLY, true)).block).toMatch(/^The permission check refused a call of yours in this turn\. /)
+  // The line said after the later refusal answers it.
+  w.turn = [prompt(), refusedCall(), wrote(ROW_REPLY), heldOnce, wrote(NOTHING_LINE), refusedCall(), wrote(NOTHING_LINE)].join('\n')
+  expect((await turnStop($, NOTHING_LINE, true)).block).toBeUndefined()
+  // Only a refusal is asked about again: a step left in prose after the first hold is not.
+  w.turn = [prompt(), wrote('a'), heldOnce, wrote(PROSE_STEP)].join('\n')
+  expect((await turnStop($, PROSE_STEP, true)).block).toBeUndefined()
+  // Held for the later refusal too, the turn holds nothing new, so it cannot loop.
+  w.turn = [prompt(), refusedCall(), heldOnce, wrote(NOTHING_LINE), refusedCall(), wrote(ROW_REPLY), heldOnce, wrote('Carrying on.')].join('\n')
+  expect((await turnStop($, 'Carrying on.', true)).block).toBeUndefined()
+})
+
+test('a steps tool call that failed does not answer the refusal before it, and one that worked does (#3860)', withKit, async ($, on) => {
+  const call = JSON.stringify({ type: 'assistant', isSidechain: false, isPinning: true, callIds: ['t9'] })
+  const result = (isError: boolean) => JSON.stringify({ type: 'user', promptId: 'p1', isOurs: false, resultOf: 't9', isError })
+  const { w } = world(on, { turn: [prompt(), refusedCall(), call, result(true), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  expect((await turnStop($, ROW_REPLY)).block).toMatch(/^The permission check refused a call of yours in this turn\. /)
+  w.turn = [prompt(), refusedCall(), call, result(false), wrote(ROW_REPLY)].join('\n')
+  expect((await turnStop($, ROW_REPLY)).block).toBeUndefined()
+})
+
+test('a turn the reader could not read to its start is held once and says so in plain words, unless what it read settles it (#3860)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [readerStopped, prompt(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  expect((await turnStop($, ROW_REPLY)).block).toBe(UNREAD_HOLD)
+  // Held for it already, the turn is not held again.
+  w.turn = [readerStopped, prompt(), wrote(ROW_REPLY), JSON.stringify({ type: 'user', promptId: 'p1', isOurs: true }), wrote(NOTHING_LINE)].join('\n')
+  expect((await turnStop($, NOTHING_LINE, true)).block).toBeUndefined()
+  // The one line, a step pinned in the part that was read, or saying none of the steps are his now settles it.
+  w.turn = [readerStopped, prompt(), wrote(NOTHING_LINE)].join('\n')
+  expect((await turnStop($, NOTHING_LINE)).block).toBeUndefined()
+  w.turn = [readerStopped, prompt(), pinnedAfter, prompt(), wrote(ROW_REPLY)].join('\n')
+  expect((await turnStop($, ROW_REPLY)).block).toBeUndefined()
+  w.turn = [readerStopped, prompt(), wrote('None of these steps are yours to do now.')].join('\n')
+  expect((await turnStop($, 'None of these steps are yours to do now.')).block).toBeUndefined()
+  // A refusal in the part that was read is asked about as itself, with nothing added.
+  w.turn = [readerStopped, prompt(), refusedCall(), wrote(ROW_REPLY)].join('\n')
+  const read = (await turnStop($, ROW_REPLY)).block
+  expect(read).toMatch(/^The permission check refused a call of yours in this turn\. /)
+  expect(read).not.toMatch(/could not read/)
+})
+
+test('a read of the turn that did not finish is held once in the same words, beside a step left in prose (#3860)', withKit, async ($, on) => {
+  // The reader stopped with no reason of its own, as one stopped at its time limit is.
+  const { w } = world(on, { turn: { fails: '' } })
+  await start($)
+  expect((await turnStop($, ROW_REPLY)).block).toBe(UNREAD_HOLD)
+  // The same chain's next turn end is not held again.
+  expect((await turnStop($, ROW_REPLY, true)).block).toBeUndefined()
+  // Its answer cut short by the engine is unread too.
+  w.turn = 'truncated'
+  expect((await turnStop($, ROW_REPLY)).block).toBe(UNREAD_HOLD)
+  // The last message still answers it, and is still checked for a step left in prose.
+  expect((await turnStop($, NOTHING_LINE)).block).toBeUndefined()
+  const both = (await turnStop($, PROSE_STEP)).block
+  expect(both).toMatch(/leaves Dan a step in prose/)
+  expect(both).toContain(UNREAD_HOLD)
+})
+
+test('the line the unread turn\'s hold asks for answers it, and answers the hold for a refused call too (#3860)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [readerStopped, prompt(), wrote(UNREAD_LINE)].join('\n') })
+  await start($)
+  expect((await turnStop($, UNREAD_LINE)).block).toBeUndefined()
+  w.turn = { fails: '' }
+  expect((await turnStop($, UNREAD_LINE)).block).toBeUndefined()
+  w.turn = [prompt(), refusedCall(), wrote(UNREAD_LINE)].join('\n')
+  expect((await turnStop($, UNREAD_LINE)).block).toBeUndefined()
+})
+
+test('a turn the reader stopped part way back through is said in the log with the limit it stopped at, once a turn end (#3860)', withKit, async ($, on) => {
+  const { w, logs } = world(on, { turn: [JSON.stringify({ type: 'reader', isCutShort: true, at: 'output' }), prompt(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  await turnStop($, ROW_REPLY)
+  const said = logs.filter(l => /read this turn only part of the way back/.test(l))
+  expect(said).toHaveLength(1)
+  expect(said[0]).toContain('its limit on output')
+  // A turn read to its first record says nothing.
+  w.turn = [prompt(), wrote(ROW_REPLY)].join('\n')
+  await turnStop($, ROW_REPLY)
+  expect(logs.filter(l => /read this turn only part of the way back/.test(l))).toHaveLength(1)
+})
+
+test('a turn the reader stopped part way back through is still asked about a step left in prose in what it read (#3860)', withKit, async ($, on) => {
+  world(on, { turn: [JSON.stringify({ type: 'reader', isCutShort: true, at: 'output' }), prompt(), wrote(PROSE_STEP), prompt(), wrote('Done with the rest.')].join('\n') })
+  await start($)
+  const both = (await turnStop($, 'Done with the rest.')).block
+  expect(both).toMatch(/leaves Dan a step in prose/)
+  expect(both).toContain(UNREAD_HOLD)
+})
+
+test('the hold for refused calls counts only those the line was not said after (#3860)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [prompt(), refusedCall(), wrote(NOTHING_LINE), refusedCall(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  const one = (await turnStop($, ROW_REPLY)).block
+  expect(one).toMatch(/^The permission check refused a call of yours in this turn\. /)
+  expect(one).not.toMatch(/calls\)/)
+  // Neither answered, both are counted.
+  w.turn = [prompt(), refusedCall(), wrote('a'), refusedCall(), wrote(ROW_REPLY)].join('\n')
+  expect((await turnStop($, ROW_REPLY)).block).toMatch(/^The permission check refused a call of yours in this turn \(2 calls\)\. /)
 })
 
 // Review of pull request 3854: the card could not be read, so the step left in prose is not asked

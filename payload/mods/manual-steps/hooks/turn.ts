@@ -10,12 +10,18 @@
 
 import { PAGE_MARK } from './page.ts'
 
-/** The words this mod's prose block begins with, so a turn that already holds it is never blocked twice. */
+/** The words this mod's prose block begins with, so a turn that already holds it is not asked about prose twice. */
 export const PROSE_MARK = 'Your reply leaves Dan a step in prose'
 /** The words this mod's block for a call the permission check refused begins with (#3842). */
 export const REFUSED_MARK = 'The permission check refused a call of yours in this turn'
-/** Every block this mod gives: the prose one, the page one (#1811) and the refused call one (#3842). A turn holding any is never blocked by this mod again. */
-const MARKS = [PROSE_MARK, PAGE_MARK, REFUSED_MARK]
+/** The words this mod's block for a turn it could not read to its start begins with (#3860). */
+export const UNREAD_MARK = 'Manual steps could not read this whole turn'
+/**
+ * Every block this mod gives: the prose one, the page one (#1811), the refused call one (#3842) and
+ * the unread turn one (#3860). A turn holding any is blocked by this mod again only for a call
+ * refused after it.
+ */
+const MARKS = [PROSE_MARK, PAGE_MARK, REFUSED_MARK, UNREAD_MARK]
 
 // #3842: a call the permission check refused, read from Claude Code's own record of its result and
 // never from words. The record of a refused call carries `toolDenialKind`, measured on 2026-11-27
@@ -39,8 +45,9 @@ export const REFUSED_KIND = 'automode-blocked'
 export const STEPS_TOOL = 'mcp__manual-steps__steps'
 /**
  * The longest record of a refused call kept whole. The 32 measured on 2026-11-27 (22 of the main
- * conversation, 10 of subagents) were 3.3 to 4.4 KB; a longer
- * line naming the kind is some other record that holds those words, and is cut down like any other.
+ * conversation, 10 of subagents) were 3.3 to 4.4 KB. A longer line naming the kind is cut down to
+ * its top level fields, so a refusal in it is still read (#3860) and some other record that only
+ * holds those words nested inside it is not taken for one.
  */
 export const REFUSED_BYTES = 65_536
 
@@ -57,6 +64,27 @@ export const TURN_BYTES = 4_000_000
  */
 export const TURN_TIMEOUT_MS = 2_000
 
+/**
+ * How many bytes before the window the reader walks back through, looking for the turn's first
+ * record, when the window does not hold it (#3860). Past it the reader says it stopped.
+ */
+export const FAR_BYTES = 400_000_000
+
+/**
+ * The reader's own limit on how long it walks back, under the limit its caller stops it at, so it
+ * answers with what it read and says it stopped, where a reader stopped by its caller answers nothing.
+ */
+export const FAR_MS = 1_200
+
+/**
+ * The most the reader prints. The engine keeps the first 4,194,304 bytes a process prints and says
+ * the rest was cut, and an answer cut there has lost the turn's last records, so the whole turn is
+ * then unreadable. The window's records are printed whatever they come to, being what the turn is
+ * read for; the walk back prints only what still fits under this, and says it stopped at the first
+ * record that does not.
+ */
+export const OUT_BYTES = 3_000_000
+
 // What perl runs: the window, read by seeking to its start, cut to Claude's text records whole and each
 // user record cut to its promptId and whether it is this mod's own block, so the answer stays small
 // however large the tool results in the window are. Only an unescaped key matches, so the same words
@@ -67,25 +95,117 @@ export const TURN_TIMEOUT_MS = 2_000
 // #3842: the record of a call the permission check refused is printed whole, being small, so its kind
 // is read from the record itself; and a call of the steps tool with no text beside it is printed as a
 // mark of its own, so a step pinned after a refusal is seen in its place in the turn.
+// #3860: three more things are read. A refused call's record too long to print whole is cut down to
+// its top level fields by `top`, which steps over strings and nested values, so the kind is still
+// read from the record itself. Each tool result is printed with the id of its call and whether it
+// is an error, and each steps tool call with every id its record holds (its own among them), so a
+// call that failed is told from one that pinned a step. And when the window does not hold a record
+// of another prompt, the turn began before it: the reader then walks back from the window's start,
+// a chunk at a time, printing the same records without Claude's texts, until it meets a record of
+// another prompt or the transcript's first byte, or has gone `$far` bytes or `$ms` milliseconds,
+// or holds as much as it may print with the window's records (`$out` bytes in all), where it
+// prints a line saying it stopped and at which of the three. A line the window's first byte lands
+// inside is read by that walk, whole; one that byte begins is the window's own. So the read starts
+// one byte before the window: a line that ends there is the walk's, cut off at its newline. The
+// walk's records are met newest first and printed oldest first.
 const TURN_READ = [
-  'my ($n, $f, $tool, @marks) = @ARGV;',
+  'use Time::HiRes ();',
+  'my ($n, $far, $ms, $out, $f, $tool, @marks) = @ARGV;',
+  'my $t0 = Time::HiRes::time();',
   'open(my $h, "<", $f) or die "$f: $!\n";',
   'my $size = -s $h;',
-  'seek($h, $size > $n ? $size - $n : 0, 0) or die "$f: $!\n";',
-  'while (my $l = <$h>) {',
+  'my $start = $size > $n ? $size - $n : 0;',
+  'seek($h, $start > 0 ? $start - 1 : 0, 0) or die "reading $f: $!\n";',
+  'my ($turn, $bound, %ids);',
+  'sub top {',
+  '  my ($l) = @_;',
+  '  my ($d, $key, %v) = (0);',
+  '  while ($l =~ /(["{}\\[\\]])/g) {',
+  '    my $c = $1;',
+  '    if ($c ne q{"}) { $d += $c eq "{" || $c eq "[" ? 1 : -1; undef $key; next; }',
+  '    my $s = pos($l);',
+  '    my $e = $s;',
+  '    while (1) {',
+  '      $e = index($l, q{"}, $e);',
+  '      return () if $e < 0;',
+  '      my $b = 0;',
+  '      $b++ while $e - $b > $s && substr($l, $e - $b - 1, 1) eq "\\\\";',
+  '      last unless $b % 2;',
+  '      $e++;',
+  '    }',
+  '    pos($l) = $e + 1;',
+  '    next unless $d == 1;',
+  '    my $str = substr($l, $s, $e - $s);',
+  '    if (defined $key) { $v{$key} = $str; undef $key; }',
+  '    elsif ($l =~ /\\G:([^"{\\[,}\\]]+)?/gc) { if (defined $1) { $v{$str} = $1; } else { $key = $str; } }',
+  '  }',
+  '  return %v;',
+  '}',
+  'sub cut {',
+  '  my ($l, $win) = @_;',
   '  if (index($l, q{"type":"user"}) >= 0) {',
-  `    if (index($l, q{"toolDenialKind":"${REFUSED_KIND}"}) >= 0 && length($l) <= ${REFUSED_BYTES}) { print $l; next; }`,
-  '    my $id = $l =~ /("promptId":"[^"]*")/ ? ",$1" : "";',
+  '    my $id = $l =~ /"promptId":"([^"]*)"/ ? $1 : undef;',
+  '    if (defined $id) {',
+  '      if ($win) { $ids{$id} = 1; $turn = $id; } elsif (!defined $turn) { $turn = $id; } elsif ($id ne $turn) { $bound = 1; }',
+  '    }',
+  '    my $res = $l =~ /"tool_use_id":"([^"]*)"/ ? qq(,"resultOf":"$1","isError":) . (index($l, q{"is_error":true}) >= 0 ? "true" : "false") : "";',
+  `    if (index($l, q{"toolDenialKind":"${REFUSED_KIND}"}) >= 0) {`,
+  `      return $l if length($l) <= ${REFUSED_BYTES};`,
+  '      my %v = top($l);',
+  `      if (($v{type} // "") eq "user" && ($v{toolDenialKind} // "") eq "${REFUSED_KIND}") {`,
+  '        my $side = ($v{isSidechain} // "") eq "true" ? "true" : "false";',
+  '        my $pid = defined $v{promptId} ? qq(,"promptId":"$v{promptId}") : "";',
+  '        my $uuid = defined $v{uuid} ? qq(,"uuid":"$v{uuid}") : "";',
+  `        return qq({"type":"user","isSidechain":$side$pid$uuid,"toolDenialKind":"${REFUSED_KIND}","isOurs":false,"isCutDown":true$res}\n);`,
+  '      }',
+  '    }',
+  '    my $pid = defined $id ? qq(,"promptId":"$id") : "";',
   '    my $ours = index($l, q{"content":"Stop hook feedback:}) >= 0 && grep({ index($l, $_) >= 0 } @marks) ? "true" : "false";',
-  '    print qq({"type":"user"$id,"isOurs":$ours}\n);',
-  '  } elsif (index($l, q{"type":"assistant"}) >= 0 && index($l, q{"type":"text"}) >= 0) {',
-  '    print $l;',
-  '  } elsif (index($l, q{"type":"assistant"}) >= 0 && index($l, q{"type":"tool_use"}) >= 0 && index($l, qq{"name":"$tool"}) >= 0) {',
-  '    my $side = index($l, q{"isSidechain":true}) >= 0 ? "true" : "false";',
-  '    print qq({"type":"assistant","isSidechain":$side,"isPinning":true}\n);',
+  '    return qq({"type":"user"$pid,"isOurs":$ours$res}\n);',
+  '  }',
+  '  return undef if index($l, q{"type":"assistant"}) < 0;',
+  '  return $l if $win && index($l, q{"type":"text"}) >= 0;',
+  '  return undef unless index($l, q{"type":"tool_use"}) >= 0 && index($l, qq{"name":"$tool"}) >= 0;',
+  '  my $side = index($l, q{"isSidechain":true}) >= 0 ? "true" : "false";',
+  '  my $calls = join(",", map { qq("$_") } $l =~ /"id":"([^"]*)"/g);',
+  '  return qq({"type":"assistant","isSidechain":$side,"isPinning":true,"callIds":[$calls]}\n);',
+  '}',
+  'sub stopped { return qq({"type":"reader","isCutShort":true,"at":"$_[0]"}\n); }',
+  'my (@win, @back, $stopped);',
+  'my $head = "";',
+  'if ($start > 0) { my $l = <$h>; $head = substr($l, 1) if defined $l && length($l) > 1; }',
+  'my $room = $out - length(stopped("output"));',
+  'while (my $l = <$h>) { my $o = cut($l, 1); if (defined $o) { push @win, $o; $room -= length($o); } }',
+  'if ($start > 0 && keys(%ids) < 2) {',
+  '  my ($pos, $tail, $went) = ($start, $head, 0);',
+  '  WALK: while ($pos > 0) {',
+  '    if ($went >= $far) { $stopped = "bytes"; last; }',
+  '    if ((Time::HiRes::time() - $t0) * 1000 >= $ms) { $stopped = "time"; last; }',
+  '    my $len = $far - $went < 4194304 ? $far - $went : 4194304;',
+  '    $len = $pos if $pos < $len;',
+  '    $pos -= $len;',
+  '    seek($h, $pos, 0) or die "reading $f: $!\n";',
+  '    my $got = read($h, my $buf, $len);',
+  '    die "reading $f: " . (defined $got ? "read $got of $len bytes" : $!) . "\n" unless defined $got && $got == $len;',
+  '    $went += $len;',
+  '    $buf .= $tail;',
+  '    my @lines = split(/\\n/, $buf, -1);',
+  '    $tail = $pos > 0 ? shift(@lines) : "";',
+  '    for my $l (reverse @lines) {',
+  '      next if $l eq "";',
+  '      my $o = cut("$l\\n", 0);',
+  '      if (defined $o) {',
+  '        if (length($o) > $room) { $stopped = "output"; last WALK; }',
+  '        $room -= length($o);',
+  '        push @back, $o;',
+  '      }',
+  '      last WALK if $bound;',
+  '    }',
   '  }',
   '}',
-  'close($h) or die "$f: $!\n";',
+  'print stopped($stopped) if $stopped;',
+  'print reverse(@back), @win;',
+  'close($h) or die "reading $f: $!\n";',
 ].join('\n')
 
 export type TurnRead = {
@@ -95,28 +215,66 @@ export type TurnRead = {
   isOurs: boolean
   /** The prompt the turn answers, or null when the window held no record of it. */
   promptId: string | null
-  /** The calls of the turn the permission check refused, with no call of the steps tool after them (#3842). */
+  /** The calls of the turn the permission check refused, with no call of the steps tool that worked after them (#3842, #3860). */
   refused: number
+  /**
+   * Those of `refused` that came after this mod's last block in the turn, or all of them when it
+   * gave none: the ones no turn end has asked about yet (#3860). What the check holds for.
+   */
+  refusedUnasked: number
+  /**
+   * For each of `refusedUnasked`, the latest first, what Claude wrote after it, oldest first: the
+   * only words that can answer that refusal (#3860).
+   */
+  saidAfterUnasked: string[][]
   /** Every call of the turn the permission check refused, answered or not. Read by the count (tools/steps-phrase-count.ts), not by the check. */
   refusedMet: number
-  /** The main conversation called the steps tool in the turn. Read by the count, not by the check, which reads the card itself. */
+  /** The main conversation called the steps tool in the turn and the call did not fail. Read by the count and by `refusalAsk`. */
   isPinned: boolean
+  /** The reader stopped before the turn's first record, so what came before was never read (#3860). */
+  isCutShort: boolean
+  /** The limit it stopped at, in the reader's own word (bytes, time or output), or null when it did not stop or did not say. */
+  stoppedAt: string | null
 }
 
-type Rec = { type?: unknown; promptId?: unknown; isOurs?: unknown; isSidechain?: unknown; isPinning?: unknown; toolDenialKind?: unknown; message?: { content?: unknown } }
+type Block = { type?: unknown; name?: unknown; id?: unknown; tool_use_id?: unknown; is_error?: unknown }
+type Rec = {
+  type?: unknown
+  promptId?: unknown
+  isOurs?: unknown
+  isSidechain?: unknown
+  isPinning?: unknown
+  callIds?: unknown
+  resultOf?: unknown
+  isError?: unknown
+  isCutShort?: unknown
+  at?: unknown
+  toolDenialKind?: unknown
+  message?: { content?: unknown }
+}
+
+const blocksOf = (r: Rec): Block[] => {
+  const c = r.message?.content
+  return Array.isArray(c) ? c.filter((b): b is Block => Boolean(b) && typeof b === 'object') : []
+}
 
 /**
- * Whether this record of Claude's holds a call of the steps tool: the reader's own mark, or the call
- * in a record kept whole. It is the call that is seen, never its result, so a call the steps tool
- * refused (a step with no place, say) still answers a refusal before it; rare, and the tool's own
- * refusal already tells Claude what to do. The reader's mark is by the words `"name":"<the tool>"`
- * anywhere in the record, so another tool whose input holds those words would be marked too
- * (review of pull request 3854, cases 19 and 17: neither met in the records measured).
+ * The ids this record of Claude's holds a call of the steps tool under, or null when it holds no
+ * such call: from the reader's own mark, or from the call in a record kept whole. The reader's mark
+ * is by the words `"name":"<the tool>"` anywhere in the record, so another tool whose input holds
+ * those words would be marked too (review of pull request 3854, cases 19 and 17: neither met in the
+ * records measured), and it carries every id the record holds, the call's own among them.
  */
-const pins = (r: Rec): boolean => {
-  if (r.isPinning === true) return true
-  const c = r.message?.content
-  return Array.isArray(c) && c.some(b => b && typeof b === 'object' && (b as { type?: unknown }).type === 'tool_use' && (b as { name?: unknown }).name === STEPS_TOOL)
+const pinIds = (r: Rec): string[] | null => {
+  if (r.isPinning === true) return Array.isArray(r.callIds) ? r.callIds.filter((id): id is string => typeof id === 'string') : []
+  const calls = blocksOf(r).filter(b => b.type === 'tool_use' && b.name === STEPS_TOOL)
+  return calls.length ? calls.flatMap(b => (typeof b.id === 'string' ? [b.id] : [])) : null
+}
+
+/** The ids of the calls this tool result says failed: as the reader prints it, or in a record kept whole. */
+const failedIds = (r: Rec): string[] => {
+  if (typeof r.resultOf === 'string') return r.isError === true ? [r.resultOf] : []
+  return blocksOf(r).flatMap(b => (b.type === 'tool_result' && b.is_error === true && typeof b.tool_use_id === 'string' ? [b.tool_use_id] : []))
 }
 
 const textOf = (r: Rec): string | null => {
@@ -139,7 +297,7 @@ export const turnIn = (out: string): TurnRead => {
       const o: unknown = JSON.parse(line)
       if (o && typeof o === 'object') recs.push(o as Rec)
     } catch {
-      // The window's first line is cut short, and is no record.
+      // A line that does not parse is no record. The reader prints whole lines only.
     }
   }
   let promptId: string | null = null
@@ -157,12 +315,16 @@ export const turnIn = (out: string): TurnRead => {
   let isPinned = false
   let isPinPending = false
   let refused = 0
+  const saidAfterUnasked: string[][] = []
   let refusedMet = 0
+  // Walking back, a call's result is met before the call, so a call that failed is known by then.
+  const failed = new Set<string>()
   for (let i = recs.length - 1; i >= 0; i--) {
     const r = recs[i] as Rec
     if (r.type === 'assistant') {
       if (r.isSidechain === true) continue
-      if (pins(r)) {
+      const ids = pinIds(r)
+      if (ids !== null && !ids.some(id => failed.has(id))) {
         isPinnedLater = true
         isPinPending = true
       }
@@ -170,17 +332,23 @@ export const turnIn = (out: string): TurnRead => {
       if (t !== null) pending.unshift(t)
       continue
     }
-    if (r.type !== 'user' || typeof r.promptId !== 'string') continue
+    if (r.type !== 'user') continue
+    for (const id of failedIds(r)) failed.add(id)
+    if (typeof r.promptId !== 'string') continue
     if (promptId === null) promptId = r.promptId
     if (r.promptId !== promptId) {
       isBounded = true
       break
     }
-    if (r.isOurs === true) isOurs = true
     if (r.toolDenialKind === REFUSED_KIND && r.isSidechain !== true) {
       refusedMet++
-      if (!isPinnedLater) refused++
+      if (!isPinnedLater) {
+        refused++
+        // A block of this mod's met already is a later one, whose turn end asked about this refusal.
+        if (!isOurs) saidAfterUnasked.push([...pending, ...texts])
+      }
     }
+    if (r.isOurs === true) isOurs = true
     texts.unshift(...pending)
     pending = []
     if (isPinPending) isPinned = true
@@ -190,30 +358,90 @@ export const turnIn = (out: string): TurnRead => {
     texts.unshift(...pending)
     if (isPinPending) isPinned = true
   }
-  return { texts, isOurs, promptId, refused, refusedMet, isPinned }
+  const stop = recs.find(r => r.type === 'reader' && r.isCutShort === true)
+  return { texts, isOurs, promptId, refused, refusedUnasked: saidAfterUnasked.length, saidAfterUnasked, refusedMet, isPinned, isCutShort: stop !== undefined, stoppedAt: typeof stop?.at === 'string' ? stop.at : null }
 }
 
 /**
  * The reader's command for the last `bytes` of the transcript at this path. One spelling, so the
  * count of what the turn end check would hold (tools/steps-phrase-count.ts) runs this same reader.
  */
-export const turnReadArgv = (transcript: string, bytes: number = TURN_BYTES): string[] => ['perl', '-e', TURN_READ, '--', String(bytes), transcript, STEPS_TOOL, ...MARKS]
+export const turnReadArgv = (transcript: string, bytes: number = TURN_BYTES, far: number = FAR_BYTES, ms: number = FAR_MS, out: number = OUT_BYTES): string[] => [
+  'perl',
+  '-e',
+  TURN_READ,
+  '--',
+  String(bytes),
+  String(far),
+  String(ms),
+  String(out),
+  transcript,
+  STEPS_TOOL,
+  ...MARKS,
+]
 
 export type TurnRun = (argv: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string; isStdoutTruncated: boolean }>
-/** The turn now ending, or why it could not be read (never read as an empty turn). */
-export type TurnAt = ({ state: 'read' } & TurnRead) | { state: 'unreadable'; why: string }
+/**
+ * The turn now ending, or why it could not be read (never read as an empty turn). `isUnfinished`
+ * tells a read that was started and gave no whole answer (stopped at its time limit, killed, its
+ * answer cut short) from a transcript that is not there to read (#3860).
+ */
+export type TurnAt = ({ state: 'read' } & TurnRead) | { state: 'unreadable'; why: string; isUnfinished: boolean }
 
 /** The turn now ending in the transcript at this path, its records found by the perl `run` starts. */
 export const turnAt = async (transcript: string, run: TurnRun): Promise<TurnAt> => {
-  if (!transcript) return { state: 'unreadable', why: 'no transcript was given' }
+  if (!transcript) return { state: 'unreadable', why: 'no transcript was given', isUnfinished: false }
   let r: Awaited<ReturnType<TurnRun>>
   try {
     r = await run(turnReadArgv(transcript))
   } catch (err) {
-    return { state: 'unreadable', why: err instanceof Error ? err.message : String(err) }
+    return { state: 'unreadable', why: err instanceof Error ? err.message : String(err), isUnfinished: true }
   }
-  if (r.exitCode !== 0) return { state: 'unreadable', why: r.stderr.trim() || `the transcript reader exited ${r.exitCode}` }
+  // The engine rejects the call when perl cannot start or is still running at its time limit,
+  // which is answered above. An exit that is not 0 is perl's own or a signal's: only the reader's
+  // failure to open the transcript begins with the bare path, a failure once it is reading begins
+  // "reading", and every one but that first counts as a read that did not finish.
+  if (r.exitCode !== 0) return { state: 'unreadable', why: r.stderr.trim() || `the transcript reader exited ${r.exitCode}`, isUnfinished: !r.stderr.startsWith(`${transcript}: `) }
   // Cut short, it lost the turn's last records, which are what it is read for.
-  if (r.isStdoutTruncated) return { state: 'unreadable', why: 'the transcript reader printed more than could be read whole' }
+  if (r.isStdoutTruncated) return { state: 'unreadable', why: 'the transcript reader printed more than could be read whole', isUnfinished: true }
   return { state: 'read', ...turnIn(r.stdout) }
 }
+
+/** What the turn's end asks about calls the permission check refused. */
+export type RefusalAsk = { ask: 'none' } | { ask: 'refused'; calls: number } | { ask: 'unread' }
+
+/**
+ * What to ask at this turn end about refused calls (#3842, #3860). `said` is everything Claude
+ * wrote in the turn, its last message included; `isHeld` whether this mod already blocked in the
+ * turn, or in this chain of turn ends when the turn could not be read; `answers` whether some of
+ * these texts say in one line that nothing is Dan's to do.
+ *
+ * A refusal no turn end has asked about is asked about, held already or not, unless Claude said
+ * the line after it: the line said for an earlier refusal does not answer a later one, and only
+ * the refusals it does not answer are counted. With none,
+ * a turn that could not be read to its start is said to be unread, since a refusal in the stretch
+ * never read would otherwise pass as no refusal. That is not said when the turn was already held,
+ * when a step pinned in the part that was read answers whatever came before it, or when the line
+ * was said anywhere in the part that was read.
+ */
+export const refusalAsk = (turn: TurnAt, said: readonly string[], isHeld: boolean, answers: (said: readonly string[]) => boolean): RefusalAsk => {
+  if (turn.state === 'unreadable') return turn.isUnfinished && !isHeld && !answers(said) ? { ask: 'unread' } : { ask: 'none' }
+  if (turn.refusedUnasked > 0) {
+    // The last message may not be in the transcript yet; it comes after every refusal.
+    const last = said.at(-1)
+    const later = last !== undefined && turn.texts.at(-1) !== last ? [last] : []
+    const calls = turn.saidAfterUnasked.filter(after => !answers([...after, ...later])).length
+    return calls > 0 ? { ask: 'refused', calls } : { ask: 'none' }
+  }
+  return turn.isCutShort && !isHeld && !turn.isPinned && !answers(said) ? { ask: 'unread' } : { ask: 'none' }
+}
+
+/**
+ * What a turn end is told when the turn could not be read to its start. It begins with
+ * UNREAD_MARK, so a turn whose record of it the reader reaches is not told this twice and is
+ * blocked again only for a call refused after it. The line it asks for names no refusal as having
+ * happened, since none may have, and Dan reads the reply; that line and the one the block for a
+ * refused call asks for each answer both (hooks/waiting.ts).
+ */
+export const unreadStep = (): string =>
+  `${UNREAD_MARK}, so a call the permission check refused in it may have gone unseen. If one was refused and left Dan something to do, put that on the steps card (${STEPS_TOOL}). If not, say exactly: "No refused call left you anything to do."`

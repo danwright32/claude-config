@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { PAGE_MARK } from '../hooks/page.ts'
-import { PROSE_MARK, REFUSED_MARK, TURN_BYTES, turnAt, turnIn, type TurnRun } from '../hooks/turn.ts'
+import { FAR_BYTES, FAR_MS, OUT_BYTES, PROSE_MARK, REFUSED_MARK, TURN_BYTES, TURN_TIMEOUT_MS, UNREAD_MARK, refusalAsk, turnAt, turnIn, unreadStep, type TurnAt, type TurnRun } from '../hooks/turn.ts'
 
 // #1608: every message Claude wrote since the turn began, read from the tail of the transcript, so a
 // step handed over in an earlier message of the turn is judged as well as the last one. The reader
@@ -21,7 +21,7 @@ describe('turnIn', () => {
       user('p1'), said('An earlier turn, already judged at its own end.'),
       user('p2'), said('One thing is still yours to do.'), tool, user('p2'), said('Done with the rest.'),
     ].join('\n')
-    expect(turnIn(out)).toEqual({ texts: ['One thing is still yours to do.', 'Done with the rest.'], isOurs: false, promptId: 'p2', refused: 0, refusedMet: 0, isPinned: false })
+    expect(turnIn(out)).toEqual({ texts: ['One thing is still yours to do.', 'Done with the rest.'], isOurs: false, promptId: 'p2', refused: 0, refusedUnasked: 0, saidAfterUnasked: [], refusedMet: 0, isPinned: false, isCutShort: false, stoppedAt: null })
   })
 
   test('Stop hook feedback keeps the prompt\'s promptId, so a reflection after it is the same turn', () => {
@@ -30,14 +30,14 @@ describe('turnIn', () => {
   })
 
   test('a turn whose prompt lies before the window is read from the window\'s start', () => {
-    // The first line is cut by the byte window and is not a record.
+    // A first line that does not parse is not a record.
     const out = ['cut":"short"}', said('early in the turn'), user('p9'), said('later')].join('\n')
     expect(turnIn(out).texts).toEqual(['early in the turn', 'later'])
   })
 
   test('a window holding no prompt record names no prompt, so the turn it read cannot be told from nothing read', () => {
-    expect(turnIn([said('a'), said('b')].join('\n'))).toEqual({ texts: ['a', 'b'], isOurs: false, promptId: null, refused: 0, refusedMet: 0, isPinned: false })
-    expect(turnIn('')).toEqual({ texts: [], isOurs: false, promptId: null, refused: 0, refusedMet: 0, isPinned: false })
+    expect(turnIn([said('a'), said('b')].join('\n'))).toEqual({ texts: ['a', 'b'], isOurs: false, promptId: null, refused: 0, refusedUnasked: 0, saidAfterUnasked: [], refusedMet: 0, isPinned: false, isCutShort: false, stoppedAt: null })
+    expect(turnIn('')).toEqual({ texts: [], isOurs: false, promptId: null, refused: 0, refusedUnasked: 0, saidAfterUnasked: [], refusedMet: 0, isPinned: false, isCutShort: false, stoppedAt: null })
   })
 
   test('this mod\'s own block already given in the turn is reported, so it is never given twice', () => {
@@ -71,27 +71,28 @@ describe('turnAt', () => {
   const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false })
 
   // #1811, #3842: each of this mod's blocks is a mark, the step left in prose, the page of steps
-  // and the refused call, so a turn holding any of them is never blocked by this mod again.
+  // the refused call and the unread turn, so a turn holding any of them is blocked by this mod again
+  // only for a call refused after it.
   test('reads the transcript\'s last bytes through perl, the path and each mark as arguments, never in the program', async () => {
     const { asked, run } = runs(ok([user('p1'), said('hello')].join('\n')))
-    expect(await turnAt(T, run)).toEqual({ state: 'read', texts: ['hello'], isOurs: false, promptId: 'p1', refused: 0, refusedMet: 0, isPinned: false })
+    expect(await turnAt(T, run)).toEqual({ state: 'read', texts: ['hello'], isOurs: false, promptId: 'p1', refused: 0, refusedUnasked: 0, saidAfterUnasked: [], refusedMet: 0, isPinned: false, isCutShort: false, stoppedAt: null })
     const argv = asked[0] ?? []
     expect(argv.slice(0, 2)).toEqual(['perl', '-e'])
-    expect(argv.slice(3)).toEqual(['--', String(TURN_BYTES), T, 'mcp__manual-steps__steps', PROSE_MARK, PAGE_MARK, REFUSED_MARK])
+    expect(argv.slice(3)).toEqual(['--', String(TURN_BYTES), String(FAR_BYTES), String(FAR_MS), String(OUT_BYTES), T, 'mcp__manual-steps__steps', PROSE_MARK, PAGE_MARK, REFUSED_MARK, UNREAD_MARK])
     expect(argv[2]).toContain('@marks')
     expect(argv[2]).not.toContain(T)
   })
 
   test('a transcript that cannot be read is said to be unreadable with the reason, never read as an empty turn', async () => {
     expect(await turnAt(T, runs({ exitCode: 2, stdout: '', stderr: `${T}: No such file or directory\n`, isStdoutTruncated: false }).run))
-      .toEqual({ state: 'unreadable', why: `${T}: No such file or directory` })
-    expect(await turnAt(T, runs({ exitCode: 2, stdout: '', stderr: '', isStdoutTruncated: false }).run)).toEqual({ state: 'unreadable', why: 'the transcript reader exited 2' })
-    expect(await turnAt(T, runs('throws').run)).toEqual({ state: 'unreadable', why: 'perl could not be started' })
-    expect(await turnAt('', runs(ok('')).run)).toEqual({ state: 'unreadable', why: 'no transcript was given' })
+      .toEqual({ state: 'unreadable', why: `${T}: No such file or directory`, isUnfinished: false })
+    expect(await turnAt(T, runs({ exitCode: 2, stdout: '', stderr: '', isStdoutTruncated: false }).run)).toEqual({ state: 'unreadable', why: 'the transcript reader exited 2', isUnfinished: true })
+    expect(await turnAt(T, runs('throws').run)).toEqual({ state: 'unreadable', why: 'perl could not be started', isUnfinished: true })
+    expect(await turnAt('', runs(ok('')).run)).toEqual({ state: 'unreadable', why: 'no transcript was given', isUnfinished: false })
   })
 
   test('output cut short by the engine is unreadable, since the turn\'s last messages are what it lost', async () => {
-    expect(await turnAt(T, runs({ ...ok(said('x')), isStdoutTruncated: true }).run)).toEqual({ state: 'unreadable', why: 'the transcript reader printed more than could be read whole' })
+    expect(await turnAt(T, runs({ ...ok(said('x')), isStdoutTruncated: true }).run)).toEqual({ state: 'unreadable', why: 'the transcript reader printed more than could be read whole', isUnfinished: true })
   })
 })
 
@@ -195,9 +196,207 @@ describe('a call the permission check refused in the turn (#3842)', () => {
       asked.push([...argv])
       return { exitCode: 0, stdout: [user('p1'), denied('automode-blocked')].join('\n'), stderr: '', isStdoutTruncated: false }
     }
-    expect(await turnAt('/t.jsonl', run)).toEqual({ state: 'read', texts: [], isOurs: false, promptId: 'p1', refused: 1, refusedMet: 1, isPinned: false })
-    expect(asked[0]?.slice(3)).toEqual(['--', String(TURN_BYTES), '/t.jsonl', 'mcp__manual-steps__steps', PROSE_MARK, PAGE_MARK, REFUSED_MARK])
+    expect(await turnAt('/t.jsonl', run)).toEqual({ state: 'read', texts: [], isOurs: false, promptId: 'p1', refused: 1, refusedUnasked: 1, saidAfterUnasked: [[]], refusedMet: 1, isPinned: false, isCutShort: false, stoppedAt: null })
+    expect(asked[0]?.slice(3)).toEqual(['--', String(TURN_BYTES), String(FAR_BYTES), String(FAR_MS), String(OUT_BYTES), '/t.jsonl', 'mcp__manual-steps__steps', PROSE_MARK, PAGE_MARK, REFUSED_MARK, UNREAD_MARK])
     expect(asked[0]?.[2]).toContain('toolDenialKind')
     expect(asked[0]?.[2]).not.toContain('mcp__manual-steps__steps')
+  })
+})
+
+// #3860: what the refused call check could not see. The records here are as the reader prints
+// them, the ids invented. Shapes measured on 2026-11-28 over the main conversations' records of 30
+// days on the personal MacBook: a user record holds at most one tool result (0 of 69,470 held
+// two), a refused or denied call's result carries `is_error` and its call's `tool_use_id` (2,320
+// of 2,320), and a steps tool call is a block of its own carrying its `id` (223 of 223).
+const pinCall = (id: string, extra: Record<string, unknown> = {}) => JSON.stringify({ type: 'assistant', isSidechain: false, isPinning: true, callIds: [id], ...extra })
+const resultOf = (id: string, isError: boolean, promptId = 'p1') => JSON.stringify({ type: 'user', promptId, isOurs: false, resultOf: id, isError })
+const STOPPED = JSON.stringify({ type: 'reader', isCutShort: true })
+
+describe('what the refused call check could not see (#3860)', () => {
+  test('a refusal record too long to keep whole, cut down by the reader to its top level fields, is counted', () => {
+    const cutDown = JSON.stringify({ type: 'user', isSidechain: false, promptId: 'p1', toolDenialKind: 'automode-blocked', isOurs: false, isCutDown: true, resultOf: 't1', isError: true })
+    expect(turnIn([user('p1'), cutDown, said('The row is still yours.')].join('\n')).refused).toBe(1)
+    // A subagent's, cut down the same way, is still not the main conversation's.
+    expect(turnIn([user('p1'), cutDown.replace('"isSidechain":false', '"isSidechain":true'), said('x')].join('\n')).refused).toBe(0)
+  })
+
+  test('the reader stopping before the turn\'s first record is reported, so a stretch it never read is not taken for a clean one', () => {
+    expect(turnIn([STOPPED, user('p1'), said('x')].join('\n')).isCutShort).toBe(true)
+    expect(turnIn([user('p1'), said('x')].join('\n')).isCutShort).toBe(false)
+    // What it did read of the turn is still read.
+    const t = turnIn([STOPPED, user('p1'), denied('automode-blocked'), said('x')].join('\n'))
+    expect([t.isCutShort, t.refused, t.texts]).toEqual([true, 1, ['x']])
+  })
+
+  test('a refusal that came after this mod\'s own block in the turn has not been asked about, and one before the block has', () => {
+    const late = turnIn([user('p1'), denied('automode-blocked'), said('a'), user('p1', true), said('b'), denied('automode-blocked'), said('c')].join('\n'))
+    expect([late.isOurs, late.refused, late.refusedUnasked]).toEqual([true, 2, 1])
+    const early = turnIn([user('p1'), denied('automode-blocked'), said('a'), user('p1', true), said('b')].join('\n'))
+    expect([early.isOurs, early.refused, early.refusedUnasked]).toEqual([true, 1, 0])
+    // With no block in the turn, none has been asked about.
+    expect(turnIn([user('p1'), denied('automode-blocked'), denied('automode-blocked'), said('a')].join('\n')).refusedUnasked).toBe(2)
+    // A step pinned after the late refusal answers it as it answers any other.
+    expect(turnIn([user('p1'), user('p1', true), denied('automode-blocked'), pinCall('t2'), resultOf('t2', false), said('c')].join('\n')).refusedUnasked).toBe(0)
+  })
+
+  test('only what Claude wrote after a refusal not yet asked about is reported as able to answer it, for each such refusal, newest first', () => {
+    const t = turnIn([user('p1'), denied('automode-blocked'), said('Nothing from the refusal is yours to do.'), user('p1', true), said('b'), denied('automode-blocked'), said('c'), user('p1'), said('d')].join('\n'))
+    expect(t.saidAfterUnasked).toEqual([['c', 'd']])
+    expect(turnIn([user('p1'), said('a')].join('\n')).saidAfterUnasked).toEqual([])
+    const two = turnIn([user('p1'), denied('automode-blocked'), said('a'), denied('automode-blocked'), said('b')].join('\n'))
+    expect([two.refusedUnasked, two.saidAfterUnasked]).toEqual([2, [['b'], ['a', 'b']]])
+  })
+
+  test('the reader names the limit it stopped at, and names none when it read the turn to its start', () => {
+    const stoppedAt = (at: string) => JSON.stringify({ type: 'reader', isCutShort: true, at })
+    for (const at of ['bytes', 'time', 'output']) {
+      const t = turnIn([stoppedAt(at), user('p1'), said('x')].join('\n'))
+      expect([t.isCutShort, t.stoppedAt]).toEqual([true, at])
+    }
+    expect(turnIn([user('p1'), said('x')].join('\n')).stoppedAt).toBeNull()
+  })
+
+  test('a steps tool call whose record holds the message\'s id before its own is known as failed by its own id', () => {
+    const call = JSON.stringify({ type: 'assistant', isSidechain: false, isPinning: true, callIds: ['msg_1', 't9'] })
+    const failed = turnIn([user('p1'), denied('automode-blocked'), call, resultOf('t9', true), said('It is on the card.')].join('\n'))
+    expect([failed.refused, failed.isPinned]).toEqual([1, false])
+    expect(turnIn([user('p1'), denied('automode-blocked'), call, resultOf('t9', false), said('It is on the card.')].join('\n')).refused).toBe(0)
+  })
+
+  test('a steps tool call whose result is an error does not answer the refusal before it', () => {
+    const failed = turnIn([user('p1'), denied('automode-blocked'), pinCall('t9'), resultOf('t9', true), said('It is on the card.')].join('\n'))
+    expect([failed.refused, failed.refusedUnasked, failed.isPinned]).toEqual([1, 1, false])
+    const worked = turnIn([user('p1'), denied('automode-blocked'), pinCall('t9'), resultOf('t9', false), said('It is on the card.')].join('\n'))
+    expect([worked.refused, worked.isPinned]).toEqual([0, true])
+    // A second call that worked, after the one that failed, answers it.
+    expect(turnIn([user('p1'), denied('automode-blocked'), pinCall('t8'), resultOf('t8', true), pinCall('t9'), resultOf('t9', false), said('x')].join('\n')).refused).toBe(0)
+    // Another call's failure is not the steps tool call's.
+    expect(turnIn([user('p1'), denied('automode-blocked'), pinCall('t9'), resultOf('t9', false), resultOf('t7', true), said('x')].join('\n')).refused).toBe(0)
+  })
+
+  test('a failed steps tool call is read the same in records kept whole, and one the permission check refused is itself a refusal', () => {
+    const call = JSON.stringify({ type: 'assistant', isSidechain: false, message: { content: [{ type: 'text', text: 'Pinning it.' }, { type: 'tool_use', id: 't9', name: 'mcp__manual-steps__steps', input: {} }] } })
+    const refusedPin = denied('automode-blocked', 'p1', { message: { role: 'user', content: [{ type: 'tool_result', content: 'refused', is_error: true, tool_use_id: 't9' }] } })
+    const t = turnIn([user('p1'), denied('automode-blocked'), call, refusedPin, said('x')].join('\n'))
+    expect([t.refused, t.isPinned]).toEqual([2, false])
+  })
+
+  test('a steps tool call with no result in what was read still answers, as it did before its result was read', () => {
+    expect(turnIn([user('p1'), denied('automode-blocked'), pinCall('t9'), said('x')].join('\n')).refused).toBe(0)
+    expect(turnIn([user('p1'), denied('automode-blocked'), pinned, said('x')].join('\n')).refused).toBe(0)
+  })
+
+  // Point 4 of #3860, left as it is until Dan decides: Claude Code writes a prompt typed while a
+  // turn runs under the running prompt's promptId (98 such records in the 30 days measured), so
+  // the reader cannot tell it from a tool result and starts no new turn at it.
+  test('a prompt typed while the turn runs keeps the turn\'s promptId, so a refusal and a block before it are still this turn\'s', () => {
+    const typed = user('p1')
+    const t = turnIn([user('p1'), denied('automode-blocked'), said('The row is still yours.'), typed, said('Thanks, carrying on.')].join('\n'))
+    expect([t.promptId, t.refused, t.texts]).toEqual(['p1', 1, ['The row is still yours.', 'Thanks, carrying on.']])
+    expect(turnIn([user('p1'), said('a'), user('p1', true), typed, said('b')].join('\n')).isOurs).toBe(true)
+  })
+})
+
+describe('a read that did not finish (#3860)', () => {
+  const T = '/t.jsonl'
+  const answer = (a: Partial<Awaited<ReturnType<TurnRun>>>): TurnRun => async () => ({ exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, ...a })
+
+  test('a transcript perl names as one it could not open is absent, and a read that started and gave no whole answer is unfinished', async () => {
+    expect(await turnAt(T, answer({ exitCode: 2, stderr: `${T}: No such file or directory\n` }))).toEqual({ state: 'unreadable', why: `${T}: No such file or directory`, isUnfinished: false })
+    expect(await turnAt('', answer({}))).toEqual({ state: 'unreadable', why: 'no transcript was given', isUnfinished: false })
+    // Killed by something other than the engine, which rejects the call at its time limit: no reason of perl's own.
+    expect(await turnAt(T, answer({ exitCode: 143 }))).toEqual({ state: 'unreadable', why: 'the transcript reader exited 143', isUnfinished: true })
+    // A failure of the reader's own once it is reading is not a transcript that is not there.
+    expect(await turnAt(T, answer({ exitCode: 5, stderr: `reading ${T}: Input/output error\n` }))).toEqual({ state: 'unreadable', why: `reading ${T}: Input/output error`, isUnfinished: true })
+    expect(await turnAt(T, answer({ exitCode: 1, stderr: 'the process was stopped at its time limit' }))).toEqual({ state: 'unreadable', why: 'the process was stopped at its time limit', isUnfinished: true })
+    expect(await turnAt(T, async () => { throw new Error('timed out after 2000ms') })).toEqual({ state: 'unreadable', why: 'timed out after 2000ms', isUnfinished: true })
+    expect(await turnAt(T, answer({ isStdoutTruncated: true }))).toEqual({ state: 'unreadable', why: 'the transcript reader printed more than could be read whole', isUnfinished: true })
+  })
+
+  test('the reader is handed how far back it may walk past the window and its own time limit, under the limit its caller stops it at', async () => {
+    const asked: string[][] = []
+    await turnAt(T, async argv => {
+      asked.push([...argv])
+      return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false }
+    })
+    expect(asked[0]?.slice(3, 9)).toEqual(['--', String(TURN_BYTES), String(FAR_BYTES), String(FAR_MS), String(OUT_BYTES), T])
+    expect(FAR_MS).toBeLessThan(TURN_TIMEOUT_MS)
+    // What it may print is under what the engine keeps of a process's output, with room to spare.
+    expect(OUT_BYTES).toBeLessThanOrEqual(4_194_304 * 0.75)
+    // Only its failure to open the transcript is said with the bare path, which is how a
+    // transcript that is not there is told from a read that failed part way.
+    expect(asked[0]?.[2]?.match(/die "\$f: /g)).toHaveLength(1)
+    expect(asked[0]?.[2]?.match(/die "reading \$f: /g)).toHaveLength(4)
+  })
+})
+
+describe('what the turn\'s end asks about refused calls (#3860)', () => {
+  const read = (lines: string[]): TurnAt => ({ state: 'read', ...turnIn(lines.join('\n')) })
+  const answers = (said: readonly string[]) => said.some(t => t.includes('Nothing from the refusal is yours to do.'))
+  const LINE = 'Nothing from the refusal is yours to do.'
+
+  test('a refusal not yet asked about is asked about, with how many', () => {
+    expect(refusalAsk(read([user('p1'), denied('automode-blocked'), denied('automode-blocked'), said('x')]), ['x'], false, answers)).toEqual({ ask: 'refused', calls: 2 })
+    expect(refusalAsk(read([user('p1'), said('x')]), ['x'], false, answers)).toEqual({ ask: 'none' })
+  })
+
+  test('a refusal after this mod already held the turn is asked about once more, and the line said for the earlier one does not answer it', () => {
+    const turn = read([user('p1'), denied('automode-blocked'), said('a'), user('p1', true), said(LINE), denied('automode-blocked'), said('The second row is still yours.')])
+    expect(refusalAsk(turn, ['a', LINE, 'The second row is still yours.'], true, answers)).toEqual({ ask: 'refused', calls: 1 })
+    // The line said after the later refusal answers it.
+    const answered = read([user('p1'), denied('automode-blocked'), said('a'), user('p1', true), said(LINE), denied('automode-blocked'), said(LINE)])
+    expect(refusalAsk(answered, ['a', LINE, LINE], true, answers)).toEqual({ ask: 'none' })
+    // Held again for the later one, the turn has nothing new, so it cannot loop.
+    const again = read([user('p1'), denied('automode-blocked'), user('p1', true), said(LINE), denied('automode-blocked'), said('b'), user('p1', true), said('c')])
+    expect(refusalAsk(again, [LINE, 'b', 'c'], true, answers)).toEqual({ ask: 'none' })
+  })
+
+  test('the last message, not yet in the transcript, can answer a refusal', () => {
+    const turn = read([user('p1'), denied('automode-blocked'), said('a')])
+    expect(refusalAsk(turn, ['a', LINE], false, answers)).toEqual({ ask: 'none' })
+  })
+
+  test('of several refusals not yet asked about, only those the line was not said after are counted', () => {
+    // Said between two refusals, the line answers the first and not the second.
+    const between = read([user('p1'), denied('automode-blocked'), said(LINE), denied('automode-blocked'), said('The second row is still yours.')])
+    expect(refusalAsk(between, [LINE, 'The second row is still yours.'], false, answers)).toEqual({ ask: 'refused', calls: 1 })
+    // Said after both, it answers both, in the record or as the last message not yet in it.
+    const both = read([user('p1'), denied('automode-blocked'), said('a'), denied('automode-blocked'), said(LINE)])
+    expect(refusalAsk(both, ['a', LINE], false, answers)).toEqual({ ask: 'none' })
+    const open = read([user('p1'), denied('automode-blocked'), said('a'), denied('automode-blocked'), said('b')])
+    expect(refusalAsk(open, ['a', 'b', LINE], false, answers)).toEqual({ ask: 'none' })
+    expect(refusalAsk(open, ['a', 'b'], false, answers)).toEqual({ ask: 'refused', calls: 2 })
+  })
+
+  test('a turn the reader could not read to its start is said to be unread, unless what it did read settles it', () => {
+    expect(refusalAsk(read([STOPPED, user('p1'), said('x')]), ['x'], false, answers)).toEqual({ ask: 'unread' })
+    // A refusal it did read is asked about as itself.
+    expect(refusalAsk(read([STOPPED, user('p1'), denied('automode-blocked'), said('x')]), ['x'], false, answers)).toEqual({ ask: 'refused', calls: 1 })
+    // A step pinned in the part it read answers any refusal before it; the line does too; and a turn already held is not held again.
+    expect(refusalAsk(read([STOPPED, user('p1'), pinCall('t1'), resultOf('t1', false), said('x')]), ['x'], false, answers)).toEqual({ ask: 'none' })
+    expect(refusalAsk(read([STOPPED, user('p1'), said(LINE)]), [LINE], false, answers)).toEqual({ ask: 'none' })
+    expect(refusalAsk(read([STOPPED, user('p1', true), said('x')]), ['x'], true, answers)).toEqual({ ask: 'none' })
+    // A step whose pin failed settles nothing.
+    expect(refusalAsk(read([STOPPED, user('p1'), pinCall('t1'), resultOf('t1', true), said('x')]), ['x'], false, answers)).toEqual({ ask: 'unread' })
+  })
+
+  test('a read that did not finish is said to be unread once per chain of turn ends, and a transcript that is not there asks nothing', () => {
+    expect(refusalAsk({ state: 'unreadable', why: 'timed out', isUnfinished: true }, ['x'], false, answers)).toEqual({ ask: 'unread' })
+    expect(refusalAsk({ state: 'unreadable', why: 'timed out', isUnfinished: true }, ['x'], true, answers)).toEqual({ ask: 'none' })
+    expect(refusalAsk({ state: 'unreadable', why: 'timed out', isUnfinished: true }, [LINE], false, answers)).toEqual({ ask: 'none' })
+    expect(refusalAsk({ state: 'unreadable', why: '/t: No such file or directory', isUnfinished: false }, ['x'], false, answers)).toEqual({ ask: 'none' })
+  })
+
+  test('the words for an unread turn begin with their own mark, name the steps tool and one line to say, and stay short', () => {
+    const words = unreadStep()
+    expect(words.startsWith(`${UNREAD_MARK},`)).toBe(true)
+    expect(words).toContain('mcp__manual-steps__steps')
+    expect(words.trim().split(/\s+/).length).toBeLessThanOrEqual(50)
+  })
+
+  test('the line an unread turn is asked to say names no refusal as having happened, since none may have', () => {
+    const words = unreadStep()
+    expect(words.match(/say exactly: "([^"]+)"$/)?.[1]).toBe('No refused call left you anything to do.')
+    expect(words).not.toContain('Nothing from the refusal')
   })
 })
