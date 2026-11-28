@@ -74,6 +74,8 @@ const leftBehindRef = { plugin: 'goal-box', key: 'leftBehind' } as const
 // What the card reads of the mods beside it; each may not be loaded.
 const stepsCardRef = { plugin: 'manual-steps', key: 'card' } as const
 // #3864: manual steps' record of a card worked through, and the newest one this mod has dealt with.
+// Read as unknown, so the type check cannot see a key or a field renamed on manual steps' side:
+// tests/test-goal-box-card-prompt-records.sh runs its writers into this mod's readers.
 const stepsEmptiedRef = { plugin: 'manual-steps', key: 'emptied' } as const
 const cardAskedRef = { plugin: 'goal-box', key: 'cardAsked' } as const
 const compactQueuedRef = { plugin: 'status-bar', key: 'compactQueued' } as const
