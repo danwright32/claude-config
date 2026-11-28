@@ -2518,6 +2518,95 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   last steps call named it, finished or not; this one follows each card through its steps calls
   and verdicts and asks for an unfinished step. By the first count's rule the same 30 days give
   25.
+- **A call the permission check refused is answered by a step pinned after it, or by one line**
+  (#3842). On 2026-11-27 the permission check refused a call that set a row of Dan's to do list.
+  The session rightly did not send it again, then told him in eight replies that the row was his
+  to set, and pinned nothing: none of its five wordings was a phrase the check read, and nothing
+  tied a refused call to the card. Dan's answer that day was "Both". So the turn's end now judges
+  the refused call itself, whatever the reply says, and the two of the five wordings that caught
+  steps when counted are phrases as well.
+  The refusal is read from Claude Code's own session record, which the check already reads for the
+  turn (`hooks/turn.ts`): the record of a refused call carries `toolDenialKind`, and only
+  `automode-blocked`, the permission check's verdict, counts. `automode-unavailable` is the check
+  giving no verdict, which is sent once more by rule and leaves Dan nothing; `permission-rule` is a
+  hook's or a rule's refusal, which at 1,938 in the 30 days below cannot be held for, so a step
+  one leaves is left to the wording check (what each said in its place was not measured);
+  `user-rejected` is a prompt Dan declined himself. Measured on 2026-11-27 over the main conversations' records of 30 days on the
+  personal MacBook (Claude Code 2.1.311 to 2.1.332): 22 `automode-blocked` (Bash 20, Agent 1,
+  SendMessage 1, each result beginning with the check's own "denied" sentence), 93
+  `automode-unavailable`, 1,938 `permission-rule`, 65 `user-rejected`, 12 cancelled or
+  interrupted; 10 more `automode-blocked` sat in subagents' own records, which the main session's
+  check never reads. A turn holding one, with no call of the `steps` tool after it, is blocked
+  once and told both ways out: pin what the refusal left for Dan, or say "Nothing from the refusal
+  is yours to do." The line the check already read, "None of these steps are yours to do now.",
+  answers it as well, as it answers every ask of this check. A card pinned before the refusal
+  holds some other step and does not answer it, and neither does a step a subagent pinned.
+  The block begins with its own mark (`REFUSED_MARK`), so a turn holding it is never blocked by
+  this mod again, and a turn that could not be read names no refusal. Not built: a hook on
+  `classic.PermissionDenied`. A mod's hook there needs a line on two lists of exceptions
+  (`tools/sec-default-bypassed-hooks.tsv` and the exempt list of `tests/test-sleep-silence.sh`),
+  and what that event says of no verdict is the words "Classifier unavailable" (614 of the 619
+  refusals scope modes noted overnight on this Mac by 2026-11-27), read by scope modes alone. No
+  MCP tool was among the 22, and the refused call of 2026-11-27 was one, on the work MacBook, so
+  whether its record carries the kind is what that Mac's count shows.
+  Counted with the check's own reader and matcher (`tools/steps-phrase-count.ts`, which prints
+  counts and never a message's text) on 2026-11-27 over the personal MacBook's 7,594 session
+  records of 30 days, 10,491 turns: 19 turns held a call the permission check refused, 3 were
+  answered by a call of the `steps` tool by the turn's end, and 16 were not. The count judges a
+  turn once, at its end, and the check at every turn end inside it, so a step pinned only after a
+  first turn end was held first: between 16 and 19 turns would be held, once each, about one every
+  two days. Read one by one, 2 of the 16 left Dan a step no card held and said so in prose, 1 more
+  probably did, 9 left him nothing and would be answered by the one line, and 4 could not be told
+  from the turn. A hold costs Dan more than Claude's one line, since a Stop hook's block is printed
+  to him as well. As first built the hold for a refusal alone was 127 words (644 characters), and
+  1,836 characters when a typed command, a prose step and two refusals were asked about together
+  (measured in the review of pull request 3854, 2026-11-27).
+  The work MacBook's count, 2026-11-27, at `d768c69e67` over 16,643 session records of 30 days,
+  24,148 turns: a refused call in 102 turns, 23 answered by a call of the `steps` tool by the
+  turn's end and 79 not, so between 78 and 102 held. The 79 were read one by one there, each given
+  one label from a fixed list: 7 left Dan a step, and in all 7 the reply said so in prose with no
+  card; 70 left him nothing (in 56 the session did it another allowed way, in 14 it gave it up or
+  it was not needed); 2 could not be told. 118 refused calls carried the kind, 25 of them calls of
+  an MCP tool, and the cross check found 118 results by the sentence with none unread, so a
+  refused MCP call is read like any other. Dan's decision on those figures, 2026-11-27: "Merge
+  with a shorter hold". The check stays, since it catches every one of the 7, and the hold's words
+  for a refusal alone were cut to 41 (229 characters): what happened, that a refusal is final, and
+  both ways out. How a step is written, and that pinning replaces the card, are left to the
+  `steps` tool's own description, which says both.
+  The kind is a field Claude Code does not document, and the reader finds it by its exact text, so
+  a release that renamed or respaced it would stop the hold with nothing said. The count's last
+  line therefore finds refused calls a second way, by the "denied" sentence their result begins
+  with, and says both directions. On the personal MacBook on 2026-11-27 (7,779 session records of
+  30 days, 10,688 turns): 20 such results, 0 of them not read by the check, and of the 20 refused
+  calls the check read, 0 whose result begins otherwise. It takes a record kept under two project
+  folders once; the 22 above was counted over every folder, and whether its two extra are such
+  copies was not checked.
+  A phrase stays only if what it catches are steps for Dan, so the five wordings were counted twice
+  that day: as first written, and again (7,603 records, 10,501 turns) after two were narrowed to
+  leave out what they had wrongly caught. Counts are turns, and "newly held" is the most it could
+  be, since the card as it stood is not in the record:
+
+  | Wording | First: said in, newly held | What those turns were | Then: said in, newly held | Read by the check |
+  |---|---|---|---|---|
+  | "step left for you" | 3, 1 | 1 said no step was left, 1 was an issue's title, 1 a step for Dan already on the card | 1, 0 (narrowed to a step counted or singled out) | yes, as "One step left for you", "The one step left for you" |
+  | "the one only you can do" | 2, 2 | both steps for Dan (an app only he can quit and reopen, a command only he can type) | 2, 2 | yes |
+  | "Still yours:" | 1, 1 | two open questions, no step | 0, 0 (narrowed to where a step follows it) | no: it caught no step |
+  | "needs you to set" | 0, 0 | never said | 0, 0 | no: never said |
+  | "because my (call) was refused by the permission check" | 0, 0 | never said | 0, 0 | no: never said |
+
+  The three not read were all said on the work MacBook in the replies of 2026-11-27, which this
+  count cannot see. The turn a call is refused in is held for the refusal whatever its words, and
+  those replies also said "One step left for you", which is read. Counted on the work MacBook the
+  same day (16,650 session records, 24,159 turns, at the commit that reads all five): each of the
+  three was said in 1 turn, all three in that one session, so Dan's decision was "Leave all three
+  out" (2026-11-27). The two that are read, counted there at `d768c69e67`: "step left for you"
+  said in 12 turns and newly held in 1, "the one only you can do" said in 10 and newly held in 2,
+  and all 3 were steps for Dan. "the one thing only you can do" also fires when the thing is a
+  decision, which the older phrases leave out; every turn it caught on either Mac was a step (2 on
+  each), and Dan's decision was "Leave it as it is" (2026-11-27).
+
+  "Set" did not join the words that begin a numbered step (Dan, 2026-11-27): it also leads
+  Claude's own plans, and the same list decides what a page of steps is.
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On
