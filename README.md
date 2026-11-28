@@ -116,10 +116,9 @@ suites under `payload/` and fails when its scan read fewer of them, and that lin
 it. Measured alone on 2026-11-28, at nice 15 on 12 cores: 0.67 to 0.84 seconds before that check (5
 runs, load averages 27 to 33). With it, 0.98 to 1.04 seconds at a load average just under 10 (5
 runs) and 1.06 to 1.14 seconds at load averages of 48 to 52 (5 runs), plus one run of 6.6 seconds
-as the load rose from 43 to 58. The gate as a whole was not timed with
-and without it. In the gate's own records of a push refused for time that morning, with its slowest
-scanners at 147 to 155 seconds, two scanners that take 0.6 seconds alone were recorded at 1 and 2
-seconds (2026-11-28).
+as the load rose from 43 to 58. Inside the gate, on the push that added it (2026-11-28, a load
+average of 10 as the push began), the gate recorded it at 4 seconds, with its slowest scanner at
+115 seconds. The gate as a whole was not timed with and without it.
 
 A push that adds or changes a test suite also runs the suites that walk the checkout without
 listing it through git (#3183). A suite is one of those when its own code runs
