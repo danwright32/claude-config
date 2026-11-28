@@ -1,0 +1,49 @@
+name: web guidance pin
+
+# Once a day, the pinned web guidance tool against the newest release on npm (claude-config#3565).
+# Sessions run the one version in payload/hooks/lib/modern-web-guidance-version, so a newer release
+# never reaches Dan's Mac by itself; this run is what says one exists, once it has been out two
+# weeks. Moving the pin is then the pull request that changes that file and the rule file together.
+#
+# It never runs on a push or a pull request, so it cannot turn either red, and
+# tests/test-web-guidance-pin.sh holds that. A pin behind a two week old release opens one issue for
+# Dan, or comments on the one already open; a current pin posts nothing
+# (tools/report-web-guidance-pin.sh). A registry it cannot reach, or a run that dies before
+# reporting, is red in the Actions tab, and GitHub emails whoever last changed the schedule below.
+#
+# It reads the registry only: nothing from the package is downloaded or run here.
+#
+# By hand: `gh workflow run web-guidance-pin.yml`.
+on:
+  schedule:
+    # 11:41 UTC, which is 6:41 AM ET in winter, off the hour when GitHub's scheduled runs bunch up.
+    - cron: '41 11 * * *'
+  workflow_dispatch:
+
+# One at a time, never cancelled: a run by hand beside the scheduled one must not open a second
+# issue, so the second waits and then finds the first one's issue open.
+concurrency:
+  group: web-guidance-pin
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-26.04
+    # It ends in under a minute. The number is a backstop only, above an hour for the same check
+    # (#210) as the other daily run's jobs.
+    timeout-minutes: 61
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tell Dan when the pin is behind, and nobody when it is not
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/report-web-guidance-pin.sh

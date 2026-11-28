@@ -73,6 +73,7 @@ REFUSING=(
   temp-worktree-gate.sh
   fresh-worktree-base-gate.sh
   check-rtk-init.sh
+  web-guidance-pin-gate.sh
   check-zsh-builtins.sh
   check-screenshot-window.sh
   check-wrapped-commands.sh
