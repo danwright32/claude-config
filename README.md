@@ -12513,9 +12513,9 @@ then spent for the request, the prompt
 for a met /goal waits for a later turn end, and Dan is told in one line he sees, once per request,
 that the box is waiting on the review (his choice of 2026-11-27: "One line, then one later ask").
 The record ends with the turn, so the mod asks it at every turn end of the main conversation where
-the message, the question or the later ask below is waiting, whether or not that turn end could
-send it: a turn Dan interrupted or that ended on a refusal or an error, where nothing is sent, a
-turn end with something in flight, and for the question one with a /goal set or unreadable. A
+a prompt about the box is waiting, whether or not that turn end could send it: a turn Dan
+interrupted or that ended on a refusal or an error, where nothing is sent, and a turn end with
+something in flight or a /goal set or unreadable. A
 review found unanswered there spends or blocks what was waiting, and the line is said. A call
 refused after the request's message was used has no prompt left in that request, so its review
 left unanswered is said in the same line, and its box is asked for after his next message.
