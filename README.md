@@ -5078,7 +5078,8 @@ before, and a refusal says the earlier tests were not counted and why. Because e
 read with every push of the branch, a could not judge refusal that holds them says a smaller push
 will not make them fit.
 
-Every push either gate reaches is recorded, overrides included (#1075), one line each in
+Every push either gate reaches is recorded, overrides included (#1075), one verdict line each (and
+the readings line described below before some) in
 `~/.claude/state/push-gates/push-gates.tsv`: never synced, never swept, so it outlives temp
 cleaning (the lessons review keeps its outcome ledger beside it for the same reason). Read it with:
 
@@ -5094,6 +5095,18 @@ sonnet), the judge's time and cost, and on how many pushes both judges were call
 two calls ran at the same time (#1077). A rate over fewer than five pushes prints as UNMEASURED. The
 suites point the gates at a throwaway ledger (`PUSH_GATE_LEDGER_DIR`, which `run-all-tests.sh` and
 `tools/time-push-gates.sh` also set), so no test push is ever counted.
+
+A push the test gate judged with a reader also gets a readings line (#3339), written in the same
+append just before its verdict line, so the last line is still the verdict. It has the same columns,
+time, call id and tree, the word `reads` where the outcome goes, and in its detail the verdict and,
+for the first reading and each further one, how many times it was asked, how it ended (`read`,
+`unread`, `failed`, or `unneeded` when every change was already found tested) and the name of the
+temporary folder each ask's judge ran from, for example
+`outcome pass; first 2 read tmp.a tmp.b`. Counts, those fixed words and folder names only: never a
+prompt, an answer or a diff. Claude Code keeps a headless run's transcript under `~/.claude/projects`
+in a folder named after the folder it ran from, so a reading can be traced to its transcript by
+name. Before this line a reading cleared on its second or third ask left the same record as a first
+time pass. The report above passes over readings lines; nothing it prints changes.
 
 ### The quiz after a merge
 

@@ -227,6 +227,7 @@ STUB="$TMPROOT/stub"; mkdir -p "$STUB"
 cat > "$STUB/claude" <<'S'
 #!/usr/bin/env bash
 cat >/dev/null
+[ -n "${STUB_CWD:-}" ] && printf '%s' "${PWD##*/}" > "$STUB_CWD"
 [ -n "${STUB_OUT:-}" ] && printf '%s' "$STUB_OUT"
 exit "${STUB_EXIT:-0}"
 S
@@ -293,6 +294,59 @@ if [ "$rc" = 2 ] && [ "$(wc -l < "$LEDGER")" = "$before" ]; then ok; else no "an
 printf 'x\n' > "$TMPROOT/notadir"
 ( cd "$W" && PUSH_GATE_LEDGER_DIR="$TMPROOT/notadir" PC_GATE=tests pc_record pass ) 2> "$TMPROOT/err"; rc=$?
 if [ "$rc" = 1 ] && [ ! -s "$TMPROOT/err" ]; then ok; else no "an unwritable ledger must return 1 and print nothing itself, got rc $rc [$(cat "$TMPROOT/err")]"; fi
+
+# ---- claude-config#3339: where each judge ran, and the readings line --------------------------------
+# pc_judge names the folder the judge's claude ran from, by its name alone, so the transcript Claude
+# Code keeps under a folder named after it can be found by name rather than by time.
+STUB_CWD="$TMPROOT/stub-cwd" STUB_OUT='{"result":"{\"verdict\":\"pass\"}"}' judge_case "a clean answer, for its folder" "$STUB:$PATH_BASE" 0 'verdict'
+if [ -n "${PC_JUDGE_DIR:-}" ] && [ "${PC_JUDGE_DIR:-}" = "$(cat "$TMPROOT/stub-cwd" 2>/dev/null)" ]; then ok; else no "#3339 PC_JUDGE_DIR [${PC_JUDGE_DIR:-}] is not the folder the judge ran in [$(cat "$TMPROOT/stub-cwd" 2>/dev/null)]"; fi
+case "${PC_JUDGE_DIR:-}" in */*) no "#3339 PC_JUDGE_DIR carries a path, not a name: [${PC_JUDGE_DIR:-}]" ;; *) ok ;; esac
+STUB_OUT='{"result":"looks fine to me"}' judge_case "an unreadable answer, for its folder" "$STUB:$PATH_BASE" 1 'not readable JSON'
+if [ -n "${PC_JUDGE_DIR:-}" ]; then ok; else no "#3339 an unreadable answer's folder was not named"; fi
+PATH="$PATH_BASE" pc_judge sonnet 7 "rubric" "input"
+if [ -z "${PC_JUDGE_DIR:-}" ]; then ok; else no "#3339 a judge that never ran named a folder: [${PC_JUDGE_DIR:-}]"; fi
+
+# pc_record with PC_READS writes the readings line, then the verdict line, in one append: the
+# readings line has the same 15 columns, the outcome column "reads", no model figures, and the
+# verdict and the readings in its detail; the verdict line is what it would have been without it.
+before="$(wc -l < "$LEDGER")"
+( cd "$W" && PC_GATE=tests PC_CALL_ID=toolu_r PC_READS="first 2 read tmp.a tmp.b" pc_record pass "" ) || no "#3339 pc_record with readings failed on a writable ledger"
+rows="$(tail -n +"$((before + 1))" "$LEDGER")"
+if [ "$(printf '%s\n' "$rows" | wc -l | tr -d ' ')" = 2 ]; then ok; else no "#3339 a record with readings should add 2 lines, got [$rows]"; fi
+if [ "$(printf '%s\n' "$rows" | awk -F '\t' '{ print NF }' | sort -u)" = 15 ]; then ok; else no "#3339 every line should have 15 columns, got [$rows]"; fi
+if [ "$(printf '%s\n' "$rows" | sed -n 1p | awk -F '\t' '{ print $3 "|" $4 "|" $7 "|" $8 $9 $10 $11 $12 "|" $14 }')" = "tests|reads|toolu_r||outcome pass; first 2 read tmp.a tmp.b" ]; then ok
+else no "#3339 the readings line's fields are wrong: [$(printf '%s\n' "$rows" | sed -n 1p)]"; fi
+if [ "$(printf '%s\n' "$rows" | sed -n 2p | awk -F '\t' '{ print $3 "|" $4 "|" $7 "|" $14 }')" = "tests|pass|toolu_r|" ]; then ok
+else no "#3339 the verdict line changed: [$(printf '%s\n' "$rows" | sed -n 2p)]"; fi
+if [ "$(printf '%s\n' "$rows" | cut -f 15 | sort -u | wc -l | tr -d ' ')" = 1 ]; then ok; else no "#3339 the two lines should carry the same tree"; fi
+# A tab or line break in the readings cannot split the line.
+before="$(wc -l < "$LEDGER")"
+( cd "$W" && PC_GATE=tests PC_READS="$(printf 'first 1\tread\nx')" pc_record pass "" )
+if [ "$(tail -n +"$((before + 1))" "$LEDGER" | wc -l | tr -d ' ')" = 2 ]; then ok; else no "#3339 a tab or newline in the readings split the record"; fi
+# No readings, no readings line: the simplify gate and every push no reader judged.
+before="$(wc -l < "$LEDGER")"
+( cd "$W" && PC_GATE=simplify pc_record pass "" )
+if [ "$(tail -n +"$((before + 1))" "$LEDGER" | wc -l | tr -d ' ')" = 1 ]; then ok; else no "#3339 a record with no readings wrote more than its own line"; fi
+# Unwritable: both lines fail together, return 1, and nothing is printed by pc_record itself.
+( cd "$W" && PUSH_GATE_LEDGER_DIR="$TMPROOT/notadir" PC_GATE=tests PC_READS="first 1 read tmp.a" pc_record pass ) 2> "$TMPROOT/err"; rc=$?
+if [ "$rc" = 1 ] && [ ! -s "$TMPROOT/err" ]; then ok; else no "#3339 an unwritable ledger with readings must return 1 and print nothing, got rc $rc"; fi
+
+# pc_base_judged reads a ledger of old lines (no readings line) and of new ones alike: a readings
+# line is never a judged push and never an override, whatever its detail says.
+BJ="$(mk_repo)"
+( cd "$BJ" && echo a > a.txt && git add a.txt && git commit -qm a ) >/dev/null 2>&1
+bj_tip="$(git -C "$BJ" rev-parse HEAD)"; bj_tree="$(git -C "$BJ" rev-parse 'HEAD^{tree}')"; bj_from="$(git -C "$BJ" rev-parse HEAD~1)"
+bj_line() { printf '1\th\ttests\t%s\t%s\t%s\tid\t\t\t\t\t\t1\t%s\t%s\n' "$1" "$BJ" "$bj_tip" "$2" "$bj_tree"; }
+bj_case() {   # <label> <want rc> <ledger lines...>
+  local label="$1" want="$2" d rc; shift 2
+  d="$(mktemp -d "$TMPROOT/bj.XXXXXX")"; printf '%s\n' "$@" > "$d/push-gates.tsv"
+  ( cd "$BJ" && PUSH_GATE_LEDGER_DIR="$d" PC_GATE=tests pc_base_judged "$bj_tip" "$bj_from" ); rc=$?
+  if [ "$rc" = "$want" ]; then ok; else no "#3339 pc_base_judged, $label: rc $rc, want $want"; fi
+}
+bj_case "an old ledger, a judged pass" 0 "$(bj_line pass '')"
+bj_case "a new ledger, readings then a judged pass" 0 "$(bj_line reads 'outcome pass; first 2 read tmp.a tmp.b')" "$(bj_line pass '')"
+bj_case "a readings line alone is not a judged push" 1 "$(bj_line reads 'outcome pass; first 1 read tmp.a')"
+bj_case "a readings line saying override is not an override" 0 "$(bj_line reads 'outcome override; first 1 read tmp.a')" "$(bj_line pass '')"
 
 # pc_call_id reads the id Claude Code gives every hook on one call, and nothing when there is none.
 if [ "$(pc_call_id '{"tool_name":"Bash","tool_use_id": "toolu_01AbC","tool_input":{}}')" = toolu_01AbC ]; then ok; else no "pc_call_id did not read the id"; fi

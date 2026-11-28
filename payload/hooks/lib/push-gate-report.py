@@ -28,6 +28,10 @@ OUTCOMES = ["override", "nosource", "empty", "docsonly", "untested", "pass", "bl
 GATES = [("simplify", "simplify-before-push.sh"), ("tests", "require-tests-before-push.sh")]
 MIN_JUDGED = 5
 COLUMNS = 15
+# The test gate's readings line (claude-config#3339), written just before the verdict line of a push
+# a reader judged: how many times each reading was asked. Not a push and not an outcome, so it is
+# passed over here, neither counted nor called unreadable; the count it exists for reads it itself.
+READINGS = "reads"
 
 
 def ledger_default():
@@ -50,6 +54,8 @@ def read(path, since):
             if not line:
                 continue
             c = line.split("\t")
+            if len(c) == COLUMNS and c[3] == READINGS and num(c[0]) is not None:
+                continue
             if len(c) != COLUMNS or c[3] not in OUTCOMES or num(c[0]) is None:
                 bad += 1
                 continue

@@ -105,9 +105,14 @@ TG_DIR="$(cd "${TG_DIR:-/}" && pwd)"
 # ordinary silent allows (not a push, SKIP_TEST_CHECK, no source touched,
 # docs-only) are correct verdicts, not failures: making them talk would train
 # everyone to tune the notice out. Recorded first once the command is known to be a push.
+# A record that could not be written is said in the same notice, once, as allow and refuse say it
+# (#3339): it used to be dropped here without a word.
 fail_open() {   # $1 = why  $2 = judged, when a judge was called
-  if [ "${PC_PUSH:-0}" = 1 ]; then pc_record failopen "$1" "${2:-}" || :; fi
-  hook_allow_notice "TEST GATE DID NOT RUN ($1). Push allowed ungated."
+  local unwritten=""
+  if [ "${PC_PUSH:-0}" = 1 ]; then
+    pc_record failopen "$1" "${2:-}" || unwritten=" Its record could not be written to $(pc_ledger_path)."
+  fi
+  hook_allow_notice "TEST GATE DID NOT RUN ($1). Push allowed ungated.$unwritten"
 }
 
 # A silent allow, recorded. A record that could not be written is said in one line (a systemMessage,
@@ -935,6 +940,10 @@ MISSING_EOF
   # is asked again.
   local last j fj p pids failed covered_all meta todo again tries how why
   local -a part_err=()
+  # For the gate's record only (#3339): how many times each part's reading was asked, the folder each
+  # ask's judge ran from, and how its last ask ended (read, unread, failed or unneeded). Never read
+  # by anything that decides.
+  local -a part_asks=() part_dirs=() part_end=()
   failed=""
   k=1
   while [ "$k" -le "$n" ] && [ -n "$nums" ]; do
@@ -963,13 +972,14 @@ MISSING_EOF
       for j in $todo; do
         # A try's results replace the last try's, so a reading that dies leaves no stale answer.
         rm -f "$dir/obj.$j" "$dir/err.$j" "$dir/meta.$j" "$dir/rc.$j"
+        part_asks[j]=$(( ${part_asks[j]:-0} + 1 ))
         part_in="$(printf 'COMMIT MESSAGES:\n%s\n\nCHANGES THE FIRST READER FOUND NO TEST FOR:\n%s\nFAILURE HANDLING FILES (their added code catches, raises, branches on an error or status, or retries):\n%s\n\n%s\n%s\n\nMORE TEST FILE CHANGES (reading %s of %s of the test changes the first reader was not shown in full):\n%s\n' \
           "$msgs" "$list" "$failure_files" "$c_label" "$code_diff" "$j" "$n" "$(cat "$dir/part.$j")")"
         (
           if pc_judge "$JUDGE_MODEL" "$t" "$PART_RUBRIC" "$part_in"; then rc=0; else rc=1; fi
           printf '%s' "$PC_JUDGE_OBJ" > "$dir/obj.$j"
           printf '%s' "$PC_JUDGE_ERR" > "$dir/err.$j"
-          printf '%s|%s|%s|%s|%s\n' "$PC_JUDGE_START" "$PC_JUDGE_END" "$PC_JUDGE_BYTES" "$PC_JUDGE_MS" "$PC_JUDGE_COST" > "$dir/meta.$j"
+          printf '%s|%s|%s|%s|%s|%s\n' "$PC_JUDGE_START" "$PC_JUDGE_END" "$PC_JUDGE_BYTES" "$PC_JUDGE_MS" "$PC_JUDGE_COST" "$PC_JUDGE_DIR" > "$dir/meta.$j"
           printf '%s' "$rc" > "$dir/rc.$j"
         ) >/dev/null 2>&1 &
         pids="$pids $!"
@@ -981,10 +991,11 @@ MISSING_EOF
         RT_READINGS=$((RT_READINGS + 1))
         meta=""; [ -f "$dir/meta.$j" ] && IFS= read -r meta < "$dir/meta.$j"
         # Split on a pipe, never a tab: a tab is whitespace to IFS, so empty fields would collapse.
-        IFS='|' read -r PC_JUDGE_START PC_JUDGE_END PC_JUDGE_BYTES PC_JUDGE_MS PC_JUDGE_COST <<META_EOF
+        IFS='|' read -r PC_JUDGE_START PC_JUDGE_END PC_JUDGE_BYTES PC_JUDGE_MS PC_JUDGE_COST PC_JUDGE_DIR <<META_EOF
 $meta
 META_EOF
         add_call_cost
+        part_dirs[j]="${part_dirs[j]:+${part_dirs[j]} }${PC_JUDGE_DIR:--}"; part_end[j]=unread
         if [ "$(cat "$dir/rc.$j" 2>/dev/null)" != 0 ]; then
           PC_JUDGE_ERR="$(cat "$dir/err.$j" 2>/dev/null)"
           [ -n "$PC_JUDGE_ERR" ] || PC_JUDGE_ERR="the reading left no result behind"
@@ -994,7 +1005,8 @@ META_EOF
           case "$PC_JUDGE_ERR" in
             "judge verdict was not readable JSON"|"judge returned an error envelope"|"judge unreachable"*|"the reading left no result behind")
               again="$again $j" ;;
-            *) failed="$failed $j"; [ -n "$RT_WHY" ] || { RT_CAUSE=failed; RT_WHY="reading $j of the rest failed: $PC_JUDGE_ERR"; } ;;
+            *) part_end[j]=failed
+               failed="$failed $j"; [ -n "$RT_WHY" ] || { RT_CAUSE=failed; RT_WHY="reading $j of the rest failed: $PC_JUDGE_ERR"; } ;;
           esac
           continue
         fi
@@ -1013,7 +1025,7 @@ except Exception:
     print("ERR")
 ' 2>/dev/null)"
         case "$answer" in
-          OK*) covered_all="${covered_all}${answer#OK} " ;;
+          OK*) covered_all="${covered_all}${answer#OK} "; part_end[j]=read ;;
           *) part_err[j]="it answered without a list of covered changes, so its answer could not be read"
              again="$again $j" ;;
         esac
@@ -1022,6 +1034,7 @@ except Exception:
       for x in $nums; do case "$covered_all" in *" $x "*) ;; *) still="${still:+$still }$x" ;; esac; done
       nums="$still"
       todo="$again"
+      if [ -z "$nums" ]; then for j in $todo; do part_end[j]=unneeded; done; fi
       # Nothing left to ask, or every change already found tested by the readings that answered.
       { [ -n "$todo" ] && [ -n "$nums" ]; } || { todo=""; break; }
       [ "$tries" -lt "$READ_TRIES" ] || { RT_CAUSE=unreadable; break; }
@@ -1056,6 +1069,10 @@ except Exception:
     RT_UNSEEN="${RT_UNSEEN% }"
     [ -n "$RT_UNSEEN" ] || RT_UNSEEN="$tests_cut"
   fi
+  # Each part's reading, in part order, for the gate's record (#3339).
+  for j in "${!part_asks[@]}"; do
+    PC_READS="$PC_READS; rest$j ${part_asks[j]} ${part_end[j]:-unread} ${part_dirs[j]:--}"
+  done
   rm -rf "$dir"
   return 0
 }
@@ -1107,14 +1124,22 @@ fi
 # left (#3327). A reading that timed out is not asked again: the deadline checks below decide it.
 # Every try but the last is added to the record's cost here; first_t and first_left are the last
 # try's, which the deadline checks read.
+# After every ask, PC_READS says how the first reading stands for the gate's record (#3339): how many
+# times it was asked, how its last ask ended and the folder each ask's judge ran from. It decides
+# nothing.
 FIRST_TRIES=0
+FIRST_DIRS=""
+first_asked() {   # $1 = how the ask ended: read, unread or failed
+  FIRST_DIRS="${FIRST_DIRS:+$FIRST_DIRS }${PC_JUDGE_DIR:--}"
+  PC_READS="first $FIRST_TRIES $1 $FIRST_DIRS"
+}
 first_reading() {
   while :; do
     FIRST_TRIES=$((FIRST_TRIES + 1))
-    pc_judge "$JUDGE_MODEL" "$first_t" "$RUBRIC" "$judge_input" && return 0
+    if pc_judge "$JUDGE_MODEL" "$first_t" "$RUBRIC" "$judge_input"; then first_asked read; return 0; fi
     case "$PC_JUDGE_ERR" in
-      "judge verdict was not readable JSON"|"judge returned an error envelope"|"judge unreachable"*) ;;
-      *) return 1 ;;
+      "judge verdict was not readable JSON"|"judge returned an error envelope"|"judge unreachable"*) first_asked unread ;;
+      *) first_asked failed; return 1 ;;
     esac
     [ "$FIRST_TRIES" -lt "$READ_TRIES" ] || return 1
     first_left=$(( TESTS_DEADLINE - $(gate_clock) ))
@@ -1173,6 +1198,7 @@ case "$verdict" in
     if [ -n "$tests_cut" ]; then
       judge_rest_of_tests "$(printf '%s\n' "$verdict" | sed '1d; s/^  - //')"
       use_call_costs
+      if [ "$RT_STATE" = cantjudge ]; then PC_READS="$PC_READS; stop ${RT_CAUSE:-unknown}"; fi
       missing_detail="$(printf '%s' "$RT_MISSING" | sed 's/^  - //' | paste -sd '|' -)"
       missing_shown="${RT_MISSING%$'\n'}"
       case "$RT_STATE" in

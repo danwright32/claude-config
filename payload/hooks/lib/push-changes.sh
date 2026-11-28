@@ -343,20 +343,25 @@ pc_messages() {
 # returned nothing, an error envelope, or an answer that is not a JSON object. Never a verdict: the
 # gate reads its own fields from the object. Also sets PC_JUDGE_MODEL, PC_JUDGE_START and
 # PC_JUDGE_END (epoch seconds around the call), PC_JUDGE_MS and PC_JUDGE_COST (the envelope's own
-# duration_ms and total_cost_usd, empty when it carried none) and PC_JUDGE_BYTES (the input's size).
+# duration_ms and total_cost_usd, empty when it carried none), PC_JUDGE_BYTES (the input's size) and
+# PC_JUDGE_DIR (the name of the folder the judge ran from, empty when none was launched).
 pc_judge() {   # $1 = model  $2 = timeout seconds  $3 = system prompt (the rubric)  $4 = the input
   local tbin jtmp envelope status parsed
   PC_JUDGE_OBJ=""; PC_JUDGE_ERR=""; PC_JUDGE_MS=""; PC_JUDGE_COST=""
   # The model is named only once a call is launched, so a failure before that is never recorded as
   # a judge call (the report counts calls by it).
   PC_JUDGE_MODEL=""; PC_JUDGE_BYTES=${#4}; PC_JUDGE_START=""; PC_JUDGE_END=""
+  # The NAME of the folder the judge runs from, never its path (claude-config#3339): Claude Code keeps
+  # a headless run's transcript under ~/.claude/projects in a folder named after it, so a reading can
+  # be traced to its transcript by name. Empty when no judge was launched.
+  PC_JUDGE_DIR=""
   if ! command -v claude >/dev/null 2>&1; then
     PC_JUDGE_ERR="judge unavailable: no claude CLI on PATH"; return 1
   fi
   # GNU `timeout` is absent on stock macOS (it ships as `gtimeout` via coreutils).
   tbin="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
   jtmp="$(mktemp -d)" || { PC_JUDGE_ERR="judge could not start: no scratch directory"; return 1; }
-  PC_JUDGE_START="$(date +%s)"; PC_JUDGE_MODEL="$1"
+  PC_JUDGE_START="$(date +%s)"; PC_JUDGE_MODEL="$1"; PC_JUDGE_DIR="${jtmp##*/}"
   # The FIVE MINUTE prompt cache (claude-config#1600). On a subscription a headless run otherwise
   # writes to the one hour cache at twice the input price; a five minute write costs 1.25 times it.
   # 392 of 670 judge runs in the week to 2026-10-23 started within five minutes of the one before,
@@ -433,7 +438,8 @@ except Exception:
 }
 
 # ---- the record of what each gate did (claude-config#1075) ----
-# One tab separated line per push a gate reaches, appended to
+# One tab separated verdict line per push a gate reaches (and, before it, a readings line for a push
+# the test gate judged with a reader, described below), appended to
 # ${PUSH_GATE_LEDGER_DIR:-~/.claude/state/push-gates}/push-gates.tsv. Under ~/.claude/state, which
 # holds per Mac state that is never synced and that nothing sweeps (the lessons review keeps its
 # outcome ledger there for the same reason), so it outlives every temp clean. About 200 bytes a
@@ -461,6 +467,23 @@ except Exception:
 #   block      the judge refused it
 #   cantjudge  the test gate: the judge said untested, over test changes it could not see all of
 #   failopen   the gate wanted to decide and could not; the detail says why
+#
+# A push a reader judged also gets a READINGS line (claude-config#3339), written by pc_record in the
+# same append just BEFORE the verdict line, so `tail -n 1` and every reader of the last line still
+# find the verdict. Same 15 columns, the same finished time, call id and tree as its verdict line,
+# outcome column "reads" (not an outcome: no push is counted twice), no model figures, and in the
+# detail the verdict and how each reading went, in fixed words, counts and folder names only:
+#   outcome cantjudge; first 1 read tmp.a; rest1 3 unread tmp.b tmp.c tmp.d; stop unreadable
+# Each reading is "first" or "rest<part>", how many times it was asked, how it ended (read, unread:
+# never answered readably when the asking stopped, failed: a failure not asked again, unneeded:
+# unreadable and not asked again because every change was already found tested), and the name of the
+# folder each ask's judge ran from ("-" when none was made). "stop" is the could not judge cause. A
+# reading cleared on a second or third ask could not be told from a first time pass before it, and
+# its transcript could be found only by time. A line was added rather than a column, because
+# push-gate-report.py refuses a line of any other width and every suite reads the verdict from the
+# last line; and not the verdict's detail, which is cut at 400 characters and grouped on by the report.
+# PC_READS holds the readings for pc_record to write; only the test gate sets it.
+PC_READS=""
 PC_OUTCOMES="override nosource empty docsonly untested pass block cantjudge failopen"
 PC_LEDGER_NAME="push-gates.tsv"
 
@@ -479,7 +502,8 @@ pc_call_id() {   # $1 = payload JSON
 }
 
 # Appends the line. Reads PC_GATE and PC_CALL_ID (set by the gate once it has the payload), the
-# repository and HEAD from the shell's directory, and the PC_JUDGE_* values when $3 = judged.
+# repository and HEAD from the shell's directory, and the PC_JUDGE_* values when $3 = judged. With
+# PC_READS set, the readings line goes first in the same append (see above).
 # Returns 2, writing nothing, for an outcome not in PC_OUTCOMES, and 1 when the line could not be
 # written: the gate says so rather than losing the record silently, and never changes its verdict.
 pc_record() {   # $1 = outcome  $2 = detail  $3 = judged (when a judge was called)
@@ -506,7 +530,14 @@ pc_record() {   # $1 = outcome  $2 = detail  $3 = judged (when a judge was calle
     fi
   fi
   local tree; tree="$(pc_push_tree)"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  # The readings line (#3339), first, in the same printf, so it fails or lands with the verdict line.
+  local reads=""
+  if [ -n "${PC_READS:-}" ]; then
+    reads="${PC_READS//[$'\t\n\r']/ }"
+    printf -v reads '%s\t%s\t%s\treads\t%s\t%s\t%s\t\t\t\t\t\t%s\toutcome %s; %s\t%s\n' \
+      "$now" "$host" "${PC_GATE:-}" "$repo" "$head" "${PC_CALL_ID:-}" "$now" "$outcome" "$reads" "$tree"
+  fi
+  printf '%s%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$reads" \
     "$now" "$host" "${PC_GATE:-}" "$outcome" "$repo" "$head" "${PC_CALL_ID:-}" \
     "$model" "$wall" "$ms" "$cost" "$bytes" "$start" "$detail" "$tree" 2>/dev/null >> "$file" || return 1
   return 0
