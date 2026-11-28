@@ -3239,7 +3239,8 @@ def flattened(s):
 
     WHAT THAT TEXT STILL HID IS ADDED AFTER IT, AND NOTHING IS TAKEN AWAY (claude-config#3739).
     The text so far is every command a hook was handed before, and it is handed over whole,
-    first, whatever else is found. Two more readings of the command as typed may follow it:
+    whatever else is found. Two more readings of the command as typed may stand beside it
+    (after it, or before it where only that order reads every command of both, _added):
       * after a heredoc's opener, on its line. Written as "; " the line break that starts a
         body cannot be told from a ; after the opener: `cat <<EOF; git push`, the body and its
         closing line ran the push in bash and zsh, and the push was the body's first line to

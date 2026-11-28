@@ -305,8 +305,9 @@ sys.exit(1 if v is None or isinstance(v, str) else 0)' 2>/dev/null
 # was, and never hands back a text naming fewer commands than the plain flattening does. A pair
 # inside a string a wrapper hands a shell, or inside backquotes, is removed by the shell that
 # reads those and by no other, so the text is left as it was and the command is written again
-# after it with those read as that shell reads them (claude-config#3739): what was handed over
-# before is still handed over, whole and first. That needs python3 and the reader's file; with
+# beside it with those read as that shell reads them (claude-config#3739): what was handed over
+# before is still handed over, whole, with the rewritten command after it, or before it where
+# only that order reads every command of both. That needs python3 and the reader's file; with
 # either missing, or a command that reader cannot vouch for, the text is flattened as it always
 # was. The pair is found in the raw payload first, by every way JSON can spell it, so a command
 # holding none starts nothing more.
@@ -318,7 +319,7 @@ sys.exit(1 if v is None or isinstance(v, str) else 0)' 2>/dev/null
 # reading the segmented form, with no backslash anywhere, and the same on a command of one line,
 # which no shell gives a body at all. So a payload in which a ; and a blank follow a << before
 # that line ends is flattened by the same mode of lib/shell-words.py, which hands back the text
-# as it always was and, after it, the command with each body moved up to follow the command that
+# as it always was and, beside it, the command with each body moved up to follow the command that
 # opens it (the shape this form has always been read right in). The old text is never replaced,
 # so a hook is handed every command it was handed before. The look for it is a pattern over the
 # raw payload, so a heredoc with nothing after its opener, which is nearly every one, starts

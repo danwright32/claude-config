@@ -229,7 +229,7 @@ def unchanged(what, cmd):
     text_is(what, cmd, old_text(cmd))
 
 
-# Must fix 1: a pair the string's own shell keeps is not taken out.
+# A pair the string's own shell keeps is not taken out.
 shows("a push on the line after a comment that ends in a backslash, in a wrapper's string, is still named",
       "bash -c 'true # c" + J + PUSH + " origin main --force; gi" + J + "t push origin feature; l" + J + "s'", ("", "git", "push", "origin main --force"))
 shows("and so is the push the join does put together", "bash -c 'true # c" + J + PUSH + " origin main --force; gi" + J + "t push origin feature; l" + J + "s'",
@@ -241,7 +241,7 @@ text_is("a pair that ends a comment in a wrapper's string stays in the rewritten
         "bash -c 'true # c" + J + PUSH + "; l" + J + "s'", "bash -c 'true # c\\; " + PUSH + "; l\\; s'; bash -c 'true # c\\; " + PUSH + "; ls'")
 shows("a push whose refspec stands across the pair in a wrapper's string is named with that refspec",
       "bash -c '" + PUSH + " origin " + J + "main'", ("", "git", "push", "origin main"))
-# Must fix 2: no skip word is put together, and a string no shell reads is left as typed.
+# No skip word is put together, and a string no shell reads is left as typed.
 unchanged("a commit message holding the pair, with nothing else to rewrite, is handed over as it always was", "git commit -m 'a" + J + "b' && " + PUSH)
 unchanged("an argument of echo holding the pair is handed over as it always was", "echo 'gi" + J + "t push'")
 unchanged("a string ssh hands another machine is handed over as it always was", "ssh host 'gi" + J + "t push'")
@@ -265,7 +265,7 @@ text_is("a NAME=1 word a moved body would leave where the text ends is followed 
         PUSH + "; cat <<EOF; ls; SKIP_X=1\nbody\nEOF", PUSH + "; cat <<EOF; body; EOF; ls; SKIP_X=1; " + PUSH + "; cat <<EOF; ls; SKIP_X=1; body; EOF")
 skip = SKIPS[0].findall(sw.flattened("cat <<EOF; SKIP_X=1 " + PUSH + "\nbody\nEOF"))
 row("control: a skip word typed whole in front of a push after an opener is one, as it was before", "" if "SKIP_X" in skip else "it is none in the text handed over")
-# Must fix 3: inside backquotes, by how many backslashes stand before the line break.
+# Inside backquotes, by how many backslashes stand before the line break.
 for n, joins in ((1, True), (2, True), (3, True), (4, False), (5, False), (6, False), (7, False)):
     cmd = "x=`git " + "\\" * n + "\npush`"
     if joins:
@@ -276,7 +276,7 @@ hides("after three backslashes a separator that starts the next line is escaped 
       "x=`echo a \\\\" + J + "; true`", "git", "push")
 text_is("three backslashes and a line break leave one backslash, which escapes the next line's first letter",
         "x=`git \\\\" + J + "push`", "x=`git \\\\\\; push`; x=`git \\push`")
-# Must fix 4: behind a relative cd.
+# Behind a relative cd.
 shows("a push after an opener, behind a relative cd and a cd on the opener's line, is named in the folder it runs in",
       "cd a; cat <<EOF; cd b; " + PUSH + " origin main\nbody\nEOF\nls", ("a/b", "git", "push", "origin main"))
 text_is("there the rewritten command goes first inside a subshell, and the old text follows from the folder it always started in",
@@ -297,7 +297,7 @@ shows("a push across the pair in a string bash -c reads under sudo is named", "s
 shows("a push across the pair in a wrapper's string inside a substitution is named", "x=$(bash -c 'gi" + J + "t push')", ("", "git", "push", ""))
 shows("a push across the pair inside backquotes in a wrapper's string is named", "bash -c 'x=`gi" + J + "t push`'", ("", "git", "push", ""))
 shows("a pull request creation after an opener is named", "cat <<EOF; gh pr create --fill\nbody\nEOF", ("", "gh", "pr", "--fill"))
-# More such lines than one reading at a time used to allow.
+# However many lines with an opener there are, and however many separators one such line holds.
 many = "".join("cat <<E; true\nx\nE\n" for _ in range(200))
 shows("a push after the opener on the two hundred and first such line is named", many + "cat <<EOF; " + PUSH + "\nbody\nEOF", ("", "git", "push", ""))
 deep = "".join("cat <<E%d; " % k for k in range(sw.OPENER_LINE_LIMIT + 6)) + PUSH + "".join("\nb\nE%d" % k for k in range(sw.OPENER_LINE_LIMIT + 6))

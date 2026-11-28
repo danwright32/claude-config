@@ -2767,8 +2767,9 @@ joined_row no ps_is_git_add "git add" "cat <<EOF; git commit -m x${BODY}" "quiet
 
 # The text itself: each body moved up to follow the command that opens it, and written as it always
 # was wherever nothing more is named that way. THE OLD TEXT IS NEVER REPLACED: it is handed over
-# whole and first, and the rewritten command follows it, so a hook is handed every command it was
-# handed before: the rewritten text alone can hide a command the old text names.
+# whole, with the rewritten command after it, or before it where only that order reads every
+# command of both, so a hook is handed every command it was handed before: the rewritten text
+# alone can hide a command the old text names.
 OLD3739="cat <<EOF; git push; body; EOF"
 flat_is "cat <<EOF; git push${BODY}" "$OLD3739; cat <<EOF; body; EOF; git push" "the old text comes first, whole, and then the command with the body following the command that opens it and what stood after the opener following the body"
 flat_is "cat <<EOF; git push${BODY}${NL}echo done" "cat <<EOF; git push; body; EOF; echo done; cat <<EOF; body; EOF; git push; echo done" "and the lines after the heredoc follow that"
