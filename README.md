@@ -2013,7 +2013,9 @@ commit either, and this refusal only arrives at the push.
 
 A pull request labelled `changelog/announce` carries the post for agents under `## Announcement`,
 and Dan's words for the label were "it should ask me before applying the label". So the session
-writes the post to a file, runs `/no-ai-tells` on it, opens it in BBEdit with the front window flag,
+writes the post to a file, runs `/no-ai-tells` on it, runs
+`node ~/.claude/hooks/lib/changelog-entry.js announcement-refusal <file>` and changes the wording
+until that refuses nothing (#3846, below), opens it in BBEdit with the front window flag,
 and asks ONE picker of one question (`Approve the wording` or `Not yet`) naming the pull request or
 feature and the channel and ending `Save the file before you answer.`, with this metadata:
 
@@ -2057,7 +2059,72 @@ when all of these hold, each failure said in its own words:
   leave no more than two in a row, then open the file and ask him again. Blank lines after the last
   line of wording hide nothing and pass. The run is counted by `hooks/lib/changelog-entry.js`
   (`blankRunBeforeWording`, in the answer of its `announcement-hash` command), by the same reading
-  of a blank line the hash drops them by, and an answer without the count approves nothing.
+  of a blank line the hash drops them by, and an answer without the count approves nothing;
+- the merge would not refuse the wording for what it holds (#3846). On 2026-11-27 he approved, by
+  picker, wording whose first line was the mention followed by a sentence. Only the merge gate read
+  the rules for what a post may hold (the mention alone on its first line, only the markdown that
+  was measured to arrive in Slack, no dash as punctuation, no HTML comment), so the approval
+  counted, the label went on, the merge was refused for the opener, and he was asked a second
+  time. An Approve of wording the merge would refuse now approves nothing, and the refusal carries
+  the gate's code and its own words. Two rules came with the review of that change. Wording that
+  holds a carriage return inside a line is refused by the gate and so by the approval
+  (`ANNOUNCEMENT_CARRIAGE_RETURN`): the hash reads that character as a line's end and the rules
+  did not, so a block quote or a table behind it was judged by nothing. And a wording file in
+  which any line is a heading is refused (`WORDING_FILE_HEADING`): a pull request's block ends at
+  the next heading, so the block could never be that file whole. There is one judge and no copy of the rules:
+  `hooks/lib/changelog-entry.js`'s `blockRefusal` is what the merge gate judges a pull request's
+  block with, and its command line `announcement-refusal [--body] <file | ->` puts the same
+  function to a wording file (read as the block it becomes), printing `{refused, code, reason}`
+  and exiting 0 for wording the gate takes, 1 for wording it refuses and 3 for a file it cannot
+  read. It changes nothing. Of a file it also refuses a run of more than two blank lines above
+  wording (`WORDING_FILE_BLANK_RUN`), which the approval refuses a file for (#3703, above): the
+  count is the same `blankRunBeforeWording`, and `hooks/test-announce-approval.sh` holds the two
+  limits equal. So the command judges everything the approval refuses about what the file holds;
+  the file's size and its name are not content, and only the approval refuses those. Two of the
+  gate's sentences are about a pull request and are not true of a file, so the file form gives
+  words of its own under the gate's code: a file that holds no post (`EMPTY_ANNOUNCEMENT`), and
+  a file that begins with a byte order mark (`ANNOUNCEMENT_NO_OPENER`, naming the mark, since a
+  first line quoted with it reads as the mention alone). The library
+  hands that command the same bytes it hashed, and an answer
+  from it that cannot be read approves nothing. How to ask him, which the label hook and the merge
+  gate print, names the command as the step before the file is opened, so a session that follows
+  it never puts wording the merge would refuse in front of him.
+
+What is written to the record did not change with that rule. A note of wording the merge would
+refuse still holds the wording's hash, so his `Not yet` about it takes back what it always did, and
+its `why` says what an Approve of it is stopped by. An approval the record already held still
+counts wherever its wording passes. One of wording that does not pass could never merge, and
+`announce-label-ask.sh` refuses the label for it: before it looks for any approval, it puts the
+Announcement block the command would leave to the same judge and refuses wording the merge would
+refuse, with the gate's code and words. The hash and that judging share the library's one five
+second bound, so the hook's longest wait is what it was.
+
+Wording nobody could judge is not wording that was refused (the review of #3846). The hash and the
+judging are each one bounded question to `changelog-entry.js`, and either can run out of time on a
+loaded Mac. With no note that refuses the one call that met it. In a note it used to be permanent:
+when the review ran it on 2026-11-27,
+the note of good wording carried "did not judge the wording in 1.7 seconds" as its `why`, and a note
+that carries a `why` approves nothing for good. So a note whose reason is that the wording could not
+be judged now also says `"unjudged": true`, and the call that reads it judges the file again, only
+while the file's change time is still the one noted. What each state of a note reads as:
+
+| The note holds | An Approve read with it |
+|---|---|
+| its ids alone, or another repository or file than the picker names | is judged by the file as it stands, as with no note |
+| a hash, no `why` | counts, by the hash noted, when the change time noted is before his answer |
+| a `why`, no `unjudged` | approves nothing, for good, in the words of the `why` |
+| a `why` and `"unjudged": true`, the file unchanged since the note | has the file judged now (the three outcomes are below) |
+| a `why` and `"unjudged": true`, the file changed since or unreadable | approves nothing, and the refusal says to open the file and ask him again |
+| no change time, or one at or after his answer | approves nothing |
+
+A `why` with no `unjudged` is refused wording, a file that could not be read when noted, held no
+wording, was too large, held a long run of blank lines or changed while it was hashed, and any note
+written before the field. A file judged now and taken counts. One judged now and refused approves
+nothing, in the gate's words. One still not judged approves nothing for that call, and the next
+call judges again.
+
+The fourth row is the only way a note that carries a `why` ends in an approval, and it does so
+only by the file being judged and taken by the merge gate's own judge.
 
 What is hashed is the FILE as it stands, never a hash the session supplies, by
 `hooks/lib/changelog-entry.js`'s `announcementHash`: the sha256 of the one normalised form (line
@@ -2215,7 +2282,8 @@ the wording, and sleep mode can answer one with Dan asleep.
   `gh pr create --label`, `gh pr edit --add-label`, `gh issue edit --add-label` and a `gh api`
   write to a pull request's labels are refused unless the wording the command would leave is
   approved, read from its `--body`, from the file its `--body-file` names, or from GitHub for an
-  edit that gives neither. It asks for the pull request the command names by number or link (or
+  edit that gives neither. Wording the merge would refuse for what it holds is refused first,
+  approved or not, by the merge gate's own judge and in its words (#3846, above). It asks for the pull request the command names by number or link (or
   GitHub's answer names) and records nothing: the pull request that used an approval keeps it, and
   any other, or a command naming none (a create), goes through only while an approval of that
   wording is unused. A form the wording cannot be read from (`--fill`, a template, a body on
@@ -6704,6 +6772,117 @@ day, with the helper at 135,488 bytes, it was 8,133 steps and the same 2.5 secon
 refusal that day, at 2:32 PM ET, was not a helper grown past the gate. No load figure was recorded
 for that minute, so the likely cause (a Mac too busy to give the gate a quarter of a core for 11
 seconds) is inferred, not measured.
+
+## Slack drafts are compared with what Dan sent
+
+Sessions save each Slack message as a draft and Dan edits it before he sends it. A measurement on
+the work MacBook on 2026-11-24 paired 106 drafts with what he sent: 22 went out as drafted and 29
+were heavily rewritten, and the commonest edit was cutting figures and shortening (#3554). Three
+pieces turn the edits he keeps making into written rules, each one his to accept.
+
+- **The reader**, `hooks/lib/draft-edit-diff.py`. It reads this Mac's session records, pairs each
+  draft Slack saved with the next post by `--author` in the same thread, as a later session read it
+  back, and prints counts by kind of edit: sent as drafted, heavily rewritten, figures cut, length
+  cut, the ask reworded, the opening changed. A draft is used once, by the first post after it; a
+  post with no draft before it is left out, and so is one more than an hour after its draft (a
+  setting, chosen from the work MacBook's pairs of 2026-11-27, where 173 of 184 posts came within
+  the hour). Both are compared with Slack's formatting set aside. A heavily rewritten pair is in
+  none of the four kinds a rule is offered for, since a post that far from its draft may not be an
+  edit of it; what that costs is that a draft cut to under about half its length is in no kind. A
+  read made in the concise layout shows no time for a post, so it is counted as its own kind and
+  nothing is paired from it. It only prints. It imports
+  nothing that can send a request or write a file and opens files only to read, because the records
+  name Slack's posting address and the Slack drafts gate refuses a program that reads them and
+  could write. Message text is printed only with `--examples`: one pair for each recurring kind. A
+  kind is recurring at 10 pairs in 3 threads, a setting chosen on 2026-11-27 so that one long thread
+  cannot make an edit look like a habit; under it the kind is reported as too thin and no rule is
+  offered. A read result it finds no message in is counted and said. Only the `messages` field of
+  a read result is read for messages: text in any other field, `pagination_info` included, is no
+  part of a message, and a result with no such field is counted as one it cannot read. A run exits
+  4 when none could be read, or when most messages have their text somewhere it does not look
+  (none under the Message TS line, or an unknown line above it). A pair whose post begins or ends
+  in a line shaped like one of the connector's own (a word or three and a colon) is set aside and
+  counted, unless the draft holds a line with the same label at that end, which makes it his; a
+  run in which most pairs were set aside that way exits 4 too. That is judged over the pairs and
+  not the messages, so a channel of alerts that all begin "Alert:" does not stop a run. That exit
+  cannot tell a line of the connector's from one Dan adds by hand to most drafts ("Update: " in
+  front of 7 of 12 stops the run, on a layout that is as measured), so its words name both
+  readings and blame neither, and the note the skill files says only that nothing was measured.
+  `--shapes` prints what the results are made of: counts, and a field or label name only when it
+  is in a fixed list in the script, never a key or a line it does not know. `--differences`
+  counts, for the pairs changed but not heavily, how many would be the same with one more thing
+  set aside (a name inside angle brackets, how a link is written, punctuation, emoji, a trailing
+  edited mark, a last or first line), and the same for each kind a rule can be offered for. Each
+  counts the pairs one of those seven listed differences would explain, and is a limit in neither
+  direction: a pair it explains can still be his edit, since he also changes punctuation and adds
+  and cuts lines, and a pair it does not explain can still be no edit of his, when a read writes a
+  message another way that is not listed (twelve drafts posted word for word, with a phone number
+  read back as a link, read as twelve changed openings with 0 of 12 explained). `--likeness` counts the pairs in each band of likeness (the
+  same, 0.98 and over, 0.95, 0.90, 0.80, 0.70, under 0.70), once by words and once by characters,
+  and how many posts were the last message of the read their text came from. The two differ
+  widely on a small change: one changed letter in a message of ten words is 0.90 by words and
+  about 0.99 by characters. The run prints, in fixed words, what the two counts can and cannot
+  show.
+- **The offer**, the `draft-edit-review` skill. It runs the reader with `--differences` and
+  `--likeness`, tells Dan the counts and, before any rule, the doubt set out in the last paragraph
+  of this section, and asks one question for each recurring kind: the proposed rule in one
+  sentence, the pairs it rests on, how many of them one of the listed read differences would
+  explain and that the rest are his edit or a read difference nobody has listed, one example pair,
+  and Accept, Not now or Never offer this again. The sentence is run
+  through `/no-ai-tells` before that question, so the sentence he accepts is the sentence written,
+  word for word. On Accept a second question asks where the rule goes (the no-ai-tells skill, the Slack
+  section of the global `CLAUDE.md`, or the project's own file), and the session makes that edit
+  itself. What checks the save depends on the place. The ask before saving mod asks him before a
+  save to a `CLAUDE.md`, an `AGENTS.md` or a memory file. It does not ask about a skill file, so
+  for the no-ai-tells skill the skill asks one more question of its own, showing the final sentence
+  and the file's name, before the edit. `skills/draft-edit-review/decisions.py` keeps each answer,
+  and the reader reads that file itself, so a kind he accepted or declined for good is left out
+  whether or not the session passes anything. Where a rule went is kept as one of three labels and
+  a project's folder name, never as text somebody typed. `decisions.py forget` takes an answer back.
+- **The weekly notice**, `hooks/draft-edit-review-notice.sh`, at session start. It says the review
+  is due, in one line, when a week has passed since it last said so and a draft has been saved on
+  this Mac since the last review finished. The line goes into the session, which is asked to tell
+  Dan; nothing checks that it did, and the week is recorded when the line is printed. It reads no
+  record, runs nothing and asks nothing. The same script runs after the Slack draft tool and
+  records the second, and nothing about the draft, unless the tool's answer says Slack saved
+  nothing. State it cannot read is said by name, at every session start until it is put right, and
+  the review is not offered.
+
+What the pairing cannot see: a thread no later session read back, or read back only in the concise
+layout; a draft Dan deleted (a post he then wrote in that thread within the hour reads as heavily
+rewritten); a draft he sent more than an hour after it was saved; a message he wrote with no
+draft; a post a session sent as him; an edit he made after sending; a read result that was cut
+short; and the other Mac's sessions. Three things it reads wrongly, each on purpose or for want of
+a measurement. A line of his own shaped like a label ("Update: ...") that opens or ends what he
+sent, and that the draft did not hold there, is set aside with the lines that may be the
+connector's, so that pair is in no count; when most of his pairs are so, the run stops and no kind
+is counted on that Mac, which is a decision still open with Dan (pull request 3848). A line of the connector's that is not shaped like a
+label, and is not the Reactions line, is read as his words. And "@Name" typed in a draft and made
+a real mention by hand reads as an edit, which it is.
+
+State is in `~/.claude/state/draft-edit-review/` on each Mac and is never synced: `draft-saved`,
+`last-offered` and `last-review` (one time each), `author` (Dan's Slack member id) and
+`decisions.json`. It is per Mac on purpose. This repository is public, the counts come from one
+Mac's own records, and where a rule went can name a private project. The cost is that a kind
+declined on one Mac can be offered once on the other.
+
+The layout inside a thread or channel read could not be measured on the personal MacBook, which on
+2026-11-27 held no draft call and no read that succeeded in 8,628 record files. It was measured on
+the work MacBook the same day, over 1,765 read results, by counts, field names and the punctuation
+of headings only (pull request 3848), and the reader was fitted to it: the concise layout, a channel
+heading with no name, the section heading over a thread's replies, a `Reactions:` line under a
+message, and the name a read adds inside a mention. The fixtures hold invented text in that layout.
+A channel, a group and a here mention with a name added are set aside the same way, and were not
+measured. One thing that run left unexplained: 6 of its 184 pairs read as sent as drafted, against
+22 of 106 in the issue's measurement of 2026-11-24. One likely cause is that the two counts meant
+different things by it: the issue reported four bands, and this reader wants the two texts the
+same. `--likeness` prints bands of its own, by words and by characters, and cannot settle that:
+the issue did not record whether it compared words or characters, or where it drew its lines, so
+about a fifth of the pairs at 0.90 and over would fit that cause and fit small edits of his
+equally, and far fewer would make it less likely without ruling it out. Neither count had been
+run on the work MacBook when this was written on 2026-11-27. For as long as the reader's own
+account lists that share as not explained, the skill tells Dan the doubt at every review, with the
+run's own numbers, before it puts any rule to him.
 
 ## Read only queries are approved without asking
 
@@ -11730,11 +11909,22 @@ introduced by before, when or if, #1680, "yours to do", "the one step left is yo
 it's done", "still open is ... described above", an imperative click on a named thing or type of a
 named value, "In Settings, ...", "go to ... and click", two or more numbered lines that each begin
 with an action at a screen such as open, click, press or paste, #1811, a file edit closed by ", then
-tell me", "Tell me it's done", "Save the file" or "press Cmd+S", #1955, never one negated right
-before it or quoted) with no unfinished step on a card he can see is blocked once, telling Claude to
-check the step and pin it with the `steps` tool; never twice in one turn (the turn's own transcript
-shows the block), and never in a -p run. A transcript that cannot be read is said in the log, and
-the last message alone is judged, never twice in one chain of turn ends (`stop_hook_active`). A page
+tell me", "Tell me it's done", "Save the file" or "press Cmd+S", #1955, the two wordings of #3842
+that caught steps when counted, "One step left for you" and "the one only you can do", never one
+negated right before it or quoted) with no unfinished step on a card he can see is blocked once,
+telling Claude to check the step and pin it with the `steps` tool; never twice in one turn (the
+turn's own transcript shows the block), and never in a -p run. A transcript that cannot be read is
+said in the log, and the last message alone is judged, never twice in one chain of turn ends
+(`stop_hook_active`). A call the permission check refused in the turn (#3842) is judged
+whatever the reply says: it is read from
+the session record's own `toolDenialKind` (`automode-blocked` alone, never no verdict, a hook's or a
+rule's refusal, or a prompt Dan declined), and with no call of the `steps` tool after it the turn is
+blocked once, in about 40 words since Dan reads them too, telling Claude to put what the refusal
+left for Dan on the steps card or to say in one line that nothing from it is his ("Nothing from the
+refusal is yours to do."). Three things answer it: a step the main conversation pins after the
+refusal, that line, and the line that answers every ask of this check, "None of these steps are
+yours to do now." A subagent's refusal is in its own
+record and holds nothing, and a turn that could not be read names no refusal. A page
 published with the Artifact tool is judged as it is published, read from the file it came from
 (#1811, `hooks/page.ts`): two list items, numbered or bulleted, that each begin with a thing to do
 at a screen, or any two of ticks, Copy buttons and such a thing to do, make it a page of steps for
@@ -11748,7 +11938,7 @@ not judged. Behaviour in `docs/mods-design.md`, "Manual steps behaviour".
 
 </td><td>
 
-#614, #707, #708, #863, #886, #939, #1215, #1239, #1245, #1608, #1613, #1811
+#614, #707, #708, #863, #886, #939, #1215, #1239, #1245, #1608, #1613, #1811, #1955, #3652, #3842
 
 </td></tr>
 <tr><td>
@@ -12275,8 +12465,27 @@ that repository; a call that failed, or an answer for another number or reposito
 box, saying why (#1818), and one GitHub says was closed, or whose number is no pull request there,
 holds nothing, as is it live lets it go. A merge GitHub confirmed holds the box until a card made
 since it merged is in is it live's verdicts, which the box reads too, since is it live crosses a
-carded merge off its record only at a turn end. At most one box per request: a second needs a new
-message typed by Dan, and two calls at once show one. Where the card is not drawn, the result is the
+carded merge off its record only at a turn end. At most one box per request, and two calls at once
+show one. A request is a message Dan types, or since #3843 an answer he gives in a picker that the
+session then does work after (his answer of 2026-11-27: an answer alone, such as one confirming a
+step, is no request; a reply he types into the picker in place of a choice is an answer; an
+answer to a picker he could not have read whole, by mod-kit's `askFault` (#3321), is not). His
+answer waits only until the turn it was given in ends, so work in a later turn he did not start is
+not work he picked. Work is a call of the main conversation that ran, that Claude Code did not mark
+read only (`isReadOnly` on the call's result, set when the tool held its input read only, as its
+typings say Bash does for `ls`; a result without the mark is never taken as read only), and whose
+tool the end of turn review's own test counts as able to change something (`is_mutating` in
+`hooks/turn-worked.py`, run from that file by the mod, so there is one list of such tools;
+`tests/test-goal-box-work-test.sh` holds the mod's command to the real file; a run that could not
+be read is not made again for the same tool's name in that turn). The box's own tool,
+a call that was refused or came back as an error (how a settings hook's refusal reaches a mod)
+and a subagent's call are not work; a picker dismissed, failed or closed while he was away is no
+answer; one that came back any other way with no answer the mod reads is not counted either, and
+the debug log then names the keys its result held, never a word of his, so a change in what
+Claude Code hands the mod for a picker shows at the first one; a message he types drops an answer
+still waiting. A test that
+cannot be run is said in the refusal, never read as no work. The refusal of a second box says
+which of these it is and when a later call is right. Where the card is not drawn, the result is the
 same box as text, shaped like SESSION REFLECTION. What holds the box is read through mod-kit's one
 list of what is in flight (`hooks/mod-kit/inflight.ts`, #3770), asked for the box's three kinds.
 The close this session card (#3770, Dan's answers of 2026-11-26): a manual steps card headed
@@ -12330,7 +12539,7 @@ the kernel does not show.
 
 </td><td>
 
-#1563, #1749, #1818, #3770
+#1563, #1749, #1818, #3770, #3843
 
 </td></tr>
 </tbody>
