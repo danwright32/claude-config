@@ -2383,8 +2383,7 @@ settled:
   session start forgets it. A settled announcement stays final. The row comes down as soon as a
   draft is counted. So Copy and Mark sent are of use only while none has been: in the minutes
   before the live card's draft is saved, and for as long as a draft cannot be saved or counted
-  (wording that failed the claimed check, an error from Slack, a draft that differs). The mod's
-  tests are what holds those two buttons: neither has been pressed in a live band (#3670).
+  (wording that failed the claimed check, an error from Slack, a draft that differs).
   `/live` lists it. Every session
   started in that project says it in one line, to Dan and with the session's first prompt. And the
   turn end of the session whose card found it live is refused once per chain of turn ends.
