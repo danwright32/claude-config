@@ -10,7 +10,7 @@ import { call, refusalOf, withKit, world } from './world.ts'
 
 const run = async ($: Parameters<typeof call>[0], path: string) => refusalOf(await call($, { tool: 'Bash', command: `bash ${path}` }))
 const files = (scripts: Record<string, string>) => ({ '/w/slate/app/page.tsx': 'x\n', ...Object.fromEntries(Object.entries(scripts).map(([path, text]) => [`/w/slate/${path}`, `${text}\n`])) })
-const allHeld = async ($: Parameters<typeof call>[0], on: Parameters<typeof world>[1], scripts: Record<string, string>) => {
+const allHeld = async ($: Parameters<typeof world>[0], on: Parameters<typeof world>[1], scripts: Record<string, string>) => {
   const w = world($, on, { files: files(scripts) })
   for (const path of Object.keys(scripts)) expect({ path, held: (await run($, path)).includes(SKIP_QUESTION) }).toEqual({ path, held: true })
   expect(w.ran).toEqual([])
