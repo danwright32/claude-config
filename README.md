@@ -2357,6 +2357,12 @@ settled:
   loads the same copy). A draft that differs, an answer with no `draft_id`, each error Slack names,
   and a judgement that could not be made each have a sentence of their own and leave it owed. Once
   drafted it is never asked for again.
+- A draft that is not counted is not refused either: nothing here can stop Slack keeping it. Seen
+  for real on 2026-11-27 (#3670): a draft whose words differ is created in Slack and then not
+  counted, and the sentence says where the two first differ. Slack keeps one draft per channel, so
+  a second draft saved while one waits is answered "Draft created" with no `draft_id` and nothing
+  is kept. The wrong draft therefore blocks the right one until Dan sends or deletes it by hand,
+  and the announcement stays owed and the turn end stays refused until then.
 - Only the wording the pull request merged on is drafted, counted or copied, since a description
   can be edited after the merge by a command no hook judges. The same library's `claimed` check
   holds the wording's hash to the hash of that pull request's latest claim line in the record of
@@ -2374,7 +2380,12 @@ settled:
   button's label to `Confirm: not announcing #<number>` and says so; a press within 10 seconds
   settles it, and left alone the label goes back. A press of Copy or Mark sent disarms it. Armed
   is that session's own state, never the store, decided by the clock and not by a timer, and a
-  session start forgets it. A settled announcement stays final. `/live` lists it. Every session
+  session start forgets it. A settled announcement stays final. The row comes down as soon as a
+  draft is counted. So Copy and Mark sent are of use only while none has been: in the minutes
+  before the live card's draft is saved, and for as long as a draft cannot be saved or counted
+  (wording that failed the claimed check, an error from Slack, a draft that differs). On
+  2026-11-27 neither was pressed in a live band, and Dan chose to accept the mod's tests for them
+  (by picker: "Tests are enough"). `/live` lists it. Every session
   started in that project says it in one line, to Dan and with the session's first prompt. And the
   turn end of the session whose card found it live is refused once per chain of turn ends.
 - The merge gate's allow for an announce merge (`require-changelog-tag.sh`) always carries one line
