@@ -346,6 +346,9 @@ describe('typedCommands, the misreads of #3865', () => {
     expect(typedCommands('Run `/reload-plugins`. It can wait no longer.')).toEqual(['/reload-plugins'])
     expect(typedCommands('Run `/reload-plugins`. This branch can wait.')).toEqual(['/reload-plugins'])
     expect(typedCommands('Run `/reload-plugins`. Do it before the review, and that can wait.')).toEqual(['/reload-plugins'])
+    // After a clause with a subject of its own, "it" is that subject.
+    expect(typedCommands('Run `/reload-plugins`. The merge queue is stuck, and it can wait for the morning.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/reload-plugins`. No test needs it tonight, so it can wait until tomorrow.')).toEqual([])
     // The command's own sentence says now, which the next sentence cannot take back.
     expect(typedCommands('Type `/compact` now. It can wait for the morning.')).toEqual(['/compact'])
   })

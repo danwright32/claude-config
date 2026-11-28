@@ -133,10 +133,12 @@ const OR_NEXT = new RegExp(String.raw`^[ \t]+${ANOTHER}`, 'i')
 // The sentence right after, on the same line, putting the command off. Its subject is the command
 // and its verb the putting off: "It can wait for the morning.", "Nothing tonight depends on it, and
 // it can wait for the morning.", "I have put that down for the morning." Not "This cannot wait",
-// "the rest can wait", "The tests for this branch can wait" or "It can wait no longer".
+// "the rest can wait", "The tests for this branch can wait" or "It can wait no longer". After a
+// clause, "it" is the command only when that clause has no subject "it" could name instead, which
+// "nothing" and "no" give: not "The merge queue is stuck, and it can wait for the morning".
 const TILL_LATER = String.raw`\s+(?:for|until|till)\s+(?:the\s+)?(?:morning|tomorrow)`
 const WAIT_ENDS = String.raw`(?=\s*(?:[.!?,;]|$))`
-const WAIT_NEXT = new RegExp(String.raw`^[ \t]+(?:(?:it|that|this)\s+can\s+wait(?:${TILL_LATER}|\s+until\s+you(?:'re| are)\s+back)?${WAIT_ENDS}|[^.!?\n,;]{0,80}[,;]\s+(?:and|so|but)\s+it\s+can\s+wait${TILL_LATER}${WAIT_ENDS}|I\s+have\s+put\s+(?:it|that)\s+down\s+for\s+(?:the\s+morning|tomorrow)\b)`, 'i')
+const WAIT_NEXT = new RegExp(String.raw`^[ \t]+(?:(?:it|that|this)\s+can\s+wait(?:${TILL_LATER}|\s+until\s+you(?:'re| are)\s+back)?${WAIT_ENDS}|(?:nothing|no\s+\w+)\b[^.!?\n,;]{0,80}[,;]\s+(?:and|so|but)\s+it\s+can\s+wait${TILL_LATER}${WAIT_ENDS}|I\s+have\s+put\s+(?:it|that)\s+down\s+for\s+(?:the\s+morning|tomorrow)\b)`, 'i')
 // A standing rule, not a step now: "Run `/no-ai-tells` on anything other people will read". Never
 // "every" or "any" alone, which a hand over says too ("in every open session"), nor "anything else"
 // ("before anything else" says first, now).

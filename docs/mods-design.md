@@ -2595,10 +2595,11 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   load the guard I merged in the morning"). One offered beside a new session, named as one after
   the command ("or start a fresh session"), and never "or" with other words ("or keep seeing the
   old error"). And one the sentence right after puts off, where that sentence's subject is the
-  command and its verb the putting off ("It can wait for the morning.", "and it can wait for
-  the morning", "I have put that down for the morning"), or offers a new session for ("Or open
-  a new session."); "This cannot wait", "the rest can wait" and "Or leave it and the session
-  ends" are held. Now counted: an imperative after ", then" where the words before
+  command and its verb the putting off ("It can wait for the morning.", "Nothing tonight depends
+  on it, and it can wait for the morning", "I have put that down for the morning"), or offers a
+  new session for ("Or open a new session."); "This cannot wait", "the rest can wait", "The
+  merge queue is stuck, and it can wait for the morning" and "Or leave it and the session ends"
+  are held. Now counted: an imperative after ", then" where the words before
   it are not the session's own; "go ahead and run"; "you'll have to run"; "use" after "your next
   step is to", with a closed list of system folders (`/tmp`, `/usr`) never a command; "before
   anything else", which is no standing rule; a command beside a web word that names something
