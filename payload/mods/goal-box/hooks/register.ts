@@ -432,7 +432,9 @@ const spendCardNow = async ($: EngineInterface): Promise<void> => {
  *
  * Passed over for good, with nothing sent: a card none of whose steps was done in this session (all
  * taken off undone, or all another session's), since nothing was finished by it; one that emptied
- * before Dan asked this session for anything; and one whose request already has its box.
+ * before Dan asked this session for anything; one whose request already has its box; and one that
+ * emptied before his latest message or before the newest box shown, so a record that waited is
+ * never asked about under a later request.
  * Left for a later turn end: a card that emptied while something the box refuses for is in flight,
  * and one followed by a card that has a step open now or cannot be read.
  * The end of turn review's record is asked last, through `record` (endRecord): a review handed over
@@ -447,13 +449,20 @@ const askAfterCard = async ($: EngineInterface, record: () => Promise<EndRecord>
   if (asked.value !== undefined && asked.value >= emptied.at) return
   const prompts = (await $.state.get(promptsRef)).value ?? 0
   const shown = (await $.state.get(shownRef)).value ?? []
+  const since = (await $.state.get(requestAtRef)).value
+  // The last two tie a record that waited to the request it emptied under: his message since is a
+  // new request, and a box shown since covered the card, whatever he has picked in a picker after.
   const passed = emptied.done < 1
     ? 'no step on the steps card that emptied was done in this session'
     : prompts < 1
       ? 'the steps card emptied before Dan asked this session for anything'
       : shown.some(s => s.prompts >= prompts)
         ? "the Goal accomplished box was already shown for Dan's latest request when the steps card emptied"
-        : undefined
+        : since !== undefined && emptied.at < since
+          ? "the steps card emptied before Dan's latest message"
+          : shown.some(s => s.at >= emptied.at)
+            ? 'a Goal accomplished box was shown after the steps card emptied'
+            : undefined
   if (passed !== undefined) {
     if (await spendCard($, emptied)) debug($, `${passed}, so the session is not asked about the Goal accomplished box`)
     return

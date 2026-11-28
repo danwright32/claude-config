@@ -3374,3 +3374,57 @@ test('a steps card that cannot be read: nothing is asked and the debug log says 
   await turnEnds($)
   expect(cardAsks(submitted)).toHaveLength(1)
 })
+
+// A record that waits is asked about only under the request it emptied under.
+const PR_OPEN = { links: [link('danwright32/claude-config', 1700)], open: { 'danwright32/claude-config': { exitCode: 0, stdout: '[{"number":1700}]' } } }
+
+test("a record that waited behind an open pull request is not asked about under Dan's next message, then or later (#3864)", withAll, async ($, on) => {
+  const { w, submitted, logs, clock } = world(on, { stepsEmptied: EMPTIED, ...PR_OPEN })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  await clock.advance(EMPTIED.at - NOW + 1)
+  await says($, 'Now make the status bar quieter')
+  w.open = {}
+  await turnEnds($)
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  expect(logs.filter(l => /the steps card emptied before Dan's latest message, so the session is not asked about the Goal accomplished box/.test(l))).toHaveLength(1)
+})
+
+test('a card that emptied in the very millisecond of his message is asked about (#3864)', withAll, async ($, on) => {
+  const { submitted } = world(on, { stepsEmptied: { at: NOW, done: 1 } })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+})
+
+for (const [when, at] of [['before', NOW + 1_000], ['in the very millisecond of', NOW + 5_000]] as const)
+  test(`a card that emptied ${when} the last box shown is not asked about under work Dan then picks in a picker (#3864, #3843)`, withAll, async ($, on) => {
+    const { w, submitted, logs, clock } = reviewed(on, { stepsEmptied: { at, done: 2 } })
+    await start($)
+    await says($, 'Run the one off test and tell the team')
+    await clock.advance(5_000)
+    expect((await box($, ASKED, 'b1')).deny).toBeUndefined()
+    await picks(w, $, 'q1')
+    await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
+    await turnEnds($)
+    await turnEnds($)
+    expect(cardAsks(submitted)).toEqual([])
+    expect(logs.filter(l => /a Goal accomplished box was shown after the steps card emptied, so the session is not asked about the Goal accomplished box/.test(l))).toHaveLength(1)
+  })
+
+test('a card that emptied after the last box shown is asked about under work Dan picked in a picker (#3864, #3843)', withAll, async ($, on) => {
+  const { w, submitted, clock } = reviewed(on)
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await clock.advance(5_000)
+  expect((await box($, ASKED, 'b1')).deny).toBeUndefined()
+  await picks(w, $, 'q1')
+  await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
+  w.stepsEmptied = { at: NOW + 5_001, done: 1 }
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+})
