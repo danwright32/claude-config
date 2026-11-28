@@ -76,6 +76,15 @@ export const FAR_BYTES = 400_000_000
  */
 export const FAR_MS = 1_200
 
+/**
+ * The most the reader prints. The engine keeps the first 4,194,304 bytes a process prints and says
+ * the rest was cut, and an answer cut there has lost the turn's last records, so the whole turn is
+ * then unreadable. The window's records are printed whatever they come to, being what the turn is
+ * read for; the walk back prints only what still fits under this, and says it stopped at the first
+ * record that does not.
+ */
+export const OUT_BYTES = 3_000_000
+
 // What perl runs: the window, read by seeking to its start, cut to Claude's text records whole and each
 // user record cut to its promptId and whether it is this mod's own block, so the answer stays small
 // however large the tool results in the window are. Only an unescaped key matches, so the same words
@@ -94,16 +103,19 @@ export const FAR_MS = 1_200
 // of another prompt, the turn began before it: the reader then walks back from the window's start,
 // a chunk at a time, printing the same records without Claude's texts, until it meets a record of
 // another prompt or the transcript's first byte, or has gone `$far` bytes or `$ms` milliseconds,
-// where it prints a line saying it stopped. The line the window's first byte lands in is read by
-// that walk, whole. The walk's records are met newest first and printed oldest first.
+// or holds as much as it may print with the window's records (`$out` bytes in all), where it
+// prints a line saying it stopped and at which of the three. A line the window's first byte lands
+// inside is read by that walk, whole; one that byte begins is the window's own. So the read starts
+// one byte before the window: a line that ends there is the walk's, cut off at its newline. The
+// walk's records are met newest first and printed oldest first.
 const TURN_READ = [
   'use Time::HiRes ();',
-  'my ($n, $far, $ms, $f, $tool, @marks) = @ARGV;',
+  'my ($n, $far, $ms, $out, $f, $tool, @marks) = @ARGV;',
   'my $t0 = Time::HiRes::time();',
   'open(my $h, "<", $f) or die "$f: $!\n";',
   'my $size = -s $h;',
   'my $start = $size > $n ? $size - $n : 0;',
-  'seek($h, $start, 0) or die "reading $f: $!\n";',
+  'seek($h, $start > 0 ? $start - 1 : 0, 0) or die "reading $f: $!\n";',
   'my ($turn, $bound, %ids);',
   'sub top {',
   '  my ($l) = @_;',
@@ -158,13 +170,17 @@ const TURN_READ = [
   '  my $calls = join(",", map { qq("$_") } $l =~ /"id":"([^"]*)"/g);',
   '  return qq({"type":"assistant","isSidechain":$side,"isPinning":true,"callIds":[$calls]}\n);',
   '}',
+  'sub stopped { return qq({"type":"reader","isCutShort":true,"at":"$_[0]"}\n); }',
   'my (@win, @back, $stopped);',
-  'my $head = $start > 0 ? <$h> : undef;',
-  'while (my $l = <$h>) { my $o = cut($l, 1); push @win, $o if defined $o; }',
+  'my $head = "";',
+  'if ($start > 0) { my $l = <$h>; $head = substr($l, 1) if defined $l && length($l) > 1; }',
+  'my $room = $out - length(stopped("output"));',
+  'while (my $l = <$h>) { my $o = cut($l, 1); if (defined $o) { push @win, $o; $room -= length($o); } }',
   'if ($start > 0 && keys(%ids) < 2) {',
-  '  my ($pos, $tail, $went) = ($start, defined $head ? $head : "", 0);',
+  '  my ($pos, $tail, $went) = ($start, $head, 0);',
   '  WALK: while ($pos > 0) {',
-  '    if ($went >= $far || (Time::HiRes::time() - $t0) * 1000 >= $ms) { $stopped = 1; last; }',
+  '    if ($went >= $far) { $stopped = "bytes"; last; }',
+  '    if ((Time::HiRes::time() - $t0) * 1000 >= $ms) { $stopped = "time"; last; }',
   '    my $len = $far - $went < 4194304 ? $far - $went : 4194304;',
   '    $len = $pos if $pos < $len;',
   '    $pos -= $len;',
@@ -178,12 +194,16 @@ const TURN_READ = [
   '    for my $l (reverse @lines) {',
   '      next if $l eq "";',
   '      my $o = cut("$l\\n", 0);',
-  '      push @back, $o if defined $o;',
+  '      if (defined $o) {',
+  '        if (length($o) > $room) { $stopped = "output"; last WALK; }',
+  '        $room -= length($o);',
+  '        push @back, $o;',
+  '      }',
   '      last WALK if $bound;',
   '    }',
   '  }',
   '}',
-  'print qq({"type":"reader","isCutShort":true}\n) if $stopped;',
+  'print stopped($stopped) if $stopped;',
   'print reverse(@back), @win;',
   'close($h) or die "reading $f: $!\n";',
 ].join('\n')
@@ -202,14 +222,19 @@ export type TurnRead = {
    * gave none: the ones no turn end has asked about yet (#3860). What the check holds for.
    */
   refusedUnasked: number
-  /** What Claude wrote after the latest of `refusedUnasked`, oldest first: the only words that can answer it (#3860). Empty when there is none. */
-  saidAfterRefusal: string[]
+  /**
+   * For each of `refusedUnasked`, the latest first, what Claude wrote after it, oldest first: the
+   * only words that can answer that refusal (#3860).
+   */
+  saidAfterUnasked: string[][]
   /** Every call of the turn the permission check refused, answered or not. Read by the count (tools/steps-phrase-count.ts), not by the check. */
   refusedMet: number
   /** The main conversation called the steps tool in the turn and the call did not fail. Read by the count and by `refusalAsk`. */
   isPinned: boolean
   /** The reader stopped before the turn's first record, so what came before was never read (#3860). */
   isCutShort: boolean
+  /** The limit it stopped at, in the reader's own word (bytes, time or output), or null when it did not stop or did not say. */
+  stoppedAt: string | null
 }
 
 type Block = { type?: unknown; name?: unknown; id?: unknown; tool_use_id?: unknown; is_error?: unknown }
@@ -223,6 +248,7 @@ type Rec = {
   resultOf?: unknown
   isError?: unknown
   isCutShort?: unknown
+  at?: unknown
   toolDenialKind?: unknown
   message?: { content?: unknown }
 }
@@ -289,8 +315,7 @@ export const turnIn = (out: string): TurnRead => {
   let isPinned = false
   let isPinPending = false
   let refused = 0
-  let refusedUnasked = 0
-  let saidAfterRefusal: string[] | null = null
+  const saidAfterUnasked: string[][] = []
   let refusedMet = 0
   // Walking back, a call's result is met before the call, so a call that failed is known by then.
   const failed = new Set<string>()
@@ -320,10 +345,7 @@ export const turnIn = (out: string): TurnRead => {
       if (!isPinnedLater) {
         refused++
         // A block of this mod's met already is a later one, whose turn end asked about this refusal.
-        if (!isOurs) {
-          refusedUnasked++
-          saidAfterRefusal ??= [...pending, ...texts]
-        }
+        if (!isOurs) saidAfterUnasked.push([...pending, ...texts])
       }
     }
     if (r.isOurs === true) isOurs = true
@@ -336,14 +358,15 @@ export const turnIn = (out: string): TurnRead => {
     texts.unshift(...pending)
     if (isPinPending) isPinned = true
   }
-  return { texts, isOurs, promptId, refused, refusedUnasked, saidAfterRefusal: saidAfterRefusal ?? [], refusedMet, isPinned, isCutShort: recs.some(r => r.type === 'reader' && r.isCutShort === true) }
+  const stop = recs.find(r => r.type === 'reader' && r.isCutShort === true)
+  return { texts, isOurs, promptId, refused, refusedUnasked: saidAfterUnasked.length, saidAfterUnasked, refusedMet, isPinned, isCutShort: stop !== undefined, stoppedAt: typeof stop?.at === 'string' ? stop.at : null }
 }
 
 /**
  * The reader's command for the last `bytes` of the transcript at this path. One spelling, so the
  * count of what the turn end check would hold (tools/steps-phrase-count.ts) runs this same reader.
  */
-export const turnReadArgv = (transcript: string, bytes: number = TURN_BYTES, far: number = FAR_BYTES, ms: number = FAR_MS): string[] => [
+export const turnReadArgv = (transcript: string, bytes: number = TURN_BYTES, far: number = FAR_BYTES, ms: number = FAR_MS, out: number = OUT_BYTES): string[] => [
   'perl',
   '-e',
   TURN_READ,
@@ -351,6 +374,7 @@ export const turnReadArgv = (transcript: string, bytes: number = TURN_BYTES, far
   String(bytes),
   String(far),
   String(ms),
+  String(out),
   transcript,
   STEPS_TOOL,
   ...MARKS,
@@ -373,9 +397,10 @@ export const turnAt = async (transcript: string, run: TurnRun): Promise<TurnAt> 
   } catch (err) {
     return { state: 'unreadable', why: err instanceof Error ? err.message : String(err), isUnfinished: true }
   }
-  // Only the reader's failure to open the transcript begins with the bare path; a failure once it
-  // is reading begins "reading". What the engine answers for a process it stopped at its time
-  // limit is not known, so every failure but that first one counts as a read that did not finish.
+  // The engine rejects the call when perl cannot start or is still running at its time limit,
+  // which is answered above. An exit that is not 0 is perl's own or a signal's: only the reader's
+  // failure to open the transcript begins with the bare path, a failure once it is reading begins
+  // "reading", and every one but that first counts as a read that did not finish.
   if (r.exitCode !== 0) return { state: 'unreadable', why: r.stderr.trim() || `the transcript reader exited ${r.exitCode}`, isUnfinished: !r.stderr.startsWith(`${transcript}: `) }
   // Cut short, it lost the turn's last records, which are what it is read for.
   if (r.isStdoutTruncated) return { state: 'unreadable', why: 'the transcript reader printed more than could be read whole', isUnfinished: true }
@@ -392,7 +417,8 @@ export type RefusalAsk = { ask: 'none' } | { ask: 'refused'; calls: number } | {
  * these texts say in one line that nothing is Dan's to do.
  *
  * A refusal no turn end has asked about is asked about, held already or not, unless Claude said
- * the line after it: the line said for an earlier refusal does not answer a later one. With none,
+ * the line after it: the line said for an earlier refusal does not answer a later one, and only
+ * the refusals it does not answer are counted. With none,
  * a turn that could not be read to its start is said to be unread, since a refusal in the stretch
  * never read would otherwise pass as no refusal. That is not said when the turn was already held,
  * when a step pinned in the part that was read answers whatever came before it, or when the line
@@ -403,17 +429,19 @@ export const refusalAsk = (turn: TurnAt, said: readonly string[], isHeld: boolea
   if (turn.refusedUnasked > 0) {
     // The last message may not be in the transcript yet; it comes after every refusal.
     const last = said.at(-1)
-    const after = last !== undefined && turn.texts.at(-1) !== last ? [...turn.saidAfterRefusal, last] : turn.saidAfterRefusal
-    return answers(after) ? { ask: 'none' } : { ask: 'refused', calls: turn.refusedUnasked }
+    const later = last !== undefined && turn.texts.at(-1) !== last ? [last] : []
+    const calls = turn.saidAfterUnasked.filter(after => !answers([...after, ...later])).length
+    return calls > 0 ? { ask: 'refused', calls } : { ask: 'none' }
   }
   return turn.isCutShort && !isHeld && !turn.isPinned && !answers(said) ? { ask: 'unread' } : { ask: 'none' }
 }
 
 /**
  * What a turn end is told when the turn could not be read to its start. It begins with
- * UNREAD_MARK, so the turn holding it is not told this twice and is blocked again only for a call
- * refused after it. It asks for the same one line as the block for a refused call, so one answer
- * is read by both.
+ * UNREAD_MARK, so a turn whose record of it the reader reaches is not told this twice and is
+ * blocked again only for a call refused after it. The line it asks for names no refusal as having
+ * happened, since none may have, and Dan reads the reply; that line and the one the block for a
+ * refused call asks for each answer both (hooks/waiting.ts).
  */
 export const unreadStep = (): string =>
-  `${UNREAD_MARK}, so a call the permission check refused in it may have gone unseen. If one was refused and left Dan something to do, put that on the steps card (${STEPS_TOOL}). If not, say exactly: "Nothing from the refusal is yours to do."`
+  `${UNREAD_MARK}, so a call the permission check refused in it may have gone unseen. If one was refused and left Dan something to do, put that on the steps card (${STEPS_TOOL}). If not, say exactly: "No refused call left you anything to do."`

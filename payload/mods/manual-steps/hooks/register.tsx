@@ -913,6 +913,8 @@ export const register: Register = on => {
     const last = typeof e.last_assistant_message === 'string' ? e.last_assistant_message : null
     const turn = await turnAt(typeof e.transcript_path === 'string' ? e.transcript_path : '', argv => $.process.run(argv, { timeoutMs: TURN_TIMEOUT_MS }))
     if (turn.state === 'unreadable') $.ui.log(`Manual steps could not read this turn from its transcript, so only its last message was checked for a step left in prose: ${turn.why}`)
+    // Said at every turn end it happens at, held or not, so how often the reader falls short can be counted.
+    else if (turn.isCutShort) $.ui.log(`Manual steps read this turn only part of the way back to its first record: the transcript reader stopped at its limit on ${turn.stoppedAt ?? 'something it did not name'}`)
     const isTurnRead = turn.state === 'read' && turn.promptId !== null
     const isHeld = isTurnRead ? turn.isOurs : e.stop_hook_active
     const texts = turn.state === 'read' ? turn.texts : []

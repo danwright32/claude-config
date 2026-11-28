@@ -2,14 +2,16 @@
 # The manual steps mod's transcript reader (the perl payload/mods/manual-steps/hooks/turn.ts runs),
 # run for real on session records in the shape Claude Code writes, for what claude-config#3860
 # added: a refusal in a record too long to keep whole, a refusal further back than the window, the
-# reader saying it stopped before the turn's first record, and a steps tool call's result. The
-# mod's own tests hand turnIn the reader's output and never run it.
+# reader saying it stopped before the turn's first record (at its limit on bytes, on time or on
+# what it prints), and a steps tool call's result. The mod's own tests hand turnIn the reader's
+# output and never run it.
 #
 # Every record here is made up. Its shape is measured (2026-11-28, the main conversations' records
 # of 30 days on the personal MacBook): a tool result is a user line carrying the turn's promptId
 # and one tool_result block with its call's tool_use_id, and is_error when the call failed or was
 # refused; a refused call's line also carries toolDenialKind at its top level; a call is an
-# assistant line, one block a line, the block carrying its id before its name.
+# assistant line, one block a line, holding two ids: the message's first, then the block's own
+# before its name (223 of 223 steps tool calls).
 set -uo pipefail
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../payload/hooks/lib/suite-deadline.sh" || {
   echo "FAIL: $(basename "$0"): suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
@@ -38,16 +40,34 @@ const [path, ...limits] = process.argv.slice(2)
 const [cmd, ...argv] = turnReadArgv(path as string, ...limits.map(Number))
 const r = spawnSync(cmd as string, argv, { encoding: 'utf8', maxBuffer: 2 ** 31 - 1 })
 const t = turnIn(r.stdout)
-console.log(\`status=\${r.status} refused=\${t.refused} unasked=\${t.refusedUnasked} met=\${t.refusedMet} cut=\${t.isCutShort} ours=\${t.isOurs} prompt=\${t.promptId} texts=\${t.texts.length} pinned=\${t.isPinned} outkb=\${Math.ceil(r.stdout.length / 1024)} \${r.stderr.trim()}\`)
+// How far what it printed passes the limit it was handed on that, or 0.
+const over = limits[3] === undefined ? 0 : Math.max(0, Buffer.byteLength(r.stdout) - Number(limits[3]))
+console.log(\`status=\${r.status} refused=\${t.refused} unasked=\${t.refusedUnasked} met=\${t.refusedMet} cut=\${t.isCutShort} at=\${t.stoppedAt} over=\${over} ours=\${t.isOurs} prompt=\${t.promptId} texts=\${t.texts.length} pinned=\${t.isPinned} outkb=\${Math.ceil(r.stdout.length / 1024)} \${r.stderr.trim()}\`)
 EOF
-# read_turn <record> [window bytes] [bytes back past the window] [the reader's own milliseconds]
+# read_turn <record> [window bytes] [bytes back past the window] [the reader's own milliseconds] [bytes it may print]
 read_turn(){ node "$W/read.ts" "$@" 2>/dev/null; }
+
+# Reads a record as the mod does at a turn end, with its own limits, through a runner that keeps
+# what the engine's types say $.process.run keeps: the first 4,194,304 bytes a process prints, and
+# a word saying the rest was cut.
+cat > "$W/at.ts" <<EOF
+import { spawnSync } from 'node:child_process'
+import { turnAt } from '$DIR/../payload/mods/manual-steps/hooks/turn.ts'
+const KEPT = 4194304
+const t = await turnAt(process.argv[2] as string, async argv => {
+  const r = spawnSync(argv[0] as string, argv.slice(1), { maxBuffer: 2 ** 31 - 1 })
+  return { exitCode: r.status ?? 1, stdout: r.stdout.subarray(0, KEPT).toString('utf8'), stderr: r.stderr.toString('utf8'), isStdoutTruncated: r.stdout.length > KEPT }
+})
+console.log(t.state === 'read' ? \`state=read cut=\${t.isCutShort} texts=\${t.texts.length} met=\${t.refusedMet}\` : \`state=unreadable \${t.why}\`)
+EOF
+# turn_at <record>
+turn_at(){ node "$W/at.ts" "$@" 2>/dev/null; }
 
 STEPS=mcp__manual-steps__steps
 prompt(){ printf '{"parentUuid":null,"isSidechain":false,"promptId":"%s","type":"user","message":{"role":"user","content":"do the work"},"uuid":"u"}\n' "$1"; }
 said(){ printf '{"parentUuid":"u","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$2"; }
-# A call of a tool: $1 the tool, $2 the call's id.
-called(){ printf '{"parentUuid":"u","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"%s","name":"%s","input":{},"caller":{"type":"direct"}}]}}\n' "$2" "$1"; }
+# A call of a tool: $1 the tool, $2 the call's id. The message's own id comes before it.
+called(){ printf '{"parentUuid":"u","isSidechain":false,"type":"assistant","message":{"model":"m","id":"msg_%s","type":"message","role":"assistant","content":[{"type":"tool_use","id":"%s","name":"%s","input":{},"caller":{"type":"direct"}}]}}\n' "$2" "$2" "$1"; }
 # A tool result: $1 the prompt, $2 the call's id, $3 how many bytes it holds.
 result(){ printf '{"parentUuid":"u","isSidechain":false,"promptId":"%s","type":"user","message":{"role":"user","content":[{"tool_use_id":"%s","type":"tool_result","content":"%s"}]},"toolUseResult":{"stdout":"ok"}}\n' "$1" "$2" "$(perl -e 'print "x" x $ARGV[0]' "${3:-2}")"; }
 # A call that failed: its result says so.
@@ -92,8 +112,22 @@ has "and what it never read is not counted" "$out" "refused=0"
 out="$(read_turn "$W/far.jsonl" 3000 1000000 0)"
 has "stopped by its limit on time, the reader says it stopped" "$out" "cut=true"
 has "and still answers with what the window held" "$out" "status=0"
+has "and names that limit" "$out" "at=time"
+has "stopped by its limit on bytes, it names that limit" "$(read_turn "$W/far.jsonl" 3000 5000 5000)" "at=bytes"
+# Stopped by its limit on what it prints: the walk back prints only what still fits.
+out="$(read_turn "$W/far.jsonl" 3000 1000000 5000 600)"
+has "stopped by its limit on what it prints before the turn's first record, the reader says it stopped" "$out" "cut=true"
+has "and names that limit" "$out" "at=output"
+has "and prints no more than that limit" "$out" "over=0"
+has "and what it never printed is not counted" "$out" "refused=0"
+has "and still answers with what the window held" "$out" "texts=1"
+# The window's records come first: where they alone pass the limit, the walk back prints nothing.
+out="$(read_turn "$W/far.jsonl" 3000 1000000 5000 10)"
+has "where the window's records alone pass the limit, the reader says it stopped" "$out" "at=output"
+has "and the window's records are all still printed" "$out" "texts=1"
+has "a limit on what it prints that the turn fits inside changes nothing" "$(read_turn "$W/far.jsonl" 3000 1000000 5000 100000)" "refused=1"
 # A turn that fits the window is never walked back from, whatever the limits.
-has "a turn whose first record is inside the window is not cut short" "$(read_turn "$W/far.jsonl" 100000 0 0)" "cut=false"
+has "a turn whose first record is inside the window is not cut short" "$(read_turn "$W/far.jsonl" 100000 0 0 0)" "cut=false"
 
 # The walk ends at the turn's first record: a long turn before it is not walked through, so the
 # limit is not reached and nothing is said to be unread.
@@ -116,6 +150,22 @@ all_bytes="$(wc -c < "$W/straddle.jsonl" | tr -d ' ')"
 out="$(read_turn "$W/straddle.jsonl" "$((all_bytes - head_bytes + 200))" 1000000 5000)"
 has "a refusal the window's first byte lands inside is counted, once" "$out" "refused=1"
 
+# A record the window's first byte is the first byte of is the window's own, read whole with its text.
+{ prompt p1; called Bash c1; result p1 c1 1500; } > "$W/aligned.jsonl"
+head_bytes="$(wc -c < "$W/aligned.jsonl" | tr -d ' ')"
+{ said p1 'One thing is still yours to do.'; called Bash c2; result p1 c2 1500; said p1 'x'; } >> "$W/aligned.jsonl"
+all_bytes="$(wc -c < "$W/aligned.jsonl" | tr -d ' ')"
+has "what Claude wrote in a record that starts on the window's first byte is read" "$(read_turn "$W/aligned.jsonl" "$((all_bytes - head_bytes))" 1000000 5000)" "texts=2"
+
+# The walk back reads 4,194,304 bytes at a time, and a record can lie across two of those reads.
+# Here the refusal's record ends 200 bytes into the read nearer the window.
+after_refusal(){ called Bash c1; result p1 c1 "$1"; said p1 'The row is still yours.'; }
+base_bytes="$(after_refusal 2 | wc -c | tr -d ' ')"
+{ prompt p0; said p0 'earlier'; prompt p1; called Bash c0; refused p1 automode-blocked; after_refusal "$((3000 + 4194304 - 200 - base_bytes + 2))"; } > "$W/join.jsonl"
+out="$(read_turn "$W/join.jsonl" 3000 100000000 5000)"
+has "a refusal whose record lies across two reads of the walk back is counted" "$out" "refused=1"
+has "and the turn was read to its first record" "$out" "cut=false"
+
 # What the walk back reads besides refusals: this mod's own hold, and a step pinned.
 { prompt p0; said p0 'earlier'; prompt p1; refused p1 automode-blocked; feedback p1; said p1 'Nothing from the refusal is yours to do.'; for n in 1 2 3 4; do called Bash "c$n"; result p1 "c$n" 2400; done; said p1 'x'; } > "$W/held.jsonl"
 out="$(read_turn "$W/held.jsonl" 3000 1000000 5000)"
@@ -129,6 +179,21 @@ has "a step pinned further back than the window answers the refusal before it" "
 out="$(read_turn "$W/five.jsonl")"
 has "with the mod's own limits, a refusal 5 MB back is counted" "$out" "refused=1"
 has "and the turn was read to its first record" "$out" "cut=false"
+
+# ---- At the sizes the mod runs with: more records before the window than the engine keeps ----
+# A refusal, then 80,000 small results. A line for each is over twice the 4,194,304 bytes the engine
+# keeps of what the reader prints, and an answer the engine cut is no answer at all: the turn's last
+# words, which sit inside the window, would go unread with it.
+{
+  prompt p0; said p0 'earlier'; prompt p1; called Bash c0; refused p1 automode-blocked
+  perl -e 'my $x = "x" x 300; print qq({"parentUuid":"u","isSidechain":false,"promptId":"p1","type":"user","message":{"role":"user","content":[{"tool_use_id":"c$_","type":"tool_result","content":"$x"}]},"toolUseResult":{"stdout":"ok"}}\n) for 1 .. 80000;'
+  said p1 'One thing is still yours to do.'
+} > "$W/many.jsonl"
+has "read as the mod reads at a turn end, a refusal 5 MB back is counted" "$(turn_at "$W/five.jsonl")" "met=1"
+out="$(turn_at "$W/many.jsonl")"
+has "with the mod's own limits, a turn of 80,000 small results is still read" "$out" "state=read"
+has "and what Claude wrote inside the window is still returned" "$out" "texts=1"
+has "and the reader says it stopped before the turn's first record" "$out" "cut=true"
 
 # ---- A steps tool call's result ----
 { prompt p1; refused p1 automode-blocked; called "$STEPS" s1; failed p1 s1; said p1 'It is on the card.'; } > "$W/failed.jsonl"

@@ -2405,9 +2405,10 @@ test('where nobody is at the prompt, or the turn could not be read, a refused ca
 
 const heldOnce = JSON.stringify({ type: 'user', promptId: 'p1', isOurs: true })
 const NOTHING_LINE = 'Nothing from the refusal is yours to do.'
+const UNREAD_LINE = 'No refused call left you anything to do.'
 const UNREAD_HOLD =
-  'Manual steps could not read this whole turn, so a call the permission check refused in it may have gone unseen. If one was refused and left Dan something to do, put that on the steps card (mcp__manual-steps__steps). If not, say exactly: "Nothing from the refusal is yours to do."'
-const readerStopped = JSON.stringify({ type: 'reader', isCutShort: true })
+  'Manual steps could not read this whole turn, so a call the permission check refused in it may have gone unseen. If one was refused and left Dan something to do, put that on the steps card (mcp__manual-steps__steps). If not, say exactly: "No refused call left you anything to do."'
+const readerStopped = JSON.stringify({ type: 'reader', isCutShort: true, at: 'bytes' })
 
 test('a call refused after this mod already held the turn is asked about once more, and never a third time (#3860)', withKit, async ($, on) => {
   const { w } = world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY), heldOnce, wrote(NOTHING_LINE), refusedCall(), wrote(ROW_REPLY)].join('\n') })
@@ -2470,6 +2471,48 @@ test('a read of the turn that did not finish is held once in the same words, bes
   const both = (await turnStop($, PROSE_STEP)).block
   expect(both).toMatch(/leaves Dan a step in prose/)
   expect(both).toContain(UNREAD_HOLD)
+})
+
+test('the line the unread turn\'s hold asks for answers it, and answers the hold for a refused call too (#3860)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [readerStopped, prompt(), wrote(UNREAD_LINE)].join('\n') })
+  await start($)
+  expect((await turnStop($, UNREAD_LINE)).block).toBeUndefined()
+  w.turn = { fails: '' }
+  expect((await turnStop($, UNREAD_LINE)).block).toBeUndefined()
+  w.turn = [prompt(), refusedCall(), wrote(UNREAD_LINE)].join('\n')
+  expect((await turnStop($, UNREAD_LINE)).block).toBeUndefined()
+})
+
+test('a turn the reader stopped part way back through is said in the log with the limit it stopped at, once a turn end (#3860)', withKit, async ($, on) => {
+  const { w, logs } = world(on, { turn: [JSON.stringify({ type: 'reader', isCutShort: true, at: 'output' }), prompt(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  await turnStop($, ROW_REPLY)
+  const said = logs.filter(l => /read this turn only part of the way back/.test(l))
+  expect(said).toHaveLength(1)
+  expect(said[0]).toContain('its limit on output')
+  // A turn read to its first record says nothing.
+  w.turn = [prompt(), wrote(ROW_REPLY)].join('\n')
+  await turnStop($, ROW_REPLY)
+  expect(logs.filter(l => /read this turn only part of the way back/.test(l))).toHaveLength(1)
+})
+
+test('a turn the reader stopped part way back through is still asked about a step left in prose in what it read (#3860)', withKit, async ($, on) => {
+  world(on, { turn: [JSON.stringify({ type: 'reader', isCutShort: true, at: 'output' }), prompt(), wrote(PROSE_STEP), prompt(), wrote('Done with the rest.')].join('\n') })
+  await start($)
+  const both = (await turnStop($, 'Done with the rest.')).block
+  expect(both).toMatch(/leaves Dan a step in prose/)
+  expect(both).toContain(UNREAD_HOLD)
+})
+
+test('the hold for refused calls counts only those the line was not said after (#3860)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [prompt(), refusedCall(), wrote(NOTHING_LINE), refusedCall(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  const one = (await turnStop($, ROW_REPLY)).block
+  expect(one).toMatch(/^The permission check refused a call of yours in this turn\. /)
+  expect(one).not.toMatch(/calls\)/)
+  // Neither answered, both are counted.
+  w.turn = [prompt(), refusedCall(), wrote('a'), refusedCall(), wrote(ROW_REPLY)].join('\n')
+  expect((await turnStop($, ROW_REPLY)).block).toMatch(/^The permission check refused a call of yours in this turn \(2 calls\)\. /)
 })
 
 // Review of pull request 3854: the card could not be read, so the step left in prose is not asked

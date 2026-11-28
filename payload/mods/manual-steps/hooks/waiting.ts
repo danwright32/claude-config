@@ -236,8 +236,14 @@ export const saysNoneNow = (texts: readonly string[]): boolean => saysPlainly(te
 // it by accident, and saying a call was refused is not saying this.
 const NOTHING_FROM_REFUSAL = /\bnothing from (?:the|that|this|those|these) (?:refusals?|refused (?:calls?|actions?|commands?)) is yours to do\b/gi
 
-/** Whether any of `texts` says nothing from a refused call is Dan's to do (#3842). */
-export const saysNothingFromRefusal = (texts: readonly string[]): boolean => saysPlainly(texts, NOTHING_FROM_REFUSAL)
+// #3860: the same answer in the words the hold for a turn that could not be read whole gives, "No
+// refused call left you anything to do.", which stays true when no call was refused at all. It
+// must begin "no refused" and end "left you anything to do", so a sentence handing a step over is
+// never read as it.
+const NO_REFUSED_CALL_LEFT = /\bno refused (?:calls?|actions?|commands?)(?: in (?:this|the) turn)? left you anything to do\b/gi
+
+/** Whether any of `texts` says nothing from a refused call is Dan's to do, in either hold's words (#3842, #3860). */
+export const saysNothingFromRefusal = (texts: readonly string[]): boolean => saysPlainly(texts, NOTHING_FROM_REFUSAL) || saysPlainly(texts, NO_REFUSED_CALL_LEFT)
 
 // The phrase said the other way round: "nothing else is waiting on you", "this is no longer
 // waiting on you". Only a negation attached to the phrase counts, in the same clause and within

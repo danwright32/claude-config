@@ -11969,10 +11969,16 @@ record too long to keep whole (cut down to its top level fields), and further ba
 4 MB, which the reader walks back through to the turn's first record without printing Claude's
 texts. A `steps` call whose result is an error pinned nothing and answers nothing. A call refused
 after this mod already held the turn is asked about once more, and the line said for an earlier
-refusal does not answer it. When the reader could not get to the turn's first record inside its
-limits (`FAR_BYTES` and `FAR_MS`), or did not finish at all, the turn end is told once that the
-turn went unread and a refusal may have gone unseen, with the same two ways out; a transcript
-that is not there still names no refusal. A page
+refusal does not answer it. The line said further back than the last 4 MB does not answer either,
+since the walk back reads no texts: a turn that said it unasked right after a refusal and then did
+more than 4 MB of work is still held at its end, once. When the reader could not get to the
+turn's first record inside its limits (`FAR_BYTES`, `FAR_MS`, and `OUT_BYTES` on what it prints,
+kept under the 4,194,304 bytes the engine keeps of a process's output), or did not finish at all,
+the log says so and the turn end is told that the turn went unread and a refusal may have gone
+unseen: pin what one left, or say "No refused call left you anything to do." (either hold's line
+answers both). That is told once a turn, and again only when the record of the first telling is
+itself further back than the reader got; a transcript that is not there still names no refusal.
+A page
 published with the Artifact tool is judged as it is published, read from the file it came from
 (#1811, `hooks/page.ts`): two list items, numbered or bulleted, that each begin with a thing to do
 at a screen, or any two of ticks, Copy buttons and such a thing to do, make it a page of steps for
