@@ -151,8 +151,9 @@ grep -q "^judged|first|unset|cat <<EOF; $PUSH; body; EOF$" "$T/log" && check "th
   || check "the first run is handed the text as it always was, with nothing before or after it" "the log holds [$(grep '^judged|first' "$T/log")]"
 grep -q "^judged|second|unset|cat <<EOF; body; EOF; $PUSH$" "$T/log" && check "the second run is handed the second reading alone" ok \
   || check "the second run is handed the second reading alone" "the log holds [$(grep '^judged|second' "$T/log")]"
-grep '^judged|' "$T/log" | cut -d'|' -f3 | grep -qv '^unset$' && check "neither run leaves PS_READING in the environment of what it starts" "one did: [$(grep '^judged|' "$T/log")]" \
-  || check "neither run leaves PS_READING in the environment of what it starts" ok
+left="$(grep '^judged|' "$T/log" | cut -d'|' -f3 | sort -u | tr '\n' ' ')"
+[ "$left" = "unset " ] && check "neither run leaves PS_READING in the environment of what it starts" ok \
+  || check "neither run leaves PS_READING in the environment of what it starts" "what each run found there: [$left]"
 
 run_hook "bash -c 'git ${PAIR}push'"
 [ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && check "a push across the pair in a wrapper's string is refused, by the second reading" ok \
