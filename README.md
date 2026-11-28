@@ -6312,6 +6312,21 @@ this command", and "line 3 as it is on disk" for a line of the script's own that
 it is made from. Nothing is refused or allowed that was not before. Editing the two files in
 separate calls, or the hook alone, passes. Suite: `test-slack-drafts-made-lines.sh`.
 
+A text the shared reader gives up on (a quote left open, in a heredoc fed to a shell, a script
+file, a sourced file, a string handed to `bash -c` or `eval`, or the command itself) is cut crudely
+into whatever may be a command, words inside quotes included. A write among those may be words a
+shell only prints, so it never takes the place of what the gate noted before (claude-config#3878).
+A file written there keeps what it was noted to hold and also holds something the gate could not
+read; a folder copied there has every file under it unread; and a `PYTHONPATH` exported there is
+one the gate could not read, so an import Python would look for on it is refused as a check that
+could not be made, while an import found beside the script is read as before. The same holds for
+a script on disk that such a text runs or sources, since the words that run it may be quoted.
+Before this, `cp post.sh made.sh`, then the quoted words `printf true > made.sh`, then a quote left
+open, left `made.sh` read as `true`, and `bash made.sh` after it was allowed. The cost is that a
+text the reader gives up on that writes a file and then runs it is refused, where the gate used to
+read what was written. Still unread: a real write the crude cut hides, because it reads the
+redirection as inside a quote, is not noted at all. Suite: `test-slack-drafts-unread-write-notes.sh`.
+
 Since claude-config#3356 one refusal says what to run instead. `bun test` with test files named,
 typed in a mod's folder, is refused where the gate cannot find a module one of those files imports
 (on 2026-11-20: `bun test tests/rules.test.ts tests/register.test.ts` in

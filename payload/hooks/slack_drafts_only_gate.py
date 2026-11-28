@@ -1004,6 +1004,13 @@ PY_BANG = re.compile(r"^#!.*\b(python[0-9.]*|pypy[0-9.]*)\b")
 PY_ENV_CHANGE = re.compile(r"(^|[^A-Za-z0-9_])(PATH|PYTHONHOME|PYTHONUSERBASE|VIRTUAL_ENV|CONDA_PREFIX)\+?="
                            r"|(^|[\s;&|(`])(source|\.|activate|conda|pyenv|mamba|micromamba|eval|function)(\s|$)"
                            r"|\(\s*\)\s*\{")
+# The entry a PYTHONPATH gains where an export of it is read in text the reader gave up on
+# (Judge.exported_path, claude-config#3878): where Python looks from that entry on is not known. A
+# path under /dev/null names no folder, so every reader of the list passes it over as a folder that
+# is not there, and being an entry it stays through each copy made of the list. PY_PATH_DOUBT is
+# how a refusal names such a path.
+PY_PATH_UNREAD = "/dev/null/a PYTHONPATH exported in text this gate could not read"
+PY_PATH_DOUBT = "a PYTHONPATH exported in text this gate could not read as commands for certain"
 # Read when a file cannot be parsed as Python by this python3: each import statement's first line.
 PY_IMPORT_LINE = re.compile(r"^[ \t]*(?:from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+\(?([^#\n)]*)|import[ \t]+([^#\n]+))",
                             re.M)
@@ -2937,9 +2944,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         real = os.path.realpath(self.resolve(target, d))
         if self.shell.get("on_disk"):
             pieces = [(k, v, "") if k == "unknown" else (k, v, lb) for k, v, lb in pieces]
-        if append:
+        roughly = self.read_roughly()
+        if append or roughly:
             pieces = self.pieces_of(target, d) + pieces
-        self.made[real] = pieces
+        self.made[real] = pieces + roughly
         if os.path.basename(real) in CURLRC_NAMES:
             self.curlrc_noted.add(real)
 
@@ -3052,12 +3060,32 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         real = os.path.realpath(self.resolve(target, d))
         if src_real == real:
             return
+        roughly = self.read_roughly()
         if os.path.isdir(src_real) or src_real in self.made_dirs:
+            if roughly:
+                # Never in the place of a folder noted before: every file under it is unread.
+                self.made_unknown.append((glob.escape(real.rstrip("/")) + "/*", roughly[0][2]))
+                return
             self.made_dirs[real] = (src_real, src.rstrip("/") or src)
             return
         pieces = self.pieces_of(src, where)
         if pieces:
-            self.made[real] = pieces
+            self.made[real] = (self.pieces_of(target, d) if roughly else []) + pieces + roughly
+
+    def read_roughly(self):
+        """The piece every write gains where the text being read could only be read by the crude cut
+        (lib/shell-words.py crude_commands), else []. That cut lists whatever MAY be a command,
+        words inside quotes included, which a shell only prints. Noted as any other write, such a
+        pretend write would replace what the gate holds for the file: after `cp post.sh made.sh`,
+        the line `echo 'a $(printf true > made.sh) b'`, in a script with a quote left open further
+        down, would leave made.sh read as `true`, and `bash made.sh` after it allowed
+        (claude-config#3837). So in such a text a write only ever adds: what the file held before
+        is kept, and the file also holds something the gate could not read, which refuses a later
+        run of it as one that could not be checked."""
+        if not self.shell.get("crude"):
+            return []
+        return [("unknown", None, "" if self.shell.get("on_disk") else
+                 "a command in text this gate could not read as commands for certain")]
 
     def script(self, word, d, depth, shell_hint, lang=None, label=None, sourced=False, built=None, maybe=True):
         """The reason a script file posts, or None. lang ("js" or "py") is the language of the
@@ -3342,6 +3370,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return
                 if targets is False and lead is not None and spec == lead and self.found_nowhere(spec, root):
                     continue  # Python stops there with ImportError, before anything runs
+                if targets is False and kind == "py" and not spec.startswith(".") \
+                        and PY_PATH_UNREAD in self.py_cmd["path"]:
+                    yield self.unfollow(f"{via}, a module Python looks for on {PY_PATH_DOUBT}, so the gate "
+                                        "cannot tell which file that runs"), None, None, None
+                    return
                 if targets is False:
                     where = ("" if kind != "py" or spec.startswith(".") else
                              " beside the script, on its PYTHONPATH or sys.path, in the standard library or installed")
@@ -3576,6 +3609,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         interp = self.py_cmd.get("interp")
         if not interp or not self.py_cmd.get("plain"):
             return False
+        if PY_PATH_UNREAD in self.py_cmd["path"]:
+            return False  # it may be in a folder of a PYTHONPATH the gate could not read (exported_path)
         path = self.resolve(interp, self.py_cmd["cwd"]) if "/" in interp else None
         # A bare name is the first on the PATH, as the shell finds it (shutil.which is not used:
         # importing shutil costs 4 ms on every call the gate reads). An empty or relative entry is
@@ -3620,6 +3655,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if not module:
             return []
         for base in list(inserts[0]) + [root] + self.py_cmd["path"]:
+            if base == PY_PATH_UNREAD:
+                return False  # where Python looks from here on is not known (exported_path)
             found = self.raw_resolve(base, module) if isinstance(base, tuple) else self.resolve_in(base, 0, module, names)
             if found is not None:
                 return found
@@ -5934,6 +5971,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.shell["zero"], self.next_zero = self.next_zero, None
         self.shell["ran"], self.next_ran = self.next_ran, None
         self.shell["parent"] = saved  # the text that runs this one, whose output carries it (#2913)
+        # A text that a command of a text the reader gave up on runs or sources may never be run,
+        # where that command is quoted words, so its writes are noted as that text's own are
+        # (read_roughly, claude-config#3878).
+        self.shell["crude"] = bool(saved.get("crude"))
         self.next_script, self.next_cwd_known, self.next_on_disk, self.next_program = None, True, False, None
         handed, self.next_handed = self.next_handed, None
         try:
@@ -5945,6 +5986,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 starts = [p["start"] for p in parts]
             except self.sw.Unreadable:
                 parts, starts = [], []  # read by the crude cut, so no command's place is known
+                self.shell["crude"] = True  # and a write it lists may be quoted words (read_roughly)
             # The command of a package script that the words after the script's name land in: the one
             # they are written inside, as the shell reads text added to the end of a line, which a
             # command inside a substitution earlier in it is not (script_handed, claude-config#3143).
@@ -5979,11 +6021,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # it (headed_filled in lib/sh-walk-shapes.py, claude-config#3252), while the reader's
             # commands for that string, which that reading stands in for, are passed over.
             headed = None
+            # The depth of a wrapper whose string the reader could not read for certain, while the
+            # commands listed from that string are being read: a write among them may be quoted
+            # words, as in a whole text read by the crude cut (read_roughly, claude-config#3837).
+            rough_text, rough_under = bool(self.shell.get("crude")), None
             for d, text, wrapper, why, wdepth in self.sw.every_command(s, cwd):
                 if headed is not None:
                     if wdepth > headed:
                         continue
                     headed = None
+                if rough_under is not None and wdepth <= rough_under:
+                    rough_under = None
+                self.shell["crude"] = rough_text or rough_under is not None
                 d = self.settled_dir(d)  # a cd built from $0 or BASH_SOURCE, worked out (#2913)
                 while wraps and wraps[-1][0] >= wdepth:
                     wraps.pop()
@@ -6054,6 +6103,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return reason
                 if wrapper:
                     wraps.append([wdepth, text, d, -1])
+                    if why == self.sw.WHY_QUOTE and rough_under is None:
+                        rough_under = wdepth
                 if not wdepth:
                     self.shell["last_cmd"] = (at, text) if at is not None else None
                     if home is not None:
@@ -6098,9 +6149,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if words and words[0] == "export":
             for w in words[1:]:
                 if w.startswith("PYTHONPATH="):
-                    self.exported = self.py_path(self.sh_pythonpath(w[len("PYTHONPATH="):], text, d), d)
+                    named = self.py_path(self.sh_pythonpath(w[len("PYTHONPATH="):], text, d), d)
+                    self.exported = self.exported_path(named, d)
         elif not words and value is not None:
-            self.exported = self.py_path(value, d)
+            self.exported = self.exported_path(self.py_path(value, d), d)
         here = os.path.abspath(d or os.getcwd())
         if value is not None:
             path = self.py_path(value, d)
@@ -6140,6 +6192,17 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             self.py_cmd = saved
             if not sourced:
                 self.exported = saved_exported
+
+    def exported_path(self, named, d):
+        """What an export of PYTHONPATH naming the folders named leaves exported. In a text the
+        reader gave up on (read_roughly) the export may be words a shell only prints, or a real one
+        whose value the crude cut split, so it never takes the place of what was exported before
+        (claude-config#3878): its folders are added to those, behind PY_PATH_UNREAD, the entry at
+        which a later Python's imports stop being placed (resolve_py)."""
+        if not self.read_roughly():
+            return named
+        before = self.exported if self.exported is not None else self.py_path(os.environ.get("PYTHONPATH", ""), d)
+        return [PY_PATH_UNREAD] + [p for p in before + named if p != PY_PATH_UNREAD]
 
     def rest_of(self, text):
         """The shared reader's command_rest(text), worked out once for each text. What it gives
@@ -6638,6 +6701,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", mod):
             return None
         found = self.resolve_py(0, mod, ("__main__",), here, here)
+        if found is False and PY_PATH_UNREAD in self.py_cmd["path"]:
+            return self.unfollow(f"{name} -m {mod} runs a module Python looks for on {PY_PATH_DOUBT}, so the "
+                                 "gate cannot tell which file that runs")
         if not found:
             # A runner from the standard library or installed is read by what it runs (#2844).
             return self.py_runner(program, name, mod, after, d, depth, here)
