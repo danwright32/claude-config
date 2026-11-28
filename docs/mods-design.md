@@ -2511,7 +2511,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   `/plan-council`", and any unfinished step on the card answered the prose check whatever that step
   was. So `hooks/typed.ts` recognises a command handed over to type (an imperative to type, run,
   start, paste, invoke, launch or kick off it, leading its sentence, its line, the words after a
-  label's colon or a clause after "so", with "just", "when you're ready" or "after those two"
+  label's colon or a clause after "so" (and, since #3865, after "then" or "and then"), with
+  "just", "when you're ready" or "after those two"
   before it; "to do X, type"; "until you run", "you have to type", "you should now run", "needs
   you to type", "remember to type"; "your next move is" and "your next move:"; "is yours:" then a
   marked command; "open a new session and run"; a fenced block whose first line is the command),
@@ -2594,12 +2595,11 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   something else ("now, the rest can wait for the morning", "in the morning-report tab", "to
   load the guard I merged in the morning"). One offered beside a new session, named as one after
   the command ("or start a fresh session"), and never "or" with other words ("or keep seeing the
-  old error"). And one the sentence right after puts off, where that sentence's subject is the
-  command and its verb the putting off ("It can wait for the morning.", "Nothing tonight depends
-  on it, and it can wait for the morning", "I have put that down for the morning"), or offers a
-  new session for ("Or open a new session."); "This cannot wait", "the rest can wait", "The
-  merge queue is stuck, and it can wait for the morning" and "Or leave it and the session ends"
-  are held. Now counted: an imperative after ", then" where the words before
+  old error"). And one the sentence right after puts off, where that sentence opens with the
+  command as its subject and the putting off as its verb ("It can wait for the morning.", "I
+  have put that down for the morning"), or offers a new session for ("Or open a new
+  session."); "This cannot wait", "the rest can wait", "Nothing is wrong with the merge queue,
+  and it can wait for the morning" and "Or leave it and the session ends" are held. Now counted: an imperative after ", then" where the words before
   it are not the session's own; "go ahead and run"; "you'll have to run"; "use" after "your next
   step is to", with a closed list of system folders (`/tmp`, `/usr`) never a command; "before
   anything else", which is no standing rule; a command beside a web word that names something
@@ -2618,7 +2618,9 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   plan it: type `/plan-lite`" has the same shape and is a hand over; and a report worded
   outside the shapes above ("The issue says: you have to type", "tell you that you have to
   type") is held. So is a command put off in words the rules do not know: by a next sentence
-  whose verb is neither "can wait" nor "have put down" ("That is noted for the morning."), or
+  whose verb is neither "can wait" nor "have put down" ("That is noted for the morning."), by
+  "it can wait" after a clause of that sentence, where "it" can name what the clause spoke of
+  ("Nothing tonight depends on it, and it can wait for the morning"), or
   under a label that names the time among other words ("Something to look for in the
   morning:"). Of the review's 72 replies that hand nothing over, 11 are held, 7 of them as on
   main. Three of its hand overs are missed, as on main: "anything new" read as a standing rule,
@@ -2637,15 +2639,14 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   earlier counts held those turns only because a count reads the record; the count sets them
   apart now.
   Counted on 2026-11-28 over the personal MacBook's 134 interactive sessions of the 30 days
-  before (3,137 turns; the 45 ending in Claude Code's own notice set apart, neither check holding
-  any of them; 3,092 judged): 35 held by both the check as it was and the check as it is, none
-  newly held, 4 newly passed. Read one by one, 2 of the 4 hand the command over for the morning
-  or for when Dan is back and 2 offer it beside starting a new session. Each moved turn is laid
-  to the rule that moved it by running the new check with that one rule put back: 1 to a time
-  right after the command, 1 to a new session in the same sentence, 1 to the next sentence
-  putting it off and 1 to the next sentence offering a new session. The first build passed 6:
-  the 2 it passed and this one holds are for the morning too, put off in the two wordings named
-  above as left held.
+  before (3,141 turns; the 45 ending in Claude Code's own notice set apart, neither check holding
+  any of them; 3,096 judged): 36 held by both the check as it was and the check as it is, none
+  newly held, 3 newly passed. Read one by one, 1 of the 3 hands the command over for when Dan is
+  back and 2 offer it beside starting a new session. Each moved turn is laid to the rule that
+  moved it by running the new check with that one rule put back: 1 to a time right after the
+  command, 1 to a new session in the same sentence and 1 to the next sentence offering a new
+  session. The first build passed 6: the 3 it passed and this one holds are for the morning,
+  put off in the three wordings named above as left held.
 - **A call the permission check refused is answered by a step pinned after it, or by one line**
   (#3842). On 2026-11-27 the permission check refused a call that set a row of Dan's to do list.
   The session rightly did not send it again, then told him in eight replies that the row was his

@@ -335,7 +335,7 @@ describe('typedCommands, the misreads of #3865', () => {
   test('a command the label or the next sentence puts off to the morning passes', () => {
     expect(typedCommands('A note for the morning: the old guard stays loaded until you run `/reload-plugins`.')).toEqual([])
     expect(typedCommands('Run `/reload-plugins` when you wake.')).toEqual([])
-    expect(typedCommands('Loading the new guard needs you to type `/reload-plugins`. Nothing tonight depends on it, and it can wait for the morning.')).toEqual([])
+    expect(typedCommands('Loading the new guard needs you to type `/reload-plugins`. It can wait for the morning.')).toEqual([])
     expect(typedCommands('The old copy stays loaded until you run `/reload-plugins`. I have put that down for the morning.')).toEqual([])
   })
   test('a next sentence that puts something else off, or says more of the command, leaves it held', () => {
@@ -346,9 +346,9 @@ describe('typedCommands, the misreads of #3865', () => {
     expect(typedCommands('Run `/reload-plugins`. It can wait no longer.')).toEqual(['/reload-plugins'])
     expect(typedCommands('Run `/reload-plugins`. This branch can wait.')).toEqual(['/reload-plugins'])
     expect(typedCommands('Run `/reload-plugins`. Do it before the review, and that can wait.')).toEqual(['/reload-plugins'])
-    // After a clause with a subject of its own, "it" is that subject.
+    // After a clause, "it" can be whatever that clause spoke of.
     expect(typedCommands('Run `/reload-plugins`. The merge queue is stuck, and it can wait for the morning.')).toEqual(['/reload-plugins'])
-    expect(typedCommands('Run `/reload-plugins`. No test needs it tonight, so it can wait until tomorrow.')).toEqual([])
+    expect(typedCommands('Run `/reload-plugins`. Nothing is wrong with the merge queue, and it can wait for the morning.')).toEqual(['/reload-plugins'])
     // The command's own sentence says now, which the next sentence cannot take back.
     expect(typedCommands('Type `/compact` now. It can wait for the morning.')).toEqual(['/compact'])
   })
@@ -365,6 +365,9 @@ describe('typedCommands, the misreads of #3865', () => {
   test('as built today, a command put off in words the rules do not know is held', () => {
     // The next sentence puts it off with a verb other than "can wait" and "have put down".
     expect(typedCommands('The old copy stays loaded until you run `/reload-plugins`. That is noted for the morning.')).toEqual(['/reload-plugins'])
+    // "It can wait" comes after a clause of the next sentence, where "it" could name something else.
+    expect(typedCommands('Loading the new guard needs you to type `/reload-plugins`. Nothing tonight depends on it, and it can wait for the morning.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/reload-plugins`. No test needs it tonight, so it can wait until tomorrow.')).toEqual(['/reload-plugins'])
     // The label names the time among other words.
     expect(typedCommands('Something to look for in the morning: the old copy stays loaded until you run `/reload-plugins`.')).toEqual(['/reload-plugins'])
   })
