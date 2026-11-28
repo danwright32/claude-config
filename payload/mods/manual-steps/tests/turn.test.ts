@@ -71,7 +71,8 @@ describe('turnAt', () => {
   const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false })
 
   // #1811, #3842: each of this mod's blocks is a mark, the step left in prose, the page of steps
-  // and the refused call, so a turn holding any of them is never blocked by this mod again.
+  // the refused call and the unread turn, so a turn holding any of them is blocked by this mod again
+  // only for a call refused after it.
   test('reads the transcript\'s last bytes through perl, the path and each mark as arguments, never in the program', async () => {
     const { asked, run } = runs(ok([user('p1'), said('hello')].join('\n')))
     expect(await turnAt(T, run)).toEqual({ state: 'read', texts: ['hello'], isOurs: false, promptId: 'p1', refused: 0, refusedUnasked: 0, saidAfterRefusal: [], refusedMet: 0, isPinned: false, isCutShort: false })
@@ -287,6 +288,8 @@ describe('a read that did not finish (#3860)', () => {
     expect(await turnAt('', answer({}))).toEqual({ state: 'unreadable', why: 'no transcript was given', isUnfinished: false })
     // Stopped at its time limit or killed: whatever the engine answers then, it is not perl's own reason.
     expect(await turnAt(T, answer({ exitCode: 143 }))).toEqual({ state: 'unreadable', why: 'the transcript reader exited 143', isUnfinished: true })
+    // A failure of the reader's own once it is reading is not a transcript that is not there.
+    expect(await turnAt(T, answer({ exitCode: 5, stderr: `reading ${T}: Input/output error\n` }))).toEqual({ state: 'unreadable', why: `reading ${T}: Input/output error`, isUnfinished: true })
     expect(await turnAt(T, answer({ exitCode: 1, stderr: 'the process was stopped at its time limit' }))).toEqual({ state: 'unreadable', why: 'the process was stopped at its time limit', isUnfinished: true })
     expect(await turnAt(T, async () => { throw new Error('timed out after 2000ms') })).toEqual({ state: 'unreadable', why: 'timed out after 2000ms', isUnfinished: true })
     expect(await turnAt(T, answer({ isStdoutTruncated: true }))).toEqual({ state: 'unreadable', why: 'the transcript reader printed more than could be read whole', isUnfinished: true })
@@ -300,6 +303,10 @@ describe('a read that did not finish (#3860)', () => {
     })
     expect(asked[0]?.slice(3, 8)).toEqual(['--', String(TURN_BYTES), String(FAR_BYTES), String(FAR_MS), T])
     expect(FAR_MS).toBeLessThan(TURN_TIMEOUT_MS)
+    // Only its failure to open the transcript is said with the bare path, which is how a
+    // transcript that is not there is told from a read that failed part way.
+    expect(asked[0]?.[2]?.match(/die "\$f: /g)).toHaveLength(1)
+    expect(asked[0]?.[2]?.match(/die "reading \$f: /g)).toHaveLength(4)
   })
 })
 

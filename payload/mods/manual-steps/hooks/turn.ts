@@ -103,7 +103,7 @@ const TURN_READ = [
   'open(my $h, "<", $f) or die "$f: $!\n";',
   'my $size = -s $h;',
   'my $start = $size > $n ? $size - $n : 0;',
-  'seek($h, $start, 0) or die "$f: $!\n";',
+  'seek($h, $start, 0) or die "reading $f: $!\n";',
   'my ($turn, $bound, %ids);',
   'sub top {',
   '  my ($l) = @_;',
@@ -168,9 +168,9 @@ const TURN_READ = [
   '    my $len = $far - $went < 4194304 ? $far - $went : 4194304;',
   '    $len = $pos if $pos < $len;',
   '    $pos -= $len;',
-  '    seek($h, $pos, 0) or die "$f: $!\n";',
+  '    seek($h, $pos, 0) or die "reading $f: $!\n";',
   '    my $got = read($h, my $buf, $len);',
-  '    die "$f: " . (defined $got ? "read $got of $len bytes" : $!) . "\n" unless defined $got && $got == $len;',
+  '    die "reading $f: " . (defined $got ? "read $got of $len bytes" : $!) . "\n" unless defined $got && $got == $len;',
   '    $went += $len;',
   '    $buf .= $tail;',
   '    my @lines = split(/\\n/, $buf, -1);',
@@ -185,7 +185,7 @@ const TURN_READ = [
   '}',
   'print qq({"type":"reader","isCutShort":true}\n) if $stopped;',
   'print reverse(@back), @win;',
-  'close($h) or die "$f: $!\n";',
+  'close($h) or die "reading $f: $!\n";',
 ].join('\n')
 
 export type TurnRead = {
@@ -373,8 +373,9 @@ export const turnAt = async (transcript: string, run: TurnRun): Promise<TurnAt> 
   } catch (err) {
     return { state: 'unreadable', why: err instanceof Error ? err.message : String(err), isUnfinished: true }
   }
-  // Every reason the reader gives itself begins with the path. What the engine answers for a
-  // process it stopped at its time limit is not known, so any other failure counts as stopped.
+  // Only the reader's failure to open the transcript begins with the bare path; a failure once it
+  // is reading begins "reading". What the engine answers for a process it stopped at its time
+  // limit is not known, so every failure but that first one counts as a read that did not finish.
   if (r.exitCode !== 0) return { state: 'unreadable', why: r.stderr.trim() || `the transcript reader exited ${r.exitCode}`, isUnfinished: !r.stderr.startsWith(`${transcript}: `) }
   // Cut short, it lost the turn's last records, which are what it is read for.
   if (r.isStdoutTruncated) return { state: 'unreadable', why: 'the transcript reader printed more than could be read whole', isUnfinished: true }

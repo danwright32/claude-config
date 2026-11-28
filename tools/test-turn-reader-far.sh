@@ -142,6 +142,10 @@ has "and pinned a step" "$out" "pinned=true"
 { prompt p1; refused p1 automode-blocked; called "$STEPS" s1; result p1 s1 6; called Bash c2; failed p1 c2; said p1 'x'; } > "$W/other.jsonl"
 has "another call's failure is not the steps tool call's" "$(read_turn "$W/other.jsonl")" "refused=0"
 
+# ---- A transcript that is not there ----
+# Said with the bare path first, which is how the mod tells it from a read that failed part way.
+has "a transcript that is not there is named by its bare path" "$(read_turn "$W/none.jsonl")" "outkb=0 $W/none.jsonl: No such file or directory"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

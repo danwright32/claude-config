@@ -594,7 +594,7 @@ const proseStep = (phrase: string) =>
 
 // #3652: a slash command handed to Dan to type is a step like any other, and only an unfinished step
 // naming it answers for it, since a card of other steps closes once those are done and reads as all
-// done. It begins with PROSE_MARK, so the turn holding it is never blocked again (turn.ts).
+// done. It begins with PROSE_MARK, so the turn holding it is not asked this again (turn.ts).
 const typedStep = (commands: readonly string[]) => {
   const named = commands.map(c => `\`${c}\``).join(', ')
   return `${PROSE_MARK}: a command to type himself (${named}), and no unfinished step on the steps card holds it, so once he finishes the card's other steps it is forgotten. If he is to type it now, put it on the card with the ${TOOL} tool as a step of its own: location "paste it where you type your messages to me", and the whole command he types as its value. Pinning replaces the card, so pin it again with its unfinished steps and this one. Then say in one line that it is on the card. If he is not to type it now (you only named it, or offered it as an option), say so in one line instead.`
@@ -901,7 +901,8 @@ export const register: Register = on => {
   // #1608: every message of the turn is read from the transcript, not only the last, since the step
   // can sit in an earlier one while the last is the session reflection. Once the turn is read, the
   // turn itself says whether this mod already blocked in it, so it blocks at most once per turn even
-  // in a chain another Stop hook started; unread, it falls back to the last message and to that chain.
+  // in a chain another Stop hook started, and again only for a call refused after that block;
+  // unread, it falls back to the last message and to that chain.
   // #3652: a slash command handed to Dan to type is answered only by an unfinished step naming it.
   // #3842: a call the permission check refused in the turn is answered only by a step pinned after
   // it, by the one line saying nothing from it is Dan's, or by the line saying none of the steps

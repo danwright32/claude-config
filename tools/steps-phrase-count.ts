@@ -163,7 +163,8 @@ export type Denied = { file: string; isRead: boolean }
 /**
  * Take in the lines of one session record that hold the sentence, beside what the mod's reader
  * printed for the same record. A result is read as a refused call when the reader kept its line
- * whole and turnIn counts that line, which are the mod's own two steps and no test of this tool's.
+ * whole and turnIn counts that line, which are the mod's own two steps and no test of this tool's,
+ * or when the reader printed the record cut down under the same record id and turnIn counts that.
  * A result met again under its record id, in the copy of a session kept under a second folder, is
  * taken once.
  */
