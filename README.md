@@ -107,6 +107,19 @@ before every push each suite with a line of code that lists the repository's fil
 `hooks/lib/repo-files.sh` or git itself. A string or a heredoc holding either name counts as code,
 and a comment naming one selects nothing (#3409).
 
+`hooks/test-settings-file.sh` is one of them since #3859. It reads every suite the payload ships
+for a second copy of the settings lookup, and it listed them only through
+`hooks/lib/synced-trees.sh`, which the gate does not read as a listing. So on 2026-11-27 a push
+carrying such a copy went through the gate, with every suite the gate ran passing, and failed in
+CI 17 minutes later. The suite now also asks `hooks/lib/repo-files.sh` for the repository's own
+suites under `payload/` and fails when its scan read fewer of them, and that line is what selects
+it. Measured alone on 2026-11-28, at nice 15 on 12 cores: 0.67 to 0.84 seconds before that check (5
+runs, load averages 27 to 33) and 1.06 to 1.14 seconds with it (5 runs, load averages 48 to 52),
+plus one run of 6.6 seconds as the load rose from 43 to 58. The gate as a whole was not timed with
+and without it. In the gate's own records of a push refused for time that morning, with its slowest
+scanners at 147 to 155 seconds, two scanners that take 0.6 seconds alone were recorded at 1 and 2
+seconds (2026-11-28).
+
 A push that adds or changes a test suite also runs the suites that walk the checkout without
 listing it through git (#3183). A suite is one of those when its own code runs
 `hooks/lib/checkout-root.sh` to find the checkout and walks a tree (`os.walk`, `rglob`, or a `find`

@@ -57,6 +57,20 @@
 # After the move, with that lock held throughout, the gate passed in 60 seconds at a load average
 # of 160 on 2026-11-01, its slowest scanner 51, so the budget below was left where it was.
 #
+# A SUITE THAT LISTS THE TREE BY ANOTHER ROUTE IS NOT SEEN (claude-config#3859). The mark is one
+# spelling. test-settings-file.sh reads every suite the payload ships for a second copy of the
+# settings lookup, and listed them only through lib/synced-trees.sh, so on 2026-11-27 a push
+# carrying such a copy went through this gate with every scanner passing and failed in CI 17 minutes
+# later. That suite now also asks lib/repo-files.sh for the repository's own suites, to check its
+# scan read them all, and so carries the mark. Measured alone on 2026-11-28 at nice 15 on 12 cores:
+# 0.67 to 0.84 seconds before that check (5 runs, load averages 27 to 33), 1.06 to 1.14 with it (5
+# runs, load averages 48 to 52), and one run of 6.6 as the load rose from 43 to 58. The gate was not
+# timed as a whole with and without it. In its own records of a push refused for time that morning,
+# its slowest scanners at 147 to 155 seconds, two scanners that take 0.6 seconds alone stood at 1
+# and 2 (2026-11-28). Other suites read the tree by routes the mark does not see, a glob over the
+# hooks folder or lib/synced-trees.sh among them; measure one against the budget before giving it
+# the mark.
+#
 # It is repo-agnostic by construction: a repository with no payload/hooks/run-all-tests.sh is not
 # this one, and the hook does nothing at all there rather than running suites it knows nothing
 # about the cost of.
