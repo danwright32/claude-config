@@ -354,9 +354,12 @@ const sendHeld = async ($: EngineInterface, id: string, what: string, text: stri
  * Claimed before it is sent, so two turn ends at once ask once, and released when it did not enter,
  * so a passing failure is asked again at the next turn end (L368).
  * The end of turn review's record is asked first, through `record` (endRecord): a review handed
- * over this turn that Dan has not answered spends the request's question unsent.
+ * over this turn that Dan has not answered spends the request's question unsent. It is asked
+ * before what holds the box is weighed, since the record ends with the turn. `send` is false at a
+ * turn end where the question does not go out (heldOnly, or a /goal set or unreadable): the record
+ * is still asked and an unanswered review still spends the question, and nothing is sent.
  */
-const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<void> => {
+const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>, send = true): Promise<void> => {
   const since = (await $.state.get(requestAtRef)).value
   if (since === undefined) return
   const prompts = (await $.state.get(promptsRef)).value ?? 0
@@ -370,16 +373,18 @@ const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>): 
   const shown = (await $.state.get(shownRef)).value ?? []
   if (shown.some(s => s.prompts >= prompts)) return
   if (!cardedSince(facts.verdicts, since, Math.max(-Infinity, ...shown.map(s => s.at)))) return
-  const holds = await boxHolds($)
-  if (holds.length) return
   const end = await record()
-  if (!(await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet) return
   if (end.unanswered) {
+    if (!(await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet) return
     debug($, `${UNANSWERED}, so the session is not asked whether the work is finished for this request`)
     await noteOwing($, prompts)
     await tellWaiting($, 'request')
     return
   }
+  if (!send) return
+  const holds = await boxHolds($)
+  if (holds.length) return
+  if (!(await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet) return
   const failed = await sendHeld($, 'ask-done', 'the prompt asking whether the work is finished', askDoneText())
   if (failed === undefined) {
     if (end.unread !== undefined) $.ui.log(promptedUnreadText(end.unread))
@@ -601,8 +606,12 @@ const reviewNow = async ($: EngineInterface, prompts: number): Promise<ReviewWai
  * not answered it (he closed its picker, it closed while he was away, the session asked in prose
  * and stopped), no prompt is sent, and a prompt added later must ask here first too. A record that
  * cannot be read stops nothing, since a box that never shows is the worse fault, and the prompt that
- * then goes out is said where Dan can see it. Asked once a turn end, and only when a prompt is about
- * to be sent, so a turn end that sends nothing never pays for the read.
+ * then goes out is said where Dan can see it. The record ends with the turn, so it is asked at
+ * every turn end of the main conversation where a prompt is waiting, whether or not that turn end
+ * can send it (a turn that did not end with an answer, something in flight, a /goal set), and an
+ * unanswered review found there blocks or spends the prompt as it does where one is sent. Asked
+ * once a turn end, and only where a prompt is waiting, so a turn end with none never pays for the
+ * read.
  */
 type EndRecord = { unanswered: boolean; unread?: string }
 const UNANSWERED = 'an end of turn review was handed over this turn and Dan has not answered it'
@@ -645,6 +654,12 @@ const noteOwing = async ($: EngineInterface, prompts: number | null): Promise<vo
   }
 }
 
+/** Whether Dan has already been told so for this request (tellWaiting). */
+const toldWaiting = async ($: EngineInterface): Promise<boolean> => {
+  const told = (await $.state.get(reviewToldRef)).value
+  return told !== undefined && told >= ((await $.state.get(promptsRef)).value ?? 0)
+}
+
 /** Tells Dan, once per request, that a prompt about the box was held back over an unanswered review. */
 const tellWaiting = async ($: EngineInterface, kind: 'request' | 'goal'): Promise<void> => {
   const prompts = (await $.state.get(promptsRef)).value ?? 0
@@ -659,19 +674,23 @@ const tellWaiting = async ($: EngineInterface, kind: 'request' | 'goal'): Promis
  * and a message he typed has since begun another request. The session is asked for it once, in place
  * of this mod's other prompts at that turn's end, which ask for the same call and are marked asked.
  *
- * It can never put the box behind a review Dan has not answered. It exists only once he has typed
- * (prompt.submit), so no prompt of anybody else's leads to it. The record is asked at every turn's
- * end while it waits, before anything else is weighed, and a review found handed over and not
- * answered blocks it until he types again: a later turn somebody else starts, where the record reads
- * none, sends nothing. Then it waits while anything is in flight or a /goal is still set.
+ * It exists only once he has typed (prompt.submit), so no prompt of anybody else's leads to it. The
+ * record is asked at every turn's end of the main conversation while it waits, however the turn
+ * ended and before anything else is weighed, and a review found handed over and not answered
+ * blocks it until he types again: a later turn somebody else starts, where the record reads none,
+ * sends nothing. Then it waits while anything is in flight or a /goal is still set.
+ *
+ * `send` is false at a turn end where no prompt goes out (heldOnly): the record is still asked,
+ * since it ends with the turn, and nothing is sent.
  *
  * Once: claimed before it is sent, so two turn ends at once send one, and put back when it did not
  * enter, so a passing failure is asked again at the next turn's end (L368). True when sent.
  */
-const askOwed = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<boolean> => {
+const askOwed = async ($: EngineInterface, record: () => Promise<EndRecord>, send = true): Promise<boolean> => {
   const owed = await $.state.get(reviewOwedRef)
   if (!owed.value) return false
-  if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= owed.value.request)) {
+  const request = owed.value.request
+  if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= request)) {
     await $.state.set(reviewOwedRef, null, { ifVersion: owed.version })
     return false
   }
@@ -682,6 +701,7 @@ const askOwed = async ($: EngineInterface, record: () => Promise<EndRecord>): Pr
     await tellWaiting($, 'request')
     return false
   }
+  if (!send) return false
   if ((await boxHolds($)).length) return false
   if ((await goalNow($)).state !== 'none') return false
   if (!(await $.state.set(reviewOwedRef, null, { ifVersion: owed.version })).isSet) return false
@@ -716,26 +736,41 @@ const askOwed = async ($: EngineInterface, record: () => Promise<EndRecord>): Pr
  * released when it did not enter, so a passing failure is asked again at the next turn end (L368).
  * It asks what the turn end's other question asks, so that one is marked asked too. True when sent.
  *
- * The record is asked first, through `record` (endRecord). A review handed over this turn that Dan has not
+ * The record is asked first, through `record` (endRecord), before what is in flight is weighed: it
+ * ends with the turn, so a review left unanswered while an agent ran would be read as none once
+ * the agent had finished. A review handed over this turn that Dan has not
  * answered sends nothing, and the request's one message is spent there without being sent, so no
  * later turn end of the same request sends it either: his own next message starts the new request,
  * and the box held here is asked for once after it (askOwed). Dan is told in a line he sees.
+ *
+ * Where the request's message is already used and a call was refused since, that call's box has
+ * no prompt left in this request and is asked for after his next message, so its review left
+ * unanswered is said to Dan in the same line.
+ *
+ * `send` is false at a turn end where no prompt goes out (heldOnly): the record is still asked
+ * and an unanswered review still spends the message, and nothing is sent.
  */
-const askAfterReview = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<boolean> => {
+const askAfterReview = async ($: EngineInterface, record: () => Promise<EndRecord>, send = true): Promise<boolean> => {
   const held = (await $.state.get(reviewHeldRef)).value
   if (typeof held !== 'number') return false
-  const asked = await $.state.get(reviewAskedRef)
-  if (asked.value !== undefined && asked.value >= held) return false
   if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= held)) return false
-  if ((await boxHolds($)).length) return false
+  const asked = await $.state.get(reviewAskedRef)
+  if (asked.value !== undefined && asked.value >= held) {
+    // Not asked once the line has been said for this request: it is said once, so the read would buy nothing.
+    if (typeof (await $.state.get(reviewOwingRef)).value === 'number' && !(await toldWaiting($)) && (await record()).unanswered) await tellWaiting($, 'request')
+    return false
+  }
   const prompts = (await $.state.get(promptsRef)).value ?? 0
   const end = await record()
-  if (!(await $.state.set(reviewAskedRef, prompts, { ifVersion: asked.version })).isSet) return false
   if (end.unanswered) {
+    if (!(await $.state.set(reviewAskedRef, prompts, { ifVersion: asked.version })).isSet) return false
     debug($, `${UNANSWERED}, so the session is not asked to call the Goal accomplished box again for this request`)
     await tellWaiting($, 'request')
     return false
   }
+  if (!send) return false
+  if ((await boxHolds($)).length) return false
+  if (!(await $.state.set(reviewAskedRef, prompts, { ifVersion: asked.version })).isSet) return false
   const failed = await sendHeld($, 'ask-after-review', 'the prompt asking for the Goal accomplished box again', askAgainText())
   if (failed === undefined) {
     await noteOwing($, null)
@@ -1158,15 +1193,24 @@ export const register: Register = on => {
     const r = await next(e)
     // #3843: an answer of Dan's that nothing followed waits only until the turn it was given in ends.
     if (e.agentId === undefined) await pickerTurnEnded($)
-    if (e.agentId !== undefined || e.reason !== 'answer') return r
+    if (e.agentId !== undefined) return r
     if ((await $.state.get(interactiveRef)).value !== true) return r
+    // #3843: no prompt below is sent over an end of turn review Dan has not answered
+    // (endRecord). The record is asked by whichever prompt is waiting, once for this turn end.
+    const record = endRecord($)
+    // #3843: a turn Dan interrupted, or that ended on a refusal or an error, sends nothing. A
+    // review handed over in it still blocks or spends what was waiting, since no later turn end
+    // can read it.
+    if (e.reason !== 'answer') {
+      await askOwed($, record, false)
+      await askAfterReview($, record, false)
+      await askIfDone($, record, false)
+      return r
+    }
     // #3770: the quiet period before the close card, armed under this turn's count.
     const seq = (await $.state.get(closeSeqRef)).value ?? 0
     await $.state.set(closeAnswerRef, { seq, text: e.answer })
     $.clock.after(QUIET_MS, () => void closeCheck($, seq).catch(err => debug($, `the close this session card could not be judged (${errorText(err, MOD)})`)))
-    // #3843: no prompt below is sent over an end of turn review Dan has not answered
-    // (endRecord). The record is asked by whichever is about to send, once for this turn end.
-    const record = endRecord($)
     // #3843: an earlier request's held box, once Dan has typed since. One prompt a turn end, so this
     // one stands in for every other below, which ask for the same call.
     if (await askOwed($, record)) return r
@@ -1174,9 +1218,10 @@ export const register: Register = on => {
     // prompts below in the same way.
     if (await askAfterReview($, record)) return r
     const goal = await goalNow($)
-    if (goal.state !== 'none') return r
-    if (!goal.met) {
-      await askIfDone($, record)
+    // With a /goal set or unreadable the question about shipped work is not sent, and an
+    // unanswered review still spends it.
+    if (goal.state !== 'none' || !goal.met) {
+      await askIfDone($, record, goal.state === 'none')
       return r
     }
     // A met goal's prompt is not spent by an unanswered review, as the other two are: its box is the

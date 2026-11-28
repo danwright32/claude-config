@@ -12512,6 +12512,13 @@ would show behind the unanswered review. The message and the question about ship
 then spent for the request, the prompt
 for a met /goal waits for a later turn end, and Dan is told in one line he sees, once per request,
 that the box is waiting on the review (his choice of 2026-11-27: "One line, then one later ask").
+The record ends with the turn, so the mod asks it at every turn end of the main conversation where
+the message, the question or the later ask below is waiting, whether or not that turn end could
+send it: a turn Dan interrupted or that ended on a refusal or an error, where nothing is sent, a
+turn end with something in flight, and for the question one with a /goal set or unreadable. A
+review found unanswered there spends or blocks what was waiting, and the line is said. A call
+refused after the request's message was used has no prompt left in that request, so its review
+left unanswered is said in the same line, and its box is asked for after his next message.
 The record reads the same when he left a picker unanswered, when the session did the review and
 skipped its last step, and when the hand over never reached the session, and the mod cannot tell
 them apart (a question asked in prose leaves no picker either), so it guesses at none. A message
@@ -12519,8 +12526,12 @@ Dan types drops a hold left from the request before, so the message is never sen
 request, and the held box is not forgotten: it is asked for once, in words for an earlier
 request, at the end of the first turn after his message that has no unanswered review, nothing
 in flight and no /goal still set, in place of the mod's other prompts there. A review found
-unanswered at any turn's end in between stops that ask until he types again, so no prompt of
-anybody else's can put the box behind it. A subagent's Bash call that would record the main
+unanswered at any turn's end of the main conversation in between, however that turn ended, stops
+that ask until he types again, so a turn somebody else starts does not send it. Its box is recorded
+under the request it is shown in, so a second box for that request is refused as already shown.
+What is waiting is kept in the session's `$.state`, which is not known to outlive the process: a
+session quit and resumed between the line and the later ask may never be asked. A subagent's
+Bash call that would record the main
 conversation's review as answered is refused, because its calls carry the main session's id.
 The call is judged by what it runs, as mod-kit's reader reads it (the record's file run as a
 script, its first operand, the transcript it names), never by how it is spelled, so a search or
