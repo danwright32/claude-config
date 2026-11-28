@@ -1244,6 +1244,32 @@ bash ~/claude-config-sync/tools/install-lessons-core-rerank-schedule.sh
 It runs at 11:07 local time (a run missed while asleep happens on wake) and logs to
 `~/.claude-lessons-core-rerank.log`. `--remove` takes it out.
 
+## Memory status checked against GitHub (built, not wired in)
+
+`hooks/check-memory-status.sh` reads one memory folder, its `MEMORY.md` and every other `.md` file
+directly beside it, for lines that pair a pull request or issue with a status word (open, still
+open, pending, awaiting, not merged), asks GitHub for the real state, and prints the file, line
+number and GitHub's state of each line the two disagree on (claude-config#3552). It only prints: it
+writes no file and changes no memory file, and its output goes to the terminal that ran it. Run it
+by hand with the folder as its one argument:
+
+```bash
+bash ~/.claude/hooks/check-memory-status.sh ~/.claude/projects/<project>/memory
+```
+
+A line counts only when it names its repository (`owner/repo#N`, or a github.com pull or issues
+link). A bare `#N`, `PR N` or `repo#N` is never looked up in a guessed repository: those lines are
+skipped and listed by number. GitHub is asked once per distinct reference, each call bounded by
+`MEMORY_STATUS_CALL_SECONDS` (15) and all of them by `MEMORY_STATUS_TOTAL_SECONDS` (120). The exit
+code says what happened: 0 every named reference agrees (or no line pairs one with a status word,
+which it says), 1 at least one disagrees, 2 nothing could be read, 3 something could not be checked
+(gh missing, not signed in, no network, a repository this account cannot see, a rate limit, a
+timeout), 4 everything checked agrees but some lines were skipped. A reference that could not be
+checked is never counted as agreeing.
+
+Nothing runs it yet. Whether it belongs in the session start notice, in `claude-sync status` or in
+both is still open on #3552.
+
 ## When a merge cannot be done
 
 The other Mac's version is applied and yours is kept beside it as `<file>.conflict-<host>`, with one
