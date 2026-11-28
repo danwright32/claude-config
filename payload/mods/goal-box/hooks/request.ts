@@ -112,7 +112,7 @@ const kind = (v: unknown): string => (v === null ? 'null' : v === undefined ? 'n
  * How an AskUserQuestion call came back (PickerCame), as Claude Code's dialog hands it to a
  * tool.call hook. An answer of Dan's is a result holding `answers` with at least one that is not
  * empty, or a `response` that is not empty, which is what he typed in place of choosing (Claude
- * Code's typings of the tool's result: "Freeform text the user typed instead of selecting a
+ * Code's typings say of what the tool returns, "Freeform text the user typed instead of selecting a
  * structured option"). Those are his own words, so they are an answer like a choice; which path of
  * the dialog fills `response` was read from the typings and not measured in a session. A picker he
  * dismissed (a refusal), one that failed, and one that closed by itself while he was away

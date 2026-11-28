@@ -50,6 +50,51 @@ declare module 'claude-code' {
       closed: { prompts: number; pinned: boolean }
       /** #3770: what a command this session ran did that may leave a process behind; once set, for the session. */
       leftBehind: string
+      /**
+       * #3843: whether the turn under this closeSeq has had a main conversation call the end of turn
+       * review's test counts, which makes its review still to come, or why that could not be read.
+       */
+      reviewWork: { seq: number; worked: boolean; unread?: string }
+      /**
+       * #3843: the request (`prompts` above) in which a box was last refused until the review was
+       * answered; null once a message Dan typed has begun another request, which drops the hold.
+       */
+      reviewHeld: number | null
+      /**
+       * #3843: the value of `prompts` when the request's one message asking for such a box again
+       * was last spent at a turn's end: sent, or given up because a review handed over that turn
+       * was not answered.
+       */
+      reviewAsked: number
+      /**
+       * #3843: the request whose box is held for the review with no prompt asking for it sent yet: a
+       * call was refused until the review was answered, or a prompt about the box was given up at a
+       * turn's end over an unanswered review. Null once such a prompt was sent, or a message Dan
+       * typed has moved it to `reviewOwed`.
+       */
+      reviewOwing: number | null
+      /**
+       * #3843: the earlier request whose held box was never shown when a message Dan typed began
+       * another, to be asked for once at a later turn's end.
+       */
+      reviewOwed: { request: number } | null
+      /**
+       * #3843: a review found handed over and not answered at a turn's end of the main conversation
+       * since Dan last typed a message. `now`: found at the latest end of the turn still current.
+       * `earlier`: found at the end of a turn that has since passed. Null when neither, and once
+       * he types.
+       */
+      reviewOpen: { earlier: boolean; now: boolean } | null
+      /**
+       * #3843: why the review's record could not be read at a turn's end of the main conversation
+       * since Dan last typed a message; null when every reading since came back, once a prompt
+       * sent since has said so, and once he types.
+       */
+      reviewUnsure: string | null
+      /** #3843: the request in which Dan was last told, in a line he sees, that the box waits on the review. */
+      reviewTold: number
+      /** #3843: the request whose box was shown over a reading of the review that failed, and what was said of it. */
+      reviewUnread: { prompts: number; text: string }
     }
   }
 }

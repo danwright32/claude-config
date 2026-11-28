@@ -12525,8 +12525,83 @@ the debug log then names the keys its result held, never a word of his, so a cha
 Claude Code hands the mod for a picker shows at the first one; a message he types drops an answer
 still waiting. A test that
 cannot be run is said in the refusal, never read as no work. The refusal of a second box says
-which of these it is and when a later call is right. Where the card is not drawn, the result is the
-same box as text, shaped like SESSION REFLECTION. What holds the box is read through mod-kit's one
+which of these it is and when a later call is right. The box also waits for the turn's end of turn
+review (#3843, Dan's answers of 2026-11-27: hold it "until the review is answered", and, of how the
+box is to know, "The review says so itself"). The review keeps its own record.
+`hooks/lib/review-reason.py`, which both review hooks build their payload through, records that a
+review was handed to the session, only for an instruction in the hooks' own `review/` folder, and
+says in the reason Dan sees when that could not be written. The review's last step records that he
+answered it, or that it asked him nothing: `python3 ~/.claude/hooks/lib/review-record.py answered`,
+given in `review/session-reflection.md`, which is handed over in every turn a review is.
+`hooks/lib/review-record.py` is the record's one owner: two files beside the session's transcript
+(`<transcript>.review-handed.json` and `<transcript>.review-answered.json`), each written whole and
+moved into place, an answer naming the hand over it answers. A record belongs to one turn, told by
+the `promptId` of the transcript's last user line, so the next prompt of any origin ends it and a
+review nobody answered holds no later turn. The mod runs its `state` command before it shows a box:
+handed over and not answered refuses the box and names the command; nothing handed over refuses it
+only in a turn that has had a main conversation call the review's test counts, whatever became of
+the call, since that turn's review is still to come; answered shows it. That test runs beside the
+call it reads, never ahead of it, so no tool waits on it to start, and the box's own tool is never
+read for it. A box refused this way and
+not shown by the turn's end is asked for once more, once per request, by a message the mod sends
+in place of the turn end's other question, because the hooks do not hand a review over at every
+such turn's end. That message, every other prompt of the mod that asks for the box, and the box
+itself go out through one function (`leave` in `hooks/register.ts`), which weighs the review first.
+`tests/test-goal-box-one-way-out.sh` scans every file of the mod for the spellings of a send and of
+a showing that it lists, and fails on one outside that function; a spelling it does not list passes
+it, its header says which are known, and what a site inside the function does is held by the mod's
+own tests, never by the scan. The review is weighed first because of what a prompt does: no prompt
+for a request's box is sent over a review that was handed over and that Dan has not answered,
+since each starts a new turn, where the record reads
+none and the box would show behind the unanswered review. The record ends with its turn, and a
+prompt can fall due in a later turn nobody typed to start (a card made there, a call refused
+there), so the mod reads the record once at every turn end of the main conversation, whatever is
+waiting and however the turn ended (a turn Dan interrupted, a refusal, an error), and keeps a
+review found unanswered until he next types. While it is kept, a prompt for the box of the
+request under way is given up for that request where it falls due, whether or not that turn end
+could have sent it, a refusal promises no message, and Dan is told in one line he sees, once per
+request, that the box is waiting on the review (his choice of 2026-11-27: "One line, then one
+later ask"). A review found answered at a later end of the same
+turn ends what that turn end kept; one answered in a later turn does not. The prompt for a
+met /goal is held only at the end of the turn whose own review is unanswered, says so in a line
+of its own, and is sent at the first later turn end. Under a /goal that is set or cannot be read
+no prompt for a request's box waits, so nothing is spent there. A record that cannot be read at
+a turn's end is kept the same way, and the first prompt sent before he next types says it went
+out without knowing. A call
+refused after the request's message was used has no prompt left in that request, so its review
+left unanswered is said in the same line, and its box is asked for after his next message.
+The record reads the same when he left a picker unanswered, when the session did the review and
+skipped its last step, and when the hand over never reached the session, and the mod cannot tell
+them apart (a question asked in prose leaves no picker either), so it guesses at none. A message
+Dan types drops a hold left from the request before, so the message is never sent under a later
+request, and ends what the turn ends before it found of the review. The held box is not
+forgotten: it is asked for once, in words for an earlier
+request, at the end of the first turn after his message that has no unanswered review, nothing
+in flight and no /goal still set, in place of the mod's other prompts there. A review found
+unanswered at any turn's end of the main conversation in between, however that turn ended, stops
+that ask until he types again, so a turn somebody else starts does not send it. Its box is recorded
+under the request it is shown in, so a second box for that request is refused as already shown.
+What is waiting is kept in the session's `$.state`, which is not known to outlive the process: a
+session quit and resumed between the line and the later ask may never be asked. A subagent's
+Bash call that would record the main
+conversation's review as answered is refused, because its calls carry the main session's id.
+The call is judged by what it runs, as mod-kit's reader reads it (the record's file run as a
+script, its first operand, the transcript it names), never by how it is spelled, so a search or
+a commit message that quotes the phrase passes; a script file whose own lines run it is not seen.
+A record that cannot be read never holds the box: the box shows, with a line in
+the log and a note in the close card's reasons file, and a prompt sent at a turn's end over such
+a record is said in the log too. A hand over that names no turn is read as cannot be read, never
+as none. Each hand over also tidies the transcript's folder without asking: it removes the
+records this file wrote for transcripts that are no longer there (told by the file's whole name
+and by a record's own fields), and its own temp files more than an hour old, and leaves
+everything else. While Dan is asleep the reviews stand down and nothing is held for a review still
+to come; one handed over before he fell asleep and not answered holds the box as it does while he
+is awake. Nothing is held in a conversation the reviews are switched off for (the
+Stop hooks' own `<transcript>.skip-stop-hooks` file), where the box shows as it did.
+`payload/hooks/test-review-record.sh` holds the record and its writers, and
+`tests/test-goal-box-review-record.sh` holds the mod's two commands, and that switch's name, to
+the real files. Where the card is not drawn, the result is the same box as text, shaped like
+SESSION REFLECTION. What holds the box is read through mod-kit's one
 list of what is in flight (`hooks/mod-kit/inflight.ts`, #3770), asked for the box's three kinds.
 The close this session card (#3770, Dan's answers of 2026-11-26): a manual steps card headed
 "Nothing this session can see is running or waiting", whose one step, "Close this session if you

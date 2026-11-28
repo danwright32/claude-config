@@ -1,10 +1,11 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
+import { cutCall, cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import { pickerCame } from './request.ts'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
 import { WORK_TEST_MS, alreadyShownText, answered, workRead, workTestArgv, type WorkRead } from './request.ts'
+import { REVIEWS_OFF_SUFFIX, REVIEW_STATE_MS, answeredCommand, answersMainReview, askAgainText, askOwedText, canBeTurnWork, namesRecordFile, notMainReviewText, promptedUnreadText, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, waitingText, type ReviewRead, type ReviewWait } from './review.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { askPr } from './mod-kit/prmerged.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
@@ -38,9 +39,18 @@ import { CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOO
 //    review once dropped its line (#2523), so a prompt is not the whole reminder (L27): at a turn end
 //    where work measurably shipped (an is it live card made since Dan's last message), nothing is in
 //    flight and no box was shown, this mod asks the session itself, once per request of Dan's.
+//    Since #3843 the box also waits for the turn's end of turn review: it is refused while that
+//    review is still to come or is handed over and not on record as answered, by the review's own
+//    record (review.ts), and a box refused so and never shown is asked for once at the turn's end.
+//    Every prompt of this mod that asks for the box, and the box itself, goes out through one
+//    function (leave), which sends no prompt for a request's box while a review found handed over
+//    and not answered at a turn's end stands: the record is read at every turn's end of the main
+//    conversation and what it finds is kept until Dan types (readAtEnd). Dan is told in a line he
+//    sees, once per request, and once a message he typed has begun another request the held box
+//    is asked for once at a later turn's end (askOwed).
 //
-// The box is the tool's result: drawn as mod-kit's card, its heading in the success colour, and as
-// text led by the goal wherever the card is not drawn (#2512).
+// The box is what the tool returns, drawn as mod-kit's card, its heading in the success colour, and
+// as text led by the goal wherever the card is not drawn (#2512).
 
 const interactiveRef = { plugin: 'goal-box', key: 'interactive' } as const
 const promptsRef = { plugin: 'goal-box', key: 'prompts' } as const
@@ -50,6 +60,16 @@ const requestAtRef = { plugin: 'goal-box', key: 'requestAt' } as const
 const askedDoneRef = { plugin: 'goal-box', key: 'askedDone' } as const
 // #3843, request.ts: an answer of Dan's in a picker that no work has followed yet.
 const pickerRef = { plugin: 'goal-box', key: 'picker' } as const
+// #3843, review.ts: the box waits for the end of turn review.
+const reviewWorkRef = { plugin: 'goal-box', key: 'reviewWork' } as const
+const reviewHeldRef = { plugin: 'goal-box', key: 'reviewHeld' } as const
+const reviewAskedRef = { plugin: 'goal-box', key: 'reviewAsked' } as const
+const reviewOwingRef = { plugin: 'goal-box', key: 'reviewOwing' } as const
+const reviewOwedRef = { plugin: 'goal-box', key: 'reviewOwed' } as const
+const reviewToldRef = { plugin: 'goal-box', key: 'reviewTold' } as const
+const reviewUnreadRef = { plugin: 'goal-box', key: 'reviewUnread' } as const
+const reviewOpenRef = { plugin: 'goal-box', key: 'reviewOpen' } as const
+const reviewUnsureRef = { plugin: 'goal-box', key: 'reviewUnsure' } as const
 // #3770, the close this session card's own record.
 const closeSeqRef = { plugin: 'goal-box', key: 'closeSeq' } as const
 const closeStopRef = { plugin: 'goal-box', key: 'closeStop' } as const
@@ -269,11 +289,16 @@ const claim = async ($: EngineInterface, entry: GoalBoxShown): Promise<boolean> 
   for (let i = 0; i < 10; i++) {
     const held = await $.state.get(shownRef)
     const list = held.value ?? []
-    const last = list[list.length - 1]
-    if (list.some(s => s.key === entry.key) || (entry.kind === 'request' && last !== undefined && entry.prompts <= last.prompts)) return false
+    if (taken(list, entry)) return false
     if ((await $.state.set(shownRef, [...list, entry], { ifVersion: held.version })).isSet) return true
   }
   return false
+}
+
+/** Whether a box with this key, or any box since Dan's last request, is on the list: the claim's own test. */
+const taken = (list: GoalBoxShown[], entry: Pick<GoalBoxShown, 'key' | 'kind' | 'prompts'>): boolean => {
+  const last = list[list.length - 1]
+  return list.some(s => s.key === entry.key) || (entry.kind === 'request' && last !== undefined && entry.prompts <= last.prompts)
 }
 
 /** Marks a met goal as asked about; false when it already was, or its box already shown. */
@@ -298,28 +323,130 @@ const unmarkAsked = async ($: EngineInterface, id: string): Promise<void> => {
   }
 }
 
+// ---- The one way out (#3843) ----
+// A prompt of this mod that asks for the box starts a turn whose call would show it, and the box
+// itself is a call's result. Both go out through `leave` and nowhere else, so whether an end of
+// turn review is handed over and not answered is weighed in one place for all of them.
+// tests/test-goal-box-one-way-out.sh scans the mod for the spellings of a send and of a showing
+// it lists, and fails on one outside this function. A spelling it does not list passes it, and
+// what a site inside this function does is held by the mod's own tests, never by that scan.
+
+/** A prompt that asks for the box, due at the end of a turn of the main conversation. */
+type BoxPrompt = {
+  /** The turn.complete event it is due at, which the record is read once for (readAtEnd). */
+  end: object
+  /** Whether this turn's end can send anything: not where the turn did not end with an answer. */
+  sends: boolean
+  /** `goal` is the prompt for a met /goal, held only by the review of the turn now ending. */
+  kind: 'request' | 'goal'
+  id: string
+  what: string
+  text: string
+  /** What a review found unanswered spends of this prompt; `why` is that finding, for the debug log. */
+  held?: (why: string) => Promise<void>
+  /** What else must hold before it is sent, weighed only once the review has been. */
+  ready?: () => Promise<boolean>
+  /** Claims the send, so two turn ends at once send one. */
+  claim: () => Promise<boolean>
+}
+/** A call for the box that every other rule would show. */
+type BoxCall = { entry: GoalBoxShown; shown: GoalBoxShown[]; toolUseId: string; goal: string; shipped: string[] }
+/** `held` by the review, `waits` for a later turn end, `lost` the claim to another turn end, or why it did not enter. */
+type PromptLeft = 'held' | 'waits' | 'lost' | 'sent' | { failed: string }
+type BoxLeft = { deny: string } | { result: string; text: string; context: string[] }
+
+const UNANSWERED = 'an end of turn review was handed over this turn and Dan has not answered it'
+const UNANSWERED_EARLIER = 'an end of turn review handed over in an earlier turn was left unanswered and Dan has not typed since'
+
 /**
- * Sends the session one prompt of its own, holding back mod-kit's reload of goal-box until it is sent
- * (#2132: the prompt waits until the session is idle, and a reload in that time would drop it), for
- * at most mod-kit's hour. Why it did not enter (thrown, or dropped by a hook beneath), or undefined.
+ * Sends a prompt that asks for the box, or shows the box.
+ *
+ * A call: the record is read as the call is made, with whether this turn's review is still to
+ * come (reviewNow). Held, it is refused in words the session can act on and remembered for the
+ * request; otherwise the box is claimed, drawn and returned.
+ *
+ * A prompt: what the turn ends since Dan's last typed message found of the review is asked first
+ * (readAtEnd), before anything else is weighed, since a review can be found only at the end of
+ * its own turn. While one found unanswered stands, nothing is sent: the prompt is spent or left
+ * waiting as its `held` says, and Dan is told in the one line. A prompt for a request's box is
+ * held by any such review until he types; the prompt for a met /goal only by the review of the
+ * turn now ending, as its own line says. Sent, the reload of goal-box is held back until the
+ * prompt has entered (#2132: it waits until the session is idle, and a reload in that time would
+ * drop it), for at most mod-kit's hour, and a record that could not be read at a turn's end since
+ * he last typed is said where Dan sees it, once.
  */
-const sendHeld = async ($: EngineInterface, id: string, what: string, text: string): Promise<string | undefined> => {
+async function leave($: EngineInterface, q: BoxPrompt): Promise<PromptLeft>
+async function leave($: EngineInterface, q: BoxCall): Promise<BoxLeft>
+async function leave($: EngineInterface, q: BoxPrompt | BoxCall): Promise<PromptLeft | BoxLeft> {
+  if ('entry' in q) {
+    const prompts = q.entry.prompts
+    // One the claim below would refuse anyway is left to it, so "already shown" is never said as "waiting".
+    const review = taken(q.shown, q.entry) ? null : await reviewNow($, prompts)
+    if (review && 'hold' in review) {
+      await noteReviewHeld($, prompts)
+      await noteOwing($, prompts)
+      return { deny: review.hold }
+    }
+    // Said in the words of what is known of a picker Dan answered since (request.ts).
+    if (!(await claim($, q.entry))) return { deny: alreadyShownText((await $.state.get(pickerRef)).value) }
+    const context = ['The Goal accomplished box is shown to Dan above. Do not repeat it in your reply.']
+    if (review) {
+      // A reading that failed never holds the box and is never passed over in silence: said to Dan,
+      // to the session, and kept for the close card's reasons file, where a later session can read it.
+      // The box is claimed by now, so nothing here may stop it being drawn: a note that cannot be
+      // kept is said and passed over.
+      const said = shownUnreadText(review.unread)
+      context.push(said)
+      $.ui.log(said)
+      try {
+        await $.state.set(reviewUnreadRef, { prompts, text: said })
+      } catch (err) {
+        $.ui.log(`That the Goal accomplished box was shown without waiting could not be kept for the close card's reasons file (${errorText(err, MOD)}).`)
+      }
+    }
+    const text = boxText(q.goal, q.shipped)
+    try {
+      await $.modkit.card(cardOf(q.toolUseId, q.goal, q.shipped))
+    } catch (err) {
+      // The text below is the box where the card is not drawn: still shown, never lost.
+      debug($, `the card could not be drawn (${errorText(err, MOD)}), so the box is shown as text`)
+    }
+    return { result: text, text, context }
+  }
+  await readAtEnd($, q.end)
+  const open = (await $.state.get(reviewOpenRef)).value
+  if (q.kind === 'goal' ? open?.now === true : open?.now === true || open?.earlier === true) {
+    await q.held?.(open?.now === true ? UNANSWERED : UNANSWERED_EARLIER)
+    await tellWaiting($)
+    return 'held'
+  }
+  if (!q.sends) return 'waits'
+  if (q.ready && !(await q.ready())) return 'waits'
+  if (!(await q.claim())) return 'lost'
+  let failed: string | undefined
   try {
     const held = {
       mod: MOD,
-      id,
-      what,
+      id: q.id,
+      what: q.what,
       ms: HOLD_MAX_MS,
       hold: (input: { mod: string; id: string; what: string; ms: number }) => $.modkit.hold(input),
       release: (input: { mod: string; id: string }) => $.modkit.release(input),
       log: (line: string) => $.ui.log(line, { to: 'debug' }),
     }
-    const sent = await whileHeld(held, () => $.prompt.submit({ text }))
-    if (sent.drop !== undefined) return sent.drop || 'the prompt was dropped'
-    return undefined
+    const sent = await whileHeld(held, () => $.prompt.submit({ text: q.text }))
+    if (sent.drop !== undefined) failed = sent.drop || 'the prompt was dropped'
   } catch (err) {
-    return msg(err)
+    failed = msg(err)
   }
+  if (failed !== undefined) return { failed }
+  // Said once for a reading that failed: the next prompt sent would only repeat it.
+  const unsure = (await $.state.get(reviewUnsureRef)).value
+  if (unsure) {
+    $.ui.log(promptedUnreadText(unsure))
+    await $.state.set(reviewUnsureRef, null)
+  }
+  return 'sent'
 }
 
 /**
@@ -332,8 +459,11 @@ const sendHeld = async ($: EngineInterface, id: string, what: string, text: stri
  * work that shipped before a picker answered mid turn).
  * Claimed before it is sent, so two turn ends at once ask once, and released when it did not enter,
  * so a passing failure is asked again at the next turn end (L368).
+ * A review found unanswered spends the request's question unsent and leaves its box owing (leave).
+ * `sends` is false at a turn's end that sends nothing: the question is still weighed against the
+ * review there, and nothing goes out.
  */
-const askIfDone = async ($: EngineInterface): Promise<void> => {
+const askIfDone = async ($: EngineInterface, end: object, sends: boolean): Promise<void> => {
   const since = (await $.state.get(requestAtRef)).value
   if (since === undefined) return
   const prompts = (await $.state.get(promptsRef)).value ?? 0
@@ -347,17 +477,29 @@ const askIfDone = async ($: EngineInterface): Promise<void> => {
   const shown = (await $.state.get(shownRef)).value ?? []
   if (shown.some(s => s.prompts >= prompts)) return
   if (!cardedSince(facts.verdicts, since, Math.max(-Infinity, ...shown.map(s => s.at)))) return
-  const holds = await boxHolds($)
-  if (holds.length) return
-  if (!(await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet) return
-  const failed = await sendHeld($, 'ask-done', 'the prompt asking whether the work is finished', askDoneText())
-  if (failed === undefined) return
+  const claimed = async () => (await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet
+  const left = await leave($, {
+    end,
+    sends,
+    kind: 'request',
+    id: 'ask-done',
+    what: 'the prompt asking whether the work is finished',
+    text: askDoneText(),
+    held: async why => {
+      if (!(await claimed())) return
+      debug($, `${why}, so the session is not asked whether the work is finished for this request`)
+      await noteOwing($, prompts)
+    },
+    ready: async () => !(await boxHolds($)).length,
+    claim: claimed,
+  })
+  if (typeof left === 'string') return
   for (let i = 0; i < 10; i++) {
     const held = await $.state.get(askedDoneRef)
     if (held.value !== prompts) break
     if ((await $.state.set(askedDoneRef, asked.value ?? -1, { ifVersion: held.version })).isSet) break
   }
-  $.ui.log(`Work shipped since Dan's last message, but the session could not be asked whether the work is finished (${failed}); it is asked again at the next turn end.`)
+  $.ui.log(`Work shipped since Dan's last message, but the session could not be asked whether the work is finished (${left.failed}); it is asked again at the next turn end.`)
 }
 
 // ---- A picker answer followed by work (#3843) ----
@@ -472,6 +614,356 @@ const noteCall = async ($: EngineInterface, tool: string): Promise<void> => {
   if (read.changes) await pickedWorkBegan($)
 }
 
+// ---- The box waits for the end of turn review (#3843) ----
+// The rule and its words are review.ts; this is where the session's events and the record are read.
+
+/**
+ * A tool call of the main conversation, as it arrives: a tool the review's test counts makes this a
+ * turn whose end of turn review is to come, whatever becomes of the call, since the review hooks
+ * count the tool's name in the transcript and never ask how the call ended. Kept under the turn's
+ * count (closeSeq, which every turn start and message moves), so it ends with the turn. Once a turn
+ * is known to have changed something nothing more is read, and a test that could not be run is kept
+ * as that, never as a turn that changed nothing. Never throws: it only watches.
+ */
+const noteTurnWork = async ($: EngineInterface, tool: string): Promise<void> => {
+  try {
+    for (let i = 0; i < 10; i++) {
+      const seq = (await $.state.get(closeSeqRef)).value ?? 0
+      const held = await $.state.get(reviewWorkRef)
+      if (held.value?.seq === seq && held.value.worked) return
+      // One failed run a turn: a test that cannot be run is not run again on every call of the turn.
+      // A name the test has already answered yes for costs no run, so it still makes this a turn
+      // that changed something: one run that failed must not switch the hold off for every later
+      // call of the turn whose answer is already known.
+      const failed = held.value?.seq === seq && held.value.unread !== undefined
+      if (failed && workSaid.get(tool) !== true) return
+      const read: WorkRead = failed ? { changes: true } : await changesSomething($, tool)
+      if ('changes' in read && !read.changes) return
+      const next = 'changes' in read ? { seq, worked: true } : { seq, worked: false, unread: read.unread }
+      if ((await $.state.set(reviewWorkRef, next, { ifVersion: held.version })).isSet) return
+    }
+  } catch (err) {
+    debug($, `whether ${tool} makes this a turn with an end of turn review to come could not be recorded (${errorText(err, MOD)})`)
+  }
+}
+
+/** Scope modes' one sleep predicate; scope modes not loaded, or a predicate that fails, is awake. */
+const asleepNow = async ($: EngineInterface): Promise<boolean> => {
+  try {
+    return (await ($ as unknown as { scopeModes: { isAsleep: () => Promise<boolean> } }).scopeModes.isAsleep()) === true
+  } catch (err) {
+    if (missingOf(err)?.noun !== 'scopeModes') debug($, `whether Dan is asleep could not be read (${errorText(err, MOD)}), so the box waits for the end of turn review as if he were awake`)
+    return false
+  }
+}
+
+/**
+ * What the review's record says of this turn, read by its one owner for this session's transcript,
+ * with the last step's command for that transcript; or null where no review can be handed over:
+ * with the hooks' switch file beside this conversation's transcript they are off for it and the
+ * record is not asked, and while Dan is asleep they stand down, so nothing is held for a review
+ * still to come. A review already handed over this turn and not answered is a question still open
+ * whenever sleep mode began, so the record is asked while he is asleep too, and that one reading
+ * holds as it does while he is awake. A switch that cannot be checked is
+ * taken as not set: the box then waits as usual, and the message at the turn's end covers a review
+ * that never comes. Both places that ask the record ask it here: a call for the box (reviewNow),
+ * and every turn's end of the main conversation (readAtEnd).
+ */
+const recordNow = async ($: EngineInterface): Promise<{ read: ReviewRead; command: string } | null> => {
+  const asleep = await asleepNow($)
+  const t = await transcriptNow($)
+  if (asleep && 'why' in t) return null
+  if ('why' in t) return { read: { unread: `this session's transcript, which it is kept beside, was not found: ${t.why}` }, command: '' }
+  try {
+    if (await $.fs.exists(`${t.path}${REVIEWS_OFF_SUFFIX}`)) return null
+  } catch (err) {
+    debug($, `whether the end of turn reviews are switched off for this conversation could not be checked (${errorText(err, MOD)}), so the box waits for a review as if they were on`)
+  }
+  let read: ReviewRead
+  try {
+    const home = await $.env.get('HOME')
+    read = home ? reviewRead(await $.process.run(reviewStateArgv(home, t.path), { timeoutMs: REVIEW_STATE_MS })) : { unread: "HOME is not set, so the record's reader cannot be found" }
+  } catch (err) {
+    read = { unread: errorText(err, MOD) }
+  }
+  if (asleep && !('state' in read && read.state === 'handed')) return null
+  return { read, command: answeredCommand(t.path) }
+}
+
+/**
+ * Whether the end of turn review holds a box that would otherwise show (review.ts), for a call made
+ * under this count of Dan's requests.
+ */
+const reviewNow = async ($: EngineInterface, prompts: number): Promise<ReviewWait> => {
+  const record = await recordNow($)
+  if (!record) return null
+  const seq = (await $.state.get(closeSeqRef)).value ?? 0
+  const work = (await $.state.get(reviewWorkRef)).value
+  const spent = (await $.state.get(reviewAskedRef)).value
+  // A review found unanswered since Dan last typed holds the request's one message too (leave),
+  // so a refusal made while it stands must not promise that message.
+  const open = (await $.state.get(reviewOpenRef)).value
+  return reviewWait({ read: record.read, work: work?.seq === seq ? work : undefined, command: record.command, spent: (spent !== undefined && spent >= prompts) || open?.now === true || open?.earlier === true })
+}
+
+/**
+ * What a turn's end finds of the review, kept until Dan types. The record ends with its turn: the
+ * next prompt of any origin makes it read none. And a prompt of this mod about the box can fall
+ * due in a later turn nobody typed to start (a card made there, a call refused there), where the
+ * call it asks for would show the box behind the review nobody answered. So the record is read at
+ * every turn's end of the main conversation, whatever is waiting there and however the turn
+ * ended, once for each end (`end` is the turn.complete event: asked again for the same event, the
+ * one read answers).
+ *
+ * A review found handed over and not answered is kept as `now` while its turn is still the
+ * current one, where a later end of that turn can still find it answered, and as `earlier` once
+ * another turn has begun (reviewTurnPassed) or the record reads none, after which nothing on
+ * record can answer it. No review can be handed over where the reviews are switched off or have
+ * stood down (recordNow gives null), which is read as none. A record that cannot be read changes
+ * nothing kept, since a box that never shows is the worse fault, and is itself kept, so the first
+ * prompt sent before he next types is said to have gone out without knowing (leave). A later end
+ * that reads cleanly does not end it: that reading is of its own turn, and whether the turn whose
+ * record could not be read left a review unanswered stays unknown.
+ *
+ * A reading that comes back after a message he typed is dropped: his message ends what a turn
+ * before it left, and the reading is of such a turn.
+ */
+const ENDS = new WeakMap<object, Promise<void>>()
+const readAtEnd = ($: EngineInterface, end: object): Promise<void> => {
+  let read = ENDS.get(end)
+  if (!read) ENDS.set(end, (read = keepEnd($)))
+  return read
+}
+const keepEnd = async ($: EngineInterface): Promise<void> => {
+  const typed = (await $.state.get(requestAtRef)).value
+  const read: ReviewRead = (await recordNow($))?.read ?? { state: 'none' }
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(reviewOpenRef)
+    if ((await $.state.get(requestAtRef)).value !== typed) return
+    if ('unread' in read) {
+      await $.state.set(reviewUnsureRef, read.unread)
+      return
+    }
+    const was = held.value ?? { earlier: false, now: false }
+    const next = read.state === 'handed' ? { earlier: was.earlier, now: true } : read.state === 'answered' ? { earlier: was.earlier, now: false } : { earlier: was.earlier || was.now, now: false }
+    if (next.earlier === was.earlier && next.now === was.now) return
+    if ((await $.state.set(reviewOpenRef, next.earlier || next.now ? next : null, { ifVersion: held.version })).isSet) return
+  }
+  debug($, "what this turn's end found of the end of turn review could not be kept, so a prompt about the box that falls due before Dan types is not held by it")
+}
+
+/** Another turn has begun, so a review found unanswered at the last turn's end can no longer be answered on record. */
+const reviewTurnPassed = async ($: EngineInterface): Promise<void> => {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(reviewOpenRef)
+    if (!held.value?.now) return
+    if ((await $.state.set(reviewOpenRef, { earlier: true, now: false }, { ifVersion: held.version })).isSet) return
+  }
+}
+
+/** Remembers that a call was refused until the review was answered, under the request it was made in. */
+const noteReviewHeld = async ($: EngineInterface, prompts: number): Promise<void> => {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(reviewHeldRef)
+    if (typeof held.value === 'number' && held.value >= prompts) return
+    if ((await $.state.set(reviewHeldRef, prompts, { ifVersion: held.version })).isSet) return
+  }
+}
+
+// ---- A held box is never lost with nobody told (#3843) ----
+// A box held for the review and never shown has two ways back. While the request lasts: the review
+// answered and the call made again, or the one message at a turn's end. Once a message Dan typed has
+// begun another request: one prompt at a later turn's end (askOwed). And where a prompt was held
+// back over an unanswered review, Dan is told so in a line he sees, once per request.
+
+/**
+ * Remembers that this request's box is held for the review with no prompt asking for it sent since:
+ * a call was refused, or the question about shipped work was given up at a turn's end with no call
+ * refused. The one message, or the later ask, once sent clears it.
+ */
+const noteOwing = async ($: EngineInterface, prompts: number | null): Promise<void> => {
+  try {
+    await $.state.set(reviewOwingRef, prompts)
+  } catch (err) {
+    debug($, `that a box is held for the review could not be kept (${errorText(err, MOD)}), so it may not be asked for after Dan's next message`)
+  }
+}
+
+/**
+ * The met /goal whose box the session has neither been asked for nor shown (markAsked's own two
+ * tests), if there is one: its own prompt is still to come.
+ */
+const metWaiting = async ($: EngineInterface, goal: ModKitGoal): Promise<{ id: string; condition: string } | undefined> => {
+  if (goal.state !== 'none' || !goal.met) return undefined
+  const id = goal.met.id
+  if (((await $.state.get(askedRef)).value ?? []).includes(id) || ((await $.state.get(shownRef)).value ?? []).some(s => s.key === `goal:${id}`)) return undefined
+  return goal.met
+}
+
+/**
+ * Tells Dan, once per request, that a prompt about the box was held back over an unanswered review.
+ * In the goal's words wherever a met /goal's own prompt is still to come, whichever prompt was
+ * held: that one is sent at a later turn's end, so "after your next message" would be wrong there.
+ */
+const tellWaiting = async ($: EngineInterface): Promise<void> => {
+  const prompts = (await $.state.get(promptsRef)).value ?? 0
+  const told = await $.state.get(reviewToldRef)
+  if (told.value !== undefined && told.value >= prompts) return
+  const kind = (await metWaiting($, await goalNow($))) ? 'goal' : 'request'
+  if (!(await $.state.set(reviewToldRef, prompts, { ifVersion: told.version })).isSet) return
+  $.ui.log(waitingText(kind))
+}
+
+/**
+ * At a turn's end: the box of an earlier request of Dan's was held for the review and never shown,
+ * and a message he typed has since begun another request. The session is asked for it once, in place
+ * of this mod's other prompts at that turn's end, which ask for the same call and are marked asked.
+ *
+ * It exists only once he has typed (prompt.submit), so no prompt of anybody else's leads to it. A
+ * review found handed over and not answered at a turn's end since that message holds it until he
+ * types again, and it stays owed meanwhile (leave): a later turn somebody else starts sends
+ * nothing. Then it waits while anything is in flight or a /goal is still set.
+ *
+ * `sends` is false at a turn's end that sends nothing: it is still weighed against the review
+ * there, and nothing goes out.
+ *
+ * Once: claimed before it is sent, so two turn ends at once send one, and put back when it did not
+ * enter, so a passing failure is asked again at the next turn's end (L368). True when sent.
+ */
+const askOwed = async ($: EngineInterface, end: object, sends: boolean): Promise<boolean> => {
+  const owed = await $.state.get(reviewOwedRef)
+  if (!owed.value) return false
+  const request = owed.value.request
+  if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= request)) {
+    await $.state.set(reviewOwedRef, null, { ifVersion: owed.version })
+    return false
+  }
+  const left = await leave($, {
+    end,
+    sends,
+    kind: 'request',
+    id: 'ask-owed',
+    what: "the prompt asking for an earlier request's Goal accomplished box",
+    text: askOwedText(),
+    ready: async () => !(await boxHolds($)).length && (await goalNow($)).state === 'none',
+    claim: async () => (await $.state.set(reviewOwedRef, null, { ifVersion: owed.version })).isSet,
+  })
+  if (typeof left === 'object') {
+    const now = await $.state.get(reviewOwedRef)
+    if (!now.value) await $.state.set(reviewOwedRef, owed.value, { ifVersion: now.version })
+    $.ui.log(`The session could not be asked for the Goal accomplished box of an earlier request (${left.failed}); it is asked again at the next turn end.`)
+    return false
+  }
+  if (left !== 'sent') return false
+  const prompts = (await $.state.get(promptsRef)).value ?? 0
+  for (let i = 0; i < 10; i++) {
+    const done = await $.state.get(reviewAskedRef)
+    if (done.value !== undefined && done.value >= prompts) break
+    if ((await $.state.set(reviewAskedRef, prompts, { ifVersion: done.version })).isSet) break
+  }
+  for (let i = 0; i < 10; i++) {
+    const done = await $.state.get(askedDoneRef)
+    if (done.value !== undefined && done.value >= prompts) break
+    if ((await $.state.set(askedDoneRef, prompts, { ifVersion: done.version })).isSet) break
+  }
+  await noteOwing($, null)
+  return true
+}
+
+/**
+ * At a turn's end: a call was refused until the review was answered, no box has been shown since, and
+ * nothing is in flight. The review hooks do not hand a review over at every such turn's end, so the
+ * session is asked once to call again (Dan's yes to this message is his answer of 2026-11-27 on the
+ * issue). Once per request: claimed before it is sent, so two turn ends at once send one, and
+ * released when it did not enter, so a passing failure is asked again at the next turn end (L368).
+ * It asks what the turn end's other question asks, so that one is marked asked too. True when sent.
+ *
+ * A review found unanswered sends nothing, and the request's one message is spent there without
+ * being sent (leave), so no later turn end of the same request sends it either: his own next
+ * message starts the new request, and the box held here is asked for once after it (askOwed).
+ * Dan is told in a line he sees.
+ *
+ * Where the request's message is already used and a call was refused since, that call's box has
+ * no prompt left in this request and is asked for after his next message. Nothing is leaving
+ * there, so it does not go through leave: when the review of the turn now ending is the one left
+ * unanswered, Dan is told in the same line.
+ *
+ * `sends` is false at a turn's end that sends nothing: the message is still weighed against the
+ * review there, and nothing goes out.
+ */
+const askAfterReview = async ($: EngineInterface, end: object, sends: boolean): Promise<boolean> => {
+  const held = (await $.state.get(reviewHeldRef)).value
+  if (typeof held !== 'number') return false
+  if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= held)) return false
+  const asked = await $.state.get(reviewAskedRef)
+  if (asked.value !== undefined && asked.value >= held) {
+    if (typeof (await $.state.get(reviewOwingRef)).value !== 'number') return false
+    await readAtEnd($, end)
+    if ((await $.state.get(reviewOpenRef)).value?.now === true) await tellWaiting($)
+    return false
+  }
+  const prompts = (await $.state.get(promptsRef)).value ?? 0
+  const claimed = async () => (await $.state.set(reviewAskedRef, prompts, { ifVersion: asked.version })).isSet
+  const left = await leave($, {
+    end,
+    sends,
+    kind: 'request',
+    id: 'ask-after-review',
+    what: 'the prompt asking for the Goal accomplished box again',
+    text: askAgainText(),
+    held: async why => {
+      if (await claimed()) debug($, `${why}, so the session is not asked to call the Goal accomplished box again for this request`)
+    },
+    ready: async () => !(await boxHolds($)).length,
+    claim: claimed,
+  })
+  if (left === 'sent') {
+    await noteOwing($, null)
+    for (let i = 0; i < 10; i++) {
+      const done = await $.state.get(askedDoneRef)
+      if (done.value !== undefined && done.value >= prompts) break
+      if ((await $.state.set(askedDoneRef, prompts, { ifVersion: done.version })).isSet) break
+    }
+    return true
+  }
+  if (typeof left === 'string') return false
+  for (let i = 0; i < 10; i++) {
+    const now = await $.state.get(reviewAskedRef)
+    if (now.value !== prompts) break
+    if ((await $.state.set(reviewAskedRef, asked.value ?? -1, { ifVersion: now.version })).isSet) break
+  }
+  $.ui.log(`The session could not be asked to call the Goal accomplished box again (${left.failed}); it is asked again at the next turn end.`)
+  return false
+}
+
+/**
+ * At a turn's end: the session's /goal was judged met, and it has neither been asked for that
+ * goal's box nor shown it (metWaiting). Once per met goal: claimed before it is sent, so two turn
+ * ends at once send one, and released when it did not enter, so a passing failure never loses the
+ * box (L368).
+ *
+ * An unanswered review spends a request's prompts and does not spend a met goal's: its box is the
+ * one Dan set a /goal for, so it is held only at the end of the turn whose own review is left
+ * unanswered, where he is told in the goal's own line, and sent at the first later turn end.
+ */
+const askMet = async ($: EngineInterface, end: object, sends: boolean, goal: ModKitGoal): Promise<void> => {
+  const met = await metWaiting($, goal)
+  if (!met) return
+  const left = await leave($, {
+    end,
+    sends,
+    kind: 'goal',
+    id: 'ask',
+    what: 'the prompt asking for the Goal accomplished box',
+    text: askText(met.condition),
+    held: async why => debug($, `${why}, so the prompt for the met /goal waits for a later turn end`),
+    claim: () => markAsked($, met.id),
+  })
+  if (typeof left === 'string') return
+  await unmarkAsked($, met.id)
+  $.ui.log(`The goal "${met.condition}" was met, but the Goal accomplished box could not be asked for (${left.failed}); it is asked again at the next turn end.`)
+}
+
 // ---- The close this session card (#3770) ----
 // At the main conversation's turn end, once interactive, a quiet period of QUIET_MS starts on the
 // engine's clock. Any turn start or message of any origin since (closeSeq moved) ends it unread. At
@@ -580,7 +1072,11 @@ const closeReasons = async ($: EngineInterface, seq: number): Promise<{ reasons:
   }
   const left = (await $.state.get(leftBehindRef)).value
   const processes = await processesNow($)
-  return { reasons: [...inflightHolds(facts, INFLIGHT_KINDS).map(h => h.text), ...(left ? [leftBehindReason(left)] : []), ...processes.holds], seen: { notes: processes.notes, attached: processes.attached } }
+  // #3843: this request's box was shown over a reading of the end of turn review that failed. Only
+  // a note: it decides nothing here, and is kept where a later session can read why.
+  const unread = (await $.state.get(reviewUnreadRef)).value
+  const notes = [...(unread && unread.prompts >= prompts ? [unread.text] : []), ...processes.notes]
+  return { reasons: [...inflightHolds(facts, INFLIGHT_KINDS).map(h => h.text), ...(left ? [leftBehindReason(left)] : []), ...processes.holds], seen: { notes, attached: processes.attached } }
 }
 
 /** At the end of a quiet period armed under `seq`: pins the card when nothing holds it, or says why not. */
@@ -687,7 +1183,21 @@ export const register: Register = on => {
       // #3843: his message is the request now, so an answer he gave in a picker that no work
       // followed opens nothing more.
       await $.state.set(pickerRef, null)
-    }
+      // #3843: and a box refused until the review was answered belonged to the request before, so
+      // its one message is not sent under this one, where it would say "this request" of the wrong
+      // one and ask for a box under it. Work he picks in a picker
+      // does not do this: the hold is remembered across the new request that opens.
+      await $.state.set(reviewHeldRef, null)
+      // The held box is not forgotten: it is asked for once at a later turn's end, in words for an
+      // earlier request (askOwed). Only this, a message he typed, makes that ask.
+      const owing = (await $.state.get(reviewOwingRef)).value
+      if (typeof owing === 'number') await $.state.set(reviewOwedRef, { request: owing })
+      await $.state.set(reviewOwingRef, null)
+      // And only this ends what the turn ends before it found of the review (readAtEnd): the
+      // prompts for a request's box go out again, the later ask among them.
+      await $.state.set(reviewOpenRef, null)
+      await $.state.set(reviewUnsureRef, null)
+    } else await reviewTurnPassed($)
     return r
   })
 
@@ -708,16 +1218,8 @@ export const register: Register = on => {
     const d = decide({ goal, input, shown, prompts, holds })
     if ('refuse' in d) return { deny: `No box yet: ${d.refuse.join('; ')}.` }
     const entry: GoalBoxShown = { key: d.show.key, kind: d.show.kind, at: await $.clock.now(), prompts }
-    // #3843: said in the words of what is known of a picker Dan answered since (request.ts).
-    if (!(await claim($, entry))) return { deny: alreadyShownText((await $.state.get(pickerRef)).value) }
-    const text = boxText(d.show.goal, input.shipped)
-    try {
-      await $.modkit.card(cardOf(String(toolUseId), d.show.goal, input.shipped))
-    } catch (err) {
-      // The text below is the box where the card is not drawn: still shown, never lost.
-      debug($, `the card could not be drawn (${errorText(err, MOD)}), so the box is shown as text`)
-    }
-    return { result: text, text, context: ['The Goal accomplished box is shown to Dan above. Do not repeat it in your reply.'] }
+    // #3843: a box that would show waits for the turn's end of turn review (review.ts).
+    return leave($, { entry, shown, toolUseId: String(toolUseId), goal: d.show.goal, shipped: input.shipped })
   }).catch(($, e, next) => cutOwn('the goal box', next))
 
   // #3770: a turn of the main conversation starting, of any origin, takes the close card down and
@@ -727,6 +1229,7 @@ export const register: Register = on => {
     if ('agentId' in e && e.agentId !== undefined) return r
     await bumpSeq($)
     await withdrawClose($)
+    await reviewTurnPassed($)
     return r
   })
 
@@ -753,6 +1256,31 @@ export const register: Register = on => {
     return r
   }).catch(watchesOnly)
 
+  // #3843: only the main conversation answers its end of turn review. A subagent's Bash call that
+  // would record the answer for the main conversation (review.ts answersMainReview) is refused before
+  // it runs. The main conversation's own call, and every other command, pass straight through.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    if (e.agentId === undefined) return next(e)
+    const command = toolArgs(e as unknown as Record<string, unknown>).command
+    // A call whose text nowhere holds the record's file name is not read at all.
+    if (typeof command !== 'string' || !namesRecordFile(command)) return next(e)
+    let read: unknown
+    try {
+      read = await $.modkit.pipeline({ command, follow: true })
+    } catch (err) {
+      debug($, `a subagent's command naming the review's record could not be read by mod-kit's reader (${errorText(err, MOD)}), so it is judged by its text`)
+    }
+    let home: string | undefined
+    try {
+      home = (await $.env.get('HOME')) || undefined
+    } catch {
+      home = undefined
+    }
+    if (!answersMainReview(read, undefined, home, command)) return next(e)
+    const t = await transcriptNow($)
+    return answersMainReview(read, 'why' in t ? undefined : t.path, home, command) ? { deny: notMainReviewText() } : next(e)
+  }).catch(($, e, next) => cutCall('the goal box', e, next))
+
   // #3770, reading B: a main conversation Bash call that ran (not one run in the background, which
   // the job watcher records, and not one a guard refused) is read for what may leave a process behind.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
@@ -774,8 +1302,21 @@ export const register: Register = on => {
   // refused or came back as an error: a settings hook's refusal reaches a mod as an errored result,
   // the same as a command that failed, so neither is counted and the next call that runs clean is.
   // Every other call is read for being that work (noteCall).
+  // The same calls, as they arrive and whatever becomes of them, are read for making this a turn
+  // whose end of turn review is to come (noteTurnWork): that question is the review hooks', who
+  // count a tool named in the transcript, where the picker's is whether anything was changed.
+  // That reading can cost one run of the review's own test (the first call of each tool's name in a
+  // session), so it is started as the call arrives and runs beside the call, never ahead of it: no
+  // tool waits on it to start. The call comes back only once the reading has landed, however the
+  // call ended, so the next call, which may be the box's, finds the turn noted.
   on('tool.call', async ($, e, next) => {
-    const r = await next(e)
+    const noted = canBeTurnWork(e) ? noteTurnWork($, e.tool) : undefined
+    let r: Awaited<ReturnType<typeof next>>
+    try {
+      r = await next(e)
+    } finally {
+      await noted
+    }
     if (e.agentId !== undefined || e.tool === TOOL) return r
     if (e.tool === 'AskUserQuestion') {
       if (answered(r, e)) await $.state.set(pickerRef, {})
@@ -797,44 +1338,30 @@ export const register: Register = on => {
     const r = await next(e)
     // #3843: an answer of Dan's that nothing followed waits only until the turn it was given in ends.
     if (e.agentId === undefined) await pickerTurnEnded($)
-    if (e.agentId !== undefined || e.reason !== 'answer') return r
+    if (e.agentId !== undefined) return r
     if ((await $.state.get(interactiveRef)).value !== true) return r
-    // #3770: the quiet period before the close card, armed under this turn's count.
-    const seq = (await $.state.get(closeSeqRef)).value ?? 0
-    await $.state.set(closeAnswerRef, { seq, text: e.answer })
-    $.clock.after(QUIET_MS, () => void closeCheck($, seq).catch(err => debug($, `the close this session card could not be judged (${errorText(err, MOD)})`)))
+    // #3843: a turn Dan interrupted, or that ended on a refusal or an error, sends nothing. What
+    // is waiting is still weighed against the review there (leave).
+    const sends = e.reason === 'answer'
+    if (sends) {
+      // #3770: the quiet period before the close card, armed under this turn's count.
+      const seq = (await $.state.get(closeSeqRef)).value ?? 0
+      await $.state.set(closeAnswerRef, { seq, text: e.answer })
+      $.clock.after(QUIET_MS, () => void closeCheck($, seq).catch(err => debug($, `the close this session card could not be judged (${errorText(err, MOD)})`)))
+    }
+    // #3843: read here whatever is waiting, so a prompt that falls due in a later turn is held too.
+    await readAtEnd($, e)
+    // #3843: an earlier request's held box, once Dan has typed since. One prompt a turn end, so this
+    // one stands in for every other below, which ask for the same call.
+    if (await askOwed($, e, sends)) return r
+    // #3843: a call refused until the review was answered, and no box since. It stands in for the
+    // prompts below in the same way.
+    if (await askAfterReview($, e, sends)) return r
     const goal = await goalNow($)
+    // With a /goal set or unreadable the box is the goal's, so no prompt for a request's box waits.
     if (goal.state !== 'none') return r
-    if (!goal.met) {
-      await askIfDone($)
-      return r
-    }
-    // Claimed first, so two turn ends at once send one prompt; released again when the prompt did not
-    // enter (thrown, or dropped by a hook beneath), so a passing failure never loses the box (L368).
-    if (!(await markAsked($, goal.met.id))) return r
-    let failed: string | undefined
-    try {
-      // #2132: the prompt waits until the session is idle, and mod-kit's reload of goal-box in that
-      // time would drop it, so the reload is held back until it is sent, for at most mod-kit's hour.
-      const condition = goal.met.condition
-      const held = {
-        mod: MOD,
-        id: 'ask',
-        what: 'the prompt asking for the Goal accomplished box',
-        ms: HOLD_MAX_MS,
-        hold: (input: { mod: string; id: string; what: string; ms: number }) => $.modkit.hold(input),
-        release: (input: { mod: string; id: string }) => $.modkit.release(input),
-        log: (line: string) => $.ui.log(line, { to: 'debug' }),
-      }
-      const sent = await whileHeld(held, () => $.prompt.submit({ text: askText(condition) }))
-      if (sent.drop !== undefined) failed = sent.drop || 'the prompt was dropped'
-    } catch (err) {
-      failed = msg(err)
-    }
-    if (failed !== undefined) {
-      await unmarkAsked($, goal.met.id)
-      $.ui.log(`The goal "${goal.met.condition}" was met, but the Goal accomplished box could not be asked for (${failed}); it is asked again at the next turn end.`)
-    }
+    if (goal.met) await askMet($, e, sends, goal)
+    else await askIfDone($, e, sends)
     return r
   })
 }

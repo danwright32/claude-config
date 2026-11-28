@@ -5,6 +5,7 @@ import * as request from '../hooks/request.ts'
 import type { On, Register } from 'claude-code'
 import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
 import { CLOSE_HEADING, CLOSE_TITLE, PROCESS_TIMEOUT_MS, QUIET_MS } from '../hooks/close.ts'
+import { answeredCommand, answersMainReview, canBeTurnWork, reviewRead } from '../hooks/review.ts'
 
 // The Goal accomplished box (claude-config#1563) in a session: shown once when a /goal is met (the
 // session is sent a prompt of its own asking for it once the turn has ended, since the met record
@@ -12,7 +13,10 @@ import { CLOSE_HEADING, CLOSE_TITLE, PROCESS_TIMEOUT_MS, QUIET_MS } from '../hoo
 // finished and calls the tool; never while a merge, a deploy, an agent or a pull request is in flight.
 // The close this session card (#3770) does hook classic.Stop, to record the stop's background lists.
 
-const T = `${'/Users'}/dan/.claude/projects/-repo/s1.jsonl`
+const HOME_DIR = `${'/Users'}/dan`
+const T = `${HOME_DIR}/.claude/projects/-repo/s1.jsonl`
+// mod-kit's real reader, asked as the mod asks it when it judges what a subagent's command runs.
+const followReader = (c: string) => pipeline(c, { follow: true }) as unknown[]
 const TOOL = 'mcp__goal-box__goal_accomplished'
 type Goal = { state: 'set'; condition: string } | { state: 'none'; met?: { condition: string; reason: string; id: string } } | { state: 'unreadable'; why: string }
 type Card = { toolUseId: string; border?: string; title: { text: string; color?: string; bold?: boolean }[]; lines: { text: string; color?: string }[][] }
@@ -274,6 +278,25 @@ type World = {
   toolAnswers?: Record<string, unknown>
   /** #3843: what the run of the end of turn review's own test answers in place of yes or no. */
   workTest?: Gh
+  /**
+   * #3843: what the read of the end of turn review's record answers (hooks/lib/review-record.py
+   * `state`); absent answers that no review was handed over this turn.
+   */
+  review?: Gh
+  /** #3843: a read of the record started while this is set answers, with what it read, only once it settles. */
+  reviewOut?: Promise<void>
+  /**
+   * #3843: the run of the end of turn review's own test answers only once `releaseWorkTest` is
+   * called; and each tool call that reached the bottom, where the tool itself starts, by its
+   * tool_use_id, in order.
+   */
+  workTestWaits?: boolean
+  releaseWorkTest: () => void
+  began: string[]
+  /** #3843: a line the mod logs that matches this cannot be written: the log throws. */
+  logFails?: RegExp
+  /** #3843: a message typed with exactly this text is dropped by a hook beneath, so it never enters the session. */
+  dropsTyped?: string
 }
 // manual steps' four reasons for not showing a step it was handed (addStep, word for word).
 const NOT_SHOWN = {
@@ -300,23 +323,46 @@ const WORK_TEST_SAYS: Record<string, 'yes' | 'no'> = {
   Grep: 'no',
   AskUserQuestion: 'no',
 }
+// #3843: where the end of turn review's record is read from, and what its reader prints for each
+// state. Not a copy of its rule: tests/test-goal-box-review-record.sh runs the mod's own command
+// against the real payload/hooks/lib/review-record.py and fails when it prints another shape.
+const REVIEW_FILE = `${'/Users'}/dan/.claude/hooks/lib/review-record.py`
+const reviewSays = (state: 'none' | 'handed' | 'answered'): Gh => ({ exitCode: 0, stdout: `${JSON.stringify(state === 'none' ? { state, turn: 'p1' } : { state, turn: 'p1', handed_at: 1_800_000_000, label: 'SESSION REFLECTION' })}\n` })
+// A turn whose end of turn review has been handed over and answered: what a test of something else
+// says of the review when its session works and then shows the box in one turn.
+const REVIEWED = { review: reviewSays('answered') }
 
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), stepsCard: null, compactQueued: false, compactFollowUp: null, holds: [], jobs: [], jobsFail: '', procs: { exitCode: 0, stdout: '{"found":[]}' }, reader: () => [], pinned: [], pinAnswer: 'shown', pinCalls: 0, releasePin: () => undefined, withdrawFails: '', withdrawn: [], written: {}, ...init }
+  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), stepsCard: null, compactQueued: false, compactFollowUp: null, holds: [], jobs: [], jobsFail: '', procs: { exitCode: 0, stdout: '{"found":[]}' }, reader: () => [], pinned: [], pinAnswer: 'shown', pinCalls: 0, releasePin: () => undefined, withdrawFails: '', withdrawn: [], written: {}, releaseWorkTest: () => undefined, began: [], ...init }
+  // Made before any run can ask for it, so letting go works whenever the test does it.
+  const workTestOut = new Promise<void>(open => (w.releaseWorkTest = open))
   const runs: string[][] = []
+  const reviewAsks: string[][] = []
   const views: { pr: string; repo?: string; cwd?: string; token?: string; fields?: string }[] = []
   const submitted: { text: string; origin: unknown }[] = []
   const tools: { name: string; isDeferred?: unknown; description: string }[] = []
   const logs: string[] = []
+  const seen: string[] = []
   const clock = mock.clock(on, { now: 1_800_000_000_000 })
   on('process.run', ($, e) => {
+    // A command run after HOME was read is not an ask for the id "straight after" it (idFails): the
+    // box reads HOME to find the review's record (#3843) and then runs its reader.
+    afterHome = false
     runs.push([...e.argv])
     const ok = (stdout: string, exitCode = 0, stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } }) as never
     // #3843: the end of turn review's own test of a tool's name, run from its file by path.
     if (e.argv[0] === 'python3' && e.argv[e.argv.length - 2] === WORK_TEST_FILE) {
       if (w.workTest) return ok(w.workTest.stdout, w.workTest.exitCode, w.workTest.stderr ?? '')
       const said = WORK_TEST_SAYS[e.argv[e.argv.length - 1] as string]
-      return said === undefined ? ok('', 1, `the stand in for the review's test has no answer for ${e.argv[e.argv.length - 1]}`) : ok(`${said}\n`)
+      const answer = said === undefined ? ok('', 1, `the stand in for the review's test has no answer for ${e.argv[e.argv.length - 1]}`) : ok(`${said}\n`)
+      return w.workTestWaits ? (workTestOut.then(() => answer) as never) : answer
+    }
+    // #3843: the read of the end of turn review's record, run from its file by path.
+    if (e.argv[0] === 'python3' && e.argv.includes(REVIEW_FILE)) {
+      reviewAsks.push([...e.argv])
+      const said = w.review ?? reviewSays('none')
+      const read = ok(said.stdout, said.exitCode, said.stderr ?? '')
+      return w.reviewOut ? (w.reviewOut.then(() => read) as never) : read
     }
     if (e.argv[0] === '__modkit') {
       if (e.argv[1] === 'card') {
@@ -431,7 +477,11 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
   on('classic.Stop', () => ({}) as never)
   // Every other tool runs and answers nothing of note (#3770: the Bash calls the card reads).
-  on('tool.call', ($, e) => (w.toolAnswers?.[String((e as { tool_use_id?: unknown }).tool_use_id)] ?? { result: '', text: '' }) as never)
+  on('tool.call', ($, e) => {
+    const id = String((e as { tool_use_id?: unknown }).tool_use_id)
+    w.began.push(id)
+    return (w.toolAnswers?.[id] ?? { result: '', text: '' }) as never
+  })
   on('fs.write', ($, e) => {
     w.written[e.path] = e.text
     return { value: undefined } as never
@@ -446,15 +496,18 @@ const world = (on: On, init: Partial<World> = {}) => {
       const fails = w.submitFails.shift()
       if (fails === 'throw') throw new Error('the session is shutting down')
       if (fails === 'drop') return { drop: 'held by a guard beneath' } as never
-    }
+    } else if (w.dropsTyped !== undefined && e.text === w.dropsTyped) return { drop: 'held by a guard beneath' } as never
     submitted.push({ text: e.text, origin: e.origin })
     return { text: e.text } as never
   })
   on('ui.log', ($, e) => {
+    if (w.logFails?.test(String((e as { text?: string }).text))) throw new Error('the log could not be written')
     logs.push(String((e as { text?: string }).text))
+    // `logs` keeps every line; `seen` only those Dan sees, which is every line not sent to the debug log.
+    if ((e as { to?: string }).to !== 'debug') seen.push(String((e as { text?: string }).text))
     return { value: undefined } as never
   })
-  return { w, clock, cards: async () => w.cards, runs: () => runs.filter(a => !a[0]?.startsWith('__')), submitted, tools, logs, views }
+  return { w, clock, cards: async () => w.cards, runs: () => runs.filter(a => !a[0]?.startsWith('__')), submitted, tools, logs, seen, views, reviewAsks }
 }
 
 type Engine = Parameters<Parameters<typeof test>[2]>[0]
@@ -469,6 +522,8 @@ const box = async ($: Engine, input: Record<string, unknown>, id = 'b1', more: R
 const textOf = (o: Out) => String(o.deny ?? o.text ?? o.result ?? '')
 const turnEnds = ($: Engine, more: Record<string, unknown> = {}) =>
   $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer', ...more } as never)
+// A turn Dan interrupted, as the engine's own type spells it (TurnCompleteReason).
+const ABORTED = { isAborted: true, reason: 'aborted' }
 
 const ASKED = { goal: 'Show a green box when the goal is met', shipped: ['#1563 closed: Goal accomplished box', 'PR #1700 merged and live'] }
 const DESIGN: { goal: string; shipped: string[] } = DESIGN_FIXTURE
@@ -1103,6 +1158,9 @@ const workedAndQuiet = async ($: Engine$, clock: { advance: (ms: number) => Prom
 }
 const reasonsOf = (w: World) => JSON.parse(w.written[REASONS] ?? 'null') as { pinned: boolean; reasons: string[]; notes?: string[]; attached?: number | null } | null
 const bash = ($: Engine$, command: string, more: Record<string, unknown> = {}) => $.tool.call({ tool: 'Bash', tool_use_id: 'x1', command, ...more } as never)
+// The look for a process left behind, among the python3 runs: the one program handed over with -c
+// straight after -I (the box's own read of the review's record, #3843, runs a file by path).
+const isLook = (a: string[]) => a[0] === 'python3' && a[2] === '-c'
 
 test('all clear: once the box is shown and the session stays quiet, exactly one card is pinned, for this session alone and with no Done (#3770)', withAll, async ($, on) => {
   const { w, clock } = world(on)
@@ -1422,7 +1480,7 @@ test('a process carrying this session\'s id withholds the card; a look that fail
   expect(w.pinned).toEqual([])
   expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/process 4321 \(node\).* carries this session's id/)
   // The look is handed this session's id and a time limit of its own.
-  const look = runs().find(a => a[0] === 'python3')
+  const look = runs().find(isLook)
   expect(look?.includes('s1')).toBe(true)
   // A look that fails says nothing either way: the other readings decide.
   w.procs = { exitCode: 1, stdout: '', stderr: 'python3: not found' }
@@ -1591,7 +1649,7 @@ for (const c of UNFINISHED) {
     expect(notes).toHaveLength(1)
     expect(notes[0]).toMatch(c.note)
     expect(logs).toContain(`goal-box: ${notes[0]}`)
-    expect(runs().some(a => a[0] === 'python3')).toBe(c.lookRuns)
+    expect(runs().some(isLook)).toBe(c.lookRuns)
   })
 }
 
@@ -1639,7 +1697,7 @@ test("the reasons file records how many processes the check counted as still att
 })
 
 test('a command that put something in the background withholds the card for the rest of the session, across later requests and boxes (#3770)', withAll, async ($, on) => {
-  const { w, clock } = world(on, { reader: c => (c.includes('&') ? [{ words: ['sleep', '600'], background: true }] : [{ words: ['ls'] }]) })
+  const { w, clock } = world(on, { ...REVIEWED, reader: c => (c.includes('&') ? [{ words: ['sleep', '600'], background: true }] : [{ words: ['ls'] }]) })
   await start($)
   await says($, 'Add the goal box')
   await bash($, 'ls')
@@ -1661,7 +1719,7 @@ test('a command that put something in the background withholds the card for the 
 const realReader = (c: string) => pipeline(c) as unknown[]
 
 test('a Bash call run in the background, which the job watcher tracks, does not trip it; nor does a subagent\'s (#3770)', withAll, async ($, on) => {
-  const { w, clock } = world(on, { reader: realReader })
+  const { w, clock } = world(on, { ...REVIEWED, reader: realReader })
   await start($)
   await says($, 'Add the goal box')
   await bash($, 'sleep 600 &', { run_in_background: true })
@@ -1682,7 +1740,7 @@ const DETACH_ROWS: [string, RegExp | undefined][] = [
 ]
 for (const [command, why] of DETACH_ROWS) {
   test(`${why ? 'trips it' : 'does not trip it'}: ${command} (#3770)`, withAll, async ($, on) => {
-    const { w, clock } = world(on, { reader: realReader })
+    const { w, clock } = world(on, { ...REVIEWED, reader: realReader })
     await start($)
     await says($, 'Add the goal box')
     await bash($, command)
@@ -1694,7 +1752,7 @@ for (const [command, why] of DETACH_ROWS) {
 }
 
 test('a command the reader is unsure of, or cannot read at all, counts as one that may have left something behind (#3770)', withAll, async ($, on) => {
-  const { w, clock } = world(on, { reader: c => (c === 'eval x' ? [{ words: ['eval', 'x'], unread: 'eval runs text the shell builds' }] : { fails: 'the reader threw' }) })
+  const { w, clock } = world(on, { ...REVIEWED, reader: c => (c === 'eval x' ? [{ words: ['eval', 'x'], unread: 'eval runs text the shell builds' }] : { fails: 'the reader threw' }) })
   await start($)
   await says($, 'Add the goal box')
   await bash($, 'eval x')
@@ -1704,7 +1762,7 @@ test('a command the reader is unsure of, or cannot read at all, counts as one th
 })
 
 test('a command the reader throws on trips it too (#3770)', withAll, async ($, on) => {
-  const { w, clock } = world(on, { reader: () => ({ fails: 'the reader threw' }) })
+  const { w, clock } = world(on, { ...REVIEWED, reader: () => ({ fails: 'the reader threw' }) })
   await start($)
   await says($, 'Add the goal box')
   await bash($, 'anything')
@@ -1733,6 +1791,10 @@ const does = (w: World, $: Engine$, tool: string, id: string, more: Record<strin
   return $.tool.call({ tool, tool_use_id: id, ...more } as never)
 }
 const MORE = { goal: 'Fix the count', shipped: ['#3850 closed: the count'] }
+// These tests work and then show the box in one turn, so each says its turn's end of turn review is
+// on record as answered (REVIEWED): the picker Dan answers in them is asked after it. What the box
+// does while that review is still to come, or not yet answered, is the next section's.
+const reviewed = (on: On, init: Partial<World> = {}) => world(on, { ...REVIEWED, ...init })
 // One request of Dan's, typed, and its box shown.
 const askedAndShown = async ($: Engine$, text: string, id: string) => {
   await says($, text)
@@ -1740,7 +1802,7 @@ const askedAndShown = async ($: Engine$, text: string, id: string) => {
 }
 
 test('work Dan picked in a picker, finished: the box is shown again with no new message from him (#3843)', withKit, async ($, on) => {
-  const { w, cards } = world(on)
+  const { w, cards } = reviewed(on)
   await start($)
   await askedAndShown($, 'Run the monthly sync', 'b1')
   await picks(w, $, 'q1')
@@ -1752,7 +1814,7 @@ test('work Dan picked in a picker, finished: the box is shown again with no new 
 })
 
 test('a picker answer with nothing done after it earns no box, and the refusal says so (#3843)', withKit, async ($, on) => {
-  const { w, cards } = world(on)
+  const { w, cards } = reviewed(on)
   await start($)
   await askedAndShown($, 'Run the monthly sync', 'b1')
   await picks(w, $, 'q1')
@@ -1789,7 +1851,7 @@ const NO_ANSWER: [string, unknown, RegExp | null][] = [
 ]
 for (const [how, answer] of NO_ANSWER)
   test(`a picker ${how} is no answer: work after it opens no new box (#3843)`, withKit, async ($, on) => {
-    const { w, cards } = world(on)
+    const { w, cards } = reviewed(on)
     await start($)
     await askedAndShown($, 'Run the monthly sync', 'b1')
     await picks(w, $, 'q1', answer)
@@ -1887,7 +1949,7 @@ const WORK_ROWS: [string, string, Record<string, unknown>, unknown, boolean][] =
 ]
 for (const [what, tool, input, answer, counts] of WORK_ROWS)
   test(`after a picker answer, ${what} ${counts ? 'is work: the box is shown' : 'is not work: no box'} (#3843)`, withKit, async ($, on) => {
-    const { w } = world(on)
+    const { w } = reviewed(on)
     await start($)
     await askedAndShown($, 'Run the monthly sync', 'b1')
     await picks(w, $, 'q1')
@@ -1908,7 +1970,7 @@ test("the box's own tool is never work: a refused call after a picker answer doe
 })
 
 test('two calls at once after one answer are one new request, not two (#3843)', withKit, async ($, on) => {
-  const { w } = world(on)
+  const { w } = reviewed(on)
   await start($)
   await askedAndShown($, 'Run the monthly sync', 'b1')
   await picks(w, $, 'q1')
@@ -2120,7 +2182,7 @@ test('a message Dan types after a picker answer is the request: the answer left 
 })
 
 test("the review's test of a tool that cannot be run: the refusal says whether work followed his answer is not known, and it counts once it can be (#3843)", withKit, async ($, on) => {
-  const { w, logs } = world(on, { workTest: { exitCode: 1, stdout: '', stderr: "python3: can't open file" } })
+  const { w, logs } = reviewed(on, { workTest: { exitCode: 1, stdout: '', stderr: "python3: can't open file" } })
   await start($)
   await askedAndShown($, 'Run the monthly sync', 'b1')
   await picks(w, $, 'q1')
@@ -2191,4 +2253,1931 @@ test("work Dan picked is his latest request for the close card too: no card unti
   await turnStarts($, 't3')
   await workedAndQuiet($, clock, { id: 'b2' })
   expect(w.pinned).toHaveLength(2)
+})
+
+// ---- #3843, second half: the box waits for the end of turn review ----
+// Dan's answers on the issue (2026-11-27): hold the box "until the review is answered", and, of how
+// the box is to know, "The review says so itself". The review's record is hooks/lib/review-record.py's
+// (its own suite, payload/hooks/test-review-record.sh, holds what it records and when a record ends);
+// here its reader answers what each test says, and the session's events stand in for a turn.
+const ASKS_AGAIN = 'GOAL ACCOMPLISHED BOX WAITING.'
+const LAST_STEP = `python3 ~/.claude/hooks/lib/review-record.py answered --transcript '${T}'`
+const edits = (w: World, $: Engine$, id = 'e1') => does(w, $, 'Edit', id, { file_path: '/repo/a.ts' })
+
+test('a turn that has changed something: the box waits for its end of turn review, and the refusal says what to do (#3843)', withKit, async ($, on) => {
+  const { w, cards, reviewAsks } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  const r = await box($, ASKED)
+  expect(r.deny).toMatch(/^No box yet: this turn has changed something, so its end of turn review is still to come, and the box waits until Dan has answered the end of turn review\./)
+  // Words the session can act on: end the turn, do the review, record its last step, call again.
+  expect(r.deny).toMatch(/End your turn without the box\. When the review is handed to you, do it\./)
+  expect(r.deny).toContain(`run \`${LAST_STEP}\` and then call this tool again, as the review's last step`)
+  expect(r.deny).toMatch(/If no review is handed to you when the turn ends, you are asked once to call this tool again\.$/)
+  expect(await cards()).toEqual([])
+  // The record is read by its one owner, from where the sync installs it, for this session's transcript.
+  expect(reviewAsks).toEqual([['python3', '-I', '-B', REVIEW_FILE, 'state', '--transcript', T]])
+})
+
+test('a review handed over and not yet answered holds the box; once its last step has recorded the answer, the same call shows it (#3843)', withKit, async ($, on) => {
+  const { w, cards } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  const r = await box($, ASKED)
+  expect(r.deny).toMatch(/^No box yet: the end of turn review was handed to you this turn and is not on record as answered, and the box waits until Dan has answered the end of turn review\. Finish the review first\./)
+  expect(r.deny).toContain(`Once Dan has answered what the review asked, or it asked him nothing, run \`${LAST_STEP}\` and then call this tool again, as the review's last step.`)
+  expect(await cards()).toEqual([])
+  w.review = reviewSays('answered')
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b2'])
+})
+
+test('the record decides, not what the mod saw: a review on record as handed over holds the box in a turn the mod saw no work in (#3843)', withKit, async ($, on) => {
+  const { w } = world(on, { review: reviewSays('handed') })
+  await start($)
+  await says($, 'Run the monthly sync')
+  expect((await box($, ASKED)).deny).toMatch(/was handed to you this turn and is not on record as answered/)
+})
+
+test('work Dan picked after an answered review, finished: shown; with the review still to come it waits like any other (#3843)', withKit, async ($, on) => {
+  const { w } = world(on)
+  await start($)
+  await askedAndShown($, 'Run the monthly sync', 'b1')
+  await picks(w, $, 'q1')
+  await edits(w, $)
+  expect((await box($, MORE, 'b2')).deny).toMatch(/its end of turn review is still to come/)
+  w.review = reviewSays('answered')
+  expect((await box($, MORE, 'b3')).deny).toBeUndefined()
+})
+
+test('a turn that changed nothing holds nothing: the box shows as before, reads and a picker included (#3843)', withKit, async ($, on) => {
+  const { w, cards } = world(on)
+  await start($)
+  await says($, 'Is the monthly sync done?')
+  await does(w, $, 'Read', 'r1', { file_path: '/repo/a.ts' })
+  await does(w, $, 'Grep', 'g1', { pattern: 'count' })
+  await picks(w, $, 'q1')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1'])
+})
+
+// What makes a review still to come is what the review hooks count at the turn's end: a tool the
+// review's test counts, named in the main conversation's transcript, whatever became of the call.
+const TO_COME_ROWS: [string, string, Record<string, unknown>, unknown, boolean][] = [
+  ['an edit', 'Edit', { file_path: '/repo/a.ts' }, undefined, true],
+  ['a command', 'Bash', { command: 'gh pr merge 12' }, undefined, true],
+  ['a connected tool that acts', 'mcp__is-it-live__card', {}, undefined, true],
+  ['an edit a guard refused, which the review hooks count all the same', 'Edit', { file_path: '/repo/a.ts' }, { deny: 'held by a guard' }, true],
+  ['an edit that came back as an error', 'Edit', { file_path: '/repo/a.ts' }, { isError: true, result: 'refused by a hook', text: 'refused by a hook' }, true],
+  ['a read', 'Read', { file_path: '/repo/a.ts' }, undefined, false],
+  ["a subagent's edit, which is not in the main conversation's transcript", 'Edit', { file_path: '/repo/a.ts', agentId: 'a1' }, undefined, false],
+  ['a picker Dan answers', 'AskUserQuestion', PICKER, PICKED, false],
+]
+for (const [what, tool, input, answer, holds] of TO_COME_ROWS)
+  test(`${what} ${holds ? 'means a review is to come: the box waits' : 'brings no review: the box shows'} (#3843)`, withKit, async ($, on) => {
+    const { w } = world(on)
+    await start($)
+    await says($, 'Run the monthly sync')
+    await does(w, $, tool, 'w1', input, answer)
+    const r = await box($, ASKED)
+    if (holds) expect(r.deny).toMatch(/its end of turn review is still to come/)
+    else expect(r.deny).toBeUndefined()
+  })
+
+test("the box's own tool is never the turn's work: a call refused for something else does not hold the next one (#3843)", withKit, async ($, on) => {
+  const { w } = world(on, { agents: [{ id: 'a1', status: 'running' }] })
+  await start($)
+  await says($, 'Run the monthly sync')
+  expect((await box($, ASKED)).deny).toMatch(/still running/)
+  w.agents = []
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+})
+
+// The test above passes whether or not the box's own tool is left out, because the box's own hook
+// answers its call and passes nothing on, so the hook that reads every call never sees it. Leaving
+// it out is the second guard, for the day the two hooks change places, and it is held here on the
+// rule itself (review.ts canBeTurnWork), which is what that hook asks before it reads a call.
+const CAN_BE_WORK_ROWS: [string, { tool: string; agentId?: string }, boolean][] = [
+  ["an edit of the main conversation's", { tool: 'Edit' }, true],
+  ["a read of the main conversation's, which the review's own test then says no to", { tool: 'Read' }, true],
+  ["the box's own tool, which the review's own test would count by its name", { tool: TOOL }, false],
+  ['the picker', { tool: 'AskUserQuestion' }, false],
+  ["a subagent's edit", { tool: 'Edit', agentId: 'a1' }, false],
+]
+for (const [what, call, read] of CAN_BE_WORK_ROWS)
+  test(`${what} is ${read ? 'read' : 'never read'} for being the turn's work (#3843)`, async () => {
+    expect(canBeTurnWork(call)).toBe(read)
+  })
+
+test("the review's own test of a tool's name runs beside the call, never ahead of it: the tool starts while that test is still out, the call comes back only once the turn is noted, and the box then waits (#3843)", withKit, async ($, on) => {
+  const { w, clock } = world(on, { workTestWaits: true })
+  await start($)
+  await says($, 'Run the monthly sync')
+  let back = false
+  const call = edits(w, $).then(r => {
+    back = true
+    return r
+  })
+  try {
+    await clock.settle()
+    expect({ began: w.began, back }).toEqual({ began: ['e1'], back: false })
+  } finally {
+    w.releaseWorkTest()
+    await call
+  }
+  expect((await box($, ASKED)).deny).toMatch(/its end of turn review is still to come/)
+})
+
+test('work in an earlier turn does not hold this turn: the hold ends with the turn it began in (#3843)', withKit, async ($, on) => {
+  const { w } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  await turnEnds($)
+  await turnStarts($, 't2')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+})
+
+test('a box already shown for the request is refused as already shown, never as waiting for a review (#3843)', withKit, async ($, on) => {
+  const { w } = world(on)
+  await start($)
+  await askedAndShown($, 'Run the monthly sync', 'b1')
+  await edits(w, $)
+  const r = await box($, ASKED, 'b2')
+  expect(r.deny).toMatch(/already shown for this request/)
+  expect(r.deny).not.toMatch(/end of turn review/)
+})
+
+test("no review at the turn's end: the session is asked once to call again, and that call shows the box (#3843)", withKit, async ($, on) => {
+  const { w, cards, submitted } = world(on)
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/its end of turn review is still to come/)
+  expect(asked()).toEqual([])
+  // The turn ends and no review was handed over (the hooks' kill switch, say): nothing recorded.
+  await turnEnds($)
+  expect(asked()).toHaveLength(1)
+  expect(asked()[0]?.origin).toMatchObject({ kind: 'plugin' })
+  expect(asked()[0]?.text).toMatch(/was refused until the end of turn review had run and Dan had answered it\. That turn has ended and no box was shown since\./)
+  expect(asked()[0]?.text).toContain(`call ${TOOL} again now`)
+  expect(asked()[0]?.text).toMatch(/If part of it is still to do, do not call it and say nothing of the box\.$/)
+  // Sent as the mod's other prompts are: mod-kit's reload held back until it has gone (#2132).
+  expect(w.held.filter(h => h === 'submit' || h.includes('ask-after-review'))).toHaveLength(3)
+  // The message starts a turn that has changed nothing, so the call it asks for is not held.
+  await turnStarts($, 't2')
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b2'])
+  await turnEnds($)
+  expect(asked()).toHaveLength(1)
+})
+
+test('never more than one such message for one request, and a new request of his can earn its own (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(asked()).toHaveLength(1)
+  // The turn the message starts does more work, is held again, and ends again with no box.
+  await turnStarts($, 't2')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/still to come/)
+  await turnEnds($)
+  await turnEnds($)
+  expect(asked()).toHaveLength(1)
+  // His next message: the box refused again in the request before is asked for once, in the later
+  // ask's words, and that is the one prompt of the turn end it is sent at.
+  await says($, 'Now make the status bar quieter')
+  await edits(w, $, 'e3')
+  expect((await box($, ASKED, 'b3')).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(asked()).toHaveLength(1)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toHaveLength(1)
+  // With nothing left from an earlier request, a new request earns its own message.
+  await says($, 'And the footer')
+  await edits(w, $, 'e4')
+  expect((await box($, ASKED, 'b4')).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(asked()).toHaveLength(2)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toHaveLength(1)
+})
+
+test('a box shown after the hold, or no hold at all, asks nothing at the turn end; nor does a turn end that is not the main conversation finishing (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  await says($, 'And the weekly one')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  // A subagent's turn end and an interrupted turn are not the turn's end.
+  await turnEnds($, { agentId: 'a1' })
+  await turnEnds($, ABORTED)
+  expect(asked()).toEqual([])
+  w.review = reviewSays('answered')
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+  await turnEnds($)
+  expect(asked()).toEqual([])
+})
+
+test('a headless session is never sent the message (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($, false)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  await box($, ASKED)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toEqual([])
+})
+
+test('the message waits while something is in flight, and is sent at the next turn end once it has settled (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.agents = [{ id: 'a1', status: 'running' }]
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  w.agents = []
+  await turnEnds($)
+  expect(asked()).toHaveLength(1)
+})
+
+test('a message that could not be sent is said and sent again at the next turn end (#3843)', withKit, async ($, on) => {
+  const { w, submitted, logs } = world(on, { submitFails: ['throw', 'drop'] })
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  expect(logs.filter(l => /could not be asked to call the Goal accomplished box again \(.+\); it is asked again at the next turn end/.test(l))).toHaveLength(2)
+  await turnEnds($)
+  expect(asked()).toHaveLength(1)
+})
+
+test('two calls at once while the review is to come are both refused, and two turn ends at once send one message (#3843)', withKit, async ($, on) => {
+  const { w, cards, submitted } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  const both = await Promise.all([box($, ASKED, 'b1'), box($, ASKED, 'b2')])
+  expect(both.map(r => /still to come/.test(r.deny ?? ''))).toEqual([true, true])
+  expect(await cards()).toEqual([])
+  await Promise.all([turnEnds($), turnEnds($)])
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+})
+
+test("the message is the turn end's one question: where work shipped too, the session is not also asked whether it is finished (#3843, #2523)", withLive, async ($, on) => {
+  const { w, submitted } = world(on, { verdicts: CARDED })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+})
+
+test('work Dan picked after a held call still gets the message: the hold is remembered across the new request it opens (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await picks(w, $, 'q1')
+  await edits(w, $, 'e2')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+})
+
+// A record that cannot be read never holds the box and is never taken for answered in silence.
+const UNREAD_ROWS: [string, Gh, RegExp][] = [
+  ['its reader exits with an error', { exitCode: 3, stdout: '', stderr: 'review-record: /t/s1.jsonl.review-handed.json does not hold a record (Expecting value)' }, /does not hold a record \(Expecting value\)/],
+  ['its reader is not installed', { exitCode: 2, stdout: '', stderr: "python3: can't open file 'review-record.py'" }, /can't open file/],
+  ['its reader prints something that is not its answer', { exitCode: 0, stdout: 'garbled' }, /answered "garbled", which names no state/],
+  ['its reader names a state the mod does not know', { exitCode: 0, stdout: '{"state": "pending"}' }, /which names no state/],
+]
+for (const [how, said, why] of UNREAD_ROWS)
+  test(`the review's record cannot be read (${how}): the box shows, and says it did not wait (#3843)`, withAll, async ($, on) => {
+    const { w, clock, cards, logs } = world(on, { review: said })
+    await start($)
+    await says($, 'Run the monthly sync')
+    await edits(w, $)
+    const r = await box($, ASKED)
+    expect(r.deny).toBeUndefined()
+    expect((await cards()).map(c => c.toolUseId)).toEqual(['b1'])
+    const told = logs.filter(l => l.startsWith('The Goal accomplished box was shown without waiting for the end of turn review: '))
+    expect(told).toHaveLength(1)
+    expect(told[0]).toMatch(/the end of turn review's record could not be read/)
+    expect(told[0]).toMatch(why)
+    // The session is told too, and the close card's reasons file keeps it as a note.
+    expect((r.context ?? []).join(' ')).toMatch(/shown without waiting for the end of turn review/)
+    await stopped($)
+    await turnEnds($)
+    await clock.advance(QUIET_MS)
+    expect(reasonsOf(w)?.notes).toContain(told[0])
+  })
+
+test('a record read cleanly says nothing of the kind: no log line, no note (#3843)', withAll, async ($, on) => {
+  const { w, clock, logs } = world(on, REVIEWED)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  const r = await box($, ASKED)
+  expect(r.deny).toBeUndefined()
+  expect(logs.filter(l => /without waiting/.test(l))).toEqual([])
+  expect((r.context ?? []).join(' ')).not.toMatch(/without waiting/)
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+  expect(reasonsOf(w)?.notes).toEqual([])
+})
+
+test("whether the turn changed something cannot be read (the review's test will not run): the box shows, and says so (#3843)", withKit, async ($, on) => {
+  const { w, logs } = world(on, { workTest: { exitCode: 1, stdout: '', stderr: "python3: can't open file" } })
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  expect(logs.filter(l => /shown without waiting for the end of turn review: whether this turn changed something, and so whether an end of turn review is still to come, could not be read \(.*can't open file.*\)/.test(l))).toHaveLength(1)
+})
+
+test('while Dan is asleep the reviews stand down, so the box does not wait for a review still to come (#3843)', withAll, async ($, on) => {
+  const { w } = world(on, { asleep: true })
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toBeUndefined()
+})
+
+test('nor does a record that cannot be read say anything while he is asleep: the box shows with no line about it (#3843)', withAll, async ($, on) => {
+  const { w, seen } = world(on, { asleep: true, review: { exitCode: 3, stdout: '', stderr: 'review-record: the transcript could not be read (timed out)' } })
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  expect(seen).toEqual([])
+})
+
+// Sleep mode that begins after a hand over: the review is a question already put to Dan, so it holds
+// the box asleep as it does awake, by a call and at the turn's end.
+test('a review handed over before Dan fell asleep and not answered still holds the box while he is asleep, and once answered the box shows (#3843)', withAll, async ($, on) => {
+  const { w, cards } = world(on, { review: reviewSays('handed') })
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  w.asleep = true
+  expect((await box($, ASKED)).deny).toMatch(/not on record as answered/)
+  expect(await cards()).toEqual([])
+  w.review = reviewSays('answered')
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+})
+
+test("the reviews switched off for this conversation (the Stop hooks' own switch file beside its transcript): no review will run, so the box shows as it did and the record is not asked (#3843)", withKit, async ($, on) => {
+  const { w, cards, submitted, reviewAsks } = world(on, { disk: { [`${T}.skip-stop-hooks`]: true }, review: reviewSays('handed') })
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1'])
+  expect(reviewAsks).toEqual([])
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toEqual([])
+})
+
+test('whether the reviews are switched off cannot be checked: the box waits as if they were on, and the turn end message still covers it (#3843)', withKit, async ($, on) => {
+  const { w, logs } = world(on, { disk: { [`${T}.skip-stop-hooks`]: 'the folder could not be read' } })
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/its end of turn review is still to come/)
+  expect(logs.filter(l => /whether the end of turn reviews are switched off for this conversation could not be checked \(.*the folder could not be read.*\)/.test(l))).toHaveLength(1)
+})
+
+test('a review handed over and never answered does not hold his next request: the record ends with its turn (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  expect((await box($, ASKED)).deny).toMatch(/not on record as answered/)
+  await turnEnds($)
+  // Dan closed the review's picker. His next message is a new turn, where the record's own reader
+  // answers none for a hand over of the turn before (test-review-record.sh holds that to the file).
+  w.review = reviewSays('none')
+  await says($, 'Never mind that. Is it done?')
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+  // And the mod never asked for the box behind the review he left unanswered.
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toEqual([])
+})
+
+// ---- The one message asks the record first ----
+// A message sent where the review was handed over and Dan closed its picker would be the next
+// prompt: the record reads none under it, and the box would show behind a review nobody answered.
+test("a review handed over and left unanswered when the turn ends: the mod sends nothing, at that turn end or a later one of the same request, and no box shows (#3843)", withKit, async ($, on) => {
+  const { w, cards, submitted, reviewAsks, logs } = world(on)
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  expect(reviewAsks).toHaveLength(1)
+  // The turn ends, the hooks hand the review over, and Dan closes its picker without answering.
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  // The record was asked at the turn's end, by its one owner, for this session's transcript.
+  expect(reviewAsks).toEqual([['python3', '-I', '-B', REVIEW_FILE, 'state', '--transcript', T], ['python3', '-I', '-B', REVIEW_FILE, 'state', '--transcript', T]])
+  expect(logs.filter(l => /handed over this turn and Dan has not answered it, so the session is not asked to call the Goal accomplished box again for this request/.test(l))).toHaveLength(1)
+  // A turn somebody else starts (a job's notice) ends with nothing handed over: still nothing sent,
+  // since the review of this request went unanswered.
+  w.review = reviewSays('none')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  expect(await cards()).toEqual([])
+  expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toEqual([])
+})
+
+test("a review answered by the turn's end, with no box shown since: the session is still asked once (#3843)", withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.review = reviewSays('answered')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+})
+
+test("the record cannot be read at the turn's end: the message is sent, and Dan is told it was sent without knowing (#3843)", withKit, async ($, on) => {
+  const { w, submitted, logs } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.review = UNREAD_AT_END
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  expect(logs.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+})
+
+test("a record read cleanly at the turn's end says nothing of the kind (#3843)", withKit, async ($, on) => {
+  const { w, submitted, logs } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  expect(logs.filter(l => /without knowing/.test(l))).toEqual([])
+})
+
+test("Dan asleep by the turn's end, after a box was held while he was awake, with no review handed over: none will be, so the message is sent (#3843)", withAll, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.asleep = true
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+})
+
+test("Dan asleep by the turn's end, with a review handed over before he fell asleep and not answered: no prompt is sent, and he is told in a line he sees (#3843)", withAll, async ($, on) => {
+  const { w, submitted, seen, cards } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.review = reviewSays('handed')
+  w.asleep = true
+  await turnEnds($)
+  expect(submitted).toHaveLength(1)
+  expect(seen).toEqual([WAITING_LINE])
+  expect(await cards()).toEqual([])
+})
+
+// Every prompt of the mod about the box at a turn's end starts a new turn just as the message above
+// does, so each would show the box behind an unanswered review the same way. None is sent over a
+// review that is handed over and not answered.
+const GOAL_PROMPT = 'GOAL ACCOMPLISHED. The /goal'
+
+test("an unanswered review at the turn's end stops the question about shipped work too, with or without an earlier refused call, and for the rest of the request (#3843, #2523)", withLive, async ($, on) => {
+  const { w, submitted, logs } = world(on, { verdicts: CARDED })
+  const prompts = () => submitted.filter(s => s.text.startsWith(ASKS_DONE) || s.text.startsWith(ASKS_AGAIN))
+  await start($)
+  // No call for the box was refused this request: only the shipped work would ask.
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(prompts()).toEqual([])
+  expect(logs.filter(l => /handed over this turn and Dan has not answered it, so the session is not asked whether the work is finished for this request/.test(l))).toHaveLength(1)
+  // A turn somebody else starts ends with nothing handed over: the request's question stays spent.
+  w.review = reviewSays('none')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(prompts()).toEqual([])
+  // With a refused call as well, neither prompt goes.
+  await says($, 'And merge PR 1701')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(prompts()).toEqual([])
+})
+
+test("an unanswered review at the turn's end holds back the prompt for a met /goal, which is sent at the next turn end without one (#3843)", withKit, async ($, on) => {
+  const { w, submitted, logs } = world(on, { goal: MET, review: reviewSays('handed') })
+  const prompts = () => submitted.filter(s => s.text.startsWith(GOAL_PROMPT))
+  await start($)
+  await turnEnds($)
+  expect(prompts()).toEqual([])
+  expect(logs.filter(l => /handed over this turn and Dan has not answered it, so the prompt for the met \/goal waits for a later turn end/.test(l))).toHaveLength(1)
+  w.review = reviewSays('none')
+  await turnEnds($)
+  expect(prompts()).toHaveLength(1)
+  await turnEnds($)
+  expect(prompts()).toHaveLength(1)
+})
+
+const UNREAD_AT_END = { exitCode: 3, stdout: '', stderr: 'review-record: the transcript could not be read (timed out)' }
+const PROMPTED_UNREAD = /^The session was sent a prompt about the Goal accomplished box without knowing whether an end of turn review is waiting for Dan: the end of turn review's record could not be read \(review-record: the transcript could not be read \(timed out\)\)\.$/
+
+test("the record cannot be read at the turn's end: the question about shipped work is still asked, and Dan is told it was sent without knowing (#3843, #2523)", withLive, async ($, on) => {
+  const { submitted, logs } = world(on, { verdicts: CARDED, review: UNREAD_AT_END })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toHaveLength(1)
+  expect(logs.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+})
+
+test("the record cannot be read at the turn's end: the prompt for a met /goal is still sent, and Dan is told it was sent without knowing (#3843)", withKit, async ($, on) => {
+  const { submitted, logs } = world(on, { goal: MET, review: UNREAD_AT_END })
+  await start($)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(GOAL_PROMPT))).toHaveLength(1)
+  expect(logs.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+})
+
+test("a turn end that sends no prompt still asks the record, once: a prompt can fall due after it (#3843)", withLive, async ($, on) => {
+  const { w, reviewAsks } = world(on)
+  await start($)
+  await says($, 'Is the monthly sync done?')
+  await edits(w, $)
+  await turnEnds($)
+  expect(reviewAsks).toHaveLength(1)
+})
+
+// ---- A hold and its message belong to one request; what counts as the turn's work after a failed
+// read; who may answer the review; a met /goal's own prompt; a note that cannot be kept ----
+
+test("a box held in one request, its turn interrupted, then Dan asks for something new: the old request's message is never sent under the new one, and the box is asked for once in words for an earlier request (#3843)", withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  const owed = () => submitted.filter(s => s.text.startsWith(ASKS_OWED))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($, ABORTED)
+  await says($, 'Is the weekly one done?')
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  expect(owed()).toHaveLength(1)
+  expect(owed()[0]?.text).not.toMatch(/this request/)
+  // The same where the message was only waiting on something in flight when he typed.
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/still to come/)
+  w.agents = [{ id: 'a1', status: 'running' }]
+  await turnEnds($)
+  w.agents = []
+  await says($, 'And the yearly one?')
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  expect(owed()).toHaveLength(2)
+})
+
+// The later ask marks the request's message as sent, so where it goes out it hides whether the
+// hold itself was dropped. A /goal still set makes the later ask wait, and the hold shows.
+test("a typed message drops the hold even where the later ask has to wait: with a /goal still set at the new request's turn end, the old request's message is not sent there (#3843)", withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  const owed = () => submitted.filter(s => s.text.startsWith(ASKS_OWED))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($, ABORTED)
+  await says($, 'Is the weekly one done?')
+  w.goal = { state: 'set', condition: 'complete issue 1563' }
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  expect(owed()).toEqual([])
+  w.goal = { state: 'none' }
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  expect(owed()).toHaveLength(1)
+})
+
+test('work Dan picked in the turn the message starts is a request of its own: held again it earns one more message, and no third (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(asked()).toHaveLength(1)
+  await turnStarts($, 't2')
+  await picks(w, $, 'q1')
+  await edits(w, $, 'e2')
+  expect((await box($, MORE, 'b2')).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(asked()).toHaveLength(2)
+  await turnStarts($, 't3')
+  await turnEnds($)
+  expect(asked()).toHaveLength(2)
+})
+
+test("the review's test could not be run for the turn's first tool: a later call whose answer is already known still makes it a turn with a review to come, with no second run (#3843)", withKit, async ($, on) => {
+  const { w, runs } = world(on)
+  const tests = () => runs().filter(a => a.includes(WORK_TEST_FILE)).map(a => a[a.length - 1])
+  await start($)
+  // An earlier turn: the review's test says yes of Edit, and the mod keeps that for the session.
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  await turnEnds($)
+  await says($, 'And the weekly one')
+  w.workTest = { exitCode: 1, stdout: '', stderr: "python3: can't open file" }
+  await does(w, $, 'Write', 'w1', { file_path: '/repo/b.ts' })
+  await edits(w, $, 'e2')
+  expect(tests()).toEqual(['Edit', 'Write'])
+  expect((await box($, ASKED)).deny).toMatch(/its end of turn review is still to come/)
+})
+
+test('a refusal made once the request has had its one message no longer promises it, and the message says to call before anything else (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/If no review is handed to you when the turn ends, you are asked once to call this tool again\.$/)
+  await turnEnds($)
+  const message = submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  expect(message).toHaveLength(1)
+  expect(message[0]?.text).toMatch(/Call it before anything else in this turn: a command or an edit first, the review's last step included, makes this a turn with a review of its own to come, and the call waits again\./)
+  // The session runs the review's last step first all the same, as the earlier refusal told it to.
+  await turnStarts($, 't2')
+  await does(w, $, 'Bash', 'c1', { command: LAST_STEP })
+  const r = await box($, ASKED, 'b2')
+  expect(r.deny).toMatch(/its end of turn review is still to come/)
+  expect(r.deny).not.toMatch(/you are asked once/)
+  expect(r.deny).toMatch(/Nothing asks you to call this tool again when this turn ends: that is done once for a request, and for this one it has been done or a review handed over for it was left unanswered\. The box for this request now comes through a review that is handed to you and answered, or is asked for once after Dan's next message\.$/)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+})
+
+// Only the main conversation answers its end of turn review. A subagent's Bash call carries the main
+// session's id (read in a subagent's own shell on 2026-11-27), so the last step run by a subagent,
+// or by a fork that inherited the instruction, would mark the main session's review answered.
+const ANSWERS_ROWS: [string, string, boolean][] = [
+  ['the last step as the instruction writes it', 'python3 ~/.claude/hooks/lib/review-record.py answered', true],
+  ["the last step as the refusal writes it, naming this session's transcript", LAST_STEP, true],
+  ["the last step naming this session's transcript without quotes", `python3 ~/.claude/hooks/lib/review-record.py answered --transcript ${T}`, true],
+  ['the last step after another command', `cd /repo && python3 "$HOME/.claude/hooks/lib/review-record.py" answered`, true],
+  ['the last step naming another transcript, as a test of the record does', "python3 payload/hooks/lib/review-record.py answered --transcript '/scratch/t/s9.jsonl'", false],
+  ["the record's reader", `python3 ~/.claude/hooks/lib/review-record.py state --transcript '${T}'`, false],
+  ["the record's own suite", 'bash payload/hooks/test-review-record.sh', false],
+  ['a search for the word', 'grep -n answered payload/hooks/lib/review-record.py', false],
+  // The call is judged by what it runs, as mod-kit's reader reads it, never by how it is spelled.
+  // Each of these runs the last step for the main conversation's record.
+  ['the last step with its word in quotes', "python3 ~/.claude/hooks/lib/review-record.py 'answered'", true],
+  ['the last step with the file in quotes cut in two', 'python3 ~/.claude/hooks/lib/review-recor""d.py answered', true],
+  ['the last step with the transcript before its word', `python3 ~/.claude/hooks/lib/review-record.py --transcript '${T}' answered`, true],
+  ['the last step with the transcript joined to its option', `python3 ~/.claude/hooks/lib/review-record.py answered --transcript=${T}`, true],
+  ['the last step with its option cut short', `python3 ~/.claude/hooks/lib/review-record.py answered --trans ${T}`, true],
+  ["the last step naming this session's transcript from the home folder's sign", `python3 ~/.claude/hooks/lib/review-record.py answered --transcript ${T.replace(HOME_DIR, '~')}`, true],
+  ["the last step naming this session's transcript from HOME", `python3 ~/.claude/hooks/lib/review-record.py answered --transcript "${T.replace(HOME_DIR, '$HOME')}"`, true],
+  ["the last step naming this session's transcript with a doubled slash", `python3 ~/.claude/hooks/lib/review-record.py answered --transcript ${T.replace('/-repo/', '//-repo/./')}`, true],
+  ["the last step naming this session's transcript's file in a folder the call does not spell", 'python3 ~/.claude/hooks/lib/review-record.py answered --transcript "$WHERE/s1.jsonl"', true],
+  ['the last step naming a transcript the call does not spell', 'python3 ~/.claude/hooks/lib/review-record.py answered --transcript "$WHICH"', true],
+  ['the last step with no transcript after its option', 'python3 ~/.claude/hooks/lib/review-record.py answered --transcript ""', true],
+  ['the last step across two lines', 'python3 ~/.claude/hooks/lib/review-record.py \\\n  answered', true],
+  ['the last step with its word in a variable the call sets', 'W=answered; python3 ~/.claude/hooks/lib/review-record.py $W', true],
+  ['the last step with its word in a variable the call does not set', 'python3 ~/.claude/hooks/lib/review-record.py "$STEP"', true],
+  ['the last step run by the file itself', 'cd ~/.claude/hooks/lib && ./review-record.py answered', true],
+  ['the last step inside a shell', "bash -c 'python3 ~/.claude/hooks/lib/review-record.py answered'", true],
+  ['the last step inside a substitution', 'echo "$(python3 ~/.claude/hooks/lib/review-record.py answered)"', true],
+  ['the last step handed its word by xargs', 'echo answered | xargs python3 ~/.claude/hooks/lib/review-record.py', true],
+  ['the last step run as text by eval, which cannot be read', 'eval "python3 ~/.claude/hooks/lib/review-record.py answered"', true],
+  // And each of these only holds the phrase, or records for a transcript of its own.
+  ['a search for the phrase', 'grep -rn "review-record.py answered" payload/', false],
+  ['a commit message that quotes the phrase', 'git commit -m "Run review-record.py answered as the last step"', false],
+  ['an echo of the last step', 'echo "python3 ~/.claude/hooks/lib/review-record.py answered"', false],
+  ['a note of the last step written to a file', "cat <<'EOF' > note.txt\npython3 ~/.claude/hooks/lib/review-record.py answered\nEOF", false],
+  ["the record's hand over", `python3 ~/.claude/hooks/lib/review-record.py handed --transcript '${T}' --label answered`, false],
+  ["the record's reader with its word in a variable the call sets", `W=state; python3 ~/.claude/hooks/lib/review-record.py $W --transcript '${T}'`, false],
+  ['the last step naming another file in a folder the call does not spell, as a suite does', 'python3 payload/hooks/lib/review-record.py answered --transcript "$WORK/t.jsonl"', false],
+  ['the last step naming another transcript joined to its option', 'python3 payload/hooks/lib/review-record.py answered --transcript=/scratch/t/s9.jsonl', false],
+  ["the last step naming a copy of this session's transcript in another folder", 'python3 payload/hooks/lib/review-record.py answered --transcript /scratch/copy/s1.jsonl', false],
+  ['another script handed the same word', 'python3 tools/mark.py answered --note review-record.py', false],
+]
+for (const [what, command, answers] of ANSWERS_ROWS) {
+  test(`${what} ${answers ? "would answer the main conversation's review" : 'answers nothing of the main conversation'} (#3843)`, async () => {
+    expect(answersMainReview(followReader(command), T, HOME_DIR, command)).toBe(answers)
+  })
+  test(`a subagent running ${what} is ${answers ? 'refused, and nothing runs' : 'let through'}; the main conversation always is (#3843)`, withKit, async ($, on) => {
+    const { w } = world(on, { reader: followReader })
+    await start($)
+    await says($, 'Run the monthly sync')
+    const sub = (await does(w, $, 'Bash', 's1', { command, agentId: 'a1' })) as { deny?: string }
+    if (answers) expect(sub.deny).toMatch(/^Not run: only the main conversation records that its end of turn review was answered/)
+    else expect(sub.deny).toBeUndefined()
+    expect(w.began.includes('s1')).toBe(!answers)
+    expect(((await does(w, $, 'Bash', 'm1', { command })) as { deny?: string }).deny).toBeUndefined()
+    expect(w.began).toContain('m1')
+  })
+}
+
+test("a subagent's last step naming a transcript is refused while this session's own transcript cannot be found, since which record it would mark is not known (#3843)", withKit, async ($, on) => {
+  const { w } = world(on, { transcript: '', registry: 'absent', reader: followReader })
+  await start($)
+  const OTHER = "python3 payload/hooks/lib/review-record.py answered --transcript '/scratch/t/s9.jsonl'"
+  const sub = (await does(w, $, 'Bash', 's1', { command: OTHER, agentId: 'a1' })) as { deny?: string }
+  expect(sub.deny).toMatch(/^Not run: only the main conversation records/)
+  expect(answersMainReview(followReader(OTHER), undefined, HOME_DIR, OTHER)).toBe(true)
+})
+
+test("mod-kit's reader fails on a subagent's command naming the record's file: the call is judged by its text, refused where it holds the last step and let through where it does not (#3843)", withKit, async ($, on) => {
+  const { w, logs } = world(on, { reader: () => ({ fails: 'the reader stopped' }) })
+  await start($)
+  const sub = (await does(w, $, 'Bash', 's1', { command: 'python3 ~/.claude/hooks/lib/review-record.py answered', agentId: 'a1' })) as { deny?: string }
+  expect(sub.deny).toMatch(/^Not run: only the main conversation records/)
+  expect(((await does(w, $, 'Bash', 's2', { command: `python3 ~/.claude/hooks/lib/review-record.py state --transcript '${T}'`, agentId: 'a1' })) as { deny?: string }).deny).toBeUndefined()
+  expect(logs.filter(l => /could not be read by mod-kit's reader \(.*the reader stopped.*\), so it is judged by its text/.test(l))).toHaveLength(2)
+})
+
+test("a subagent's command that nowhere holds the record's file name is never put to the reader (#3843)", withKit, async ($, on) => {
+  let read = 0
+  const { w } = world(on, { reader: c => (read++, followReader(c)) })
+  await start($)
+  expect(((await does(w, $, 'Bash', 's1', { command: 'python3 tools/mark.py answered', agentId: 'a1' })) as { deny?: string }).deny).toBeUndefined()
+  expect(read).toBe(0)
+})
+
+test('a met /goal whose box was held for the review: the one message stands in for its prompt at that turn end, and once its box is shown its own prompt is never sent, the record asked once at each turn end (#3843)', withKit, async ($, on) => {
+  const { w, submitted, cards, reviewAsks } = world(on, { goal: MET })
+  const of = (start: string) => submitted.filter(s => s.text.startsWith(start))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect([of(ASKS_AGAIN).length, of(GOAL_PROMPT).length]).toEqual([1, 0])
+  await turnStarts($, 't2')
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b2'])
+  const asks = reviewAsks.length
+  await turnEnds($)
+  await turnEnds($)
+  expect([of(ASKS_AGAIN).length, of(GOAL_PROMPT).length]).toEqual([1, 0])
+  expect(reviewAsks.length).toBe(asks + 2)
+})
+
+test('a met /goal whose box was held and then not called for: its own prompt is sent at the next turn end, so its box is not lost (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on, { goal: MET })
+  const of = (start: string) => submitted.filter(s => s.text.startsWith(start))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  await turnEnds($)
+  expect([of(ASKS_AGAIN).length, of(GOAL_PROMPT).length]).toEqual([1, 1])
+})
+
+test('the note that a box was shown without waiting cannot be kept: the box is drawn all the same, never claimed and lost, and Dan is still told (#3843)', withKit, async ($, on) => {
+  const { w, cards, logs } = world(on, { review: UNREAD_AT_END })
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'reviewUnread' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  const r = await box($, ASKED)
+  expect(r.deny).toBeUndefined()
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1'])
+  expect(logs.filter(l => l.startsWith('The Goal accomplished box was shown without waiting for the end of turn review: '))).toHaveLength(1)
+  expect(logs.filter(l => /could not be kept for the close card's reasons file \(.*state store unavailable.*\)/.test(l))).toHaveLength(1)
+})
+
+test('the line that says a box was shown without waiting cannot be written: the box is drawn all the same, never claimed and lost (#3843)', withKit, async ($, on) => {
+  const { w, cards } = world(on, { review: UNREAD_AT_END, logFails: /shown without waiting/ })
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  const r = await box($, ASKED)
+  expect(r.deny).toBeUndefined()
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1'])
+  // The session is still told, in the call's own answer.
+  expect((r.context ?? []).join(' ')).toMatch(/shown without waiting for the end of turn review/)
+})
+
+test("the note that a box was shown without waiting belongs to its request: a later request's reasons file does not repeat it (#3843)", withAll, async ($, on) => {
+  const { w, clock } = world(on, { review: UNREAD_AT_END })
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+  expect(reasonsOf(w)?.notes).toHaveLength(1)
+  w.review = reviewSays('answered')
+  await says($, 'Now the weekly one')
+  await turnStarts($, 't2')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+  expect(reasonsOf(w)?.notes).toEqual([])
+})
+
+// ---- A held box is never lost with nobody told ----
+// Where a prompt about the box is held back over an unanswered review, Dan is told in a line he
+// sees, once per request. Once a message he typed has begun another request, the box held in the
+// earlier one is asked for once, at the end of a turn with no unanswered review and nothing in
+// flight. `seen` holds only what he sees; the debug log is not in it.
+const WAITING_LINE = 'The Goal accomplished box is waiting on the end of turn review, which is not on record as answered, so the session was not asked for it. It is asked for once at the end of a turn after your next message.'
+const WAITING_GOAL_LINE = 'The Goal accomplished box for the met /goal is waiting on the end of turn review, which is not on record as answered. The session is asked for it at the end of a later turn.'
+const ASKS_OWED = 'GOAL ACCOMPLISHED BOX FROM AN EARLIER REQUEST.'
+const NOT_DANS = ['plugin', 'task-notification', 'peer', 'compact', 'schedule', 'handoff']
+// A call for the box refused in a turn that changed something, whose review is then handed over
+// and left unanswered when the turn ends.
+const heldAndUnanswered = async (w: World, $: Engine$, text = 'Run the monthly sync', id = '1') => {
+  await says($, text)
+  await edits(w, $, `e${id}`)
+  w.review = reviewSays('none')
+  expect((await box($, ASKED, `held${id}`)).deny).toMatch(/still to come/)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.review = reviewSays('none')
+}
+
+test('a prompt held back over an unanswered review is said to Dan in one line he sees, once for the request however many prompts were held back, and again for his next request (#3843)', withLive, async ($, on) => {
+  const { w, seen, submitted } = world(on, { verdicts: CARDED })
+  await start($)
+  // Both the one message and the question about shipped work are held back at this turn's end.
+  await heldAndUnanswered(w, $)
+  expect(seen).toEqual([WAITING_LINE])
+  // A later turn end of the same request, a review unanswered again: not said twice.
+  w.review = reviewSays('handed')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(seen).toEqual([WAITING_LINE])
+  await heldAndUnanswered(w, $, 'And the weekly one', '2')
+  expect(seen).toEqual([WAITING_LINE, WAITING_LINE])
+  expect(submitted.filter(s => (s.origin as { kind?: string }).kind === 'plugin')).toEqual([])
+})
+
+test('the question about shipped work held back with no call refused is said the same way, and the box is asked for once after his next message (#3843, #2523)', withLive, async ($, on) => {
+  const { w, seen, submitted } = world(on, { verdicts: CARDED })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([WAITING_LINE])
+  w.review = reviewSays('none')
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toHaveLength(1)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+})
+
+test("the prompt for a met /goal held back over an unanswered review is said to Dan once, in the goal's own words (#3843)", withKit, async ($, on) => {
+  const { seen } = world(on, { goal: MET, review: reviewSays('handed') })
+  await start($)
+  await turnEnds($)
+  await turnEnds($)
+  expect(seen).toEqual([WAITING_GOAL_LINE])
+})
+
+test('a review answered, or none handed over, says no such line (#3843)', withLive, async ($, on) => {
+  const { w, seen } = world(on, { verdicts: CARDED })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.review = reviewSays('answered')
+  await turnEnds($)
+  expect(seen).toEqual([])
+})
+
+test("the session skipped the review's last step and Dan then types: the held box is asked for once at the end of that turn, the call shows it, and nothing asks again (#3843)", withLive, async ($, on) => {
+  const { w, submitted, cards } = world(on, { verdicts: CARDED })
+  const owed = () => submitted.filter(s => s.text.startsWith(ASKS_OWED))
+  await start($)
+  await heldAndUnanswered(w, $)
+  expect(owed()).toEqual([])
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(owed()).toHaveLength(1)
+  expect((owed()[0]?.origin as { kind?: string }).kind).toBe('plugin')
+  expect(owed()[0]?.text).toMatch(/For an earlier request of Dan's in this session the Goal accomplished box was held back for the end of turn review, and no box has been shown since\. He has sent a message since then\./)
+  expect(owed()[0]?.text).toMatch(/Call it before anything else in this turn/)
+  await turnStarts($, 't2')
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+  expect(await cards()).toHaveLength(1)
+  await turnEnds($)
+  await says($, 'and thanks again')
+  await turnEnds($)
+  expect(owed()).toHaveLength(1)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN) || s.text.startsWith(ASKS_DONE))).toEqual([])
+})
+
+test('the later ask is sent once for the request: a session that does not call is not asked again, at a later turn end or after another message of his (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const owed = () => submitted.filter(s => s.text.startsWith(ASKS_OWED))
+  await start($)
+  await heldAndUnanswered(w, $)
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(owed()).toHaveLength(1)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  await says($, 'one more thing')
+  await turnEnds($)
+  expect(owed()).toHaveLength(1)
+})
+
+test('the later ask stands in for the other prompts of the request it is sent in: neither the question about shipped work nor the message for a call refused since follows it (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted } = world(on, { verdicts: CARDED })
+  const others = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN) || s.text.startsWith(ASKS_DONE))
+  await start($)
+  await heldAndUnanswered(w, $)
+  await says($, 'And merge PR 1701')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toHaveLength(1)
+  expect(others()).toEqual([])
+  // The session does not call. The next turn end sends neither of the request's own prompts.
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(others()).toEqual([])
+  // A call refused in that request after the ask is still not lost: it is asked for after his next message.
+  await turnStarts($, 't3')
+  await edits(w, $, 'e3')
+  expect((await box($, ASKED, 'b3')).deny).toMatch(/or is asked for once after Dan's next message\.$/)
+  await turnEnds($)
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toHaveLength(2)
+})
+
+// Nothing the later ask marks stops a met /goal's prompt, so only its place in the turn end does.
+test("the later ask stands in for a met /goal's prompt at the turn end it is sent at: one prompt goes out there, and the goal's own follows at the next turn end (#3843)", withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const of = (start: string) => submitted.filter(s => s.text.startsWith(start))
+  await start($)
+  await heldAndUnanswered(w, $)
+  await says($, 'thanks')
+  w.goal = MET
+  await turnEnds($)
+  expect([of(ASKS_OWED).length, of(GOAL_PROMPT).length]).toEqual([1, 0])
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect([of(ASKS_OWED).length, of(GOAL_PROMPT).length]).toEqual([1, 1])
+})
+
+test('a box shown since the hold is asked for by nothing after his next message (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await heldAndUnanswered(w, $)
+  await says($, 'Never mind that. Is it done?')
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+  await turnEnds($)
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toEqual([])
+})
+
+// The later ask can never put the box behind a review Dan has not answered. Each route tried
+// against the one message is tried against it here.
+test('the later ask is not sent over a review handed over and unanswered in the turn after his message, nor at a later turn end somebody else starts, nor after a prompt that is not his: only his next typed message lets it go (#3843)', withKit, async ($, on) => {
+  const { w, submitted, seen, cards } = world(on)
+  const owed = () => submitted.filter(s => s.text.startsWith(ASKS_OWED))
+  await start($)
+  await heldAndUnanswered(w, $)
+  // His next message starts a turn that changes something, and its review goes unanswered too.
+  await says($, 'Now make the status bar quieter')
+  await edits(w, $, 'e2')
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(owed()).toEqual([])
+  expect(seen).toEqual([WAITING_LINE, WAITING_LINE])
+  // A turn somebody else starts ends with nothing handed over: the record reads none, nothing is sent.
+  w.review = reviewSays('none')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(owed()).toEqual([])
+  for (const kind of NOT_DANS) {
+    await says($, 'A notice', kind)
+    await turnEnds($)
+  }
+  expect(owed()).toEqual([])
+  expect(await cards()).toEqual([])
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(owed()).toHaveLength(1)
+})
+
+test('the later ask reads the record before it weighs what is in flight: an unanswered review found while an agent runs still stops it once the agent has finished (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const owed = () => submitted.filter(s => s.text.startsWith(ASKS_OWED))
+  await start($)
+  await heldAndUnanswered(w, $)
+  await says($, 'Now make the status bar quieter')
+  await edits(w, $, 'e2')
+  w.agents = [{ id: 'a1', status: 'running' }]
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.agents = []
+  w.review = reviewSays('none')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(owed()).toEqual([])
+})
+
+test('the later ask waits while something is in flight or a /goal is still set, and is sent at the first turn end with neither (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const owed = () => submitted.filter(s => s.text.startsWith(ASKS_OWED))
+  await start($)
+  await heldAndUnanswered(w, $)
+  await says($, 'thanks')
+  w.agents = [{ id: 'a1', status: 'running' }]
+  await turnEnds($)
+  expect(owed()).toEqual([])
+  w.agents = []
+  w.goal = { state: 'set', condition: 'complete issue 1563' }
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(owed()).toEqual([])
+  w.goal = { state: 'none' }
+  await turnStarts($, 't3')
+  await turnEnds($)
+  expect(owed()).toHaveLength(1)
+  // The request's own message, worded for "this request", was never sent in its place meanwhile.
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toEqual([])
+})
+
+test("a request whose one message was sent, and whose session then did not call: his next message brings no later ask, since the box was asked for once (#3843)", withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toEqual([])
+})
+
+test('the later ask is not sent while Dan is asleep over a review handed over before he fell asleep, nor at a later turn end once he is awake (#3843)', withAll, async ($, on) => {
+  const { w, submitted } = world(on)
+  const owed = () => submitted.filter(s => s.text.startsWith(ASKS_OWED))
+  await start($)
+  await heldAndUnanswered(w, $)
+  await says($, 'Now make the status bar quieter')
+  await edits(w, $, 'e2')
+  w.review = reviewSays('handed')
+  w.asleep = true
+  await turnEnds($)
+  w.asleep = false
+  w.review = reviewSays('none')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(owed()).toEqual([])
+})
+
+test("the record cannot be read at the turn's end the later ask is due: it is sent, and Dan is told it was sent without knowing (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await heldAndUnanswered(w, $)
+  await says($, 'thanks')
+  w.review = UNREAD_AT_END
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toHaveLength(1)
+  expect(seen.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+})
+
+test('a later ask that could not be sent is said and sent again at the next turn end, and two turn ends at once send one (#3843)', withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on, { submitFails: ['drop'] })
+  const owed = () => submitted.filter(s => s.text.startsWith(ASKS_OWED))
+  await start($)
+  await heldAndUnanswered(w, $)
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(owed()).toEqual([])
+  expect(seen.filter(l => /^The session could not be asked for the Goal accomplished box of an earlier request \(held by a guard beneath\); it is asked again at the next turn end\.$/.test(l))).toHaveLength(1)
+  await Promise.all([turnEnds($), turnEnds($)])
+  expect(owed()).toHaveLength(1)
+})
+
+test("only a message Dan types drops the hold: a prompt of any other origin keeps it, and the request's one message is still sent (#3843)", withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($, ABORTED)
+  for (const kind of NOT_DANS) await says($, 'A notice', kind)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toEqual([])
+})
+
+// ---- A review left unanswered at a turn end where no prompt was due (#3843) ----
+// The record ends with the turn, so a review handed over in a turn that then ended any other way
+// than with an answer, or while something was in flight, is read there or never. Each prompt that
+// was waiting is blocked or spent there as at any other turn end, the line is said, and nothing
+// is sent. `fromMod` is every prompt this mod sent.
+const NOT_ANSWERS: [string, Record<string, unknown>][] = [['aborted', ABORTED], ['on a refusal', { reason: 'refusal' }], ['on an error', { reason: 'error' }]]
+const fromMod = <T extends { origin: unknown }>(submitted: T[]): T[] => submitted.filter(s => (s.origin as { kind?: string }).kind === 'plugin')
+const NOTICE = 'task-notification'
+const RUNNING = [{ id: 'a1', status: 'running' }]
+
+for (const [how, end] of NOT_ANSWERS) {
+  test(`a review handed over in a turn that ended ${how} still blocks the later ask: Dan is told, a turn somebody else starts sends nothing and shows no box, and only his next typed message lets it go (#3843)`, withKit, async ($, on) => {
+    const { w, submitted, seen, cards } = world(on)
+    await start($)
+    await heldAndUnanswered(w, $)
+    await says($, 'Now make the status bar quieter')
+    await edits(w, $, 'e2')
+    w.review = reviewSays('handed')
+    await turnEnds($, end)
+    expect(seen).toEqual([WAITING_LINE, WAITING_LINE])
+    w.review = reviewSays('none')
+    await says($, 'A notice', NOTICE)
+    await turnStarts($, 't2')
+    await turnEnds($)
+    expect(fromMod(submitted)).toEqual([])
+    expect(await cards()).toEqual([])
+    await says($, 'thanks')
+    await turnEnds($)
+    expect(fromMod(submitted).map(s => s.text.startsWith(ASKS_OWED))).toEqual([true])
+  })
+
+  test(`a review handed over in a turn that ended ${how} spends the request's one message unsent: Dan is told, a turn somebody else starts sends nothing, and the box is asked for once after his next message (#3843)`, withKit, async ($, on) => {
+    const { w, submitted, seen, cards } = world(on)
+    await start($)
+    await says($, 'Run the monthly sync')
+    await edits(w, $)
+    expect((await box($, ASKED)).deny).toMatch(/still to come/)
+    w.review = reviewSays('handed')
+    await turnEnds($, end)
+    expect(seen).toEqual([WAITING_LINE])
+    w.review = reviewSays('none')
+    await says($, 'A notice', NOTICE)
+    await turnStarts($, 't2')
+    await turnEnds($)
+    expect(fromMod(submitted)).toEqual([])
+    expect(await cards()).toEqual([])
+    await says($, 'thanks')
+    await turnEnds($)
+    expect(fromMod(submitted).map(s => s.text.startsWith(ASKS_OWED))).toEqual([true])
+  })
+
+  test(`a review handed over in a turn that ended ${how} spends the question about shipped work unsent: Dan is told, a turn somebody else starts sends nothing, and the box is asked for once after his next message (#3843, #2523)`, withLive, async ($, on) => {
+    const { w, submitted, seen } = world(on, { verdicts: CARDED })
+    await start($)
+    await says($, 'Merge PR 1700')
+    await edits(w, $)
+    w.review = reviewSays('handed')
+    await turnEnds($, end)
+    expect(seen).toEqual([WAITING_LINE])
+    w.review = reviewSays('none')
+    await says($, 'A notice', NOTICE)
+    await turnStarts($, 't2')
+    await turnEnds($)
+    expect(fromMod(submitted)).toEqual([])
+    await says($, 'thanks')
+    await turnEnds($)
+    expect(fromMod(submitted).map(s => s.text.startsWith(ASKS_OWED))).toEqual([true])
+  })
+
+  test(`a turn that ended ${how} sends no prompt where no review was handed over: the question about shipped work, the one message and the later ask each wait for a turn that ends with an answer (#3843, #2523)`, withLive, async ($, on) => {
+    const { w, submitted } = world(on, { verdicts: CARDED })
+    const sent = () => fromMod(submitted).map(s => [ASKS_DONE, ASKS_AGAIN, ASKS_OWED].find(start => s.text.startsWith(start)))
+    await start($)
+    await says($, 'Merge PR 1700')
+    await edits(w, $)
+    await turnEnds($, end)
+    expect(sent()).toEqual([])
+    await turnStarts($, 't2')
+    await turnEnds($)
+    expect(sent()).toEqual([ASKS_DONE])
+    await says($, 'Run the monthly sync')
+    await edits(w, $, 'e2')
+    expect((await box($, ASKED)).deny).toMatch(/still to come/)
+    await turnEnds($, end)
+    expect(sent()).toEqual([ASKS_DONE])
+    await turnStarts($, 't3')
+    await turnEnds($)
+    expect(sent()).toEqual([ASKS_DONE, ASKS_AGAIN])
+    await heldAndUnanswered(w, $, 'And the weekly one', '3')
+    await says($, 'thanks')
+    await turnEnds($, end)
+    expect(sent()).toEqual([ASKS_DONE, ASKS_AGAIN])
+    await turnStarts($, 't4')
+    await turnEnds($)
+    expect(sent()).toEqual([ASKS_DONE, ASKS_AGAIN, ASKS_OWED])
+  })
+}
+
+test('a turn that ended aborted reads the record whether or not a prompt is waiting, and where no review was handed over it says nothing and sends nothing (#3843)', withKit, async ($, on) => {
+  const { w, submitted, seen, reviewAsks } = world(on)
+  await start($)
+  // Nothing held: no prompt is waiting, and the record is asked all the same.
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  await turnEnds($, ABORTED)
+  expect(reviewAsks).toHaveLength(1)
+  // A call refused, and no review handed over when the turn is interrupted: read once, nothing
+  // spent, nothing said, nothing sent there.
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  const asks = reviewAsks.length
+  await turnEnds($, ABORTED)
+  expect(reviewAsks.length).toBe(asks + 1)
+  expect(seen).toEqual([])
+  expect(fromMod(submitted)).toEqual([])
+})
+
+test('a headless session reads and says nothing at a turn that ended aborted (#3843)', withKit, async ($, on) => {
+  const { w, seen, reviewAsks } = world(on)
+  await start($, false)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  await box($, ASKED)
+  const asks = reviewAsks.length
+  w.review = reviewSays('handed')
+  await turnEnds($, ABORTED)
+  expect(reviewAsks.length).toBe(asks)
+  expect(seen).toEqual([])
+})
+
+test("the request's one message reads the record before it weighs what is in flight: an unanswered review found while an agent runs spends it, so nothing is sent once the agent has finished (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen, cards } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.agents = RUNNING
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([WAITING_LINE])
+  w.agents = []
+  w.review = reviewSays('none')
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(fromMod(submitted)).toEqual([])
+  expect(await cards()).toEqual([])
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(fromMod(submitted).map(s => s.text.startsWith(ASKS_OWED))).toEqual([true])
+})
+
+test('an unanswered review found while the question about shipped work could not be sent still stops it: found while an agent runs, and found while the /goal cannot be read (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { verdicts: CARDED })
+  const told = () => seen.filter(l => l === WAITING_LINE)
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.agents = RUNNING
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(told()).toHaveLength(1)
+  w.agents = []
+  w.review = reviewSays('none')
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(fromMod(submitted)).toEqual([])
+  // His next request, with the /goal unreadable at the turn end its review goes unanswered.
+  await says($, 'And merge PR 1701')
+  await edits(w, $, 'e2')
+  w.goal = { state: 'unreadable', why: 'grep failed' }
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  // The line here is for the later ask of the request before, which this review holds.
+  expect(told()).toHaveLength(2)
+  w.goal = { state: 'none' }
+  w.review = reviewSays('none')
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't3')
+  await turnEnds($)
+  expect(fromMod(submitted)).toEqual([])
+})
+
+// ---- A call refused after the request's one message was used (#3843) ----
+test("a call refused after the request's one message was sent, its review then left unanswered: Dan is told in the one line, once, and the box is asked for once after his next message (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  // The session did not call. A later review left unanswered holds no box, so no line promises one.
+  await turnStarts($, 't2')
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([])
+  // A call refused now is held with no prompt left to ask for it in this request.
+  w.review = reviewSays('none')
+  await turnStarts($, 't3')
+  await edits(w, $, 'e3')
+  expect((await box($, ASKED, 'b3')).deny).toMatch(/or is asked for once after Dan's next message\.$/)
+  // Its review answered and the session not calling again: nothing is waiting on Dan, so no line.
+  w.review = reviewSays('answered')
+  await turnEnds($)
+  expect(seen).toEqual([])
+  w.review = reviewSays('handed')
+  await turnStarts($, 't4')
+  await turnEnds($)
+  expect(seen).toEqual([WAITING_LINE])
+  await turnStarts($, 't5')
+  await turnEnds($, ABORTED)
+  expect(seen).toEqual([WAITING_LINE])
+  w.review = reviewSays('none')
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toHaveLength(1)
+})
+
+test("a call refused after the request's one message was sent, and its box then shown: a later review left unanswered says no line (#3843)", withKit, async ($, on) => {
+  const { w, seen, cards } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  await turnStarts($, 't2')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/still to come/)
+  w.review = reviewSays('answered')
+  expect((await box($, ASKED, 'b3')).deny).toBeUndefined()
+  expect(await cards()).toHaveLength(1)
+  await turnEnds($)
+  await turnStarts($, 't3')
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([])
+})
+
+// ---- The later ask on its commonest path, and behind a /goal that cannot be read (#3843) ----
+test('the commonest path: refused, the review answered, the box shown in the same request, then Dan types: nothing asks for an earlier box (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.review = reviewSays('answered')
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+  await turnEnds($)
+  w.review = reviewSays('none')
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(fromMod(submitted)).toEqual([])
+})
+
+test('the later ask waits while the /goal cannot be read, and is sent at the first turn end where it reads as not set (#3843)', withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const owed = () => submitted.filter(s => s.text.startsWith(ASKS_OWED))
+  await start($)
+  await heldAndUnanswered(w, $)
+  await says($, 'thanks')
+  w.goal = { state: 'unreadable', why: 'grep failed' }
+  await turnEnds($)
+  expect(owed()).toEqual([])
+  w.goal = { state: 'none' }
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(owed()).toHaveLength(1)
+})
+
+test("the record is asked once at a turn's end however many prompts ask it, and once where a met /goal was already asked about (#3843)", withLive, async ($, on) => {
+  const { w, reviewAsks } = world(on, { verdicts: CARDED })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  expect(reviewAsks).toHaveLength(1)
+  // The one message and the question about shipped work both ask it at this turn's end.
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(reviewAsks).toHaveLength(2)
+  // A met /goal: its prompt is sent at one turn end, and a later turn end asks the record once more.
+  w.review = reviewSays('none')
+  w.goal = MET
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(reviewAsks).toHaveLength(3)
+  await turnStarts($, 't3')
+  await turnEnds($)
+  expect(reviewAsks).toHaveLength(4)
+})
+
+test('the tool says in its description that it waits for the review (#3843)', withKit, async ($, on) => {
+  const { tools } = world(on)
+  await start($)
+  expect(tools[0]?.description).toMatch(/In a turn that has changed something it also waits until the end of turn review has run and Dan has answered it/)
+})
+
+test("the review's last step is one command whatever the transcript's path holds, and the reader's answer is held to its three words (#3843)", withKit, async () => {
+  // The work MacBook keeps its projects under a folder with an apostrophe and spaces in its name.
+  // The folder is put together here, as T is, so no line of this file names a home directory.
+  const under = `${'/Users'}/dan/Documents - Dan`
+  expect(answeredCommand(`${under}'s MacBook Pro/.claude/projects/-repo/s1.jsonl`)).toBe(
+    `python3 ~/.claude/hooks/lib/review-record.py answered --transcript '${under}'\\''s MacBook Pro/.claude/projects/-repo/s1.jsonl'`,
+  )
+  // And that command, quoted so, is known for the main conversation's last step under such a path.
+  const apostrophe = `${under}'s MacBook Pro/.claude/projects/-repo/s1.jsonl`
+  expect(answersMainReview(followReader(answeredCommand(apostrophe)), apostrophe, HOME_DIR)).toBe(true)
+  expect(answersMainReview(followReader(answeredCommand(`${under}/other.jsonl`)), apostrophe, HOME_DIR)).toBe(false)
+  expect(reviewRead({ exitCode: 0, stdout: '{"state": "handed", "turn": "p1"}\n', stderr: '' })).toEqual({ state: 'handed' })
+  expect(reviewRead({ exitCode: 0, stdout: '{"state": "none"}', stderr: 'a warning' })).toEqual({ state: 'none' })
+  expect(reviewRead({ exitCode: 3, stdout: '{"state": "answered"}', stderr: 'review-record: it could not be read\n' })).toEqual({ unread: 'review-record: it could not be read' })
+  expect(reviewRead({ exitCode: 1, stdout: '', stderr: '' })).toEqual({ unread: "the read of the review's record exited 1" })
+  const odd = reviewRead({ exitCode: 0, stdout: 'null', stderr: '' })
+  expect('unread' in odd ? odd.unread : 'read as a state').toMatch(/names no state/)
+})
+
+// ---- What a turn end finds of the review is kept until Dan types (#3843) ----
+// The record ends with its turn, and a prompt about the box can fall due in a later turn nobody
+// typed to start: a card made there, a call refused there. So every turn end of the main
+// conversation reads the record, and a review found unanswered holds every prompt for a request's
+// box until a message Dan types. `sentKinds` is each prompt this mod sent, by which one it is.
+const sentKinds = (submitted: { text: string; origin: unknown }[]) =>
+  fromMod(submitted).map(s => (s.text.startsWith(ASKS_OWED) ? 'OWED' : s.text.startsWith(ASKS_AGAIN) ? 'AGAIN' : s.text.startsWith(ASKS_DONE) ? 'DONE' : s.text.startsWith(GOAL_PROMPT) ? 'MET' : 'OTHER'))
+
+for (const [how, end] of [['with an answer', {}], ...NOT_ANSWERS] as [string, Record<string, unknown>][]) {
+  test(`a review left unanswered in a turn that ended ${how}, with no prompt yet waiting, is read and kept: the question about shipped work that falls due in a turn somebody else starts is not sent, Dan is told there, and the box is asked for once after his next message (#3843, #2523)`, withLive, async ($, on) => {
+    const { w, submitted, seen } = world(on)
+    await start($)
+    await says($, 'Merge PR 1700')
+    await edits(w, $)
+    w.review = reviewSays('handed')
+    await turnEnds($, end)
+    // No box is held yet, so no line promises one.
+    expect(seen).toEqual([])
+    w.review = reviewSays('none')
+    w.verdicts = CARDED
+    await says($, 'A notice', NOTICE)
+    await turnStarts($, 't2')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual([])
+    expect(seen).toEqual([WAITING_LINE])
+    await turnStarts($, 't3')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual([])
+    await says($, 'thanks')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual(['OWED'])
+    expect(seen).toEqual([WAITING_LINE])
+  })
+}
+
+test('the same with an agent running when the review is left unanswered and the card made once the agent has finished: the question is not sent, and Dan is told (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.agents = RUNNING
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([])
+  w.agents = []
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  expect(seen).toEqual([WAITING_LINE])
+})
+
+test("a review left unanswered with nothing waiting, then a call refused in a turn somebody else starts: the refusal promises no message, none is sent at that turn's end, Dan is told, and the box is asked for once after his next message (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([])
+  w.review = reviewSays('none')
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await edits(w, $, 'e2')
+  const refused = (await box($, ASKED, 'b2')).deny
+  expect(refused).toMatch(/still to come/)
+  expect(refused).toMatch(/or is asked for once after Dan's next message\.$/)
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  expect(seen).toEqual([WAITING_LINE])
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['OWED'])
+})
+
+test('a reading of none keeps what the last turn end found: with no turn start and no prompt seen between, the question about shipped work is still not sent (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  expect(seen).toEqual([WAITING_LINE])
+})
+
+test('a message Dan types ends what was kept: the question about shipped work for his next request is sent as usual (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Tidy the notes')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE'])
+  expect(seen).toEqual([])
+})
+
+test("a message of Dan's that a hook beneath dropped ends nothing: an unanswered review the turn ends kept still stops the question about shipped work (#3843, #2523)", withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { dropsTyped: 'Merge PR 1700' })
+  await start($)
+  await says($, 'Tidy the notes')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  expect(await says($, 'Merge PR 1700')).toEqual({ drop: 'held by a guard beneath' })
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  expect(seen).toEqual([WAITING_LINE])
+})
+
+test("a message of Dan's that a hook beneath dropped ends nothing: a record that could not be read is still said at the prompt sent after it (#3843, #2523)", withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { dropsTyped: 'And merge PR 1701' })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.review = UNREAD_AT_END
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  expect(await says($, 'And merge PR 1701')).toEqual({ drop: 'held by a guard beneath' })
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE'])
+  expect(seen.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+})
+
+test('a review answered later in the same turn ends what that turn end kept, and one answered in a later turn does not answer the earlier one (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  // The same turn ends twice with nothing begun between: handed over, then on record as answered.
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.review = reviewSays('answered')
+  w.verdicts = CARDED
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE'])
+  expect(seen).toEqual([])
+  // A turn has begun since (a turn start, or a prompt that is not his): a review answered there
+  // is another review, and the one left unanswered still holds the prompt.
+  for (const [n, begins] of [[1, () => turnStarts($, 'tb')], [2, () => says($, 'A notice', NOTICE)]] as [number, () => Promise<unknown>][]) {
+    w.verdicts = {}
+    await says($, `And merge PR 170${n}`)
+    await edits(w, $, `later${n}`)
+    w.review = reviewSays('handed')
+    await turnEnds($)
+    await begins()
+    w.review = reviewSays('answered')
+    w.verdicts = { [`danwright32/claude-config#170${n}`]: { state: 'live', at: NOW + n } }
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual(['DONE'])
+    expect(seen).toHaveLength(n)
+  }
+  expect(seen).toEqual([WAITING_LINE, WAITING_LINE])
+})
+
+test("a reading of the record that comes back after a message Dan typed is dropped: it is of a turn before his message, which ends what such a turn left (#3843, #2523)", withLive, async ($, on) => {
+  const { w, submitted, seen, clock } = world(on)
+  await start($)
+  await says($, 'Tidy the notes')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  let comesBack = () => {}
+  w.reviewOut = new Promise<void>(open => (comesBack = open))
+  const ended = turnEnds($)
+  // He types while the record is still being read, a second later by the clock.
+  await clock.advance(1000)
+  await says($, 'Merge PR 1700')
+  w.reviewOut = undefined
+  comesBack()
+  await ended
+  w.review = reviewSays('none')
+  w.verdicts = { 'danwright32/claude-config#1700': { state: 'live', at: NOW + 1000 } }
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE'])
+  expect(seen).toEqual([])
+})
+
+// ---- A met /goal, and a /goal still set (#3843) ----
+// The prompt for a met /goal is held only by the review of the turn now ending, and says so in the
+// goal's own line. Under a /goal that is set or cannot be read no prompt for a request's box is
+// waiting, so nothing is spent there and no line is said.
+test("a met /goal and a card, the review left unanswered in a turn that ended aborted: Dan is told in the goal's own line, never the request's, and the goal's prompt is sent at the next turn end (#3843)", withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { goal: MET, verdicts: CARDED })
+  await start($)
+  await says($, 'Finish issue 1563')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($, ABORTED)
+  expect(seen).toEqual([WAITING_GOAL_LINE])
+  expect(sentKinds(submitted)).toEqual([])
+  w.review = reviewSays('none')
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  expect(seen).toEqual([WAITING_GOAL_LINE])
+})
+
+test("a met /goal and a card, the review left unanswered in a turn that ended aborted, then a message Dan types: the goal's own prompt is the only one sent, since the question about shipped work was never spent and no box is owed from the request (#3843)", withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { goal: MET, verdicts: CARDED })
+  await start($)
+  await says($, 'Finish issue 1563')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($, ABORTED)
+  expect(sentKinds(submitted)).toEqual([])
+  w.review = reviewSays('none')
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  expect(seen).toEqual([WAITING_GOAL_LINE])
+})
+
+test("a met /goal whose own prompt was already sent, then a call refused until the review was answered and the review left unanswered: Dan is told in the request's line, since no prompt of the goal's is still to come, and the box is asked for once after his next message (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on, { goal: MET })
+  await start($)
+  await says($, 'Finish issue 1563')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  await turnStarts($, 't2')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/still to come/)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([WAITING_LINE])
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  w.review = reviewSays('none')
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET', 'OWED'])
+})
+
+test("a met /goal whose box was already shown, then a later request's call refused until the review was answered and the review left unanswered: Dan is told in the request's line, never the goal's (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on, { goal: MET })
+  await start($)
+  await says($, 'Finish issue 1563')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  await says($, 'And merge PR 1701')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/still to come/)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([WAITING_LINE])
+  expect(sentKinds(submitted)).toEqual([])
+})
+
+for (const [how, end] of [['with an answer', {}], ['aborted', ABORTED]] as [string, Record<string, unknown>][]) {
+  test(`a met /goal whose box was refused until the review was answered, the review then left unanswered in a turn that ended ${how}: Dan is told in the goal's own line, since the goal's prompt is sent at the next turn end (#3843)`, withKit, async ($, on) => {
+    const { w, submitted, seen } = world(on, { goal: MET })
+    await start($)
+    await says($, 'Finish issue 1563')
+    await edits(w, $)
+    expect((await box($, ASKED)).deny).toMatch(/still to come/)
+    w.review = reviewSays('handed')
+    await turnEnds($, end)
+    expect(seen).toEqual([WAITING_GOAL_LINE])
+    expect(sentKinds(submitted)).toEqual([])
+    w.review = reviewSays('none')
+    await says($, 'A notice', NOTICE)
+    await turnStarts($, 't2')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual(['MET'])
+    expect(seen).toEqual([WAITING_GOAL_LINE])
+  })
+}
+
+test('a /goal still set, a card made, the review left unanswered: nothing is spent and no line is said, and once the goal is met after his next message its own prompt is the only one sent (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { goal: { state: 'set', condition: 'complete issue 1563' }, verdicts: CARDED })
+  await start($)
+  await says($, 'Finish issue 1563')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([])
+  expect(sentKinds(submitted)).toEqual([])
+  w.review = reviewSays('none')
+  await says($, 'keep going')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  w.goal = MET
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  await turnStarts($, 't3')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  expect(seen).toEqual([])
+})
+
+for (const [how, goal] of [['set', { state: 'set', condition: 'complete issue 1563' }], ['unreadable', { state: 'unreadable', why: 'grep failed' }]] as [string, Goal][]) {
+  test(`a review left unanswered under a /goal that is ${how}, the /goal then cleared in a turn somebody else starts: the question about shipped work is not sent there, and Dan is told there (#3843, #2523)`, withLive, async ($, on) => {
+    const { w, submitted, seen } = world(on, { goal, verdicts: CARDED })
+    await start($)
+    await says($, 'Merge PR 1700')
+    await edits(w, $)
+    w.review = reviewSays('handed')
+    await turnEnds($)
+    expect(seen).toEqual([])
+    w.goal = { state: 'none' }
+    w.review = reviewSays('none')
+    await says($, 'A notice', NOTICE)
+    await turnStarts($, 't2')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual([])
+    expect(seen).toEqual([WAITING_LINE])
+    await says($, 'thanks')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual(['OWED'])
+  })
+}
+
+test('a /goal that cannot be read, a card made, no review handed over: the question about shipped work is not sent (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { verdicts: CARDED, goal: { state: 'unreadable', why: 'grep failed' } })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  expect(seen).toEqual([])
+})
+
+test("an unanswered review of an earlier turn does not hold a met /goal's prompt: it is sent at the first turn end whose own review is not left unanswered (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Finish issue 1563')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.goal = MET
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  expect(seen).toEqual([])
+})
+
+// ---- A record that cannot be read at a turn end that sends nothing (#3843) ----
+test("the record cannot be read at a turn that ended aborted: nothing is sent there, and the request's one message at the next turn end is said to have been sent without knowing (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.review = UNREAD_AT_END
+  await turnEnds($, ABORTED)
+  expect(seen).toEqual([])
+  expect(sentKinds(submitted)).toEqual([])
+  w.review = reviewSays('none')
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['AGAIN'])
+  expect(seen.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+  expect(seen).toHaveLength(1)
+  // Said once: the next prompt sent before he types does not repeat it.
+  w.goal = MET
+  await turnStarts($, 't3')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['AGAIN', 'MET'])
+  expect(seen).toHaveLength(1)
+})
+
+test('the record cannot be read at a turn end with nothing waiting: a prompt that falls due before Dan types says it was sent without knowing, and one after his next message does not (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.review = UNREAD_AT_END
+  await turnEnds($)
+  expect(seen).toEqual([])
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE'])
+  expect(seen.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+  // His next message ends it: a prompt sent in the request it begins says nothing of the kind.
+  w.review = UNREAD_AT_END
+  await turnStarts($, 't3')
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.verdicts = { 'danwright32/claude-config#1701': { state: 'live', at: NOW + 1 } }
+  await says($, 'And merge PR 1701')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE', 'DONE'])
+  expect(seen.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+})
+
+// ---- The line for a call refused after the one message was used, and one read of the record at each turn end (#3843) ----
+test("a call refused after the request's one message was used, its review left unanswered in a turn that ended aborted: Dan is told there too (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['AGAIN'])
+  await turnStarts($, 't2')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/or is asked for once after Dan's next message\.$/)
+  w.review = reviewSays('handed')
+  await turnEnds($, ABORTED)
+  expect(seen).toEqual([WAITING_LINE])
+})
+
+test('the record is read once at every turn end of the main conversation, whatever is waiting and however the turn ended (#3843)', withLive, async ($, on) => {
+  const { w, reviewAsks } = world(on)
+  await start($)
+  // Nothing waiting, a turn that ended with an answer.
+  await says($, 'Is the monthly sync done?')
+  await turnEnds($)
+  expect(reviewAsks).toHaveLength(1)
+  // The one message and the question about shipped work both waiting, a turn that ended aborted.
+  w.verdicts = CARDED
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  const asks = reviewAsks.length
+  await turnEnds($, ABORTED)
+  expect(reviewAsks.length).toBe(asks + 1)
+  // The same two waiting at a turn that ended with an answer, the review left unanswered.
+  w.review = reviewSays('handed')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(reviewAsks.length).toBe(asks + 2)
 })
