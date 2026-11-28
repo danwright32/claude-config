@@ -3917,6 +3917,21 @@ test("a met /goal and a card, the review left unanswered in a turn that ended ab
   expect(seen).toEqual([WAITING_GOAL_LINE])
 })
 
+test("a met /goal and a card, the review left unanswered in a turn that ended aborted, then a message Dan types: the goal's own prompt is the only one sent, since the question about shipped work was never spent and no box is owed from the request (#3843)", withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { goal: MET, verdicts: CARDED })
+  await start($)
+  await says($, 'Finish issue 1563')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($, ABORTED)
+  expect(sentKinds(submitted)).toEqual([])
+  w.review = reviewSays('none')
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  expect(seen).toEqual([WAITING_GOAL_LINE])
+})
+
 for (const [how, end] of [['with an answer', {}], ['aborted', ABORTED]] as [string, Record<string, unknown>][]) {
   test(`a met /goal whose box was refused until the review was answered, the review then left unanswered in a turn that ended ${how}: Dan is told in the goal's own line, since the goal's prompt is sent at the next turn end (#3843)`, withKit, async ($, on) => {
     const { w, submitted, seen } = world(on, { goal: MET })
