@@ -275,5 +275,94 @@ run_failure 'not json' "$BARE/limit-messages.py"
 check "17 no predicate: the failure is printed" "was not JSON" "$FERR"
 if [ "$FRC" -ne 0 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: 17 no predicate exits non zero (exit $FRC)"; fi
 
+# 18 to 21. Each failure is named by the step that had it (claude-config#3567): a transcript that
+# cannot be read is said as the transcript, never as the record folder, and a record folder that
+# cannot be written is still said as the folder. All awake, so the line is on stderr.
+nonzero() { if [ "$2" -ne 0 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 (exit $2)"; fi; }
+limit_payload() {   # limit_payload <event> <transcript>: a limit stop naming that transcript
+  if [ "$1" = SubagentStop ]; then
+    printf '{"session_id":"sess-a","transcript_path":"%s","agent_id":"x9","agent_transcript_path":"%s","hook_event_name":"SubagentStop","stop_hook_active":false}' "$MAIN" "$2"
+  else
+    printf '{"session_id":"sess-a","transcript_path":"%s","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"You have hit your weekly limit, resets Nov 23 at 3am (America/New_York)"}' "$2"
+  fi
+}
+RECDIR_SAID="could not record a usage limit message in"
+if [ "$(id -u)" = 0 ]; then
+  echo "SUITE-PART-UNMEASURED cases 18 and 20, since they take away a permission root ignores"
+else
+  # 18. A transcript unreadable by permission, from a main session's stop and from an agent's.
+  for event in StopFailure SubagentStop; do
+    failure_world "unreadable-$event" awake
+    mkdir -p "$FH/.claude/projects/-proj"
+    LT="$FH/.claude/projects/-proj/sess-locked.jsonl"
+    cp "$MAIN" "$LT"; chmod 000 "$LT"
+    run_failure "$(limit_payload "$event" "$LT")"
+    nonzero "18 $event unreadable transcript exits non zero" "$FRC"
+    same "18 $event: exactly one line on stderr" "1" "$(printf '%s\n' "$FERR" | grep -c .)"
+    check "18 $event: the line names the transcript" "could not read the transcript $LT" "$FERR"
+    absent "18 $event: the line does not blame the record folder" "$RECDIR_SAID" "$FERR"
+    check "18 $event: failures.jsonl names the transcript" "could not read the transcript $LT" "$(failures_of)"
+    absent "18 $event: failures.jsonl does not blame the record folder" "$RECDIR_SAID" "$(failures_of)"
+    chmod 600 "$LT"
+  done
+
+  # 20. Both at once: the transcript cannot be read AND the record folder cannot be written. The
+  # transcript is read first and its failure ends the run, so that is the one failure the code can
+  # honestly know; the folder is never named, since it was never tried.
+  failure_world both awake
+  mkdir -p "$FH/.claude/projects/-proj" "$FH/.claude/state"
+  LT="$FH/.claude/projects/-proj/sess-locked.jsonl"
+  cp "$MAIN" "$LT"; chmod 000 "$LT"
+  printf 'a file where the folder goes\n' > "$FH/.claude/state/limit-messages"
+  run_failure "$(limit_payload StopFailure "$LT")"
+  nonzero "20 both exits non zero" "$FRC"
+  same "20 both: exactly one line on stderr" "1" "$(printf '%s\n' "$FERR" | grep -c .)"
+  check "20 both: the line names the transcript, the first failure met" "could not read the transcript $LT" "$FERR"
+  absent "20 both: the line does not name the folder it never tried" "$RECDIR_SAID" "$FERR"
+  chmod 600 "$LT"
+fi
+
+# 19. A record folder that cannot be written, under a transcript that reads fine, still names the
+# folder and never the transcript.
+failure_world folder-only awake
+mkdir -p "$FH/.claude/state"
+printf 'a file where the folder goes\n' > "$FH/.claude/state/limit-messages"
+run_failure "$(limit_payload StopFailure "$MAIN")"
+nonzero "19 unwritable folder exits non zero" "$FRC"
+check "19 the line names the record folder" "$RECDIR_SAID $FH/.claude/state/limit-messages" "$FERR"
+absent "19 the line does not name the transcript" "could not read the transcript" "$FERR"
+
+# 21. A transcript removed between the check that it is there and its read, as an agent's
+# transcript can be at its stop. The removal is stood in for by a check that answers "there" for a
+# path that is gone, so the open meets a missing file; the failure names the transcript.
+GONE_RUN="$WORK/gone-run.py"
+cat > "$GONE_RUN" <<'EOF'
+import importlib.util, os, sys
+tool, gone = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("limit_messages", tool)
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+real = os.path.isfile
+os.path.isfile = lambda p: True if p == gone else real(p)
+sys.exit(m.main(["limit-messages.py", "record"]))
+EOF
+failure_world gone awake
+GONE="$FH/.claude/projects/-proj/sess-gone.jsonl"
+limit_payload SubagentStop "$GONE" | HOME="$FH" CLAUDE_SLEEP_RECORD="$FREC" python3 "$GONE_RUN" "$TOOL" "$GONE" >"$WORK/f.out" 2>"$WORK/f.err"; FRC=$?
+FERR="$(cat "$WORK/f.err")"
+nonzero "21 removed mid read exits non zero" "$FRC"
+check "21 the line names the transcript" "could not read the transcript $GONE" "$FERR"
+absent "21 the line does not blame the record folder" "$RECDIR_SAID" "$FERR"
+check "21 failures.jsonl names the transcript" "could not read the transcript $GONE" "$(failures_of)"
+
+# 22. A transcript that is not there at all when the hook looks is, as before #3567, not a failure:
+# the hook's own wording is recorded in its place. Whether an unreadable transcript should count as a
+# failure is an open question on #3567, so this pins today's behaviour until it is decided.
+failure_world absent awake
+run_failure "$(limit_payload StopFailure "$FH/.claude/projects/-proj/never-written.jsonl")"
+same "22 absent transcript exits 0" "0" "$FRC"
+same "22 absent transcript prints nothing" "" "$FERR"
+check "22 the hook's message is recorded in its place" '"source": "hook message"' "$(cat "$FH/.claude/state/limit-messages/records.jsonl" 2>/dev/null)"
+
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

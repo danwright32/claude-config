@@ -42,8 +42,8 @@ synced. Each message is written once, keyed by its transcript line's uuid (a has
 taken from the hook's wording), under a lock, so a hook that runs twice or races the backfill adds
 nothing.
 
-A FAILURE (a payload that is not a JSON object, a record that cannot be written, anything no handler
-foresaw) is kept in failures.jsonl beside the record where that can be written, for the reader to
+A FAILURE (a payload that is not a JSON object, a transcript that cannot be read, a record that
+cannot be written, anything no handler foresaw) is said as the step that had it and kept in failures.jsonl beside the record where that can be written, for the reader to
 say, and then told according to sleep mode, as Dan chose on 2026-11-24. Awake, it is one plain line
 on stderr and exit 1, never a traceback. Asleep (lib/sleep.sh's sleep_active, the one predicate),
 nothing is printed at all: the failure becomes a note for the morning report through sleep_note,
@@ -406,33 +406,49 @@ def record_payload():
         # A StopFailure that is not a limit (an overloaded server, a lost connection) is nothing here.
         if error != "rate_limit" and not is_limit_wording(said):
             return 0
-    try:
-        # Every limit line in the transcript not yet recorded is added, so one this hook missed
-        # (a crash, a line written late) is picked up by the next run. The message the hook was
-        # handed counts as present once its wording is on a limit line in the transcript. The
-        # waits happen outside the lock, so a waiting hook never holds up another writer.
-        wanted = (said or "").strip()
-        for delay in retry_delays() if event != "SubagentStop" else [0.0]:
-            if delay:
-                time.sleep(delay)
-            texts = set()
+    # Every limit line in the transcript not yet recorded is added, so one this hook missed (a
+    # crash, a line written late) is picked up by the next run. The message the hook was handed
+    # counts as present once its wording is on a limit line in the transcript. The waits happen
+    # outside the lock, so a waiting hook never holds up another writer. Reading the transcript and
+    # writing the record are each tried on their own, so a failure is said as the step that had it:
+    # a transcript that cannot be read is never blamed on the record folder (claude-config#3567).
+    wanted = (said or "").strip()
+    for delay in retry_delays() if event != "SubagentStop" else [0.0]:
+        if delay:
+            time.sleep(delay)
+        texts = set()
+        try:
             recs = lines_in(path, texts) if isinstance(path, str) and os.path.isfile(path) else []
-            with Store() as st:
-                st.add(recs)
-            if event == "SubagentStop" or (wanted and wanted in texts) or (not wanted and recs):
-                break
-        else:
-            with Store() as st:
-                # Not in the transcript after the waits: the hook's own wording stands in for it,
-                # with no structured block. If its line is written later, a later run records that
-                # too, so this one message can be counted twice; a limit DAY is counted once either way.
-                now = datetime.now(timezone.utc)
-                rid = "hook:" + hashlib.sha256(("%s|%s|%s" % (p.get("session_id"), said, now.strftime("%Y-%m-%dT%H:%M"))).encode("utf-8", "surrogatepass")).hexdigest()[:20]
-                who = "agent" if p.get("agent_id") else "session"
-                st.add([build(now, said or "", None, who, p.get("session_id"), rid, "hook message", error)])
+        except OSError as e:
+            return failed("could not read the transcript %s, so any usage limit message in it is not recorded: %s" % (
+                path, e.strerror or e))
+        bad = store(recs)
+        if bad is not None:
+            return bad
+        if event == "SubagentStop" or (wanted and wanted in texts) or (not wanted and recs):
+            break
+    else:
+        # Not in the transcript after the waits: the hook's own wording stands in for it, with no
+        # structured block. If its line is written later, a later run records that too, so this one
+        # message can be counted twice; a limit DAY is counted once either way.
+        now = datetime.now(timezone.utc)
+        rid = "hook:" + hashlib.sha256(("%s|%s|%s" % (p.get("session_id"), said, now.strftime("%Y-%m-%dT%H:%M"))).encode("utf-8", "surrogatepass")).hexdigest()[:20]
+        who = "agent" if p.get("agent_id") else "session"
+        bad = store([build(now, said or "", None, who, p.get("session_id"), rid, "hook message", error)])
+        if bad is not None:
+            return bad
+    return 0
+
+
+def store(recs):
+    """The records added to the record under its lock. None once written; the failure's exit code
+    when the record folder could not be written, said as that folder."""
+    try:
+        with Store() as st:
+            st.add(recs)
     except OSError as e:
         return failed("could not record a usage limit message in %s: %s" % (record_dir(), e))
-    return 0
+    return None
 
 
 def cmd_scan():
