@@ -314,6 +314,99 @@ r="$(SESSION=s2 run "$EDIT")"
 check "R10 #3789 a file written after his answer, with no hash noted, puts no label on, and the refusal says to ask him again" "$(asks_dan "$r" && [[ "$r" == *"has changed since he answered"* && "$r" == *"ask him again"* ]] && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
 forget
 
+echo "the label never goes on wording the merge would refuse, approved or not (#3846)"
+# On 2026-11-27 Dan approved, by picker, wording whose first line was the mention followed by a
+# sentence. This hook let the label on, on that approval, and the merge gate then refused the same
+# wording for its opener, so he was asked a second time. The rules for what a post may hold are the
+# merge gate's, and this hook and the approval now ask the gate's own judge: the label is refused
+# with the gate's code and words, and his Approve of such wording approves nothing.
+SHARED_LINE='@here Calls can now be handed back to the queue.
+
+- Press Hand back
+- Pick a reason'
+# body_with <wording>: a description carrying that wording as its Announcement block.
+body_with() { printf 'Why.\n\n## Changelog\nAgents can now hand a call back to the queue.\n\n## Announcement\n%s\n\n## Testing\nran it\n' "$1"; }
+# gate_says <file> <field>: the merge gate's judge on a wording file, asked directly.
+gate_says() { node "$ENTRY" announcement-refusal "$1" | python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]], end="")' "$2"; }
+F="$(aaf_shown "$WORK/sharedline" "$WORK/sharedline.jsonl" "$SHARED_LINE")"
+aaf_talk "$WORK/sharedline.jsonl" ask acme/widget "$F"
+body_with "$SHARED_LINE" > "$WORK/sharedline-body.md"
+WORDS="$(gate_says "$F" reason)"
+check "the merge gate's judge refuses that day's wording for its opener, which the cases below depend on" "$([ "$(gate_says "$F" code)" = ANNOUNCEMENT_NO_OPENER ] && [[ "$WORDS" == *"on a line of its own"* ]] && echo ok || echo "$(gate_says "$F" code): $WORDS")"
+r="$(TALK="$WORK/sharedline.jsonl" FAKE_BODY="$WORK/sharedline-body.md" run "$EDIT")"
+check "R10 #3846 his Approve of wording whose first line is the mention followed by a sentence puts no label on" "$(refused "$r" && echo ok || echo "$r")"
+check "#3846 the refusal holds the merge gate's code and its own words about the opener, whole" "$([ -n "$WORDS" ] && [[ "$r" == *"ANNOUNCEMENT_NO_OPENER"*"$WORDS"* ]] && echo ok || echo "$r")"
+check "#3846 and says how to ask him, naming the command that judges the file before it is opened" "$(asks_dan "$r" && [[ "$r" == *"/no-ai-tells"*"changelog-entry.js announcement-refusal <file>"*"--front-window"* ]] && echo ok || echo "$r")"
+check "R10 #3846 and no approval of it is written to the record" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+forget
+# An approval of such wording that this Mac's record already held, from before the rule, puts no
+# label on either: the merge would refuse the wording whatever was approved.
+mkdir -p "$STORE"; printf '{"kind": "approved", "repo": "acme/widget", "hash": "%s"}\n' "$(hash_text "$SHARED_LINE")" >> "$STORE/record.jsonl"
+r="$(FAKE_BODY="$WORK/sharedline-body.md" run "$EDIT")"
+check "R10 #3846 an approval of such wording the record already held puts no label on, in the gate's own words" "$(asks_dan "$r" && [[ "$r" == *"ANNOUNCEMENT_NO_OPENER"*"$WORDS"* ]] && echo ok || echo "$r")"
+forget
+# The same for a description the command gives itself, and for a rule of the markdown nobody measured.
+CODE_SPAN='@here
+Run `the thing` now.'
+F="$(aaf_shown "$WORK/codespan" "$WORK/codespan.jsonl" "$CODE_SPAN")"
+aaf_talk "$WORK/codespan.jsonl" ask acme/widget "$F"
+body_with "$CODE_SPAN" > "$REPO/codespan-body.md"
+WORDS="$(gate_says "$F" reason)"
+r="$(TALK="$WORK/codespan.jsonl" run "gh pr create --title T --label $LABEL --body-file codespan-body.md")"
+check "R10 #3846 his Approve of wording holding markdown nobody measured puts no label on, in the gate's own words" "$(asks_dan "$r" && [ -n "$WORDS" ] && [[ "$r" == *"ANNOUNCEMENT_MARKDOWN"*"$WORDS"* && "$WORDS" == *"never measured to arrive in Slack: code (a backtick)"* ]] && echo ok || echo "$r")"
+check "R10 #3846 and no approval of it is written to the record" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+forget
+# The approval itself, through this hook: the pull request holds wording that passes, and the file
+# he approved holds wording the merge would refuse. The refusal says his Approve does not count and
+# why, in the gate's words, where it used to say only that the two wordings differ.
+F="$(aaf_shown "$WORK/sharedline-file" "$WORK/sharedline-file.jsonl" "$SHARED_LINE")"
+aaf_talk "$WORK/sharedline-file.jsonl" ask acme/widget "$F"
+WORDS="$(gate_says "$F" reason)"
+r="$(TALK="$WORK/sharedline-file.jsonl" run "$EDIT")"
+check "R10 #3846 his Approve of a file the merge would refuse approves nothing, and the refusal says why in the gate's words" "$(asks_dan "$r" && [ -n "$WORDS" ] && [[ "$r" == *"his Approve for $F does not count"*"ANNOUNCEMENT_NO_OPENER"*"$WORDS"* ]] && echo ok || echo "$r")"
+check "R10 #3846 and no approval of it is written to the record" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+forget
+# Still possible: the same post with the mention alone on its first line.
+OWN_LINE='@here
+Calls can now be handed back to the queue.
+
+- Press Hand back
+- Pick a reason'
+F="$(aaf_shown "$WORK/ownline" "$WORK/ownline.jsonl" "$OWN_LINE")"
+aaf_talk "$WORK/ownline.jsonl" ask acme/widget "$F"
+body_with "$OWN_LINE" > "$WORK/ownline-body.md"
+r="$(TALK="$WORK/ownline.jsonl" FAKE_BODY="$WORK/ownline-body.md" run "$EDIT")"
+check "R10 #3846 still possible: the same post with the mention alone on its first line, approved, lets the label on" "$(passed "$r" && echo ok || echo "$r")"
+check "#3846 and his approval of it is written to the record" "$(grep -q "\"hash\": \"$(hash_text "$OWN_LINE")\"" "$STORE/record.jsonl" 2>/dev/null && echo ok || echo "no line")"
+forget
+# An answer of the judge that cannot be read lets no label on (L98): a node in front of the real one
+# that answers that one command as a broken or older lib/changelog-entry.js would.
+NOVERDICT="$WORK/node-without-the-verdict"; mkdir -p "$NOVERDICT"
+REAL_NODE="$(command -v node)"
+cat > "$NOVERDICT/node" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" announcement-refusal "*)
+    cat >/dev/null
+    case "${FAKE_VERDICT:-}" in
+      usage) echo "Usage: changelog-entry.js required-labels <owner/name>" >&2; exit 2 ;;
+      empty) printf '{}\n'; exit 0 ;;
+      refuses-and-exits-0) printf '{"refused": true, "code": "ANNOUNCEMENT_NO_OPENER", "reason": "words"}\n'; exit 0 ;;
+      *) echo "the fake node was given no FAKE_VERDICT" >&2; exit 9 ;;
+    esac ;;
+  *) exec "$REAL_NODE" "$@" ;;
+esac
+SH
+chmod +x "$NOVERDICT/node"
+approve
+for verdict in usage empty refuses-and-exits-0; do
+  r="$(FAKE_VERDICT="$verdict" REAL_NODE="$REAL_NODE" PATH="$NOVERDICT:$PATH" run "$EDIT")"
+  check "R10 #3846 an answer of the judge that cannot be read ($verdict) lets no label on, approved wording or not, and says so" "$(refused "$r" && [[ "$r" == *"did not say whether the merge would refuse"* ]] && echo ok || echo "$r")"
+done
+r="$(run "$EDIT")"
+check "#3846 and the same command goes through once the judge answers, so it was the unread answer that refused it" "$(passed "$r" && echo ok || echo "$r")"
+forget
+
 echo "one approval covers one pull request (Dan, 2026-11-25: \"One approval, one pull request\")"
 # Pull request 7 merged on his one approval of this wording: the merge gate recorded it as the one
 # that used it. The label still goes on pull request 7, however the command names it, and on no
