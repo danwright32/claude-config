@@ -5,6 +5,12 @@
 #
 #   bash ~/.claude/hooks/lib/disk-remove.sh --plan <plan file>
 #   bash ~/.claude/hooks/lib/disk-remove.sh --propose <trash|delete|truncate> <path>...
+#   bash ~/.claude/hooks/lib/disk-remove.sh --status <plan file>
+#
+# --status says how far the --plan run for that plan's scan has got, read from the status file the
+# run rewrites as each item starts (removals/<scan_id>.status, below), so a removal of a thousand
+# items started in the background is never a bare wait (#3590). Its exits are its own: 0 finished,
+# 10 running, 11 stalled, 12 stopped before finishing, 13 none started, 2 refused.
 #
 # --plan removes what a plan names. A plan never carries paths: it names a scan and the ids of the
 # items Dan ticked in it, and every path, method and category comes from that scan's own record
@@ -88,13 +94,18 @@
 #   removals/<scan_id>.log            INTENT and OUTCOME lines, tab separated, appended; a run killed
 #                                     midway leaves an INTENT with no OUTCOME, which the next run for
 #                                     that scan reports and settles
-#   remove.lock                       a symbolic link naming the pid of the run holding it; one whose
+#   removals/<scan_id>.status         how far the last --plan run for that scan got: running, then
+#                                     finished with its exit, or failed when it left early; one
+#                                     killed outright leaves running with a dead pid, which --status
+#                                     reads as stopped and the next run reports from the log
+#   remove.lock                      a symbolic link naming the pid of the run holding it; one whose
 #                                     pid is not running is taken over
 #
 # TEST MODE. When DISK_CLEAN_TEST_ROOT is set, this refuses to run unless HOME is physically inside
 # it by the harness's own predicate (lib/disk-clean-predicates.sh, dc_home_isolated), and only then
-# honours the seams DISK_CLEAN_TRASH, DISK_CLEAN_JUDGE, DISK_CLEAN_DERIVED_DATA_SWEEP and
-# DISK_CLEAN_CATEGORIES. Outside test mode any of those being set is refused. The allowed roots are
+# honours the seams DISK_CLEAN_TRASH, DISK_CLEAN_JUDGE, DISK_CLEAN_DERIVED_DATA_SWEEP,
+# DISK_CLEAN_CATEGORIES and DISK_CLEAN_NOW (the clock --status judges a stall by). Outside test mode
+# any of those being set is refused. The allowed roots are
 # HOME and TMPDIR, each inside the throwaway directory; outside test mode they are HOME, /private/tmp
 # and /private/var/folders.
 #
@@ -125,6 +136,9 @@ case "${1:-}" in
   --plan)
     [ "$#" -eq 2 ] && [ -n "$2" ] || refuse 2 "--plan takes exactly one plan file, so it removed nothing."
     MODE=plan; PLAN="$2" ;;
+  --status)
+    [ "$#" -eq 2 ] && [ -n "$2" ] || refuse 2 "--status takes exactly one plan file, the one a --plan run was given."
+    MODE=status; PLAN="$2" ;;
   --propose)
     [ "$#" -ge 3 ] || refuse 2 "--propose takes a method (trash, delete or truncate) and at least one path, so it proposed nothing."
     MODE=propose; PROPOSE_METHOD="$2"; shift 2 ;;
@@ -138,8 +152,8 @@ if [ -n "$TEST_ROOT" ]; then
   dc_home_isolated "${HOME:-}" "$TEST_ROOT" || \
     refuse 2 "test mode (DISK_CLEAN_TEST_ROOT is $TEST_ROOT), but HOME ('${HOME:-}') is not inside that throwaway directory, so it removed nothing."
 else
-  [ -z "${DISK_CLEAN_TRASH+x}${DISK_CLEAN_JUDGE+x}${DISK_CLEAN_DERIVED_DATA_SWEEP+x}${DISK_CLEAN_CATEGORIES+x}" ] || \
-    refuse 2 "a test seam (DISK_CLEAN_TRASH, DISK_CLEAN_JUDGE, DISK_CLEAN_DERIVED_DATA_SWEEP or DISK_CLEAN_CATEGORIES) is set, but DISK_CLEAN_TEST_ROOT is not, and the seams are honoured only in test mode, so it removed nothing."
+  [ -z "${DISK_CLEAN_TRASH+x}${DISK_CLEAN_JUDGE+x}${DISK_CLEAN_DERIVED_DATA_SWEEP+x}${DISK_CLEAN_CATEGORIES+x}${DISK_CLEAN_NOW+x}" ] || \
+    refuse 2 "a test seam (DISK_CLEAN_TRASH, DISK_CLEAN_JUDGE, DISK_CLEAN_DERIVED_DATA_SWEEP, DISK_CLEAN_CATEGORIES or DISK_CLEAN_NOW) is set, but DISK_CLEAN_TEST_ROOT is not, and the seams are honoured only in test mode, so it removed nothing."
 fi
 [ -n "${HOME:-}" ] || refuse 2 "HOME is not set, so it removed nothing."
 HOME_PHYS="$(CDPATH= cd -P "$HOME" 2>/dev/null && pwd -P)" || refuse 2 "could not read the home folder $HOME, so it removed nothing."
@@ -250,11 +264,28 @@ deny_reason() { # <path>
 # ---------- small readers ----------
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/disk-remove.XXXXXXXX")" || refuse 2 "could not make a working folder under ${TMPDIR:-/tmp}, so it removed nothing."
 LOCK="" LOCK_HELD=""
+# A --plan run that leaves before it finished (a signal it can catch, or any exit it did not choose)
+# rewrites its status as failed on the way out, saying which, before the lock goes. A run killed
+# outright cannot, and its status is left saying running with a pid that is gone, which --status
+# reads as stopped, never as alive.
+SIGNAL_NAME=""
+on_signal() { SIGNAL_NAME="$1"; exit "$2"; }
 cleanup() {
+  local rc=$?
+  if [ "$ST_STATE" = running ]; then
+    ST_STATE=failed ST_EXIT="$rc"
+    if [ -n "$SIGNAL_NAME" ]; then ST_WHY="stopped by signal $SIGNAL_NAME before finishing"
+    else ST_WHY="exited $rc before finishing"; fi
+    write_status
+  fi
   [ -n "$LOCK_HELD" ] && [ "$(readlink "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"
   rm -rf "$WORK"
 }
+ST_STATE="" STATUS=""
 trap cleanup EXIT
+trap 'on_signal TERM 143' TERM
+trap 'on_signal INT 130' INT
+trap 'on_signal HUP 129' HUP
 
 human() { dcu_human "$@"; } # lib/disk-clean-units.sh
 
@@ -447,6 +478,128 @@ take_lock() {
 STATE="$HOME/.claude/state/disk-clean"
 mkdir -p "$STATE/removals" "$STATE/named" 2>/dev/null || refuse 2 "could not make $STATE, so it removed nothing."
 
+# ---------- progress: one small status file per scan, rewritten whole at each item (#3590) ----------
+# removals/<scan_id>.status, "key value" lines. A --plan run writes it once it holds the lock, again
+# as each item starts (so it names the item in hand, with the counts and verified totals of every
+# item before it), and last as finished with its exit, or as failed on the way out (cleanup above).
+# Each write goes to a temporary file beside it and is renamed over it, so a reader never sees half
+# of one. The log, not this, is the record of what went: this only says how far a run has got.
+# Measured on the personal MacBook on 2026-11-26 (3 samples, load average 50 to 130): an item costs
+# about 0.45 to 1.3 seconds, nearly all of it the judge's own open file listing and the open check,
+# and one rename here about 3 ms.
+STALL_AFTER=300 # seconds with no new item started before a live run reads as stalled
+ST_CURRENT="" ST_CURRENT_ID="" ST_CURRENT_KIB="" ST_EXIT="" ST_WHY="" ST_STARTED="" STATUS_BROKEN=""
+write_status() {
+  [ -n "$STATUS" ] || return 0
+  local tmp="$STATUS.tmp.$$"
+  if {
+    printf 'state %s\npid %s\nrun %s\nscan_id %s\nplan %s\n' "$ST_STATE" "$$" "$RUN" "$PLAN_SID" "$PLAN"
+    printf 'total %s\ndone %s\n' "$PLAN_N" "$((N_REMOVED + N_TRASHED + N_TRUNCATED + N_SKIPPED + N_FAILED))"
+    printf 'removed %s\ntrashed %s\ntruncated %s\nskipped %s\nfailed %s\n' "$N_REMOVED" "$N_TRASHED" "$N_TRUNCATED" "$N_SKIPPED" "$N_FAILED"
+    printf 'kib_removed %s\nkib_trashed %s\nkib_truncated %s\n' "$K_REMOVED" "$K_TRASHED" "$K_TRUNCATED"
+    printf 'started_at %s\nupdated_at %s\n' "$ST_STARTED" "$((T0 + SECONDS))"
+    printf 'current %s\ncurrent_id %s\ncurrent_kib %s\nexit %s\nwhy %s\n' "$ST_CURRENT" "$ST_CURRENT_ID" "$ST_CURRENT_KIB" "$ST_EXIT" "$ST_WHY"
+  } > "$tmp" 2>/dev/null && mv -f "$tmp" "$STATUS" 2>/dev/null; then return 0; fi
+  rm -f "$tmp" 2>/dev/null
+  # Progress only, never the record of what went, so the removal goes on; but it says so once.
+  [ -n "$STATUS_BROKEN" ] || echo "Its status file $STATUS could not be written, so --status cannot follow this run; the log still records every item."
+  STATUS_BROKEN=1
+}
+
+# Reads a status file into R_<key>, with no process started for it.
+read_status() { # <file>
+  local line k v
+  R_state="" R_pid="" R_run="" R_total="" R_done="" R_removed=0 R_trashed=0 R_truncated=0 R_skipped=0 R_failed=0
+  R_kib_removed=0 R_kib_trashed=0 R_kib_truncated=0 R_started_at="" R_updated_at="" R_current="" R_current_id="" R_current_kib="" R_exit="" R_why=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    k="${line%% *}"; v="${line#* }"; [ "$v" != "$line" ] || v=""
+    case "$k" in
+      state) R_state="$v" ;; pid) R_pid="$v" ;; run) R_run="$v" ;; total) R_total="$v" ;; done) R_done="$v" ;;
+      removed) R_removed="$v" ;; trashed) R_trashed="$v" ;; truncated) R_truncated="$v" ;; skipped) R_skipped="$v" ;; failed) R_failed="$v" ;;
+      kib_removed) R_kib_removed="$v" ;; kib_trashed) R_kib_trashed="$v" ;; kib_truncated) R_kib_truncated="$v" ;;
+      started_at) R_started_at="$v" ;; updated_at) R_updated_at="$v" ;;
+      current) R_current="$v" ;; current_id) R_current_id="$v" ;; current_kib) R_current_kib="$v" ;; exit) R_exit="$v" ;; why) R_why="$v" ;;
+    esac
+  done < "$1"
+}
+num_or_0() { case "$1" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+dur_words() { # <seconds>
+  local s; s="$(num_or_0 "$1")"
+  if [ "$s" -ge 60 ]; then printf '%d min %d s' $((s / 60)) $((s % 60)); else printf '%d s' "$s"; fi
+}
+# What a run that stopped partway did and did not do, from the log (the record) for its run id, with
+# the status for the plan's total and the item it had in hand. Sets EARLIER_WORDS.
+earlier_words() { # <log>
+  local tally done_n inhand=0 left
+  tally="$(awk -F '\t' -v run="$R_run" -v id="$R_current_id" '
+    $1 == "OUTCOME" && $3 == run { n++; if ($5 == "removed") r++; else if ($5 == "trashed") t++; else if ($5 == "truncated") e++
+      else if ($5 == "gone" || $5 == "skipped") s++; else f++; if ($4 == id) settled = 1 }
+    END { printf "%d %d %d %d %d %d %d\n", n, r, t, e, s, f, settled }' "$1" 2>/dev/null)"
+  set -- $tally
+  done_n="${1:-0}"
+  [ -n "$R_current_id" ] && [ "${7:-0}" -eq 0 ] && inhand=1
+  left=$(( $(num_or_0 "$R_total") - done_n - inhand )); [ "$left" -ge 0 ] || left=0
+  EARLIER_WORDS="$done_n of $(num_or_0 "$R_total") item(s): ${3:-0} trashed, ${2:-0} removed,$([ "${4:-0}" -gt 0 ] && printf ' %s emptied in place,' "$4") ${5:-0} skipped, ${6:-0} failed"
+  [ "$inhand" -eq 0 ] || EARLIER_WORDS="$EARLIER_WORDS; $R_current was in hand"
+  EARLIER_WORDS="$EARLIER_WORDS; $left never reached"
+}
+# Succeeds when the run a status names is alive: its pid is running and is the one the lock names.
+status_alive() {
+  case "$R_pid" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$R_pid" 2>/dev/null && [ "$(readlink "$STATE/remove.lock" 2>/dev/null)" = "$R_pid" ]
+}
+
+# ================================ --status ================================
+# Reads the status of the --plan run for <plan file>'s scan and says, in one line starting with its
+# state word, how far it has got. Exit 0 finished, 10 running, 11 stalled (alive, but no item started
+# for STALL_AFTER seconds), 12 stopped (killed, crashed or stopped by a signal, before finishing), 13
+# none (no run has started for that scan), 2 refused. It reads; it removes and writes nothing.
+if [ "$MODE" = status ]; then
+  [ -f "$PLAN" ] && [ -r "$PLAN" ] || refuse 2 "the plan $PLAN is not a file it can read."
+  PLAN_SID="$(awk '$1 == "scan_id" && NF == 2 { print $2; exit }' "$PLAN")"
+  case "$PLAN_SID" in ''|*[!A-Za-z0-9._:-]*) refuse 2 "the plan $PLAN names no scan_id a scan writes." ;; esac
+  NOW="$T0"
+  if [ -n "${DISK_CLEAN_NOW:-}" ]; then
+    case "$DISK_CLEAN_NOW" in *[!0-9]*) refuse 2 "DISK_CLEAN_NOW is not a number of seconds." ;; esac
+    NOW="$DISK_CLEAN_NOW"
+  fi
+  SFILE="$STATE/removals/$PLAN_SID.status"
+  if [ ! -f "$SFILE" ]; then
+    echo "none: no removal has started for scan $PLAN_SID. One started a moment ago may not have taken its lock yet; one refused before starting says why in its own output."
+    exit 13
+  fi
+  read_status "$SFILE"
+  counts="$(num_or_0 "$R_removed") removed, $(num_or_0 "$R_trashed") moved to the Trash,$([ "$(num_or_0 "$R_truncated")" -gt 0 ] && printf ' %s emptied in place,' "$R_truncated") $(num_or_0 "$R_skipped") skipped, $(num_or_0 "$R_failed") failed"
+  verified="verified $(human "$(num_or_0 "$R_kib_removed")") freed and $(human "$(num_or_0 "$R_kib_trashed")") moved to the Trash"
+  took="$(dur_words $(( $(num_or_0 "$R_updated_at") - $(num_or_0 "$R_started_at") )))"
+  since=$(( NOW - $(num_or_0 "$R_updated_at") ))
+  inhand=""; [ -z "$R_current" ] || inhand="$R_current$(case "$R_current_kib" in ''|*[!0-9]*) ;; *) printf ' (%s as scanned)' "$(human "$R_current_kib")" ;; esac)"
+  case "$R_state" in
+    finished)
+      echo "finished: $R_done of $R_total item(s) in $took, exit $R_exit: $counts; $verified. The run's own output names each item."
+      exit 0 ;;
+    running)
+      if ! status_alive; then
+        earlier_words "$STATE/removals/$PLAN_SID.log"
+        echo "stopped: the run (pid $R_pid) stopped partway without finishing, so it was killed or crashed, after $EARLIER_WORDS. Nothing is being removed now. Running the same plan again, while its scan is under an hour old, settles the item that was in hand and takes the rest."
+        exit 12
+      fi
+      if [ "$since" -ge "$STALL_AFTER" ]; then
+        echo "stalled: the run (pid $R_pid) is alive, but no new item has started for $(dur_words "$since"); it is still on ${inhand:-an item}, which may be large or slow to remove. $R_done of $R_total item(s) done: $counts; $verified."
+        exit 11
+      fi
+      echo "running: $R_done of $R_total item(s) done in $(dur_words $(( NOW - $(num_or_0 "$R_started_at") ))): $counts; $verified so far${inhand:+; now on $inhand}."
+      exit 10 ;;
+    failed)
+      earlier_words "$STATE/removals/$PLAN_SID.log"
+      echo "stopped: the run (pid $R_pid) $R_why (exit $R_exit), after $EARLIER_WORDS. Nothing is being removed now. Running the same plan again, while its scan is under an hour old, settles the item that was in hand and takes the rest."
+      exit 12 ;;
+    *)
+      echo "stopped: the status file $SFILE says '$R_state', which is not a state this tool writes, so how far the run got is not known; its log is $STATE/removals/$PLAN_SID.log."
+      exit 12 ;;
+  esac
+fi
+
 # ================================ --propose ================================
 if [ "$MODE" = propose ]; then
   case "$PROPOSE_METHOD" in trash|delete|truncate) ;; *) refuse 2 "--propose takes trash, delete or truncate, not '$PROPOSE_METHOD', so it proposed nothing." ;; esac
@@ -530,6 +683,16 @@ take_lock
 LOG="$STATE/removals/$PLAN_SID.log"
 RUN="$T0-$$"
 
+# An earlier run for this scan that never wrote finished: what it did and did not do, from the log,
+# said before the item it had in hand is settled below (which adds to that log).
+if [ -f "$STATE/removals/$PLAN_SID.status" ]; then
+  read_status "$STATE/removals/$PLAN_SID.status"
+  if [ "$R_state" != finished ] && [ -n "$R_run" ] && [ -f "$LOG" ]; then
+    earlier_words "$LOG"
+    echo "An earlier run (pid $R_pid) stopped partway after $EARLIER_WORDS${R_why:+ ($R_why)}. This run takes the plan again: what went is skipped as already settled, and the rest is judged again."
+  fi
+fi
+
 # An earlier run for this scan that was killed or crashed left an INTENT with no OUTCOME. Each is
 # reported and settled now, by whether its target is still there, so it never reads as healthy (L617).
 if [ -f "$LOG" ]; then
@@ -574,6 +737,9 @@ DF_BEFORE="$(df_mb)"
 echo "disk-remove: plan $PLAN, scan $PLAN_SID (taken $((AGE / 60)) minute(s) ago), $PLAN_N item(s)."
 N_REMOVED=0 N_TRASHED=0 N_TRUNCATED=0 N_SKIPPED=0 N_FAILED=0
 K_REMOVED=0 K_TRASHED=0 K_TRUNCATED=0 MARK_FAILED=""
+STATUS="$STATE/removals/$PLAN_SID.status" ST_STATE=running ST_STARTED="$((T0 + SECONDS))"
+write_status
+echo "Progress: bash ~/.claude/hooks/lib/disk-remove.sh --status $PLAN"
 
 # The outcome of one item: printed, logged, counted.
 finish_item() { # <id> <result> <freed KiB> <target> <detail>
@@ -768,6 +934,10 @@ do_path() { # <id> <category> <method> <target> <identity>
 }
 
 while IFS="$S" read -r -u 3 id cat method target state bytes ident; do
+  ST_CURRENT="$target" ST_CURRENT_ID="$id" ST_CURRENT_KIB=""
+  case "$bytes" in ''|*[!0-9]*) ;; *) ST_CURRENT_KIB=$(( (bytes + 1023) / 1024 )) ;; esac
+  [ -n "$ST_CURRENT" ] || ST_CURRENT="item $id"
+  write_status
   case "$state" in
     offerable) ;;
     missing) finish_item "$id" skipped "" "item $id" "scan $PLAN_SID has no item with this id"; continue ;;
@@ -814,9 +984,11 @@ else
   fi
 fi
 echo "Log: $LOG"
+# The status says finished, with the exit the run is about to make, as its last write.
+end_run() { ST_STATE=finished ST_EXIT="$1" ST_CURRENT="" ST_CURRENT_ID="" ST_CURRENT_KIB=""; write_status; exit "$1"; }
 if [ -n "$MARK_FAILED" ]; then
   echo "The scan record $RECORD could not be marked with what went, so the low space warning may still count those items until the next scan."
-  exit 5
+  end_run 5
 fi
-[ "$N_SKIPPED" -eq 0 ] && [ "$N_FAILED" -eq 0 ] && exit 0
-exit 5
+[ "$N_SKIPPED" -eq 0 ] && [ "$N_FAILED" -eq 0 ] && end_run 0
+end_run 5

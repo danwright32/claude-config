@@ -193,14 +193,45 @@ Read the free space just before, and keep the figure:
 df -m /System/Volumes/Data
 ```
 
-Then run the plan the checker wrote:
+Then tell Dan the removal has started, that it removes only what he confirmed, and how long it
+should take: about a second an item, so the plan's item count in seconds, given in minutes. Each
+item is judged again just before it goes and checked gone after, and nearly all of that second is
+two checks of whether a program holds it open (measured 0.45 to 1.3 seconds an item on the personal
+MacBook on 2026-11-26; 1,145 items took about 17 minutes on 2026-11-24). In the same message, start
+the plan the checker wrote with `run_in_background`, since a plan of more than a few hundred items
+outlasts the ten minutes a foreground call is allowed:
 
 ```bash
 bash ~/.claude/hooks/lib/disk-remove.sh --plan <folder>/plan.txt
 ```
 
-It prints one line per item (removed, trashed, truncated, skipped with the reason, or failed with
-the error), then the verified totals.
+Follow it with its status, never a bare wait: once just after starting it, so Dan knows it really
+started, then whenever you check before the background notification arrives:
+
+```bash
+bash ~/.claude/hooks/lib/disk-remove.sh --status <folder>/plan.txt
+```
+
+It answers in one line that starts with the run's state. Give Dan its figures in plain words: items
+done of the total, what is verified freed and moved to the Trash so far, and how long it has run.
+
+- **Exit 10**, **running**: it is working. Say how far it has got.
+- **Exit 11**, **stalled**: it is alive, but no new item has started for five minutes. It names the
+  item it is on, which may just be large; say which, and check again.
+- **Exit 12**, **stopped**: it was killed, crashed or stopped by a signal before finishing, so
+  nothing is being removed. Say how far it got, which item it had in hand and how many it never
+  reached. If the scan is under an hour old, start the same `--plan` command again in the
+  background, which says what the stopped run did, settles the item in hand and takes the rest;
+  otherwise start again from step 1.
+- **Exit 13**, **none**: no run has started for this scan. Just after starting, it may not have
+  taken its lock yet, so check once more; if it still says none, the run refused before starting
+  and its own output, in the background notification, says why.
+- **finished** (exit 0 here, whatever the run's own exit): the run is over. Read its output from
+  the background notification and go on below.
+
+When the background notification arrives, the run's output has one line per item (removed,
+trashed, truncated, skipped with the reason, or failed with the error), then the verified totals,
+and its exit decides what comes next.
 
 - **Exit 0**: every item went. Go on to step 5.
 - **Exit 5**: at least one item was skipped or failed, or the scan record could not be marked with
@@ -216,8 +247,9 @@ the error), then the verified totals.
   removed. Start again from step 1.
 - **Exit 4**: the plan is for a scan that is no longer the last one. Nothing was removed. Start
   again from step 1.
-- **Exit 75**: another removal is running now. Nothing was removed. Once it finishes, run the same
-  command again, if the scan is still under an hour old; otherwise start again from step 1.
+- **Exit 75**: another removal is running now. Nothing was removed. Once it finishes, start the same
+  command again in the background, if the scan is still under an hour old; otherwise start again
+  from step 1.
 
 ## 5. Report the verified result
 

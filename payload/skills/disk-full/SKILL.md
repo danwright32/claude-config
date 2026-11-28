@@ -337,7 +337,10 @@ error) and the verified total, which is the sum of each item's own size, measure
 went and checked gone after. Moving to the Trash frees nothing until the Trash is emptied, and the
 report counts trashed items apart for that reason. Exit 0 means every item went; 5 means at least
 one was skipped or failed, and the lines say which and why; 3 and 4 mean the plan is stale or for
-another scan, so propose again.
+another scan, so propose again. An item takes about a second, so a plan of more than a few hundred
+items outlasts a foreground call: start it with `run_in_background`, saying so and how long first,
+and follow it with `bash ~/.claude/hooks/lib/disk-remove.sh --status` and the same plan file, as
+disk-clean's step 4 describes.
 
 Then confirm the gain. Take this reading just before the delete and again just after, and compare
 the difference with the prediction. It is in megabytes because whole gigabytes cannot tell a gain
