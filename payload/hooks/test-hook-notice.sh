@@ -305,6 +305,16 @@ print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])' 2>&1)"
     into="$(hook_notice_into "$not_object" 'NOTE.')"; rc=$?
     [ "$rc" = 1 ] && [ -z "$into" ] && ok || bad "#3739 hook_notice_into, handed [$not_object], which is no object, did not print nothing and return 1 (it returned $rc and printed [$into])"
   done
+  long="$(head -c 9500 /dev/zero | tr '\0' x)"
+  into="$(hook_notice_into '{"systemMessage": "short"}' "$long")"
+  n="$(printf '%s' "$into" | python3 -c 'import json, sys
+print(len(json.load(sys.stdin)["systemMessage"]))' 2>&1)"
+  case "$into" in
+    *"cut short at 9000 characters"*) [ "$n" -lt 9200 ] 2>/dev/null && ok || bad "#3739 hook_notice_into said it cut a long text and printed one of $n characters" ;;
+    *) bad "#3739 hook_notice_into did not cut a text of 9500 characters and say so (it printed $n)" ;;
+  esac
+  into="$(PATH=/nonexistent; hook_notice_into '{"systemMessage": "a"}' 'NOTE.')"; rc=$?
+  [ "$rc" = 1 ] && [ -z "$into" ] && ok || bad "#3739 hook_notice_into with no python3 on PATH did not print nothing and return 1 (it returned $rc and printed [$into])"
 else
   bad "#3739 lib/hook-notice.sh holds no hook_notice_into"
 fi
