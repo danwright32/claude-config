@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { SKIP_QUESTION, calledWith, fromInsideOutput, handedToUnknown } from '../hooks/rules.ts'
+import { OWN_PIECE, OWN_PIECE_END, SKIP_QUESTION, calledWith, fromInsideOutput, handedToUnknown } from '../hooks/rules.ts'
 import { call, refusalOf, withKit, world } from './world.ts'
 
 // #3602: a plain run of a test suite must not be held for text inside the suite file that only
@@ -51,6 +51,49 @@ test('#3602: a helper that hands on what it was handed, in whatever form it name
   const w = world($, on, { files: files(scripts) })
   for (const path of Object.keys(scripts)) expect({ path, held: (await run($, path)).includes(SKIP_QUESTION) }).toEqual({ path, held: true })
   expect(w.ran).toEqual([])
+})
+
+test('#3602: a helper whose body spells a name, a flag or a count through an operator, where the reader cannot see what it spells, is still held', withKit, async ($, on) => {
+  // Each call hands the helper a screen file it does not touch, which is why it was held before
+  // such a body was read at all, and each body really writes another screen file.
+  const scripts: Record<string, string> = {
+    // An alternative's or a default's own text, as the whole name, one part of it, or a flag.
+    'tools/test-alt-text.sh': 'save(){ printf y > ${1:+app/page.tsx}; }\nsave app/site.tsx',
+    'tools/test-default-text.sh': 'save(){ printf y > "${2:-app/page.tsx}"; }\nsave app/site.tsx',
+    'tools/test-default-part.sh': 'save(){ printf y > "app/${2:-page}.tsx"; }\nsave app/site.tsx',
+    'tools/test-default-live.sh': 'save(){ printf y > "${2:-app/page.tsx}"; }\nsave app/site.tsx "$none"',
+    'tools/test-alt-flag.sh': 'fmt(){ sed ${1:+-i} s/a/b/ app/page.tsx; }\nfmt app/site.tsx',
+    // A count, or a piece of a word that names no file, as one part of a name or as a flag.
+    'tools/test-count-part.sh': 'save(){ printf y > "app/page${#1}.tsx"; }\nsave app/site.tsx',
+    'tools/test-piece-part.sh': 'save(){ printf y > "app/${2:0:4}.tsx"; }\nsave app/site.tsx pageXYZ',
+    'tools/test-piece-live.sh': 'save(){ printf y > "app/${2:0:4}.tsx"; }\nsave app/site.tsx "$name"',
+    'tools/test-piece-flag.sh': 'fmt(){ sed "${2:0:2}" s/a/b/ app/page.tsx; }\nfmt app/site.tsx -i',
+    'tools/test-piece-flag-word.sh': 'fmt(){ sed "${2:0:2}" s/a/b/ "$1"; }\nfmt app/page.tsx -i',
+    'tools/test-piece-flag-piece.sh': 'fmt(){ sed "${2:0:2}" s/a/b/ "${1:0:100}"; }\nfmt app/page.tsx -i',
+    // A piece that spells a screen file the whole word does not, written beside a word the call
+    // hands and the body leaves alone (lessons review of this change).
+    'tools/test-trim-other.sh': 'save(){ printf y > "${2%.bak}"; }\nsave app/site.tsx app/page.tsx.bak',
+    'tools/test-offset-other.sh': 'save(){ printf y > "${2:0:12}"; }\nsave app/site.tsx app/page.tsxZZ',
+    // A piece run as the command, run later, handed to another helper, piped on, or kept.
+    'tools/test-piece-runs.sh': 'go(){ "${2:0:8}" --write "$3"; }\ngo app/site.tsx prettier "$f"',
+    'tools/test-piece-later.sh': 'go(){ xargs "${2:0:8}" --write; }\ngo app/site.tsx prettier',
+    'tools/test-piece-inner.sh': 'fmt(){ sed "$1" s/a/b/ "$f"; }\nshow(){ fmt "${2:0:2}"; }\nshow app/site.tsx -i',
+    'tools/test-piece-piped.sh': 'go(){ echo "${2:0:12}" | xargs touch; }\ngo app/site.tsx app/page.tsxZZ',
+    'tools/test-piece-kept.sh': 'save(){ printf -v f %s "${2:0:12}"; printf y > "$f"; }\nsave app/site.tsx app/page.tsxZZ',
+  }
+  const w = world($, on, { files: files(scripts) })
+  for (const path of Object.keys(scripts)) expect({ path, held: (await run($, path)).includes(SKIP_QUESTION) }).toEqual({ path, held: true })
+  expect(w.ran).toEqual([])
+})
+
+test('#3602: a helper that only prints a piece of a word, its length, or the word with a default, runs unasked', withKit, async ($, on) => {
+  const scripts: Record<string, string> = {
+    'tools/test-prints-piece.sh': 'show(){ echo "first: ${2:0:3} of ${#2}"; printf \'%s\\n\' "${1:-none}" "${3:-}" "${1:?usage}" "${4:+}"; }\nshow app/page.tsx "$x"',
+    'tools/test-prints-rest.sh': 'show(){ echo "got: ${@:2}"; echo "${3##*/}"; }\nshow app/page.tsx one "$two"',
+  }
+  const w = world($, on, { files: files(scripts) })
+  for (const path of Object.keys(scripts)) expect({ path, said: await run($, path) }).toEqual({ path, said: '' })
+  expect(w.ran.length).toBe(2)
 })
 
 // From payload/skills/disk-full/test-disk-full-skill.sh: its helper and its two loops, whose words
@@ -122,10 +165,23 @@ test('#3602: handedToUnknown gives no plain name made inside a substitution, and
   expect(handedToUnknown([run([{ word: sub, path: '/s/app/page.tsx', unexpanded: true }])]).map(h => h.path)).toEqual(['/s/app/page.tsx'])
 })
 
-test('#3602: calledWith writes a word named through an operator as the whole word, and leaves what it cannot write', () => {
-  expect(calledWith('echo "${3:0:1500}" "${1:-none}" "${2:+--flag}" ${#1} "${@:2}" "${1%.bak}" "${4:-none}" "${5:+x}" "${2##*/}" "${12}" "${1:?usage}"', ['a', 'b', 'c'])).toBe(
-    `echo "c" "a" "--flag" 0 "a b c" "a" "none" "" "b" "${calledWith('$9', [])}" "a"`,
+test('#3602: calledWith writes a piece of a word between its marks, a default or an alternative only where the shell gives the word or nothing, and leaves what it cannot write', () => {
+  const none = calledWith('$9', []) as string
+  const piece = (word: string): string => `${OWN_PIECE}${word}${OWN_PIECE_END}`
+  expect(calledWith('echo "${3:0:1500}" ${#1} "${@:2}" "${1%.bak}" "${2##*/}" "${12}" "${4:0:2}"', ['a', 'b', 'c'])).toBe(
+    `echo "${piece('c')}" ${piece('0')} "${piece('a b c')}" "${piece('a')}" "${piece('b')}" "${none}" "${piece(none)}"`,
   )
+  // The word itself where the call typed one, and nothing where the shell gives nothing.
+  expect(calledWith('echo "${1:-none}" "${1-none}" "${1:?usage}" "${4:-}" "${4:+x}" "${2:+}" "${@:-none}"', ['a', 'b', 'c'])).toBe('echo "a" "a" "a" "" "" "" "a b c"')
+  // An operand's own text is never written in: where the shell would give it, the body is not read.
+  for (const form of ['${4:-none}', '${4-none}', '${2:+--flag}', '${2+x}', '${4:?usage}', '${1:-none}x${5:-y}']) expect({ form, got: calledWith(`echo "${form}"`, ['a', 'b', 'c']) }).toEqual({ form, got: undefined })
+  // A word of the call the shell has still to expand may come out empty, and so may an empty one.
+  expect(calledWith('echo "${1:-x}"', [none])).toBe(undefined)
+  expect(calledWith('echo "${1:+x}"', [none])).toBe(undefined)
+  expect(calledWith('echo "${1-x}" "${1:?usage}" "${1:-}"', [none])).toBe(`echo "${none}" "${none}" "${none}"`)
+  expect(calledWith('echo "${1:-x}"', [''])).toBe(undefined)
+  expect(calledWith('echo "${1+x}"', [''])).toBe(undefined)
+  expect(calledWith('echo "${1-x}" "${1:+x}"', [''])).toBe('echo "" ""')
   // A variable named by the word, an assignment the shell refuses, the script's own name, an
   // operand holding an expansion of its own, and a replacement or a change of case, whose text the
   // word does not hold, are left for the caller to refuse.

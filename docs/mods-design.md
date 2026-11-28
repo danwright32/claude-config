@@ -3035,16 +3035,26 @@ both ways. Not established: the work MacBook's records, and any call older than 
 the design round guard.** Two readings of a script's own text, both in `rules.ts`.
 `calledWith` writes a call's word in place of each mention the body makes of it, and that covers a
 word named through one operator whose operand holds no expansion, quote or brace of its own
-(`OWN_FORM`): a piece (`${3:0:1500}`, `${@:2}`), an end taken off (`${1%.bak}`, `${1##*/}`) and
-`${1:?usage}` are written as the whole word, since the shell hands on that word or part of it; a
-count (`${#1}`) as a number; a default (`${1:-none}`) as the
-call's word, or the default where the call gave none; an alternative (`${1:+--flag}`) as its own
-text where the call gave a word. So a helper that prints the first 1,500 characters of what it
-compared is read as one that prints it, and a helper that hands any such form to a program or
-writes to it is read as handing on or writing the call's file, and held. The whole word stands
-for where the piece goes, never for what it spells: a call is still judged by the name of the
-word it hands over, so a piece that names a screen file the whole word does not (`${1%.bak}` of
-`app/page.tsx.bak`) is not caught, as it was not when such a body was left unread. A replacement
+(`OWN_FORM`). A piece (`${3:0:1500}`, `${@:2}`), an end taken off (`${1%.bak}`, `${1##*/}`) and a
+count (`${#1}`) are written as the whole word, or `0`, between two marks (`OWN_PIECE`,
+`OWN_PIECE_END`). What a piece spells is not worked out: it may be a flag (`sed "${2:0:2}"` handed
+`-i`), one part of a name (`"app/${2:0:4}.tsx"`), or a screen file the whole word does not name
+(`${2%.bak}` of `app/page.tsx.bak`). So the call goes unjudged only where every piece stands in a
+command that can do no more than print it (`pieceReaches`): the body is not read for the call
+where a piece shows up in what mod-kit's write reader gives for the body, or stands in a command
+that runs its words, is run through another program, is named by the piece, sets a variable, is a
+function of the script, feeds a pipe, or holds a word with the shape of a file the guard holds.
+A default, an alternative and `${1:?usage}` are written only where the shell gives the call's word
+as typed, or nothing (`${1:-none}` where the call typed a first word, `${4:+--flag}` where it typed
+no fourth). Where the shell may give the operand's own text (`${2:-app/page.tsx}` called with one
+word, or with a second the shell has still to expand) the body is not read for that call: that
+text is in no word of the call, and the reader of the script's own lines does not see it either.
+So a helper that prints the first 1,500 characters of what it compared runs, and a helper that
+hands a piece to a program, writes to it, or spells a name or a flag with it is held, as it was
+when such a body was left unread. One case is the same before and after, and not caught: a helper
+handed only a name that is no screen file, which writes a screen file a piece of that name spells
+(`save(){ printf y > "${1%.bak}"; }; save app/page.tsx.bak`). No call is read unless it hands the
+helper a file the guard holds, and the same write typed with no helper is not caught either. A replacement
 (`${1/a/b}`) and a change of case, which give text the word does not hold, `${!1}`, `${1:=x}`,
 `${0}` and an operand holding an expansion (`${1:-$2}`) are not written out, and a body naming one
 is judged as a program the reader does not know, as is a body that keeps what it was handed in a

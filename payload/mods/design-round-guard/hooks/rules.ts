@@ -2439,6 +2439,11 @@ const OWN_FEED = `${OWN_MARK}feed`
 const OWN_PROBE = `${OWN_MARK}probe`
 const OWN_PROBED = new RegExp(`^${OWN_PROBE}(\\d+)$`)
 const OWN_NONE = `\${${OWN_MARK}none}`
+// What stands either side of a piece of a word, or a count of it, written into a body (calledWith).
+// Between them is the whole word the piece was taken from, since the piece's own text is not worked
+// out; the reading that follows lets such a piece stand only where it is printed (pieceReaches).
+export const OWN_PIECE = `/${OWN_MARK}piece/`
+export const OWN_PIECE_END = `/${OWN_MARK}end`
 const OWN_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 const OWN_DEPTH = 3
 // A body longer than this, or with more closing braces before its own than this, is not looked for.
@@ -2503,10 +2508,10 @@ const HANDED = /\$(?:[1-9@*]|\{[#!]?[0-9@*])/
 // `${1}`, `${12}`, a count (`${#1}`, `${#@}`), and a word named through one operator whose operand
 // holds no expansion, quote or brace of its own: a default or an alternative (`${1:-none}`,
 // `${2:+--flag}`, `${1:?usage}`), a piece (`${3:0:1500}`, `${@:2}`) or an end taken off (`${1%.bak}`,
-// `${1##*/}`). Each gives the word, a piece of it, or the operand's own text. A replacement
-// (`${1/a/b}`) and a change of case give text the word does not hold, so they are none of them, and
-// nor are `${!1}`, which names another variable by the word, `${1:=x}`, which the shell refuses,
-// and `${0}`.
+// `${1##*/}`). Each gives the word, a piece of it, or the operand's own text, and calledWith says
+// which of those it writes. A replacement (`${1/a/b}`) and a change of case give text the word does
+// not hold, so they are none of them, and nor are `${!1}`, which names another variable by the
+// word, `${1:=x}`, which the shell refuses, and `${0}`.
 const OWN_FORM = String.raw`\$(?:([1-9])|([@*])|\{(?:(#)([1-9][0-9]?|[@*])|([1-9][0-9]?|[@*])(?:(:?[-+?]|:(?!=)|##?|%%?)([^$${'`'}{}"'\\]*))?)\})`
 const HANDED_PLAIN = new RegExp(OWN_FORM, 'g')
 const HANDED_AT = new RegExp(OWN_FORM, 'y')
@@ -2520,6 +2525,13 @@ const OWN_SETS = new Set(['export', 'declare', 'typeset', 'local', 'readonly', '
 const sameWords = (a: readonly string[] | undefined, b: readonly string[]): boolean => a !== undefined && a.length === b.length && a.every((w, i) => w === b[i])
 const liveWord = (c: RunCommand, i: number): boolean => /[$`]/.test(c.words[i] ?? '') && !c.unexpanded?.[i]
 const safeWord = (word: string): string => word.replace(/[^A-Za-z0-9_@%+=:,./-]/g, '_')
+// A word with each variable it names read as one letter, and whether what is left has the shape of
+// a file the guard holds.
+const withoutVariables = (word: string): string => word.replace(/\$\{[^{}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\$[?!$#-]/g, 'X')
+const heldShape = (word: string): boolean => {
+  const plain = withoutVariables(word)
+  return shapeKind(plain) !== null || isModHook(plain) || isModHookTs(plain)
+}
 
 /**
  * Where a shell text defines the function `name`, as mod-kit's pipeline gives its commands: `braces`,
@@ -2543,18 +2555,23 @@ export const ownDefinitions = (commands: readonly RunCommand[], name: string): {
  * (#3416), or undefined where it holds a heredoc, whose text this reading does not follow. `values`
  * are the call's words after the function's name, each made of characters the shell reads the same
  * inside double quotes and outside them, so a word is written in as it stands wherever the body
- * names it; text in single quotes and comments are left as written. A word named through an
- * operator (OWN_FORM: `${3:0:1500}`, `${1%.bak}`, `${@:2}`) is written as the whole word, since the
- * shell hands on that word or a piece of it; a count (`${#1}`) as a number; a default
- * (`${1:-none}`) as the call's word, or the default where the call gave none; an alternative
- * (`${1:+--flag}`) as its own text where the call gave a word. So a helper that prints the first
- * 1,500 characters of what it compared is read as one that prints it, and one that hands a piece of
- * a name to a program is read as handing that program the name. The whole word stands for where
- * the piece goes and never for what the piece spells: a piece that names a screen file the whole
- * word does not (`${1%.bak}` of `app/page.tsx.bak`) is judged by the whole word's name, as it was
- * when such a body was not read at all. Which quotes hold a character
- * is read simply here, so the caller reads the result with mod-kit's pipeline and refuses any word
- * still naming what the function was handed.
+ * names it; text in single quotes and comments are left as written.
+ *
+ * A piece of a word (OWN_FORM: `${3:0:1500}`, `${1%.bak}`, `${@:2}`) and a count of one (`${#1}`)
+ * are written as the whole word, or `0`, between OWN_PIECE and OWN_PIECE_END. What the piece spells
+ * is not worked out: it may be a flag, one part of a name, or a screen file the whole word does not
+ * name. So the marks say only where a piece went, and the caller lets the call go unjudged only
+ * where every piece stands in a command that can do no more than print it (pieceReaches). A helper
+ * that prints the first 1,500 characters of what it compared is read as one that prints.
+ *
+ * A default, an alternative and `${1:?usage}` are written only where the shell gives the call's
+ * word as typed, or nothing: `${1:-none}` as the word where the call typed one, `${4:+--flag}` as
+ * nothing where it typed no fourth. Where the shell may give the operand's own text the result is
+ * undefined and the body is not read for that call, since that text is in no word of the call and
+ * can spell a file or a flag the reader of the script's own lines cannot see.
+ *
+ * Which quotes hold a character is read simply here, so the caller reads the result with mod-kit's
+ * pipeline and refuses any word still naming what the function was handed.
  */
 export const calledWith = (body: string, values: readonly string[]): string | undefined => {
   let out = ''
@@ -2588,17 +2605,30 @@ export const calledWith = (body: string, values: readonly string[]): string | un
       }
       const which = (m[1] ?? m[2] ?? m[4] ?? m[5]) as string
       const all = which === '@' || which === '*'
-      const value = all ? values.join(' ') : values[Number(which) - 1]
+      const given = all ? values.length > 0 : values[Number(which) - 1] !== undefined
+      const value = (all ? values.join(' ') : values[Number(which) - 1]) ?? ''
+      // A word the shell has still to expand, or an empty one, may be nothing when the body runs.
+      const maybeEmpty = value === '' || value.includes(OWN_NONE)
       const op = m[6]
-      // A count is a number. A default stands only where the call gave no word, and an alternative
-      // only where it gave one, neither carrying the word itself. Every other form OWN_FORM reads
-      // gives the word or a piece of it. It is written as the whole word, which stands only for
-      // where the piece goes: the caller asks whether anything it judges is handed it, and where
-      // something is, the call stays judged by the whole word's name, as a refused body's is.
-      if (m[3]) out += '0'
-      else if (op === '-' || op === ':-') out += value || safeWord(m[7] ?? '')
-      else if (op === '+' || op === ':+') out += value ? safeWord(m[7] ?? '') : ''
-      else out += value ?? OWN_NONE
+      const operand = m[7] ?? ''
+      // What the shell gives for the form, where that is the call's word as typed or nothing at
+      // all; undefined where it may give the operand's own text, which no word of the call holds.
+      const exact = (): string | undefined => {
+        if (op === undefined) return given || all ? value : OWN_NONE
+        if (op === '-') return given ? value : operand === '' ? '' : undefined
+        if (op === ':-') return (given && !maybeEmpty) || operand === '' ? value : undefined
+        if (op === '+') return !given || operand === '' ? '' : undefined
+        if (op === ':+') return !given || value === '' || operand === '' ? '' : undefined
+        if (op === '?' || op === ':?') return given ? value : undefined
+        return undefined
+      }
+      const told = exact()
+      // A count, an offset or an end taken off gives text this reading does not work out. The whole
+      // word is written between two marks, so the caller can tell where a piece went.
+      const piece = m[3] !== undefined || (op !== undefined && !/^:?[-+?]$/.test(op))
+      if (piece) out += `${OWN_PIECE}${m[3] ? '0' : given ? value : OWN_NONE}${OWN_PIECE_END}`
+      else if (told === undefined) return undefined
+      else out += told
       i += m[0].length - 1
     }
   }
@@ -2689,6 +2719,9 @@ const wholeGroup = async (io: OwnCallIo, inner: string): Promise<readonly RunCom
  * - a body that keeps what it was handed in a variable (`local f="$1"`, `for f in "$@"`), names it
  *   in a form calledWith does not write out (`${!1}`, `${1/a/b}`, `${1:-$2}`), runs it as a command, or hands it to a command the
  *   reader marks unread or one that runs its words later (RUNS_LATER);
+ * - a call for which a default or an alternative in the body may give its own text
+ *   (`${2:-app/page.tsx}` called with one word), and one whose body puts a piece of a word, or a
+ *   count of one, anywhere but in a command that only prints it (pieceReaches);
  * - a word that joins what was handed to another value (`"$ROOT/$1"`), where the joined name has
  *   the shape of a file the guard holds.
  * `worth` says which paths the caller would hold: a run handing none of them is given back as it is.
@@ -3070,6 +3103,26 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
     return made
   }
   const within = (text: string, marks: readonly string[]): string[] => marks.filter(t => text.includes(t))
+  const holdsPiece = (words: readonly string[] | undefined): boolean => words?.some(w => w.includes(OWN_PIECE)) === true
+  // Whether a piece of a word, or a count of it, stands anywhere in a written body but in a command
+  // that can only print it. What the piece spells is not worked out, so it may be the flag that
+  // makes a program write, one part of a file's name, or a program's name. It reaches something
+  // where its command runs its words, is run through another program, is named by the piece, sets a
+  // variable, is a function of the script, feeds a pipe, or holds a word with the shape of a file
+  // the guard holds, the piece's own word among them.
+  const pieceReaches = async (cmds: readonly RunCommand[]): Promise<boolean> => {
+    if (cmds.some(c => holdsPiece(c.pipedFrom) || holdsPiece(c.env))) return true
+    for (const c of cmds) {
+      if (!holdsPiece(c.words)) continue
+      const first = c.words[0] ?? ''
+      if (c.unread || !plainCall(c) || RUNS_LATER.test(first) || first === 'command' || first.includes(OWN_PIECE)) return true
+      if (OWN_SETS.has(first) && (first !== 'printf' || c.words.some(w => /^-v/.test(w)))) return true
+      if (c.words.some(w => heldShape(w.split(OWN_PIECE).join('').split(OWN_PIECE_END).join('')))) return true
+      const typed = ownDefinitions(commands, first)
+      if (typed.braces.length || typed.other || (await own(first)) !== undefined) return true
+    }
+    return false
+  }
   // The marks of the call's files that the body, read with `values` in place, hands to something
   // the reader judges; every mark where that cannot be told.
   const kept = async (fn: Own, values: readonly string[], marks: readonly string[], call: number, depth: number): Promise<Set<string>> => {
@@ -3077,6 +3130,8 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
     const written = calledWith(fn.body, values)
     if (written === undefined) return all
     const cmds = await io.pipeline(written)
+    const read = await io.writes(written)
+    if (written.includes(OWN_PIECE) && (JSON.stringify(read).includes(OWN_PIECE) || (await pieceReaches(cmds)))) return all
     const out = new Set<string>()
     for (const c of cmds) {
       const said = c.words.join(' ')
@@ -3087,11 +3142,9 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
       for (const [i, w] of c.words.entries()) {
         if (!liveWord(c, i)) continue
         if (HANDED.test(w)) return all
-        const plain = w.replace(/\$\{[^{}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\$[?!$#-]/g, 'X')
-        if (/[$`]/.test(plain) || shapeKind(plain) !== null || isModHook(plain) || isModHookTs(plain)) for (const t of within(w, marks)) out.add(t)
+        if (/[$`]/.test(withoutVariables(w)) || heldShape(w)) for (const t of within(w, marks)) out.add(t)
       }
     }
-    const read = await io.writes(written)
     const inner: HandedRun[] = []
     const rest: HandedRun[] = []
     for (const r of read.runs ?? []) (r.unknown && depth < OWN_DEPTH && (await own(r.script))?.end !== undefined ? inner : rest).push(r)
