@@ -1514,6 +1514,65 @@ if (POSTED) {
   check(r5.code !== 0 && /no such read/.test(r5.err), 'a read file that is not there is refused by name', r5.all);
 }
 
+// ---------------------------------------------------------------- a read saved as the tool returned it (claude-config#3845)
+//
+// The reading tool answers with one JSON object (seen 2026-11-27, claude-config#3845): `messages` is
+// a string holding the channel, a header line per message, its Slack time, and each line of the
+// message quoted, and `pagination_info` says whether more pages are left. Saved exactly as it came,
+// every line break is the two characters backslash and n, so compared as plain text the n is a word
+// between the mention and the next line, and no announcement was ever found. The names and ids here
+// are invented; only the shape is the tool's.
+function slackMessage(at, ts, text) {
+  return '=== Message from Sam Example <sam@example.com> (U0TEST00001) at ' + at + ' === \nMessage TS: ' + ts + '\n'
+    + text.split('\n').map(function (line) { return '> ' + line; }).join('\n');
+}
+function slackRead(messages, more) {
+  return JSON.stringify({ messages: 'Channel: #a-test-channel (C0TEST00001)\n\n' + messages.join('\n\n'),
+    pagination_info: more ? 'More messages are available. next_cursor: dGVzdA==\n' : 'There are no more messages.\n' });
+}
+const TWO_LINES = '@here\nTest post for the new hand back button. Nothing to do for you and no call is lost.';
+const TWO_LINES_POSTED = slackMessage('2026-11-27 12:33:31 EST', '1795800811.108609', '<!here>\n' + TWO_LINES.split('\n')[1]);
+const OTHER_POSTED = slackMessage('2026-11-27 11:02:10 EST', '1795795330.000100', 'Morning all');
+if (POSTED) {
+  const raw = slackRead([TWO_LINES_POSTED]);
+  check(/\\n> <!here>\\n> Test post/.test(raw), 'the fixture holds a post of two lines with each line break written as a backslash and an n, as the tool returns it', raw);
+  const f = POSTED.foundPosted(TWO_LINES, raw);
+  check(f.found === true, 'a post of two lines is found in the reading tool\'s answer saved exactly as it returned it', JSON.stringify(f));
+  check(f.found && /12:33:31/.test(f.before) && !/\\n/.test(f.before), 'and what was read just before it is the decoded text, holding the time it was posted at', JSON.stringify(f));
+  const decoded = JSON.parse(raw).messages;
+  const p = POSTED.foundPosted(TWO_LINES, decoded);
+  check(p.found === true && /12:33:31/.test(p.before), 'the same read saved as plain text, with real line breaks, is found too', JSON.stringify(p));
+  const changed = POSTED.foundPosted(TWO_LINES, raw.replace('no call is lost', 'no calls are lost'));
+  check(changed.found === false, 'a raw answer whose post differs by a word is not found: decoding finds nothing that is not there', JSON.stringify(changed));
+  const pages = POSTED.foundPosted(TWO_LINES, [slackRead([OTHER_POSTED], true), raw]);
+  check(pages.found === true && /12:33:31/.test(pages.before), 'pages read one per answer are each decoded, so the post is found on the second page', JSON.stringify(pages));
+  const curly = '@here\nNothing to do for you: you don' + APOS + 't lose a call.';
+  const escaped = slackRead([slackMessage('2026-11-27 12:40:00 EST', '1795801200.000200', '<!here>\n' + curly.split('\n')[1])]).replace(new RegExp(APOS, 'g'), '\\u2019');
+  check(/\\u2019/.test(escaped) && POSTED.foundPosted(curly, escaped).found === true, 'a character the answer writes as a JSON escape is decoded before the words are taken', escaped);
+  const notMessages = POSTED.foundPosted(TWO_LINES, JSON.stringify({ text: TWO_LINES_POSTED }));
+  check(notMessages.found === false, 'JSON holding no string named messages is compared as the text it is, as before', JSON.stringify(notMessages));
+  const listed = POSTED.foundPosted(TWO_LINES, JSON.stringify({ messages: [TWO_LINES_POSTED] }));
+  check(listed.found === false, 'and so is JSON whose messages is not a string', JSON.stringify(listed));
+}
+{
+  // The command, given the files the skill says to write: each answer exactly as the tool returned it.
+  const c = annCase(CARRIED);
+  const slackForm = ANNOUNCE_POST.replace(/^@here/, '<!here>').replace(/\*\*/g, '*').replace(/\n\n/g, '\n').replace(new RegExp('^' + HY + ' ', 'gm'), BULLET + ' ');
+  const page1 = path.join(c.ws.dir, 'announce-70-1.txt');
+  const page2 = path.join(c.ws.dir, 'announce-70-2.txt');
+  fs.writeFileSync(page1, slackRead([OTHER_POSTED], true));
+  fs.writeFileSync(page2, slackRead([slackMessage('2026-10-02 10:01:44 EDT', '1791900104.000300', slackForm)]));
+  const r = run(GATHER, ['posted', '--gathered', c.ws.out, '--repo', PET, '--number', '70', '--read', page2], c.ws);
+  let j = null; try { j = JSON.parse(r.out); } catch (e) { j = null; }
+  check(r.code === 0 && j && j.found === true && /10:01:44/.test(j.before), 'gather.js posted finds the announcement in a read saved exactly as the tool returned it', r.all);
+  const r2 = run(GATHER, ['posted', '--gathered', c.ws.out, '--repo', PET, '--number', '70', '--read', page1 + ',' + page2], c.ws);
+  let j2 = null; try { j2 = JSON.parse(r2.out); } catch (e) { j2 = null; }
+  check(r2.code === 0 && j2 && j2.found === true, 'and across two pages, each file one answer of the tool', r2.all);
+  const r3 = run(GATHER, ['posted', '--gathered', c.ws.out, '--repo', PET, '--number', '70', '--read', page1], c.ws);
+  let j3 = null; try { j3 = JSON.parse(r3.out); } catch (e) { j3 = null; }
+  check(r3.code === 0 && j3 && j3.found === false, 'and a raw page that does not hold it is not found', r3.all);
+}
+
 // ---------------------------------------------------------------- Draft it now (claude-config#3667)
 //
 // Dan's fourth answer for an announcement that is live and was never drafted (2026-11-25: "Draft it
@@ -1607,6 +1666,13 @@ function draftCase(claims) {
   const saved = c.ask('drafted', 70);
   check(saved.code === 0 && saved.json && saved.json.state === 'saved' && saved.json.outcome === 'drafted' && saved.json.draftId === 'Dr0123ABC',
     'an answer holding a draft_id records the announcement as drafted', saved.all);
+  // claude-config#3845: the answer as the tool returned it, echoing the post with each line break
+  // escaped. Only its draft_id is read; the words judged are the message file's, written unescaped.
+  fs.writeFileSync(c.files(70).answer, JSON.stringify({ result: 'Draft created', draft_id: 'Dr0RAW03', channel_link: 'https://example.slack.com/archives/' + ANN_CHANNEL, message: ANNOUNCE_POST }));
+  const rawSaved = c.ask('drafted', 70);
+  check(rawSaved.code === 0 && rawSaved.json && rawSaved.json.state === 'saved' && rawSaved.json.draftId === 'Dr0RAW03',
+    'a raw answer echoing the post with escaped line breaks records the announcement as drafted', rawSaved.all);
+  check(fs.readFileSync(c.files(70).message, 'utf8') === ANNOUNCE_POST, 'and the message judged is the file draftable wrote, every line break a real one', JSON.stringify(fs.readFileSync(c.files(70).message, 'utf8')));
   fs.writeFileSync(c.files(70).answer, NOT_KEPT_ANSWER);
   const notKept = c.ask('drafted', 70);
   check(notKept.code === 0 && notKept.json && notKept.json.state === 'not-kept' && notKept.json.outcome === null && /already waiting/.test(notKept.json.said) && /without "Draft it now"/.test(notKept.json.said),

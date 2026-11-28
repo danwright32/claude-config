@@ -48,15 +48,40 @@ function wordsWithin(text) {
 
 function words(text) { return wordsWithin(text).words.map(function (w) { return w.word; }); }
 
-// Whether every word of the announcement appears in the read, in order and unbroken. `before` is
+// What a channel read holds to compare against (claude-config#3845). The reading tool answers with
+// one JSON object whose `messages` string is the read, and the skill saves each answer exactly as it
+// came, so every line break in it is the two characters backslash and n, and the n was taken as a
+// word: no announcement, whose mention always stands alone on its first line, was ever found. So a
+// page that parses as JSON holding a string `messages` is compared as that string, decoded, and any
+// other page as the text it is. A read can be several pages, one answer each, so each is decoded on
+// its own: joined first, they would no longer parse. It lives here, beside the comparison, so no
+// caller can hand foundPosted a read it has not decoded.
+function readOf(read) {
+  const pages = Array.isArray(read) ? read : [read];
+  return pages.map(function (page) {
+    const text = String(page);
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (e) { return text; }
+    const answer = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+    return answer && typeof parsed.messages === 'string' ? parsed.messages : text;
+  }).join('\n');
+}
+
+// Whether every word of the announcement appears in the read, in order and unbroken. The read is a
+// page, or a list of pages, as the reading tool answered or as plain text (readOf). `before` is
 // what the read held just before the match (its markup taken out), which is where the reading tool
 // puts the time a message was posted, so the session can say "found posted at <time>". An
 // announcement with no words would be found in anything, so it is refused, never found.
 const BEFORE_CHARS = 240;
-function foundPosted(announcement, readText) {
+function foundPosted(announcement, read) {
+  return wordsInOrder(announcement, readOf(read));
+}
+
+// The comparison itself, of the announcement's words against plain text.
+function wordsInOrder(announcement, plainText) {
   const want = words(announcement);
   if (want.length === 0) throw new Error('the announcement has no words, so it would be found in any read; nothing was compared');
-  const read = wordsWithin(readText);
+  const read = wordsWithin(plainText);
   const got = read.words;
   for (let i = 0; i + want.length <= got.length; i++) {
     let j = 0;
@@ -101,7 +126,8 @@ function errorIn(answer) {
   for (const name of Object.keys(DRAFT_ERRORS)) {
     if (new RegExp('\\b' + name + '\\b').test(text)) return { error: name, why: 'Slack answered ' + name + ': ' + DRAFT_ERRORS[name] };
   }
-  if (answer.isError === true || /"ok"\s*:\s*false/.test(text)) {
+  // ok false is read with its quotes escaped too, for an answer held inside a JSON string (#3845).
+  if (answer.isError === true || /\\*"ok\\*"\s*:\s*false/.test(text)) {
     return { error: '', why: 'Slack\'s draft tool answered with an error it did not name, so nothing was kept: ' + JSON.stringify(text.trim().slice(0, 200)) };
   }
   return null;
@@ -142,7 +168,9 @@ function judgeDraft(input) {
     return { state: 'not-kept', why: 'Slack\'s answer holds no draft_id, which is what it answers when a draft is already waiting in that channel, and it keeps nothing then' };
   }
   const got = words(input.message);
-  const same = got.length === want.length && foundPosted(input.text, input.message).found;
+  // The message is the wording the draft call carried, never a channel read, so it is compared as
+  // the text it is.
+  const same = got.length === want.length && wordsInOrder(input.text, input.message).found;
   if (!same) {
     return { state: 'differs', draftId: draftId, why: 'the approved wording has ' + want.length + ' words and the draft ' + got.length + ', and ' + whereTheyPart(want, got) };
   }
