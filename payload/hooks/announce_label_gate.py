@@ -7,6 +7,11 @@ that an announcement merges only on wording he approved. This is the early refus
 ordinary command to put the label on a pull request is refused until he has, so the label is never
 sitting on wording nobody asked him about.
 
+One call is read and never refused for what it is (claude-config#3669): a Bash call naming the
+milestone helper, create-milestone.sh, and not the label. Before it runs, Dan's answers about whether
+a feature is announced to agents are read from the session's pickers into the record
+(approval.read_answers), where the helper's own question, which reads the record only, finds them.
+
 Judged here, each only when the command names the label:
   gh pr create --label, gh pr edit --add-label, gh issue edit --add-label (gh's issue edit answers
     for a pull request's number too)
@@ -18,6 +23,10 @@ Judged here, each only when the command names the label:
       (Dan, 2026-11-25): the pull request that used an approval keeps it, and any other, or a
       command naming none by number, goes through only while an approval of that wording is
       unused. This hook asks and records nothing; the merge gate records which one uses it.
+      And the wording must be wording the merge would not refuse for what it holds, approved or
+      not (claude-config#3846): the block is put to the merge gate's own judge
+      (lib/changelog-entry.js's announcement-refusal, through the library), and wording it
+      refuses is refused here with the gate's code and words, before any approval is looked for.
   gh api writing to repos/<owner>/<name>/issues/<number>/labels
       The same, from the description GitHub holds. Any other gh api write naming the label is
       refused with the form to use, since nothing here can place it.
@@ -61,6 +70,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 sys.dont_write_bytecode = True
 _HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
@@ -97,7 +107,8 @@ UNREAD_BODY_FLAGS = {"--fill", "-f", "--fill-first", "--fill-verbose", "--templa
 BODY_FLAGS = ("--body", "-b", "--body-file", "-F")
 BODY_BYTES = 1024 * 1024
 # Each bound is this hook's own. ONE command of a call is judged (_one_judgment refuses a second),
-# so the most one run can wait is one read of the remote, one of GitHub, one hash (the library's 5)
+# so the most one run can wait is one read of the remote, one of GitHub, one hash and one judging
+# of the wording by the merge gate's rules (the library's 5 for the two together, claude-config#3846)
 # and the library's check (12): 37 seconds, inside the 45 the hook is registered with. So a slow
 # GitHub is refused in words and never by the harness cutting the hook short. Without the limit of
 # one, each further command in a call brought reads of its own and the sum had no ceiling.
@@ -292,8 +303,19 @@ def _wording_approved(repo, body, payload, notes, pr=None):
     (Dan, 2026-11-25), so the pull request that used one keeps it, and any other, or a command that
     names none by number (a create, an edit by branch that gives its own description), is covered
     only while an approval of that wording is unused. Nothing is recorded here: the merge gate
-    records which pull request uses an approval."""
-    answer, why = approval.hash_of(body, True)
+    records which pull request uses an approval.
+
+    And refuse wording the merge would refuse for what it holds, approved or not
+    (claude-config#3846): the block is judged by the merge gate's own judge, asked through the
+    library (refusal_of), before any approval is looked for. An approval of such wording could
+    never be used, so the label on it only moves the refusal to the merge, where Dan is asked a
+    second time. This is what stops an approval this Mac's record held before that rule, which
+    the record holds as a hash and no wording. An answer of the judge that cannot be read is
+    refused too (L98)."""
+    # One bound for the two questions asked of lib/changelog-entry.js, the hash and the judging,
+    # so this hook's longest wait is what it was (the sum above GITHUB_SECONDS).
+    deadline = time.monotonic() + approval.HASH_SECONDS
+    answer, why = approval.hash_of(body, True, deadline)
     if why is not None:
         raise Refuse("the wording could not be hashed (" + why + "), so whether Dan approved it could not be told.")
     if not answer["found"]:
@@ -303,6 +325,13 @@ def _wording_approved(repo, body, payload, notes, pr=None):
     if not answer["hash"]:
         raise Refuse("the `## Announcement` block of the description it would leave is empty, so there is no wording "
                      "Dan could have approved. " + approval.HOW_TO_ASK)
+    refusal, untold = approval.refusal_of(body, True, deadline)
+    if untold is not None:
+        raise Refuse(untold + ", and the label goes on no wording that nobody could judge. Run the command again.")
+    if refusal["refused"]:
+        raise Refuse(approval.refused_why(refusal) + " No approval of Dan's covers wording the merge would refuse, one "
+                     "he gave of this very wording included, so put the wording right and ask him again. "
+                     + approval.HOW_TO_ASK)
     verdict = approval.check(repo, answer["hash"], payload, pr)
     notes.extend(verdict["notes"])
     if verdict["approved"] is not True:
@@ -362,24 +391,6 @@ def _judge_rename(args):
                      "carrying that one with no wording read for any of them. " + USE_PR_EDIT)
 
 
-def _api_write(args):
-    return "DELETE" not in {v.upper() for v in scan.flag_values(args, "--method", "-X")} and scan.api_writes(args)
-
-
-def _api_calls(command):
-    """The arguments of each gh api call the command makes, as the session link gate finds them."""
-    out = []
-    pipelines, _bodies = scan._stages(command)
-    for stages in pipelines:
-        if not isinstance(stages, list):
-            continue
-        for words, _redirects, _heredocs in stages:
-            found = scan.gh_command(words)
-            if found and found[0] == "api":
-                out.append(list(found[2]) + list(found[3]))
-    return out
-
-
 def _judge_api(args, cwd, payload, notes):
     """One gh api write, in a command that names the label somewhere."""
     names = LABEL in " ".join(args).lower()
@@ -415,11 +426,10 @@ def judge_label(command, cwd, payload, notes):
     if LABEL not in command.lower() or not re.search(r"\bgh\b", command):
         return None
     try:
-        found = scan.scan_gh_in_context(command, cwd, dict(os.environ), KINDS)
-        apis = [args for args in _api_calls(command) if _api_write(args)]
         # How many commands of this call write to GitHub: an edit that leaves the description to
-        # GitHub is judged by what GitHub holds now, which holds only when it is the one write.
-        writes = sum(1 for kind, _, _, _ in found if kind in PUTS) + len(apis)
+        # GitHub is judged by what GitHub holds now, which holds only when it is the one write. The
+        # count is the shared reader's, which the merge gate asks too (claude-config#3742).
+        found, apis, writes = scan.gh_writes(command, cwd, dict(os.environ), KINDS)
         for kind, args, envs, place in found:
             if kind in PUTS:
                 _judge_put(kind, args, envs, place, command, cwd, payload, notes, writes)
@@ -462,6 +472,9 @@ def judge_record(command, cwd):
 
 
 LIBRARY_FILE = "announce-approval.py"
+# The script that files a milestone and its issues, by its file name: the call that runs it is
+# where Dan's answer about announcing the feature is read into the record (main, below).
+MILESTONE_HELPER = "create-milestone.sh"
 PYTHON = re.compile(r"(?:python|pypy)[0-9.]*")
 # python's one letter options that take a value: the rest of their word, or else the next word.
 PYTHON_VALUE_LETTERS = "cmXW"
@@ -624,6 +637,21 @@ def main():
         return deny("this command runs lib/" + LIBRARY_FILE + ", or may, in a form that can write " + RECORD_IS + ": "
                     + held + ". " + LIBRARY_RULE)
     notes = []
+    if MILESTONE_HELPER in command.lower() and LABEL not in command.lower():
+        # The milestone helper is about to run (claude-config#3669). It takes a plan's "announce":
+        # "yes" or "no" only from the record, which only a hook writes his answer to, so his pickers
+        # about announcing a feature are read in here, from the session making the call and from
+        # the sessions the record notes. Nothing about the call is judged: what could not be read
+        # in is said beside it, and the helper then refuses in its own words.
+        #
+        # The helper is found by its file name anywhere in the call, so a call that only names it
+        # (a search, a commit message) reads his answers in too. That is the same reading a merge
+        # does, of the session's own pickers, and it writes nothing he did not answer.
+        #
+        # ONE JOB PER CALL: a call that also names the label is judged for the label alone, whose
+        # reads already fill the time this hook is registered with (GITHUB_SECONDS, above). His
+        # answers are then not read in, and the helper says so in its own refusal: run it apart.
+        notes += approval.read_answers(data)
     why = judge_label(command, cwd, data, notes)
     if why:
         # True of every refusal below it: wording he never approved, an approval another pull

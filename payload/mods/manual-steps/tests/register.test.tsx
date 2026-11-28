@@ -4,7 +4,9 @@ import type { Mounted as KitMounted } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow, ModKitPane } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { DROPPED_AFTER_MS } from '../hooks/card.ts'
+import { PAGE_MARK } from '../hooks/page.ts'
 import { ASKED_PANE, FOLLOW_MS, UNASKED_PANE } from '../hooks/place.ts'
+import { PROSE_MARK, REFUSED_MARK } from '../hooks/turn.ts'
 import { STEPS_DESCRIPTION, VERDICT_DESCRIPTION, VERDICT_INPUT } from '../hooks/register.tsx'
 import type { StepsCard } from '../types/index.d.ts'
 
@@ -192,9 +194,9 @@ const ROOT = '/repo'
 // at any width once asked for (#1752); `$.ui.panes()` lists them so, unless `panesFail`.
 // `files` is the disk the mod reads a published page from (#1811); a path not in it is missing. The
 // Artifact tool beneath publishes any page, and refuses one whose path holds REFUSED.
-type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; columns?: number; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; panesFail: boolean; turn: string | { fails: string } | 'truncated'; files: Record<string, string>; held: string[]; holdFails: string }
-const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
-  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, panesFail: false, turn: '', files: {}, held: [], holdFails: '', ...init }
+type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; columns?: number; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; panesFail: boolean; turn: string | { fails: string } | 'truncated'; files: Record<string, string>; held: string[]; holdFails: string; sessionFails: boolean }
+const world =(on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
+  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, panesFail: false, turn: '', files: {}, held: [], holdFails: '', sessionFails: false, ...init }
   const mem: Record<string, unknown> = { ...store }
   const asked = new Set<string>()
   // Each open pane, and whether it was opened asked, which Claude Code places at any width.
@@ -223,6 +225,10 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   on('store.delete', ($, e) => {
     delete mem[e.key]
     return { value: undefined } as never
+  })
+  on('session.id', () => {
+    if (w.sessionFails) throw new Error('the session has no id yet')
+    return { value: 's1' } as never
   })
   on('session.root', () => ({ value: w.root }) as never)
   on('session.cwd', () => ({ value: w.root }) as never)
@@ -1295,6 +1301,85 @@ test('a block another Stop hook gives is kept beside this one (#863)', withKit, 
   expect(r.block).toMatch(/steps tool/)
 })
 
+// ---- #3652: a slash command handed to Dan to type goes on the card as a step of its own ----
+
+// The 2026-11-25 hand off, as the issue tells it: two steps on the card, and the command to type next
+// in the reply, with its brief in a code block, on no step of the card.
+const TYPED_STEP = 'The file share and the draft are on the card.\n\nYour next move after those is to start `/plan-council` with this brief:\n\n```\n/plan-council Plan the import of last season\'s galleries\n```'
+const SHARE = step({ title: 'Share the gallery file', url: 'https://drive.example/f' })
+const DRAFT = step({ title: 'Send the draft to the venue', url: 'https://mail.example/d' })
+
+test('a slash command left for Dan to type blocks the turn end though the card holds two other steps (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  await hand($, [SHARE, DRAFT])
+  const r = await turnStop($, TYPED_STEP)
+  expect(r.block).toMatch(/`\/plan-council`/)
+  expect(r.block).toMatch(/paste it where you type your messages to me/)
+  expect(r.block).toMatch(/mcp__manual-steps__steps\b/)
+  // Pinning replaces the card, so the block says to keep the unfinished steps on it.
+  expect(r.block).toMatch(/unfinished steps/)
+  // Once a turn, so it cannot loop.
+  expect((await turnStop($, TYPED_STEP, true)).block).toBeUndefined()
+})
+
+test('a command to type that the prose check already knows is still blocked while the card holds only other steps (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  const said = 'Type `/plan-council` with the brief below.'
+  // With no card both checks find it: the command's, and the prose one ("type" before a code span,
+  // #863), which is all that held it before #3652. It is one step, so it gets one ask, the command's:
+  // two asks gave Dan about 1,200 characters and two different locations for it (review of 3677).
+  const bare = (await turnStop($, said)).block ?? ''
+  expect(bare).toMatch(/a command to type himself \(`\/plan-council`\)/)
+  expect(bare).not.toMatch(/no steps card holds it/)
+  expect(bare.split(PROSE_MARK).length - 1).toBe(1)
+  // Once a card of other steps is pinned the prose check passes, and only the command's ask holds it.
+  await hand($, [SHARE, DRAFT])
+  const pinned = (await turnStop($, said)).block ?? ''
+  expect(pinned).toMatch(/`\/plan-council`/)
+  expect(pinned).not.toMatch(/no steps card holds it/)
+})
+
+test('with no card, a command to type and another step left in prose are two steps and get an ask each (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  const said = `Type \`/plan-council\` with the brief below.\n\n${PROSE_STEP}`
+  const both = (await turnStop($, said)).block ?? ''
+  expect(both).toMatch(/a command to type himself \(`\/plan-council`\)/)
+  expect(both).toMatch(/\("waiting on you"\), and no steps card holds it/)
+  // The command's own words are not what the prose ask names.
+  expect(both).not.toMatch(/\("Type"\)/)
+})
+
+test('with no card at all, the command to type blocks the turn end (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  expect((await turnStop($, TYPED_STEP)).block).toMatch(/`\/plan-council`/)
+})
+
+test('once an unfinished step on the card holds the command, the same reply passes (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  const typed = { title: 'Start the planning panel', location: 'paste it where you type your messages to me', value: "/plan-council Plan the import of last season's galleries", checked: 'not-done' }
+  await hand($, [typed, SHARE, DRAFT])
+  expect((await turnStop($, TYPED_STEP)).block).toBeUndefined()
+  // A finished step no longer holds it. Only the command's step is finished here, and the card still
+  // shows the other two unfinished, so it is the finished step, not a closed card, that is tested
+  // (review of 3677: with all three finished the card was gone, which is the no card case again).
+  await call($, VERDICT, { step: 1, checked: 'checked' })
+  expect((await turnStop($, TYPED_STEP)).block).toMatch(/a command to type himself \(`\/plan-council`\)/)
+})
+
+test('a reply that only names a slash command, or offers one, passes (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  await hand($, [SHARE])
+  expect((await turnStop($, 'For a feature this size, `/plan-lite` is the lighter planner; `/plan-council` runs a whole panel.')).block).toBeUndefined()
+  expect((await turnStop($, 'If you want a fuller plan, you could start `/plan-council` on it later.')).block).toBeUndefined()
+  expect((await turnStop($, "I'll run `/next-issue` once this merges.")).block).toBeUndefined()
+})
+
 // ---- #1608: every message of the turn is read, not only the last ----
 
 // The turn as the transcript reader prints it: Dan's prompt, then Claude's messages, each record
@@ -1333,6 +1418,26 @@ test('once this mod has blocked in a turn, it never blocks that turn again, so i
   world(on, { turn: [prompt(), wrote(DOWNBEAT_STEP), prompt(true), wrote('Nothing is left for Dan to do now.')].join('\n') })
   await start($)
   expect((await turnStop($, 'Nothing is left for Dan to do now.', true)).block).toBeUndefined()
+})
+
+// In a live session the turn is read from its transcript, and then only the mark stops a second hold:
+// `stop_hook_active` is not consulted (review of 3677). The transcript reader calls a record this
+// mod's own when its text holds one of the marks, so the ask's own words are what is tested here.
+test('the ask for a command to type carries the once a turn mark, so a turn that holds it is never held again (#3652)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [prompt(), wrote(TYPED_STEP)].join('\n') })
+  await start($)
+  const first = (await turnStop($, TYPED_STEP)).block ?? ''
+  expect(first).toMatch(/`\/plan-council`/)
+  expect(first.startsWith(PROSE_MARK)).toBe(true)
+  // The feedback record as Claude Code writes it, judged as the reader judges it (hooks/turn.ts).
+  const feedback = JSON.stringify({ type: 'user', promptId: 'p1', message: { role: 'user', content: `Stop hook feedback:\n${first}` } })
+  const isOurs = [PROSE_MARK, PAGE_MARK].some(mark => feedback.includes(mark))
+  expect(isOurs).toBe(true)
+  w.turn = [prompt(), wrote(TYPED_STEP), prompt(isOurs), wrote('It is not on the card yet.')].join('\n')
+  expect((await turnStop($, 'It is not on the card yet.')).block).toBeUndefined()
+  // The control: a turn whose feedback record is another hook's is held, so the mark is what stops it.
+  w.turn = [prompt(), wrote(TYPED_STEP), prompt(false), wrote('It is not on the card yet.')].join('\n')
+  expect((await turnStop($, 'It is not on the card yet.')).block).toMatch(/`\/plan-council`/)
 })
 
 test('a step said in the turn before this one is not judged again (#1608)', withKit, async ($, on) => {
@@ -1619,10 +1724,10 @@ const caller: { name: string; register: Register } = {
   register: on => {
     on('tool.call', async ($, e, next) => {
       const tool = String(e.tool)
-      if (tool !== 'AddStep' && tool !== 'FinishStep') return next(e)
+      if (tool !== 'AddStep' && tool !== 'FinishStep' && tool !== 'WithdrawStep') return next(e)
       const input = (e as unknown as { input: object }).input
       try {
-        const r = tool === 'AddStep' ? await $.manualSteps.add(input as never) : await $.manualSteps.finish(input as never)
+        const r = tool === 'AddStep' ? await $.manualSteps.add(input as never) : tool === 'FinishStep' ? await $.manualSteps.finish(input as never) : await $.manualSteps.withdraw(input as never)
         return { result: r, text: JSON.stringify(r) } as never
       } catch (err) {
         return { deny: `threw: ${String((err as Error)?.message ?? err)}` }
@@ -1647,7 +1752,7 @@ test('another mod adds a step: a card of its own when none is pinned, shown as a
   const text = await bandText($)
   expect(text[0]).toMatch(/^The morning after sleep mode/)
   expect(text[1]).toBe(`1. ${MORNING.title}  [done-1]`)
-  expect(stored(w.mem)?.steps).toEqual([{ title: MORNING.title, location: MORNING.location, clicks: MORNING.clicks, isAdded: true }])
+  expect(stored(w.mem)?.steps).toEqual([{ title: MORNING.title, location: MORNING.location, clicks: MORNING.clicks, isAdded: true, pinnedBy: 's1' }])
 })
 
 test('a step added to a card already pinned goes at its end, under its heading, and never twice (#1107)', withCaller, async ($, on) => {
@@ -1710,6 +1815,108 @@ test('the only step taken off takes the card away (#1107)', withCaller, async ($
   expect(await finishStep($)).toEqual({ isFinished: true })
   expect(await band($)).toBeUndefined()
   expect(stored(w.mem)).toBeUndefined()
+})
+
+// #3770: the close this session card, pinned by the goal box through the noun. Its one step is for
+// this session alone (never kept for the next, where the session it names is gone), has no Done
+// (closing the session is the step, and a press would start a turn), and is taken off as withdrawn,
+// never as done, the moment the session works again.
+const CLOSE = { title: 'Close this session if you have nothing more for it', location: 'The Terminal tab showing this session', clicks: ['Type /exit and press Return', 'Or close the tab'], sessionOnly: true, noDone: true }
+const addClose = ($: Engine, s: object = CLOSE) => askNoun($, 'AddStep', { heading: 'Nothing is running or waiting in this session', step: s })
+const withdrawStep = ($: Engine, title = CLOSE.title) => askNoun($, 'WithdrawStep', { title })
+
+test('a session only step is shown with no Done and no "waiting on you", and is never kept for the next session (#3770)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  expect(await addClose($)).toEqual({ isShown: true })
+  const text = await bandText($)
+  expect(text[0]).toBe('Nothing is running or waiting in this session')
+  expect(text[1]).toBe(`1. ${CLOSE.title}`)
+  expect(text.join('\n')).not.toMatch(/done-1|waiting on you/)
+  expect(text.join('\n')).toMatch(/Type \/exit and press Return/)
+  // Nothing written for the next session in this project.
+  expect(stored(w.mem)).toBeUndefined()
+  // Beside a step that is kept, only that one is kept.
+  await addStep($)
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual([MORNING.title])
+})
+
+test('withdraw takes a step off as withdrawn, never as done; the only one takes the card away; one not there withdraws nothing (#3770)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await addClose($)
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  expect(await band($)).toBeUndefined()
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: false })
+  // On a card with another step, it stays drawn as taken off, not done.
+  await hand($, [step()])
+  await addClose($)
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  const text = await bandText($)
+  expect(text.find(t => t.startsWith(`2. ${CLOSE.title}`))).toMatch(/taken off\b.*, not done$/)
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Turn on the WAF rule'])
+})
+
+// #3770, reopened: the close this session card waits only for steps this session itself pinned
+// (Dan, 2026-11-26: "Only that session's own steps"), so each step records the session that pinned
+// it, and the store keeps that for the sessions that carry the step in later.
+const owners = (mem: Record<string, unknown>) => stored(mem)?.steps.map(s => [s.title, s.pinnedBy])
+
+test('a step pinned through the steps tool, and one another mod adds, each record this session as the one that pinned it, in the store too (#3770)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  await addStep($)
+  expect(owners(w.mem)).toEqual([
+    ['Turn on the WAF rule', 's1'],
+    [MORNING.title, 's1'],
+  ])
+  // Pinned again by the same session, with a new step beside it: each is still this session's.
+  await hand($, [step(), step({ title: 'Purge the cache', url: 'https://b.example' })])
+  expect(owners(w.mem)).toEqual([
+    ['Turn on the WAF rule', 's1'],
+    ['Purge the cache', 's1'],
+    [MORNING.title, 's1'],
+  ])
+})
+
+test("steps carried in from an earlier session keep the session that pinned them, and one kept before a step recorded it is marked as an earlier session's; pinned again here after the check each keeps its first session, and only a new step is this session's (#3770)", withCaller, async ($, on) => {
+  const card: StepsCard = {
+    heading: 'Kept',
+    steps: [
+      { title: 'Rotate the key', url: 'https://a.example', pinnedBy: 's0' },
+      { title: 'Renew the certificate', url: 'https://b.example' },
+    ],
+  }
+  const w = world(on, {}, { [`card:${ROOT}`]: card })
+  await start($)
+  // Held, with a step another mod adds here beside them: the store shows whose each is.
+  expect(await addStep($)).toMatchObject({ isShown: false })
+  expect(owners(w.mem)).toEqual([
+    ['Rotate the key', 's0'],
+    ['Renew the certificate', 'an earlier session'],
+    [MORNING.title, 's1'],
+  ])
+  // Checked and pinned again by this session, as the carried note asks, with one new step.
+  await hand($, [step({ title: 'Rotate the key', url: 'https://a.example' }), step({ title: 'Renew the certificate', url: 'https://b.example' }), step({ title: 'Purge the cache', url: 'https://c.example' })], 'Kept')
+  expect(owners(w.mem)).toEqual([
+    ['Rotate the key', 's0'],
+    ['Renew the certificate', 'an earlier session'],
+    ['Purge the cache', 's1'],
+    [MORNING.title, 's1'],
+  ])
+})
+
+test('a session whose id cannot be read records no session on the steps it pins, never a made up one (#3770)', withCaller, async ($, on) => {
+  const w = world(on, { sessionFails: true })
+  await start($)
+  await hand($, [step()])
+  await addStep($)
+  expect(owners(w.mem)).toEqual([
+    ['Turn on the WAF rule', undefined],
+    [MORNING.title, undefined],
+  ])
+  expect(w.logs.join('\n')).toMatch(/could not read this session's id/)
 })
 
 test('a card carried from an earlier session takes the step but stays held, and says so (#1107)', withCaller, async ($, on) => {
@@ -2077,4 +2284,151 @@ test('a held Done answered not done, pressed again while idle, goes once and is 
   await turnEnd($, 't2')
   await w.clock.settle()
   expect(w.prompts).toEqual(['step 1 done'])
+})
+
+// ---- #3842: a call the permission check refused, with no step pinned after it ----
+
+// The refused call as the transcript reader prints it, whole: Claude Code's own record of the tool
+// result, carrying the turn's promptId and which kind of refusal it was (measured 2026-11-27, see
+// tests/turn.test.ts). The session of 2026-11-27 told Dan in these words, which no phrase read.
+const refusedCall = (kind = 'automode-blocked') => JSON.stringify({ type: 'user', isSidechain: false, promptId: 'p1', toolDenialKind: kind, message: { content: [{ type: 'tool_result', is_error: true, content: 'refused' }] } })
+const pinnedAfter = JSON.stringify({ type: 'assistant', isPinning: true })
+const ROW_REPLY = 'I checked the deploy and it is live. The update to the row did not go through.'
+
+test('a turn in which the permission check refused a call, with nothing pinned after it, is held once and told both ways out (#3842)', withKit, async ($, on) => {
+  world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  const r = await turnStop($, ROW_REPLY)
+  expect(r.block).toMatch(/^The permission check refused a call of yours in this turn/)
+  expect(r.block).toMatch(/mcp__manual-steps__steps\b/)
+  expect(r.block).toContain('"Nothing from the refusal is yours to do."')
+  expect(r.block).toMatch(/refusal is final/i)
+  // No phrase of the prose check is in the reply, so that block is not given beside it.
+  expect(r.block).not.toMatch(/leaves Dan a step in prose/)
+})
+
+test('the hold says how many calls were refused when there were several (#3842)', withKit, async ($, on) => {
+  world(on, { turn: [prompt(), refusedCall(), refusedCall(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  expect((await turnStop($, ROW_REPLY)).block).toMatch(/in this turn \(2 calls\)/)
+})
+
+// Dan, 2026-11-27, with both Macs' counts in front of him: "Merge with a shorter hold". A hold is
+// printed to him as well as to Claude, and most holds leave him nothing (70 of the 79 turns read
+// on the work MacBook), so its words are cut from 127 to about 40. It still says what happened and
+// both ways out, and still begins with the mark that stops a second hold in the turn.
+const wordsIn = (text: string | undefined) => (text ?? '').trim().split(/\s+/).filter(Boolean).length
+
+test('the hold for a refused call alone is at most 45 words, and still says what happened and both ways out (#3842)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY)].join('\n') })
+  await start($)
+  const one = (await turnStop($, ROW_REPLY)).block
+  expect(wordsIn(one)).toBeLessThanOrEqual(45)
+  expect(one?.startsWith(`${REFUSED_MARK}.`)).toBe(true)
+  expect(one).toMatch(/refusal is final/i)
+  expect(one).toMatch(/steps card/)
+  expect(one).toMatch(/mcp__manual-steps__steps\b/)
+  expect(one).toContain('"Nothing from the refusal is yours to do."')
+  // Several calls refused: the count is the only thing added.
+  w.turn = [prompt(), refusedCall(), refusedCall(), refusedCall(), wrote(ROW_REPLY)].join('\n')
+  const three = (await turnStop($, ROW_REPLY)).block
+  expect(three?.startsWith(`${REFUSED_MARK} (3 calls).`)).toBe(true)
+  expect(wordsIn(three)).toBe(wordsIn(one) + 2)
+})
+
+test('a step pinned after the refusal answers it, and one pinned before it does not (#3842)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [prompt(), refusedCall(), pinnedAfter, prompt(), wrote('The row is on the card.')].join('\n') })
+  await start($)
+  await hand($, [step()])
+  expect((await turnStop($, 'The row is on the card.')).block).toBeUndefined()
+  // An unfinished step already on the card when the call was refused is some other step.
+  w.turn = [prompt(), pinnedAfter, prompt(), refusedCall(), wrote(ROW_REPLY)].join('\n')
+  expect((await turnStop($, ROW_REPLY)).block).toMatch(/^The permission check refused a call of yours/)
+})
+
+test('the one line the hold asks for answers it, and so does saying none of the steps are his now (#3842)', withKit, async ($, on) => {
+  const line = 'The push was refused and I left it there. Nothing from the refusal is yours to do.'
+  const { w } = world(on, { turn: [prompt(), refusedCall(), wrote(line)].join('\n') })
+  await start($)
+  expect((await turnStop($, line)).block).toBeUndefined()
+  w.turn = [prompt(), refusedCall(), wrote('None of these steps are yours to do now.')].join('\n')
+  expect((await turnStop($, 'None of these steps are yours to do now.')).block).toBeUndefined()
+  // The line quoted, as in talk about this check, is not the line said.
+  const quoted = 'The hold asks me to say "Nothing from the refusal is yours to do." when that is true.'
+  w.turn = [prompt(), refusedCall(), wrote(quoted)].join('\n')
+  expect((await turnStop($, quoted)).block).toMatch(/^The permission check refused a call of yours/)
+})
+
+test('once held for a refusal, the same turn is never held again, so it cannot loop (#3842)', withKit, async ($, on) => {
+  const held = JSON.stringify({ type: 'user', promptId: 'p1', isOurs: true })
+  world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY), held, wrote('Carrying on without it.')].join('\n') })
+  await start($)
+  expect((await turnStop($, 'Carrying on without it.', true)).block).toBeUndefined()
+})
+
+test('no verdict, a hook\'s refusal and a prompt Dan declined hold nothing (#3842)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: '' })
+  await start($)
+  for (const kind of ['automode-unavailable', 'permission-rule', 'user-rejected']) {
+    w.turn = [prompt(), refusedCall(kind), wrote(ROW_REPLY)].join('\n')
+    expect((await turnStop($, ROW_REPLY)).block).toBeUndefined()
+  }
+})
+
+test('a refusal in the turn before is not asked about in this one (#3842)', withKit, async ($, on) => {
+  const earlier = JSON.stringify({ type: 'user', promptId: 'p0', isOurs: false })
+  world(on, { turn: [earlier, refusedCall().replace('"promptId":"p1"', '"promptId":"p0"'), wrote('Stopped there.'), prompt(), wrote('Merged #12.')].join('\n') })
+  await start($)
+  expect((await turnStop($, 'Merged #12.')).block).toBeUndefined()
+})
+
+test('a step left in prose and a refused call in one turn are asked about together, in one block (#3842)', withKit, async ($, on) => {
+  world(on, { turn: [prompt(), refusedCall(), wrote(PROSE_STEP)].join('\n') })
+  await start($)
+  const r = await turnStop($, PROSE_STEP)
+  expect(r.block).toMatch(/leaves Dan a step in prose/)
+  expect(r.block).toMatch(/The permission check refused a call of yours in this turn/)
+})
+
+test('where nobody is at the prompt, or the turn could not be read, a refused call holds nothing (#3842)', withKit, async ($, on) => {
+  const { w } = world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY)].join('\n') })
+  await $.session.start({ cwd: ROOT, surface: null, isInteractive: false } as never)
+  expect((await turnStop($, ROW_REPLY)).block).toBeUndefined()
+  await start($)
+  w.turn = { fails: '/t: No such file or directory' }
+  expect((await turnStop($, ROW_REPLY)).block).toBeUndefined()
+})
+
+// Review of pull request 3854: the card could not be read, so the step left in prose is not asked
+// about (asking on a guess could ask for a card already there), and the log says so. The refused
+// call is judged from the turn alone, never from the card, so its ask is still given.
+// The card's own read, refused once `fails` is set, as #2437's read of the running turn is above:
+// refused rather than thrown, since a hook that throws is skipped and the engine beneath answers.
+const cardRead = (on: On) => {
+  const card = { fails: false }
+  on('state.get', async ($s, e, next) => (card.fails && (e as { key?: string }).key === 'card' ? ({ deny: 'the card could not be read' } as never) : next(e)))
+  return card
+}
+
+test('when the steps card cannot be read, a refused call is still asked about and a step left in prose is not (#3842)', withKit, async ($, on) => {
+  const { w, logs } = world(on, { turn: [prompt(), refusedCall(), wrote(PROSE_STEP)].join('\n') })
+  const card = cardRead(on)
+  await start($)
+  card.fails = true
+  const r = await turnStop($, PROSE_STEP)
+  expect(logs.filter(l => /could not read the steps card, so a step left in prose was not checked: .*the card could not be read/.test(l))).toHaveLength(1)
+  expect(r.block).toMatch(/^The permission check refused a call of yours in this turn/)
+  expect(r.block).not.toMatch(/leaves Dan a step in prose/)
+  // With no refused call in the turn, the unread card asks for nothing.
+  w.turn = [prompt(), wrote(PROSE_STEP)].join('\n')
+  expect((await turnStop($, PROSE_STEP)).block).toBeUndefined()
+  expect(logs.filter(l => /could not read the steps card/.test(l))).toHaveLength(2)
+})
+
+test('when the steps card cannot be read, the ask for a refused call is kept beside a block from beneath (#3842)', withKit, async ($, on) => {
+  world(on, { turn: [prompt(), refusedCall(), wrote(ROW_REPLY)].join('\n') }, {}, { STOP_BLOCK: 'Run the suite before you stop.' })
+  const card = cardRead(on)
+  await start($)
+  card.fails = true
+  expect((await turnStop($, ROW_REPLY)).block).toMatch(/^Run the suite before you stop\.\n\nThe permission check refused a call of yours in this turn/)
 })

@@ -117,9 +117,11 @@ check_rc "a malformed case set fails the check" 1 "$rc"
 answer paginate "shop/paginate.py" "$PAGINATE_GOOD"
 answer retry "report/send.sh" "$RETRY_GOOD"
 out="$(score run --all --cases "$CASES" --results-dir "$RESULTS")"; rc=$?
-check "catch rate counts the real defects found" "catch rate: 3 of 5 real defects caught (60%)" "$out"
-check "wrong rate counts findings matching a known wrong one" "wrong findings: 2 of 7 findings judged wrong (29%)" "$out"
-check "trivial and unjudged findings are counted apart" "trivial 1, unsure 0, unjudged 1" "$out"
+check "catch rate counts the real defects found, with its 95% range (#3556)" "catch rate: 3 of 5 real defects caught (60%, 95% range 23% to 88%)" "$out"
+check "#3556 the wrong rate is over the findings checked against a judged item" "wrong findings: 2 of 6 checked findings judged wrong (33%, 95% range 10% to 70%)" "$out"
+check "#3556 the unchecked findings are counted on a line of their own" "unchecked: 1 of 7 findings matched no judged item" "$out"
+check "#3556 the old figure over every finding stays, labelled as a floor" "if every unchecked finding were right, the wrong rate over all 7 would be 29% (2 of 7)" "$out"
+check "trivial and unsure findings are counted apart" "also: trivial 1, unsure 0" "$out"
 check "a missed defect is named by its id" "invented-paginate d3" "$out"
 check "the measured cost of the run is reported" '$0.10' "$out"
 check "the measured tokens of the run are reported" "3,000 input tokens" "$out"
@@ -149,31 +151,31 @@ cp -R "$SAMPLE" "$WORK/match"; rm -rf "$WORK/match/invented-retry"
 rm -f "$FAKE_DIR/answers/"*
 answer far "shop/paginate.py" 'shop/paginate.py:60: range stops at len(items) - 1, so a list of one item gives no pages (off by one). Should be: len(items). [severity: major]'
 out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
-check "a finding far outside the line window does not match" "catch rate: 0 of 3 real defects caught (0%)" "$out"
-check "the unmatched finding is counted as unjudged" "unjudged 1" "$out"
+check "a finding far outside the line window does not match" "catch rate: 0 of 3 real defects caught (0%," "$out"
+check "the unmatched finding is counted as unchecked" "unchecked: 1 of 1 finding matched no judged item" "$out"
 answer far "shop/paginate.py" 'shop/paginate.py:60: `for start in range(0, len(items) - 1, size):` drops the last item (off by one). Should be: len(items). [severity: major]'
 out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
-check "a finding quoting the defect's line matches wherever it points" "catch rate: 1 of 3 real defects caught (33%)" "$out"
+check "a finding quoting the defect's line matches wherever it points" "catch rate: 1 of 3 real defects caught (33%," "$out"
 answer far "shop/paginate.py" 'shop/paginate.py:16: the docstring above is long. Should be: shorter. [severity: minor]'
 out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
-check "a finding on the right line making another claim does not match" "catch rate: 0 of 3 real defects caught (0%)" "$out"
+check "a finding on the right line making another claim does not match" "catch rate: 0 of 3 real defects caught (0%," "$out"
 # One shared keyword is not a claim (claude-config#1367): the smoke run of #1355 credited an off
 # topic finding with a catch because it shared a single keyword with the defect. d2 lists several
 # keywords, so a finding on its line that names only "range" and is about something else must not
 # catch it, while the same finding naming a second of them, or quoting the line, still does.
 answer far "shop/paginate.py" 'shop/paginate.py:16: the range of page sizes callers may pass is not documented. Should be: a docstring. [severity: minor]'
 out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
-check "one shared keyword alone does not catch a defect that lists several" "catch rate: 0 of 3 real defects caught (0%)" "$out"
-check "and that finding is left unjudged for a person to judge" "unjudged 1" "$out"
+check "one shared keyword alone does not catch a defect that lists several" "catch rate: 0 of 3 real defects caught (0%," "$out"
+check "and that finding is left unchecked for a person to judge" "unchecked: 1 of 1 finding matched no judged item" "$out"
 answer far "shop/paginate.py" 'shop/paginate.py:16: the range is off by one. Should be: len(items). [severity: major]'
 out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
-check "two of the defect's keywords still catch it" "catch rate: 1 of 3 real defects caught (33%)" "$out"
+check "two of the defect's keywords still catch it" "catch rate: 1 of 3 real defects caught (33%," "$out"
 answer far "shop/paginate.py" 'shop/paginate.py:16: the range in `for start in range(0, len(items) - 1, size):` is wrong. Should be: len(items). [severity: major]'
 out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
-check "one keyword plus the defect's quoted line still catches it" "catch rate: 1 of 3 real defects caught (33%)" "$out"
+check "one keyword plus the defect's quoted line still catches it" "catch rate: 1 of 3 real defects caught (33%," "$out"
 answer far "shop/paginate.py" 'shop/paginate.py:16: the range stops one short, so a list of one item gives nothing back. Should be: len(items). [severity: major]'
 out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
-check "one keyword plus a restatement of the defect's claim still catches it" "catch rate: 1 of 3 real defects caught (33%)" "$out"
+check "one keyword plus a restatement of the defect's claim still catches it" "catch rate: 1 of 3 real defects caught (33%," "$out"
 # A restated claim is judged by review-answered.py's own measure and threshold, never a copy that
 # can drift from it (lessons review of #1376): over pairs either side of the threshold, the scorer's
 # decision must be exactly the one that measure gives.
@@ -198,8 +200,8 @@ rm -f "$FAKE_DIR/answers/far.txt"
 answer far2 "shop/paginate.py" 'shop/paginate.py:16: range stops at len(items) - 1 (off by one). Should be: len(items). [severity: major]
 shop/paginate.py:17: range again drops the last item (off by one). Should be: len(items). [severity: major]'
 out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
-check "two findings on one defect catch it once" "catch rate: 1 of 3 real defects caught (33%)" "$out"
-check "and both count as findings, neither as unjudged" "unjudged 0" "$out"
+check "two findings on one defect catch it once" "catch rate: 1 of 3 real defects caught (33%," "$out"
+check "and both count as findings, neither as unchecked" "unchecked: 0 of 2 findings matched no judged item" "$out"
 
 # --- 5. regression against a baseline -------------------------------------------------------------
 rm -f "$FAKE_DIR/answers/"*
@@ -210,35 +212,52 @@ check "a run can be saved as the baseline" "baseline" "$out"
 check_rc "saving a baseline succeeds" 0 "$rc"
 before="$(calls)"
 out="$(score run --all --cases "$CASES" --results-dir "$RESULTS")"; rc=$?
-check "an equal run is not worse" "NOT WORSE" "$out"
-check_rc "a run no worse than the baseline exits 0" 0 "$rc"
-# The caught defect's finding is swapped for one about something else, so the findings and the
-# wrong ones stay 7 and 2: only the catch rate moves.
+check "#3556 an equal run says there is no difference" "NO DIFFERENCE" "$out"
+check_not "#3556 and never calls the runs not worse" "NOT WORSE" "$out"
+check_rc "a run no different from the baseline exits 0" 0 "$rc"
+# The caught defect's finding is swapped for one about something else, so only one defect flips.
+# One flip is inside the noise (#3556): the old tool called it a REGRESSION.
 answer retry "report/send.sh" 'report/send.sh:1: the script has no usage comment. Should be: add one. [severity: minor]
 report/send.sh:11: the loop runs 4 times, one more than the 3 tries it reports (off by one). Should be: -lt 3. [severity: minor]'
 out="$(score run --all --cases "$CASES" --results-dir "$RESULTS")"; rc=$?
-check "a catch only regression leaves the wrong rate where it was" "wrong findings: 2 of 7" "$out"
-check "a run that catches less is a regression" "REGRESSION" "$out"
-check "the regression names the rate that fell" "catch rate fell from 60% to 40%" "$out"
-check_rc "a regression exits 1" 1 "$rc"
+check "#3556 a catch only change leaves the known wrong findings where they were" "known wrong findings: 0 raised more often, 0 less often, 2 the same" "$out"
+check "#3556 the defect that flipped is named" "newly missed: invented-retry d1" "$out"
+check "#3556 one missed defect is too few to tell from noise" "CANNOT TELL" "$out"
+check_not "#3556 and is never called a regression" "REGRESSION" "$out"
+check_rc "#3556 a difference inside the noise exits 4" 4 "$rc"
 base_before="$(cat "$RESULTS/baseline.json")"
 out="$(score run --all --save-baseline --cases "$CASES" --results-dir "$RESULTS")"; rc=$?
-check "a regressed run is refused as the baseline" "not saved as the baseline" "$out"
-[ "$(cat "$RESULTS/baseline.json")" = "$base_before" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --save-baseline must not overwrite the baseline with a run that is worse"; }
-check_rc "a refused save still exits as the regression it is" 1 "$rc"
+check "#3556 a run that cannot be told apart is refused as the baseline" "not saved as the baseline" "$out"
+[ "$(cat "$RESULTS/baseline.json")" = "$base_before" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --save-baseline must not overwrite the baseline with a run it cannot tell apart from it"; }
+check_rc "a refused save still exits as the comparison it is" 4 "$rc"
 answer retry "report/send.sh" "$RETRY_GOOD"
 answer paginate "shop/paginate.py" "$PAGINATE_GOOD
 shop/paginate.py:14: size of zero is not checked here either. Should be: check it. [severity: minor]"
 out="$(score run --all --cases "$CASES" --results-dir "$RESULTS")"; rc=$?
-check "a run with more wrong findings is a regression even when it catches as much" "wrong finding rate rose from 29% to 38%" "$out"
-check_rc "a wrong rate regression exits 1" 1 "$rc"
+check "#3556 a known wrong finding raised one more time is named" "raised more often: invented-paginate w1" "$out"
+check "#3556 and one more is inside the noise" "CANNOT TELL" "$out"
+check_rc "#3556 so it exits 4" 4 "$rc"
+# The review of #3705: the same catches and the same known wrong findings, plus 120 findings that
+# match no judged item. The judged items show no difference, but nobody has judged the 120, so the
+# verdict must say the unchecked count moved, and --save-baseline must refuse the run and say why:
+# a noisier review is the likeliest bad change to the lessons review, and saved it would become the
+# yardstick the next run is judged against.
+noise="$(for i in $(seq 1 120); do printf 'shop/paginate.py:2: the module docstring is vague about screen %s. Should be: name it. [severity: minor]\n' "$i"; done)"
+answer paginate "shop/paginate.py" "$PAGINATE_GOOD
+$noise"
+base_before="$(cat "$RESULTS/baseline.json")"
+out="$(score run --all --save-baseline --cases "$CASES" --results-dir "$RESULTS")"; rc=$?
+check "3705 the verdict names a rise in the unchecked findings" "unchecked findings rose from 1 to 121" "$out"
+check "3705 and claims no difference only on the judged items" "NO DIFFERENCE on the judged items" "$out"
+check "3705 a run whose unchecked findings moved is refused as the baseline, saying why" "the unchecked findings moved (from 1 to 121), so it was not saved as the baseline" "$out"
+[ "$(cat "$RESULTS/baseline.json")" = "$base_before" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: 3705 --save-baseline must not make a run with 120 new unchecked findings the baseline"; }
 answer paginate "shop/paginate.py" "$PAGINATE_GOOD"
 
 # --- 6. a subset is compared only with the same cases in the baseline -----------------------------
 before="$(calls)"
 out="$(score run --only invented-retry --cases "$CASES" --results-dir "$RESULTS")"; rc=$?
 [ "$(calls)" = $((before + 1)) ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --only reviews just the named case"; }
-check "a subset is compared with the baseline's same cases" "catch rate: 1 of 2 real defects caught (50%)" "$out"
+check "a subset is compared with the baseline's same cases" "catch rate: 1 of 2 real defects caught (50%," "$out"
 check "the subset comparison says which cases it covered" "same 1 case" "$out"
 check_rc "a subset no worse than the baseline on those cases exits 0" 0 "$rc"
 base_before="$(cat "$RESULTS/baseline.json")"
@@ -266,7 +285,7 @@ out="$(FAKE_FAIL_TOKEN="report/send.sh" score run --all --cases "$CASES" --resul
 check "a failed review is named as unmeasured" "unmeasured: invented-retry" "$out"
 check "a failed review's progress line says why it failed" "invented-retry: error, 0 findings" "$out"
 check "with the runner's own reason" "claude exited 1" "$out"
-check "the rates come from the cases that were measured" "catch rate: 2 of 3 real defects caught (67%)" "$out"
+check "the rates come from the cases that were measured" "catch rate: 2 of 3 real defects caught (67%," "$out"
 failed_runs=("$WORK/fail-results"/run-*.json)
 out="$(score rescore "${failed_runs[0]}" --cases "$CASES" --results-dir "$WORK/fail-results")"
 check "a rescore names the cases whose stored reviews failed" "unmeasured: invented-retry (error)" "$out"
@@ -304,7 +323,8 @@ d["items"].append({"id": "t2", "verdict": "trivial", "file": "shop/paginate.py",
 json.dump(d, open(p, "w"), indent=2)
 PY
 out="$(score rescore "$run1" --cases "$CASES" --results-dir "$RESULTS")"
-check "a rescore applies the case set's current judgements" "trivial 2, unsure 0, unjudged 0" "$out"
+check "a rescore applies the case set's current judgements" "also: trivial 2, unsure 0" "$out"
+check "and the finding it now judges is no longer unchecked" "unchecked: 0 of 7 findings" "$out"
 [ "$(calls)" = "$before" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a rescore must not call the reviewer"; }
 cp -R "$CASES" "$WORK/shrunk"; rm -rf "$WORK/shrunk/invented-retry"
 out="$(score rescore "$run1" --cases "$WORK/shrunk" --results-dir "$WORK/shrunk-results")"
@@ -312,11 +332,15 @@ check "a case the run holds but the set no longer does is named as unmeasured" "
 
 # --- 9. repeats pool their reviews ---------------------------------------------------------------
 out="$(score run --all --repeat 2 --cases "$CASES" --results-dir "$WORK/repeat-results")"
-check "two reviews per case double the denominators" "catch rate: 6 of 10 real defects caught (60%)" "$out"
+check "two reviews per case double the denominators" "catch rate: 6 of 10 real defects caught (60%," "$out"
+# #3556: two reviews of one case are not two independent samples, so the range is as wide as one
+# review per case would give (6 of 10 over 5 defects: 3 of 5, 23% to 88%), never 31% to 83%.
+check "#3556 the range of a repeated run counts each case's reviews once" "(60%, 95% range 23% to 88%" "$out"
+check "#3556 and says so" "counts each case's reviews as one" "$out"
 touch "$WORK/fail-once"
 out="$(FAKE_FAIL_ONCE="$WORK/fail-once" score run --only invented-retry --repeat 2 --cases "$CASES" --results-dir "$WORK/repeat-results")"
 check "a case with one of its repeats failed says so" "unmeasured: invented-retry (1 of 2 reviews failed: error)" "$out"
-check "and is scored on the review that succeeded" "catch rate: 1 of 2 real defects caught (50%)" "$out"
+check "and is scored on the review that succeeded" "catch rate: 1 of 2 real defects caught (50%," "$out"
 
 # --- 10. a review that read only what changed since the last reviewed head (claude-config#1358) ---
 # After three rounds of findings a review's input lists every file of the branch, marks the ones it
@@ -340,7 +364,7 @@ check_rc "#1358 a case in the narrowed shape checks clean" 0 "$rc"
 rm -f "$FAKE_DIR/answers/"*
 answer narrowed "THIS REVIEW READS ONLY WHAT CHANGED SINCE" "$RETRY_GOOD"
 out="$(score run --all --cases "$WORK/narrow" --results-dir "$WORK/narrow-results")"
-check "#1358 and is scored like any other" "catch rate: 1 of 1 real defects caught (100%)" "$out"
+check "#1358 and is scored like any other" "catch rate: 1 of 1 real defects caught (100%," "$out"
 python3 -c 'import json, sys
 c = json.load(open(sys.argv[1]))
 c["items"].append({"id": "d9", "verdict": "real", "file": "report/old.sh", "line": 2})
@@ -348,6 +372,231 @@ json.dump(c, open(sys.argv[1], "w"))' "$WORK/narrow/invented-narrowed/case.json"
 out="$(score check --cases "$WORK/narrow")"; rc=$?
 check "#1358 an item on a file the narrowed input does not show is named" "report/old.sh" "$out"
 check_rc "#1358 and fails the check" 1 "$rc"
+
+# --- 11. every rate carries its count and its 95% range (claude-config#3556) ----------------------
+# These runs are result files written by hand, from invented findings on the invented sample, and
+# scored with rescore, which never calls a reviewer. A spec names, per case, each review's findings.
+IFS= read -r -d '' mkrun_prog <<'PY' || true
+import json, sys
+F = {
+    "p.d1": "shop/paginate.py:8: `return len(items) // size` floors the count, so a partial last page is lost. [severity: major]",
+    "p.d2": "shop/paginate.py:16: range stops at len(items) - 1 (off by one). [severity: major]",
+    "p.d3": "shop/paginate.py:23: start should use number - 1, so the first page skips its items (one based). [severity: major]",
+    "p.w1": "shop/paginate.py:13: a size of zero is not checked. [severity: minor]",
+    "p.x": "shop/paginate.py:2: the docstring could say more. [severity: minor]",
+    "r.d1": "report/send.sh:6: the || true swallows the upload failure. [severity: critical]",
+    "r.d2": "report/send.sh:17: sleep 5 is a fixed delay the tests wait on; inject it. [severity: minor]",
+    "r.w1": "report/send.sh:11: the loop runs 4 times (off by one). [severity: minor]",
+}
+out, cases_dir, spec = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+run = {"version": 1, "name": out.rsplit("/", 1)[-1], "model": "sonnet", "selection": "invented",
+       "repeat": max(len(r) for r in spec.values()), "cases_dir": cases_dir,
+       "cases": {cid: {"reviews": [{"status": "ok", "findings": [F[k] for k in rv]} for rv in reviews]}
+                 for cid, reviews in spec.items()}}
+json.dump(run, open(out, "w"), indent=2)
+PY
+mkrun(){ python3 -I -B -c "$mkrun_prog" "$1" "$2" "$3" </dev/null; }
+C11="$WORK/c11"; cp -R "$SAMPLE" "$C11"
+R11="$WORK/r11"; mkdir -p "$R11" "$WORK/r11-none"
+mkrun "$R11/a.json" "$C11" '{"invented-paginate": [["p.d1", "p.d2", "p.w1", "p.x"]], "invented-retry": [["r.d1", "r.w1"]]}'
+out="$(score rescore "$R11/a.json" --cases "$C11" --results-dir "$WORK/r11-none")"
+check "#3556 the catch rate carries its count and range" "catch rate: 3 of 5 real defects caught (60%, 95% range 23% to 88%)" "$out"
+check "#3556 the wrong rate is over checked findings, with its range" "wrong findings: 2 of 5 checked findings judged wrong (40%, 95% range 12% to 77%)" "$out"
+check "#3556 the unchecked count is on its own line" "unchecked: 1 of 6 findings matched no judged item" "$out"
+check "#3556 the figure over every finding is kept and labelled" "the wrong rate over all 6 would be 33% (2 of 6)" "$out"
+# The issue's own figures, from the saved baseline of 2026-11-19 (not on this Mac): 11 of 24 caught
+# and 2 wrong of 20 checked. The range printed for them must be the one the issue measured.
+IFS= read -r -d '' unit_prog <<'PY' || true
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("rs", sys.argv[1])
+rs = importlib.util.module_from_spec(spec); spec.loader.exec_module(rs)
+print("catch:", rs.rate_text(11, 24))
+print("wrong:", rs.rate_text(2, 20))
+print("zero:", rs.rate_text(0, 0))
+print("p8:", round(rs.sign_test(0, 8), 4), "p1:", rs.sign_test(1, 0), "p44:", rs.sign_test(4, 4), "p00:", rs.sign_test(0, 0))
+print("fewest:", rs.FEWEST_FLIPS)
+PY
+unit="$(python3 -I -B -c "$unit_prog" "$TOOL" </dev/null 2>&1)"
+check "#3556 the issue's catch figure gives its measured range" "catch: 46%, 95% range 28% to 65%" "$unit"
+check "#3556 the issue's wrong figure gives its measured range" "wrong: 10%, 95% range 3% to 30%" "$unit"
+check "#3556 zero of zero has no rate, rather than 0% or a crash" "zero: None" "$unit"
+check "#3556 eight flips all one way: the exact two sided sign test gives 2 in 256" "p8: 0.0078" "$unit"
+check "#3556 one flip, or an even split, is no evidence at all" "p1: 1.0 p44: 1.0 p00: None" "$unit"
+check "#3556 six flips all one way is the fewest that can clear the 95% level" "fewest: 6" "$unit"
+# Zero checked findings: no rate, said in words.
+mkrun "$R11/z.json" "$C11" '{"invented-paginate": [["p.x"]]}'
+out="$(score rescore "$R11/z.json" --cases "$C11" --results-dir "$WORK/r11-none")"; rc=$?
+check "#3556 no checked finding gives no wrong rate, in words" "wrong findings: no rate, none of the 1 finding matched a judged item" "$out"
+check_not "#3556 and never a percentage over nothing" "0 of 0" "$out"
+check_not "#3556 nor a crash" "Traceback" "$out"
+check_rc "#3556 a rescore with no baseline still exits 3" 3 "$rc"
+mkrun "$R11/all.json" "$C11" '{"invented-paginate": [["p.d1", "p.d2", "p.d3"]], "invented-retry": [["r.d1", "r.d2"]]}'
+out="$(score rescore "$R11/all.json" --cases "$C11" --results-dir "$WORK/r11-none")"
+check "#3556 every defect caught still carries a range below 100%" "catch rate: 5 of 5 real defects caught (100%, 95% range 57% to 100%)" "$out"
+mkrun "$R11/one.json" "$C11" '{"invented-retry": [["r.d1"]]}'
+out="$(score rescore "$R11/one.json" --cases "$C11" --results-dir "$WORK/r11-none")"
+check "#3556 one case gives the wide range it should" "catch rate: 1 of 2 real defects caught (50%, 95% range 9% to 91%)" "$out"
+# Repeats that disagree: the spread per case is printed, and a defect caught by only some reviews is
+# named apart from one never caught.
+mkrun "$R11/rep.json" "$C11" '{"invented-paginate": [["p.d1", "p.d2"], ["p.d1"]], "invented-retry": [["r.d1"], ["r.d1"]]}'
+out="$(score rescore "$R11/rep.json" --cases "$C11" --results-dir "$WORK/r11-none")"
+check "#3556 repeats pool, and the range counts each case once" "catch rate: 5 of 10 real defects caught (50%, 95% range 17% to 83%" "$out"
+check "#3556 the repeats line says how often the reviews of a case disagreed" "repeats: 2 reviews per case; the reviews of 1 of 2 cases caught different defects" "$out"
+check "#3556 the spread per case is printed" "caught in each review: invented-paginate 2, 1 of 3; invented-retry 1, 1 of 2" "$out"
+check "#3556 a defect caught by only some reviews is named" "caught by only some reviews: invented-paginate d2 (1 of 2)" "$out"
+check "#3556 missed means never caught in any review" "missed: invented-paginate d3, invented-retry d2" "$out"
+out="$(score rescore "$R11/a.json" --cases "$C11" --results-dir "$WORK/r11-none")"
+check_not "#3556 a run of one review per case prints no repeats line" "repeats:" "$out"
+
+# --- 12. two runs compared case by case (claude-config#3556) --------------------------------------
+R12="$WORK/r12"; mkdir -p "$R12"
+cp "$R11/a.json" "$R12/baseline.json"
+out="$(score rescore "$R12/baseline.json" --cases "$C11" --results-dir "$R12")"; rc=$?
+check "#3556 the baseline compared with itself says no difference" "NO DIFFERENCE" "$out"
+check "#3556 with no defect flipped either way" "catch: 0 newly caught, 0 newly missed, 5 the same" "$out"
+check "#3556 both sides carry their ranges" "baseline: catch 3 of 5 (60%, 95% range 23% to 88%); wrong 2 of 5 checked findings (40%, 95% range 12% to 77%), 1 unchecked" "$out"
+check "#3556 the test used is named" "exact two sided sign test" "$out"
+check_rc "#3556 no difference exits 0" 0 "$rc"
+check_not "3705 an unchanged unchecked count adds nothing to the verdict" "unchecked findings rose" "$out"
+check_not "3705 nor says it fell" "unchecked findings fell" "$out"
+# Two tests, each at 5%, and either can give a verdict, so a run with no real change can still be
+# called a regression or an improvement up to about 1 time in 10. The output says so.
+check "3705 the test line says the two sides together can be wrong up to about 1 time in 10" "up to about 1 time in 10" "$out"
+mkrun "$R12/quiet.json" "$C11" '{"invented-paginate": [["p.d1", "p.d2", "p.w1"]], "invented-retry": [["r.d1", "r.w1"]]}'
+out="$(score rescore "$R12/quiet.json" --cases "$C11" --results-dir "$R12")"
+check "3705 a fall in the unchecked findings is named too" "unchecked findings fell from 1 to 0" "$out"
+mkrun "$R12/b.json" "$C11" '{"invented-paginate": [["p.d1", "p.w1", "p.x"]], "invented-retry": [["r.d1", "r.w1"]]}'
+out="$(score rescore "$R12/b.json" --cases "$C11" --results-dir "$R12")"; rc=$?
+check "#3556 the defect newly missed is named" "newly missed: invented-paginate d2" "$out"
+check "#3556 one flip cannot be told from noise" "CANNOT TELL" "$out"
+check "#3556 and it says why" "too few" "$out"
+check_not "#3556 one flip is never a regression" "REGRESSION" "$out"
+check_not "#3556 nor not worse" "NOT WORSE" "$out"
+check_rc "#3556 cannot tell exits 4" 4 "$rc"
+mkrun "$R12/c.json" "$C11" '{"invented-paginate": [["p.d1", "p.d2", "p.w1", "p.x"]]}'
+out="$(score rescore "$R12/c.json" --cases "$C11" --results-dir "$R12")"
+check "#3556 a case measured only in the baseline is named, never dropped silently" "measured only in the baseline: invented-retry" "$out"
+check "#3556 and nothing is measured only in this run" "measured only in this run: none" "$out"
+R12b="$WORK/r12b"; mkdir -p "$R12b"; cp "$R12/c.json" "$R12b/baseline.json"
+out="$(score rescore "$R11/a.json" --cases "$C11" --results-dir "$R12b")"
+check "#3556 a case measured only in this run is named too" "measured only in this run: invented-retry" "$out"
+C12g="$WORK/c12g"; cp -R "$C11" "$C12g"; rm -rf "$C12g/invented-retry"
+out="$(score rescore "$R11/a.json" --cases "$C12g" --results-dir "$R12")"
+check "#3556 a case both runs measured but the case set no longer holds is named" "measured in both but not compared (gone from the case set, or failing its check): invented-retry" "$out"
+mkrun "$R12/rep.json" "$C11" '{"invented-paginate": [["p.d1", "p.d2", "p.w1", "p.x"], ["p.d1", "p.w1", "p.x"]], "invented-retry": [["r.d1", "r.w1"], ["r.d1", "r.w1"]]}'
+out="$(score rescore "$R12/rep.json" --cases "$C11" --results-dir "$R12")"
+# The review of #3705: d2 was caught in 1 of 2 reviews, so it was not missed. A partial change is
+# "caught less often", apart from a defect no review caught any more.
+check "3705 a defect caught in fewer of its repeats is caught less often, with both sides' counts" "caught less often: invented-paginate d2 (1 in 1 then, 1 in 2 now)" "$out"
+check_not "3705 and is never listed as newly missed" "newly missed: invented-paginate d2" "$out"
+check "3705 the catch line counts partial changes apart from whole ones" "catch: 0 newly caught, 0 newly missed, 0 caught more often, 1 caught less often, 4 the same" "$out"
+mkrun "$R12/rep0.json" "$C11" '{"invented-paginate": [["p.d1", "p.w1", "p.x"], ["p.d1", "p.w1", "p.x"]], "invented-retry": [["r.d1", "r.w1"], ["r.d1", "r.w1"]]}'
+out="$(score rescore "$R12/rep0.json" --cases "$C11" --results-dir "$R12")"
+check "3705 a defect no repeat caught any more is newly missed" "newly missed: invented-paginate d2 (1 in 1 then, 0 in 2 now)" "$out"
+# A set big enough for the test to decide: eight invented cases, each a copy of the sample's one.
+C12="$WORK/c12"; mkdir -p "$C12"
+for n in 1 2 3 4 5 6 7 8; do cp -R "$SAMPLE/invented-paginate" "$C12/p$n"; done
+all3='[["p.d1", "p.d2", "p.d3"]]'; two='[["p.d2", "p.d3"]]'; all3w='[["p.d1", "p.d2", "p.d3", "p.w1"]]'
+spec(){ printf '{"p1": %s, "p2": %s, "p3": %s, "p4": %s, "p5": %s, "p6": %s, "p7": %s, "p8": %s}' "$@"; }
+R12c="$WORK/r12c"; mkdir -p "$R12c"
+mkrun "$R12c/baseline.json" "$C12" "$(spec "$all3" "$all3" "$all3" "$all3" "$all3" "$all3" "$all3" "$all3")"
+mkrun "$R12c/worse.json" "$C12" "$(spec "$two" "$two" "$two" "$two" "$two" "$two" "$two" "$two")"
+out="$(score rescore "$R12c/worse.json" --cases "$C12" --results-dir "$R12c")"; rc=$?
+check "#3556 eight newly missed and none newly caught is a regression" "REGRESSION" "$out"
+check "#3556 with the counts and the test's p" "catch 0 newly caught, 8 newly missed (p = 0.008)" "$out"
+check_rc "#3556 a regression exits 1" 1 "$rc"
+R12d="$WORK/r12d"; mkdir -p "$R12d"; cp "$R12c/worse.json" "$R12d/baseline.json"
+out="$(score rescore "$R12c/baseline.json" --cases "$C12" --results-dir "$R12d")"; rc=$?
+check "#3556 eight newly caught and none newly missed is an improvement" "IMPROVEMENT" "$out"
+check_rc "#3556 an improvement exits 0" 0 "$rc"
+mkrun "$R12c/mixed.json" "$C12" "$(spec "$two" "$two" "$two" "$two" "$all3" "$all3" "$all3" "$all3")"
+R12e="$WORK/r12e"; mkdir -p "$R12e"
+mkrun "$R12e/baseline.json" "$C12" "$(spec "$all3" "$all3" "$all3" "$all3" "$two" "$two" "$two" "$two")"
+out="$(score rescore "$R12c/mixed.json" --cases "$C12" --results-dir "$R12e")"; rc=$?
+check "#3556 four up and four down at the same rate is counted case by case" "catch: 4 newly caught, 4 newly missed" "$out"
+check "#3556 and cannot be told apart" "CANNOT TELL" "$out"
+check_not "#3556 an unchanged rate over different cases is never not worse" "NOT WORSE" "$out"
+check_rc "#3556 so it exits 4" 4 "$rc"
+mkrun "$R12c/wrong.json" "$C12" "$(spec "$all3w" "$all3w" "$all3w" "$all3w" "$all3w" "$all3w" "$all3w" "$all3w")"
+out="$(score rescore "$R12c/wrong.json" --cases "$C12" --results-dir "$R12c")"; rc=$?
+check "#3556 a known wrong finding raised in eight more cases is a regression" "REGRESSION: known wrong findings raised 8 more often, 0 less often (p = 0.008)" "$out"
+check_rc "#3556 and exits 1" 1 "$rc"
+# The reason given for CANNOT TELL is the unclear side's own: one defect flipped while eight known
+# wrong findings went away must say the ONE change is too few, not count the other side's eight.
+R12f="$WORK/r12f"; mkdir -p "$R12f"; cp "$R12c/wrong.json" "$R12f/baseline.json"
+mkrun "$R12c/mixed2.json" "$C12" "$(spec "$two" "$all3" "$all3" "$all3" "$all3" "$all3" "$all3" "$all3")"
+out="$(score rescore "$R12c/mixed2.json" --cases "$C12" --results-dir "$R12f")"; rc=$?
+check "#3556 the unclear side gives its own change count" "catch 0 newly caught, 1 newly missed (p = 1.000), 1 change, too few for the 95% level" "$out"
+check "#3556 and the side that did clear it is still said" "Also better: known wrong findings raised 0 more often, 8 less often" "$out"
+check_rc "#3556 one side unclear is cannot tell overall" 4 "$rc"
+# The review of #3705: a REGRESSION on one side still says what the other side did. Eight defects
+# newly missed while eight known wrong findings went away.
+out="$(score rescore "$R12c/worse.json" --cases "$C12" --results-dir "$R12f")"; rc=$?
+check "3705 a regression on one side is still a regression" "REGRESSION: catch 0 newly caught, 8 newly missed (p = 0.008)" "$out"
+check "3705 and the other side's improvement is said too" "Also better: known wrong findings raised 0 more often, 8 less often (p = 0.008)" "$out"
+check_rc "3705 and it exits 1" 1 "$rc"
+# Six changes split five one way and one the other: as many as the 95% level needs, but too evenly
+# split. The reason must say so, never "6 changes, too few ... needs at least 6", which contradicts
+# itself (the one mutant the review of #3705 saw survive moved this boundary).
+R12g="$WORK/r12g"; mkdir -p "$R12g"
+mkrun "$R12g/baseline.json" "$C12" "$(spec "$all3" "$all3" "$all3" "$all3" "$all3" "$two" "$all3" "$all3")"
+mkrun "$R12c/split6.json" "$C12" "$(spec "$two" "$two" "$two" "$two" "$two" "$all3" "$all3" "$all3")"
+out="$(score rescore "$R12c/split6.json" --cases "$C12" --results-dir "$R12g")"; rc=$?
+check "3705 six changes split five to one say they are too evenly split" "catch 1 newly caught, 5 newly missed (p = 0.219), too evenly split" "$out"
+check_not "3705 and never that six are too few" "6 changes, too few" "$out"
+check_rc "3705 six changes split five to one cannot be told apart" 4 "$rc"
+mkrun "$R12c/five.json" "$C12" "$(spec "$two" "$two" "$two" "$two" "$two" "$all3" "$all3" "$all3")"
+R12h="$WORK/r12h"; mkdir -p "$R12h"
+mkrun "$R12h/baseline.json" "$C12" "$(spec "$all3" "$all3" "$all3" "$all3" "$all3" "$all3" "$all3" "$all3")"
+out="$(score rescore "$R12c/five.json" --cases "$C12" --results-dir "$R12h")"
+check "3705 five changes all one way are too few" "5 changes, too few for the 95% level, which needs at least 6 all one way" "$out"
+# A comparison over cases that hold no item judged wrong says that side was not measured, rather
+# than that nothing judged wrong was raised more or less often; likewise for no real defect.
+C12i="$WORK/c12i"; mkdir -p "$C12i/p1"; cp "$SAMPLE/invented-paginate/input.diff" "$C12i/p1/"
+python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c["items"] = [i for i in c["items"] if i["verdict"] == "real"]
+json.dump(c, open(sys.argv[2], "w"))' "$SAMPLE/invented-paginate/case.json" "$C12i/p1/case.json"
+R12i="$WORK/r12i"; mkdir -p "$R12i"
+mkrun "$R12i/baseline.json" "$C12i" '{"p1": [["p.d1", "p.d2"]]}'
+out="$(score rescore "$R12i/baseline.json" --cases "$C12i" --results-dir "$R12i")"; rc=$?
+check "3705 no item judged wrong is said as that side not measured" "these cases hold no item judged wrong, so known wrong findings were not compared" "$out"
+check_not "3705 and never as nothing judged wrong raised more or less often" "no finding judged wrong was raised more or less often" "$out"
+check_rc "3705 the measured side alone still gives no difference" 0 "$rc"
+C12j="$WORK/c12j"; mkdir -p "$C12j/p1"; cp "$SAMPLE/invented-paginate/input.diff" "$C12j/p1/"
+python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c["items"] = [i for i in c["items"] if i["verdict"] == "wrong"]
+json.dump(c, open(sys.argv[2], "w"))' "$SAMPLE/invented-paginate/case.json" "$C12j/p1/case.json"
+R12j="$WORK/r12j"; mkdir -p "$R12j"
+mkrun "$R12j/baseline.json" "$C12j" '{"p1": [["p.w1"]]}'
+out="$(score rescore "$R12j/baseline.json" --cases "$C12j" --results-dir "$R12j")"
+check "3705 no real defect is said as that side not measured" "these cases hold no real defect, so catches were not compared" "$out"
+check_not "3705 and never as no defect caught or missed differently" "no defect was caught or missed differently" "$out"
+
+# --- 13. nothing to compare: exit 2, and save-baseline says why (the review of #3705) -------------
+# A comparison over cases holding no real defect and no item judged wrong is unmeasured, a third
+# cause of exit 2 beside no case set and no review succeeding. The reviews did run, so a refused
+# save must say nothing could be compared, never that nothing was measured.
+C13="$WORK/c13"; mkdir -p "$C13/invented-trivial"; cp "$SAMPLE/invented-paginate/input.diff" "$C13/invented-trivial/"
+python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c["items"] = [i for i in c["items"] if i["verdict"] == "trivial"]
+json.dump(c, open(sys.argv[2], "w"))' "$SAMPLE/invented-paginate/case.json" "$C13/invented-trivial/case.json"
+rm -f "$FAKE_DIR/answers/"*
+answer paginate "shop/paginate.py" "$PAGINATE_GOOD"
+out="$(score run --all --save-baseline --cases "$C13" --results-dir "$WORK/r13")"
+check "3705 a first run with nothing comparable is still saved when there is no baseline" "Saved as the baseline" "$out"
+out="$(score run --all --save-baseline --cases "$C13" --results-dir "$WORK/r13")"; rc=$?
+check "3705 a comparison with no defect and no item judged wrong is unmeasured" "UNMEASURED: these cases hold no real defect and no item judged wrong" "$out"
+check_rc "3705 and exits 2" 2 "$rc"
+check "3705 the refused save says nothing could be compared" "nothing could be compared, so it was not saved as the baseline" "$out"
+check_not "3705 and never that nothing was measured, since every review ran" "Nothing was measured" "$out"
+# Both texts wrap their lines, so they are read with every run of spaces and line breaks as one space.
+doc="$(python3 -I -B -c 'import ast, sys; print(" ".join(ast.get_docstring(ast.parse(open(sys.argv[1]).read())).split()))' "$TOOL" </dev/null)"
+check "3705 the tool's own exit text lists the third cause of exit 2" "or the cases compared hold no real defect and no item judged wrong" "$doc"
+readme="$(python3 -I -B -c 'import sys; print(" ".join(open(sys.argv[1]).read().split()))' "$DIR/../README.md" </dev/null)"
+check "3705 the README's exit text lists it too" "or the cases compared hold no real defect and no item judged wrong" "$readme"
 
 echo
 echo "passed: $pass, failed: $fail"

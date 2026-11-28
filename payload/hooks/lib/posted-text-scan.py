@@ -2,9 +2,10 @@
 """Scan what was posted to a repository in a window for work names, before it turns public.
 
 claude-config#3582. The publish gate (work_names_publish_gate.py) judges text posted to a PUBLIC
-repository and lets a private one through without reading its lists. So text posted while a
-repository is private is judged by nothing, and it is still unjudged when the repository turns
-public. On 2026-11-24 this repository was private for some hours, 83 texts were posted meanwhile,
+repository and lets a private one through without reading its lists (since Dan's decision of
+2026-11-25, unless the repository's .github/expected-visibility says public), and it reads only
+the gh commands a session runs. So text posted while a repository is private can be judged by
+nothing, and it is still unjudged when the repository turns public. On 2026-11-24 this repository was private for some hours, 83 texts were posted meanwhile,
 and a scan written by hand that night found 8 lines naming a work organisation or repository. This
 is that scan as one shipped command, which the gate's refusal of `gh repo edit --visibility public`
 names as the thing to run first.

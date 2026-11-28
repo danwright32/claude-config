@@ -126,7 +126,9 @@ function readAnnounceChannel(slug, file) {
       why: slug + ' is not listed in the dev update registry at ' + got.file + ', so it has no announcements channel.' };
   }
   const judged = announceChannelOf(found);
-  if (judged.bad) return { state: 'ok', file: got.file, channel: '', why: badAnnounceWhy(slug, judged.value) + '. The file is ' + got.file + '.' };
+  // `bad` keeps a channel that is not one apart from none named, for a caller that must not read a
+  // config error as "does not announce" (skills/milestone/create-milestone.sh, claude-config#3669).
+  if (judged.bad) return { state: 'ok', file: got.file, channel: '', bad: true, why: badAnnounceWhy(slug, judged.value) + '. The file is ' + got.file + '.' };
   if (!judged.channel) {
     return { state: 'ok', file: got.file, channel: '',
       why: 'The entry for ' + slug + ' in the dev update registry at ' + got.file + ' names no announceChannel, so '
@@ -160,14 +162,15 @@ module.exports = {
 //                 the same, plus `channel`, the id of the channel that repository's announcements for
 //                 agents are drafted in, or "" with `why` (claude-config#3665). It is what the merge
 //                 gate's refusal of a changelog/announce label says to run, to tell a repository that
-//                 never announced from one whose key was lost.
+//                 never announced from one whose key was lost. `bad` is true when the entry names a
+//                 channel that is not a channel id, which is no answer to "does it announce".
 if (require.main === module) {
   const cmd = process.argv[2];
   if (cmd === 'path') {
     process.stdout.write(registryPath() + '\n');
   } else if (cmd === 'announce-channel' && typeof process.argv[3] === 'string' && process.argv[3].trim()) {
     const got = readAnnounceChannel(process.argv[3], process.argv[4] || registryPath());
-    process.stdout.write(JSON.stringify({ state: got.state, file: got.file, why: got.why || '', channel: got.channel }) + '\n');
+    process.stdout.write(JSON.stringify({ state: got.state, file: got.file, why: got.why || '', channel: got.channel, bad: got.bad === true }) + '\n');
   } else if (cmd === 'channel') {
     const got = readChannel(process.argv[3] || registryPath());
     process.stdout.write(JSON.stringify({ state: got.state, file: got.file, why: got.why || '', channel: got.channel }) + '\n');

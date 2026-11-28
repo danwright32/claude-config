@@ -32,8 +32,8 @@
 # NOTHING HERE DECIDES A MERGE. The gates a typed merge meets cannot see a merge made inside a
 # script, so before it merges this hands the EXACT merge command it is about to run to the same
 # gates, block-red-merge.sh, pr-review-gate.sh, require-changelog-tag.sh, check-closing-merge.sh
-# (#1550), check-work-names-merge.sh (#1995), design-score-gate.sh and require-verification-run.sh
-# (#1529), as a hook payload, and merges
+# (#1550), check-work-names-merge.sh (#1995), lessons-merge-gate.sh (#3343), design-score-gate.sh
+# and require-verification-run.sh (#1529), as a hook payload, and merges
 # only when every one allows it. Green, up to date, pinned, reviewed, carrying its changelog record,
 # closing no issue its body says stays open and, when it closes a Match the settled design issue, at 100% of its
 # design match score (#1364) are therefore judged by the one implementation of each rule, never by a
@@ -253,7 +253,7 @@
 # and why), and the commands and scripts it runs, each honoured only with
 # HOOK_TESTS_RUNNING=1 (claude-config#2231, #2317, #2399, see mwr_script): MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE,
 # MWR_CHANGELOG_GATE, MWR_DESIGN_GATE, MWR_VERIFY_GATE, MWR_CLOSING_GATE, MWR_WORK_NAMES_GATE,
-# MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree),
+# MWR_LESSONS_GATE, MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree),
 # MWR_UNTESTED_RUNNER (the runner the untested suites are run by, the head's own run-all-tests.sh).
 #
 # AFTER A MERGE THAT LANDED it removes the merged branch's agent worktree when
@@ -283,6 +283,7 @@ DESIGN_GATE="$(mwr_script "${MWR_DESIGN_GATE:-}" "$MWR_HOOKS/design-score-gate.s
 VERIFY_GATE="$(mwr_script "${MWR_VERIFY_GATE:-}" "$MWR_HOOKS/require-verification-run.sh")"
 CLOSING_GATE="$(mwr_script "${MWR_CLOSING_GATE:-}" "$MWR_HOOKS/check-closing-merge.sh")"
 WORK_NAMES_GATE="$(mwr_script "${MWR_WORK_NAMES_GATE:-}" "$MWR_HOOKS/check-work-names-merge.sh")"
+LESSONS_GATE="$(mwr_script "${MWR_LESSONS_GATE:-}" "$MWR_HOOKS/lessons-merge-gate.sh")"
 REVIEW_LIB="$(mwr_script "${MWR_REVIEW_LIB:-}" "$MWR_LIB/pr-review.sh")"
 # The wait and the clock name commands this runs as well, so they take the same rule
 # (claude-config#2399): outside a test run the sleep on the PATH waits and date is the clock.
@@ -2867,6 +2868,11 @@ EOF_VIEW
     if ! why="$(ask_gate "$WORK_NAMES_GATE" "$(merge_text "$head")")"; then
       stop 1 "Stopped: check-work-names-merge.sh refused the merge of #$pr before any wait: $why Nothing was merged; run this again once that is dealt with."
     fi
+    # A change to lesson entries Dan has not answered for, asked before any wait so a merge waiting
+    # on his answer is known at once rather than after a check run (claude-config#3343, L667).
+    if ! why="$(ask_gate "$LESSONS_GATE" "$(merge_text "$head")")"; then
+      stop 1 "Stopped: lessons-merge-gate.sh refused the merge of #$pr before any wait: $why Nothing was merged; run this again once that is dealt with."
+    fi
   fi
 
   # Based on a branch that is not the default one: wait for that branch to merge, with no place in
@@ -3081,6 +3087,11 @@ EOF_VIEW
   # (claude-config#1995).
   if ! why="$(ask_gate "$WORK_NAMES_GATE" "$cmd")"; then
     stop 1 "Stopped: check-work-names-merge.sh refused the merge of #$pr at ${head:0:7}: $why"
+  fi
+  # Asked again here because a push while this waits can change a lesson entry, and his answer
+  # covers only the change he read (claude-config#3343).
+  if ! why="$(ask_gate "$LESSONS_GATE" "$cmd")"; then
+    stop 1 "Stopped: lessons-merge-gate.sh refused the merge of #$pr at ${head:0:7}: $why"
   fi
   # A pull request whose closing keywords name a Match the settled design issue merges only at 100% on
   # both halves of the design match score at this head (claude-config#1364).
