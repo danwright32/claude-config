@@ -6744,6 +6744,117 @@ refusal that day, at 2:32 PM ET, was not a helper grown past the gate. No load f
 for that minute, so the likely cause (a Mac too busy to give the gate a quarter of a core for 11
 seconds) is inferred, not measured.
 
+## Slack drafts are compared with what Dan sent
+
+Sessions save each Slack message as a draft and Dan edits it before he sends it. A measurement on
+the work MacBook on 2026-11-24 paired 106 drafts with what he sent: 22 went out as drafted and 29
+were heavily rewritten, and the commonest edit was cutting figures and shortening (#3554). Three
+pieces turn the edits he keeps making into written rules, each one his to accept.
+
+- **The reader**, `hooks/lib/draft-edit-diff.py`. It reads this Mac's session records, pairs each
+  draft Slack saved with the next post by `--author` in the same thread, as a later session read it
+  back, and prints counts by kind of edit: sent as drafted, heavily rewritten, figures cut, length
+  cut, the ask reworded, the opening changed. A draft is used once, by the first post after it; a
+  post with no draft before it is left out, and so is one more than an hour after its draft (a
+  setting, chosen from the work MacBook's pairs of 2026-11-27, where 173 of 184 posts came within
+  the hour). Both are compared with Slack's formatting set aside. A heavily rewritten pair is in
+  none of the four kinds a rule is offered for, since a post that far from its draft may not be an
+  edit of it; what that costs is that a draft cut to under about half its length is in no kind. A
+  read made in the concise layout shows no time for a post, so it is counted as its own kind and
+  nothing is paired from it. It only prints. It imports
+  nothing that can send a request or write a file and opens files only to read, because the records
+  name Slack's posting address and the Slack drafts gate refuses a program that reads them and
+  could write. Message text is printed only with `--examples`: one pair for each recurring kind. A
+  kind is recurring at 10 pairs in 3 threads, a setting chosen on 2026-11-27 so that one long thread
+  cannot make an edit look like a habit; under it the kind is reported as too thin and no rule is
+  offered. A read result it finds no message in is counted and said. Only the `messages` field of
+  a read result is read for messages: text in any other field, `pagination_info` included, is no
+  part of a message, and a result with no such field is counted as one it cannot read. A run exits
+  4 when none could be read, or when most messages have their text somewhere it does not look
+  (none under the Message TS line, or an unknown line above it). A pair whose post begins or ends
+  in a line shaped like one of the connector's own (a word or three and a colon) is set aside and
+  counted, unless the draft holds a line with the same label at that end, which makes it his; a
+  run in which most pairs were set aside that way exits 4 too. That is judged over the pairs and
+  not the messages, so a channel of alerts that all begin "Alert:" does not stop a run. That exit
+  cannot tell a line of the connector's from one Dan adds by hand to most drafts ("Update: " in
+  front of 7 of 12 stops the run, on a layout that is as measured), so its words name both
+  readings and blame neither, and the note the skill files says only that nothing was measured.
+  `--shapes` prints what the results are made of: counts, and a field or label name only when it
+  is in a fixed list in the script, never a key or a line it does not know. `--differences`
+  counts, for the pairs changed but not heavily, how many would be the same with one more thing
+  set aside (a name inside angle brackets, how a link is written, punctuation, emoji, a trailing
+  edited mark, a last or first line), and the same for each kind a rule can be offered for. Each
+  counts the pairs one of those seven listed differences would explain, and is a limit in neither
+  direction: a pair it explains can still be his edit, since he also changes punctuation and adds
+  and cuts lines, and a pair it does not explain can still be no edit of his, when a read writes a
+  message another way that is not listed (twelve drafts posted word for word, with a phone number
+  read back as a link, read as twelve changed openings with 0 of 12 explained). `--likeness` counts the pairs in each band of likeness (the
+  same, 0.98 and over, 0.95, 0.90, 0.80, 0.70, under 0.70), once by words and once by characters,
+  and how many posts were the last message of the read their text came from. The two differ
+  widely on a small change: one changed letter in a message of ten words is 0.90 by words and
+  about 0.99 by characters. The run prints, in fixed words, what the two counts can and cannot
+  show.
+- **The offer**, the `draft-edit-review` skill. It runs the reader with `--differences` and
+  `--likeness`, tells Dan the counts and, before any rule, the doubt set out in the last paragraph
+  of this section, and asks one question for each recurring kind: the proposed rule in one
+  sentence, the pairs it rests on, how many of them one of the listed read differences would
+  explain and that the rest are his edit or a read difference nobody has listed, one example pair,
+  and Accept, Not now or Never offer this again. The sentence is run
+  through `/no-ai-tells` before that question, so the sentence he accepts is the sentence written,
+  word for word. On Accept a second question asks where the rule goes (the no-ai-tells skill, the Slack
+  section of the global `CLAUDE.md`, or the project's own file), and the session makes that edit
+  itself. What checks the save depends on the place. The ask before saving mod asks him before a
+  save to a `CLAUDE.md`, an `AGENTS.md` or a memory file. It does not ask about a skill file, so
+  for the no-ai-tells skill the skill asks one more question of its own, showing the final sentence
+  and the file's name, before the edit. `skills/draft-edit-review/decisions.py` keeps each answer,
+  and the reader reads that file itself, so a kind he accepted or declined for good is left out
+  whether or not the session passes anything. Where a rule went is kept as one of three labels and
+  a project's folder name, never as text somebody typed. `decisions.py forget` takes an answer back.
+- **The weekly notice**, `hooks/draft-edit-review-notice.sh`, at session start. It says the review
+  is due, in one line, when a week has passed since it last said so and a draft has been saved on
+  this Mac since the last review finished. The line goes into the session, which is asked to tell
+  Dan; nothing checks that it did, and the week is recorded when the line is printed. It reads no
+  record, runs nothing and asks nothing. The same script runs after the Slack draft tool and
+  records the second, and nothing about the draft, unless the tool's answer says Slack saved
+  nothing. State it cannot read is said by name, at every session start until it is put right, and
+  the review is not offered.
+
+What the pairing cannot see: a thread no later session read back, or read back only in the concise
+layout; a draft Dan deleted (a post he then wrote in that thread within the hour reads as heavily
+rewritten); a draft he sent more than an hour after it was saved; a message he wrote with no
+draft; a post a session sent as him; an edit he made after sending; a read result that was cut
+short; and the other Mac's sessions. Three things it reads wrongly, each on purpose or for want of
+a measurement. A line of his own shaped like a label ("Update: ...") that opens or ends what he
+sent, and that the draft did not hold there, is set aside with the lines that may be the
+connector's, so that pair is in no count; when most of his pairs are so, the run stops and no kind
+is counted on that Mac, which is a decision still open with Dan (pull request 3848). A line of the connector's that is not shaped like a
+label, and is not the Reactions line, is read as his words. And "@Name" typed in a draft and made
+a real mention by hand reads as an edit, which it is.
+
+State is in `~/.claude/state/draft-edit-review/` on each Mac and is never synced: `draft-saved`,
+`last-offered` and `last-review` (one time each), `author` (Dan's Slack member id) and
+`decisions.json`. It is per Mac on purpose. This repository is public, the counts come from one
+Mac's own records, and where a rule went can name a private project. The cost is that a kind
+declined on one Mac can be offered once on the other.
+
+The layout inside a thread or channel read could not be measured on the personal MacBook, which on
+2026-11-27 held no draft call and no read that succeeded in 8,628 record files. It was measured on
+the work MacBook the same day, over 1,765 read results, by counts, field names and the punctuation
+of headings only (pull request 3848), and the reader was fitted to it: the concise layout, a channel
+heading with no name, the section heading over a thread's replies, a `Reactions:` line under a
+message, and the name a read adds inside a mention. The fixtures hold invented text in that layout.
+A channel, a group and a here mention with a name added are set aside the same way, and were not
+measured. One thing that run left unexplained: 6 of its 184 pairs read as sent as drafted, against
+22 of 106 in the issue's measurement of 2026-11-24. One likely cause is that the two counts meant
+different things by it: the issue reported four bands, and this reader wants the two texts the
+same. `--likeness` prints bands of its own, by words and by characters, and cannot settle that:
+the issue did not record whether it compared words or characters, or where it drew its lines, so
+about a fifth of the pairs at 0.90 and over would fit that cause and fit small edits of his
+equally, and far fewer would make it less likely without ruling it out. Neither count had been
+run on the work MacBook when this was written on 2026-11-27. For as long as the reader's own
+account lists that share as not explained, the skill tells Dan the doubt at every review, with the
+run's own numbers, before it puts any rule to him.
+
 ## Read only queries are approved without asking
 
 Auto mode's classifier refused a plain select against a production database on 2026-11-05 ("[Production
