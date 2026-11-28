@@ -4,6 +4,7 @@ import { pipeline } from './mod-kit/hooks/commands.ts'
 // #3817: the words for a held steps card, on a line of their own so the close card's line below
 // stays as other branches find it.
 import { CARRIED_RETRIES, CHECK_CARRIED, carriedReason } from '../hooks/close.ts'
+import * as closeCard from '../hooks/close.ts'
 import * as request from '../hooks/request.ts'
 import type { On, Register } from 'claude-code'
 import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
@@ -280,13 +281,28 @@ type World = {
   /** #3843: what the run of the end of turn review's own test answers in place of yes or no. */
   workTest?: Gh
 }
-// manual steps' four reasons for not showing a step it was handed (addStep, word for word).
+// manual steps' five reasons for not showing a step it was handed (addStep, word for word), and
+// four answers it never gives, which the goal box must read as it reads any other (#3817).
 const NOT_SHOWN = {
   'not shown: nobody at the prompt': 'this session has nobody at its prompt',
   'not shown: carried steps held': 'the steps carried from an earlier session are held until Claude checks them again',
+  'not shown: held while Dan is away': 'the steps this session pinned while Dan was away are held until they are pinned again once he is home',
   'not shown: taken away': 'the card was taken away as it was added',
   'not shown: not drawn': 'the card could not be shown (no pane)',
+  'not shown: held in a third way': 'the steps card is held for a reason of a third kind',
+  'not shown: the unchecked words with no value': 'the steps carried from an earlier session are held until Claude checks them again',
+  'not shown: the unchecked words under the away value': 'the steps carried from an earlier session are held until Claude checks them again',
+  'not shown: the away words under the unchecked value': 'the steps this session pinned while Dan was away are held until they are pinned again once he is home',
 } as const
+// #3817: the value manual steps gives beside its reason for a held card, which says why it is held.
+const HELD_AS: Partial<Record<keyof typeof NOT_SHOWN, string>> = {
+  'not shown: carried steps held': 'unchecked',
+  'not shown: held while Dan is away': 'away',
+  'not shown: held in a third way': 'a third kind',
+  'not shown: the unchecked words under the away value': 'away',
+  'not shown: the away words under the unchecked value': 'unchecked',
+}
+const notShown = (a: keyof typeof NOT_SHOWN) => ({ isShown: false, reason: NOT_SHOWN[a], ...(HELD_AS[a] ? { held: HELD_AS[a] } : {}) })
 type PinAnswer = 'shown' | keyof typeof NOT_SHOWN | 'refused' | 'threw' | 'says nothing' | 'null' | 'no answer yet'
 const link = (repo: string, pr: number, at = '2026-10-24T18:00:00.000Z') =>
   JSON.stringify({ type: 'pr-link', sessionId: 's1', prNumber: pr, prUrl: `https://github.com/${repo}/pull/${pr}`, prRepository: repo, timestamp: at })
@@ -349,8 +365,8 @@ const world = (on: On, init: Partial<World> = {}) => {
         if (a === 'threw') return ok('', 1, "the manual steps mod's own hook did not answer")
         if (a === 'says nothing') return ok('{}')
         if (a === 'null') return ok('null')
-        if (a === 'no answer yet') return new Promise(res => (w.releasePin = () => res(ok(JSON.stringify(w.lateAnswer ? { isShown: false, reason: NOT_SHOWN[w.lateAnswer] } : { isShown: true }))))) as never
-        if (a !== 'shown') return ok(JSON.stringify({ isShown: false, reason: NOT_SHOWN[a] }))
+        if (a === 'no answer yet') return new Promise(res => (w.releasePin = () => res(ok(JSON.stringify(w.lateAnswer ? notShown(w.lateAnswer) : { isShown: true }))))) as never
+        if (a !== 'shown') return ok(JSON.stringify(notShown(a)))
         w.pinned.push({ heading: input.heading, step: input.step })
         return ok(JSON.stringify({ isShown: true }))
       }
@@ -1239,8 +1255,8 @@ test('the prompt asking for carried steps to be checked says what to do in words
   expect(CHECK_CARRIED).toMatch(/ Say in one line what you found, with no question\.$/)
   // Dan reads it too: no name from inside the mods that he would have to read past.
   for (const inside of ['manual-steps steps tool', 'already-done', 'manual steps note']) expect(CHECK_CARRIED).not.toContain(inside)
-  // It is sent while Dan is away too, when manual steps holds a card the session may already have
-  // checked: so it does not say the steps were not checked, and it promises no card.
+  // It is sent while Dan is away too, where the steps the session then pins stay held until he is
+  // home: so it promises no card. Its wording is held as it was, without the two phrases below.
   for (const untrue of ['have not been checked', 'follows by itself']) expect(CHECK_CARRIED).not.toContain(untrue)
   // Each time it is sent he reads it: ceilings in words and in characters, so it cannot grow unnoticed.
   expect(CHECK_CARRIED.split(/\s+/).length).toBeLessThan(81)
@@ -1480,6 +1496,130 @@ for (const answer of ['not shown: nobody at the prompt', 'not shown: taken away'
     expect(reasonsOf(w)?.reasons.join(' ')).not.toMatch(/the session was asked/)
   })
 }
+
+// #3817, Dan away (his answer by picker on 2026-11-27: "Ask only if unchecked"). While he is away
+// manual steps holds every steps card the session pins, so a card whose carried steps this session
+// has already checked and pinned is held too. Manual steps says which of the two it is by a value,
+// `held`, beside its reason, and the goal box asks the session to check only for the unchecked one.
+// For the away one it takes its close step back, asks nothing and writes that the card waits for
+// him to be home.
+const AWAY = 'not shown: held while Dan is away' as const
+
+test('Dan away and the carried steps already checked and pinned by this session: the session is sent no prompt, the close step is taken back, and the reason says the card waits until he is home (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: AWAY })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinCalls).toBe(1)
+  expect(w.pinned).toEqual([])
+  expect(asksToCheck(submitted)).toEqual([])
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [closeCard.awayReason()] })
+  expect(reasonsOf(w)?.reasons[0]).toMatch(/^the card could not be shown \(the steps this session pinned while Dan was away are held until they are pinned again once he is home\); the session has pinned them already, so it was not asked to check them/)
+  expect(reasonsOf(w)?.reasons[0]).not.toMatch(/the session was asked|until Claude checks them again/)
+  // His next request from away, with a box of its own: still nothing is asked.
+  await says($, 'Now make the status bar quieter')
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(w.pinCalls).toBe(2)
+  expect(asksToCheck(submitted)).toEqual([])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [closeCard.awayReason()] })
+})
+
+test('Dan away and the carried steps not checked: the session is asked once, and after it has checked and pinned them neither the next quiet turn end nor his next request asks again (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(asksToCheck(submitted).map(s => s.text)).toEqual([CHECK_CARRIED])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [carriedReason('asked')] })
+  // The prompt's own turn: the session checks the steps and pins them. Dan is away, so manual
+  // steps holds the card for him, and says so.
+  await turnStarts($)
+  w.pinAnswer = AWAY
+  await quietEnd($, clock)
+  expect(asksToCheck(submitted)).toHaveLength(1)
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [closeCard.awayReason()] })
+  await says($, 'Now make the status bar quieter')
+  await workedAndQuiet($, clock, { id: 'b2' })
+  await quietEnd($, clock)
+  expect(asksToCheck(submitted)).toHaveLength(1)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [closeCard.awayReason()] })
+})
+
+test('home again: once the held steps are pinned with Dan at home, the next quiet turn end shows the close card, with nothing asked on the way (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: AWAY })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  // He presses the held row at home: its turn pins the steps again, and the card is shown.
+  await turnStarts($)
+  w.pinAnswer = 'shown'
+  await quietEnd($, clock)
+  expect(w.pinned).toHaveLength(1)
+  expect(w.pinned[0]?.heading).toBe(CLOSE_HEADING)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
+  expect(asksToCheck(submitted)).toEqual([])
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+})
+
+for (const answer of [CARRIED, AWAY] as const) {
+  test(`while Dan is asleep nothing is pinned, asked or taken back, whatever manual steps would answer (${answer}) (#3817)`, withAll, async ($, on) => {
+    const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: answer, asleep: true })
+    await start($)
+    await says($, 'Add the goal box')
+    await workedAndQuiet($, clock)
+    expect(w.pinCalls).toBe(0)
+    expect(asksToCheck(submitted)).toEqual([])
+    expect(w.withdrawn).toEqual([])
+  })
+}
+
+// The two answers are told apart by the value alone. An answer with a value the goal box does not
+// know, or with a held card's words and no value, is neither: it is written as any other answer
+// that was not shown, with nothing asked and nothing taken back.
+for (const answer of ['not shown: held in a third way', 'not shown: the unchecked words with no value'] as const) {
+  test(`a pin that comes back ${answer} is read as neither held answer: nothing is asked, nothing is taken back, and the reason is manual steps' own (#3817)`, withAll, async ($, on) => {
+    const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: answer })
+    await start($)
+    await says($, 'Add the goal box')
+    await workedAndQuiet($, clock)
+    expect(w.pinCalls).toBe(1)
+    expect(asksToCheck(submitted)).toEqual([])
+    expect(w.withdrawn).toEqual([])
+    expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [`the card could not be shown (${NOT_SHOWN[answer]})`] })
+  })
+}
+
+test("the value decides, never the words: the unchecked words under the away value ask nothing, and the away words under the unchecked value ask (#3817)", withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: 'not shown: the unchecked words under the away value' })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(asksToCheck(submitted)).toEqual([])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [closeCard.awayReason()] })
+  w.pinAnswer = 'not shown: the away words under the unchecked value'
+  await says($, 'Now make the status bar quieter')
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(asksToCheck(submitted).map(s => s.text)).toEqual([CHECK_CARRIED])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [carriedReason('asked')] })
+})
+
+test('the goal box knows two held answers, by two values and two reasons, and reads anything else as neither (#3817)', async () => {
+  expect(closeCard.HELD_UNCHECKED).toBe('unchecked')
+  expect(closeCard.HELD_AWAY).toBe('away')
+  expect(closeCard.HELD_UNCHECKED).not.toBe(closeCard.HELD_AWAY)
+  expect(closeCard.heldKind({ isShown: false, held: 'unchecked' })).toBe(closeCard.HELD_UNCHECKED)
+  expect(closeCard.heldKind({ isShown: false, held: 'away' })).toBe(closeCard.HELD_AWAY)
+  // Shown is never held, whatever else the answer carries; and no other value is either kind.
+  for (const other of [{ isShown: true, held: 'away' }, { isShown: true, held: 'unchecked' }, { isShown: false }, { isShown: false, held: 'a third kind' }, { isShown: false, held: '' }, { isShown: false, held: true }, { isShown: false, held: ['away'] }, { held: 'away' }, null, undefined, 'away'])
+    expect(closeCard.heldKind(other)).toBeUndefined()
+  const reasons = [closeCard.awayReason(), carriedReason('asked'), carriedReason('asked before')]
+  expect(new Set(reasons).size).toBe(3)
+  // His writing rules, as for the prompt: none of the three marks as a break between words.
+  for (const mark of [String.fromCharCode(0x2014), String.fromCharCode(0x2013), ` ${String.fromCharCode(0x2d)} `]) expect(closeCard.awayReason().includes(mark)).toBe(false)
+})
 
 test("this session's own undone step still withholds the close card, and is the only step named, beside another session's (#3770)", withAll, async ($, on) => {
   const { w, clock } = world(on, { stepsCard: { heading: 'h', steps: [{ title: 'Theirs', url: 'https://a.example', pinnedBy: 's2' }, { title: 'Mine', url: 'https://b.example', pinnedBy: 's1' }] } })

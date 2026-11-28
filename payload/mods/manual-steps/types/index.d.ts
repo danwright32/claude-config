@@ -86,9 +86,27 @@ export type StepsWaiting = { turnId: string; step: number }
 export type StepsCard = {
   heading: string
   steps: StepsStep[]
-  /** Read from an earlier session and not yet re-checked by Claude in this one. */
+  /**
+   * Held, not shown: read from an earlier session and not yet re-checked by Claude in this one, or
+   * pinned by this session while Dan is away (`isPinnedAway` says which).
+   */
   isCarried?: boolean
+  /**
+   * With `isCarried`: this session pinned the card through the steps tool while Dan was away, so it
+   * is held for him and not for a check (#3817). The one record that this session has checked and
+   * pinned the steps it holds; written by the steps tool's call alone, and never kept in the store,
+   * so the next session starts with them unchecked.
+   */
+  isPinnedAway?: boolean
 }
+
+/**
+ * Why a held card is held, said to a mod whose added step was not shown for it (#3817): 'unchecked'
+ * for steps carried from an earlier session that nobody has checked in this one, 'away' for a card
+ * this session pinned while Dan was away. A caller tells the two apart by this value, never by the
+ * words of `reason`.
+ */
+export type ManualStepsHeld = 'unchecked' | 'away'
 
 /** A step another mod hands the card (#1107): the steps tool's own fields, a link or a location required. */
 export type ManualStepsAdded = {
@@ -113,10 +131,11 @@ export type ManualSteps = {
    * Adds one step to this project's card: at the end of the card pinned now, under its heading, or a
    * card of its own under `heading` when none is. A step already on the card unfinished, by its title,
    * is not added again. Shown as a new card is, never held while Dan is away: the caller decides when
-   * to add. `isShown` false says why: nobody at the prompt, the card carried from an earlier session
-   * and held, or the card could not be drawn. A step with no link or location throws, naming it.
+   * to add. `isShown` false says why in `reason`: nobody at the prompt, the card already held, or
+   * the card could not be drawn. A step added to a held card stays held with it, and `held` then
+   * says which hold it is. A step with no link or location throws, naming it.
    */
-  add: (input: { heading: string; step: ManualStepsAdded }) => Promise<{ isShown: boolean; reason?: string }>
+  add: (input: { heading: string; step: ManualStepsAdded }) => Promise<{ isShown: boolean; reason?: string; held?: ManualStepsHeld }>
   /** Finishes the unfinished step titled `title` as checked, whichever step is open; false when there is none. */
   finish: (input: { title: string }) => Promise<{ isFinished: boolean }>
   /**

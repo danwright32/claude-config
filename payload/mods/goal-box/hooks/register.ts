@@ -12,7 +12,7 @@ import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 import { BOX_KINDS, INFLIGHT_KINDS, inflightHolds, type InflightFacts, type Reading } from './mod-kit/inflight.ts'
-import { CARRIED_HELD, CARRIED_RETRIES, CHECK_CARRIED, CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOOK, PROCESS_TIMEOUT_MS, QUIET_MS, carriedReason, checkUnfinished, closeStep, leftBehindBy, leftBehindReason, processHolds, type ProcessReading } from './close.ts'
+import { CARRIED_RETRIES, CHECK_CARRIED, CLOSE_HEADING, CLOSE_TITLE, HELD_AWAY, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOOK, PROCESS_TIMEOUT_MS, QUIET_MS, awayReason, carriedReason, checkUnfinished, closeStep, heldKind, leftBehindBy, leftBehindReason, processHolds, type HeldKind, type ProcessReading } from './close.ts'
 
 // The Goal accomplished box (claude-config#1563). Two ways a session's work ends, one box for both:
 //
@@ -602,7 +602,7 @@ const closeCheck = async ($: EngineInterface, seq: number, tries = 0): Promise<v
   const prompts = (await $.state.get(promptsRef)).value ?? 0
   const folder = (startCwd ?? (await $.session.cwd().catch(() => ''))).split('/').filter(Boolean).pop() ?? ''
   let why: string
-  let isHeld = false
+  let held: HeldKind | undefined
   try {
     const r = (await ($ as unknown as WithSteps).manualSteps.add({ heading: CLOSE_HEADING, step: closeStep(folder) })) as { isShown?: unknown; reason?: unknown } | null | undefined
     if (r?.isShown === true) {
@@ -611,17 +611,19 @@ const closeCheck = async ($: EngineInterface, seq: number, tries = 0): Promise<v
       if ((await $.state.get(closeSeqRef)).value !== seq) await withdrawClose($)
       return
     }
-    // #3817: the steps card is one carried from an earlier session that the session has not checked.
-    isHeld = r?.isShown === false && r.reason === CARRIED_HELD
+    // #3817: the steps card is held, and manual steps' answer says which hold it is by a value.
+    held = heldKind(r)
     why = `the card could not be shown (${typeof r?.reason === 'string' && r.reason ? r.reason : 'its answer did not say it was shown'})`
   } catch (err) {
     why = `the card could not be pinned (${errorText(err, MOD)})`
   }
-  if (!isHeld) return writeReasons($, false, [why], seen)
+  if (held === undefined) return writeReasons($, false, [why], seen)
   // Manual steps kept the step on the held card, so it is taken back whatever follows.
   await takeBackClose($)
   // A turn that began while the pin was out: the session is working again, so it is not asked.
   if ((await $.state.get(closeSeqRef)).value !== seq) return
+  // Pinned by this session while Dan was away: its steps are checked, and the card waits for him.
+  if (held === HELD_AWAY) return writeReasons($, false, [awayReason()], seen)
   const asked = await askToCheckCarried($, prompts)
   if (typeof asked === 'string') return writeReasons($, false, [asked], seen)
   // The prompt could not be sent. A session that stays idle has no next turn end to try it at, so

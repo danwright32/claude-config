@@ -265,25 +265,52 @@ export const processHolds = (r: { exitCode: number; stdout: string }): ProcessRe
 // and pinned them again, which nothing but a standing note asked for. So in a folder with kept
 // undone steps the close card could not show until the session had done that by itself (Dan's first
 // real test of #3770 ran in one, where it had not). Dan, 2026-11-27: "Ask the session to check first".
+//
+// Manual steps holds a card for a second reason: this session pinned it while Dan was away, and it
+// stays held until he is home. That session has checked its steps already, so it is not asked (Dan,
+// 2026-11-27, by picker: "Ask only if unchecked"). Manual steps says which hold it is by a value,
+// `held`, beside its reason, and only the value decides here.
 
 /**
- * Manual steps' reason for not showing a step added to a held card, word for word (`CARRIED_HELD`
- * in payload/mods/manual-steps/hooks/register.tsx). A mod cannot read another mod's files, so it
- * is said again here, and tests/test-close-card-carried-reason.sh fails when the two drift: reworded
- * there alone, the answer would no longer be known for a held card and the session never asked.
+ * The two values of `held` in manual steps' answer for a step added to a held card (HELD_UNCHECKED
+ * and HELD_AWAY in payload/mods/manual-steps/hooks/register.tsx): steps carried from an earlier
+ * session that nobody has checked, and a card this session pinned while Dan was away. A mod cannot
+ * read another mod's files, so they are said again here, and tests/test-close-card-carried-reason.sh
+ * fails when the two mods drift or the two values become one.
+ */
+export const HELD_UNCHECKED = 'unchecked'
+export const HELD_AWAY = 'away'
+export type HeldKind = typeof HELD_UNCHECKED | typeof HELD_AWAY
+
+/**
+ * Which hold manual steps' answer names, or undefined for an answer that is not one of the two: a
+ * card that was shown, no value, or a value not known here. An answer read as neither is written
+ * as any other that was not shown, so a third kind of hold is never acted on as one of these.
+ */
+export const heldKind = (answer: unknown): HeldKind | undefined => {
+  if (typeof answer !== 'object' || answer === null) return undefined
+  const a = answer as { isShown?: unknown; held?: unknown }
+  if (a.isShown !== false) return undefined
+  return a.held === HELD_UNCHECKED ? HELD_UNCHECKED : a.held === HELD_AWAY ? HELD_AWAY : undefined
+}
+
+/**
+ * Manual steps' reason for each hold, word for word (`CARRIED_HELD` and `AWAY_HELD` in
+ * payload/mods/manual-steps/hooks/register.tsx), said again here for the reasons file alone and
+ * held to manual steps' words by the same suite. Nothing is decided from either.
  */
 export const CARRIED_HELD = 'the steps carried from an earlier session are held until Claude checks them again'
+export const AWAY_HELD = 'the steps this session pinned while Dan was away are held until they are pinned again once he is home'
 
 /**
  * What the session is told, once per request of Dan's, when the close card is due and the steps
- * card is still held. Dan reads it too, so it is short and names nothing from inside the mods. It
- * says to keep each title and link or place because that is how manual steps knows a pinned step
- * as the kept one (`pinnedBy`, held to this by tests/test-close-card-carried-reason.sh): one it
- * does not know becomes this session's own step, which holds the close card until Dan has done it.
- * It ends by asking for a reply that is not a question, since an answer ending on one keeps the
- * close card back. It promises no card and does not say the steps were never checked: manual steps
- * answers in the same words for a card it holds because Dan is away, which the session may have
- * checked already, and that card stays held until he is home whatever the session does.
+ * card holds carried steps nobody has checked. Dan reads it too, so it is short and names nothing
+ * from inside the mods. It says to keep each title and link or place because that is how manual
+ * steps knows a pinned step as the kept one (`pinnedBy`, held to this by
+ * tests/test-close-card-carried-reason.sh): one it does not know becomes this session's own step,
+ * which holds the close card until Dan has done it. It ends by asking for a reply that is not a
+ * question, since an answer ending on one keeps the close card back. It promises no card: sent
+ * while Dan is away, the steps the session then pins stay held until he is home.
  */
 export const CHECK_CARRIED =
   'CARRIED STEPS. This session is finished, but the card telling Dan he can close it waits behind steps carried over from an earlier session, which he cannot see yet. Check each against the current state, then pin them again with the manual steps tool, marking any you find done. Keep each title and link or place as it is, or the close card stays back. Say in one line what you found, with no question.'
@@ -296,8 +323,15 @@ export const CHECK_CARRIED =
 export const CARRIED_RETRIES = 3
 
 /**
- * The one reason written when the steps card is held: it names the carried card in manual steps'
- * own words, then says what was done about it. `asked`: the prompt above entered now. `asked
+ * The one reason written when the steps card is held because this session pinned it while Dan was
+ * away: manual steps' own words, then that nothing was asked and what the card waits for.
+ */
+export const awayReason = (): string =>
+  `the card could not be shown (${AWAY_HELD}); the session has pinned them already, so it was not asked to check them, and the card can follow at a later quiet turn end once they are showing`
+
+/**
+ * The one reason written when the steps card holds carried steps nobody has checked: it names the
+ * carried card in manual steps' own words, then says what was done about it. `asked`: the prompt above entered now. `asked
  * before`: it entered earlier under this request and the answer is still held. `failed`: it could
  * not be sent, and why, with whether it is tried again while the session stays idle
  * (`isTriedAgain`) or the tries allowed there are used up. The asked reason promises the card only
