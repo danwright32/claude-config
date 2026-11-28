@@ -84,6 +84,7 @@ printf '%s\n' "print('ok')" > "$S/beside.py"
 # Scripts the reader reads whole: one writes the file a case copies the post to, one exports.
 printf '%s\n' 'printf true > made.sh' > "$S/writer.sh"
 printf '%s\n' 'export PYTHONPATH=cleanlib' > "$S/env-clean.sh"
+printf '%s\n' 'F=env-clean.sh' '. "./$F"' > "$S/via.sh"
 run_s() { run_raw "$(payload Bash "$(bash_input "$1")" "$S")"; }
 
 # The line that makes the reader give a text up, and words a shell only prints that the crude cut
@@ -135,6 +136,11 @@ run_s "bash <<< '$(lines 'cp post.sh made.sh' 'echo "a; printf true > made.sh; b
 refused "#3878 shape 1: the same text as a here-string fed to bash"
 run_s "$(lines 'cp post.sh made.sh' "$(quoted 'printf true > made.sh')" 'bash made.sh' "$OPEN")"
 refused "#3878 shape 1: the whole command given up on, the copy run inside it"
+# What the file was noted to hold is still read where a reading asks for its text: the copy
+# printed into a shell is judged by the script it was copied from.
+run_s "$(fed 'cat made.sh | bash' 'cp post.sh made.sh' "$(quoted 'printf true > made.sh')" "$OPEN")"
+refused "#3878 shape 1: the copy printed into a shell after quoted words that name a write of it"
+says "#3878 and it is judged by the script it was copied from" "the script post.sh runs a command that posts"
 run_s "$(fed 'bash made.sh' 'cp post.sh made.sh' "$(quoted 'bash writer.sh')" "$OPEN")"
 refused "#3878 shape 1: quoted words that name a run of a script on disk, read whole, which writes over the copy"
 run_s "$(fed 'bash made.sh' 'cp post.sh made.sh' "$(quoted 'bash -c "printf true > made.sh"')" "$OPEN")"
@@ -176,6 +182,9 @@ run_s "eval '$(lines 'export PYTHONPATH=postlib' 'echo "a; export PYTHONPATH=cle
 refused "#3878 shape 3: the same text as a string handed to eval, the script run after it"
 run_s "$(lines 'export PYTHONPATH=postlib' "$(quoted '. ./env-clean.sh')" 'python3 run.py' "$OPEN")"
 refused "#3878 shape 3: quoted words that source a file on disk, read whole, which exports another path"
+# The file via.sh sources is read once already, in a text read whole, before the quoted words.
+run_s "export PYTHONPATH=postlib; . ./via.sh; export PYTHONPATH=postlib; eval '$(lines 'echo "a; . ./via.sh; b"' "$OPEN")' ; python3 run.py"
+refused "#3878 shape 3: quoted words that source a file read earlier in the command, which sources one by a variable"
 run_s "$(lines 'export PYTHONPATH=postlib' "$(quoted 'export PYTHONPATH=cleanlib')" 'python3 -m helper' "$OPEN")"
 refused "#3878 shape 3: a module run by -m after it"
 says "#3878 and the refusal says where Python looks could not be read, for -m too" "$PYDOUBT"
