@@ -1,4 +1,4 @@
-import { TOOL, heldTail } from './box.ts'
+import { TOOL, YOURS_DONE, heldTail } from './box.ts'
 
 // The box waits for the end of turn review (claude-config#3843, second half). Pure, so every rule
 // is tested without a session.
@@ -159,4 +159,4 @@ export const promptedUnreadText = (why: string): string =>
  * answered and the turn then ended with no box shown.
  */
 export const askAgainText = (): string =>
-  `GOAL ACCOMPLISHED BOX WAITING. Earlier in this request a call to ${TOOL} was refused until the end of turn review had run and Dan had answered it. That turn has ended and no box was shown since. If every part of what Dan asked for is finished, call ${TOOL} again now, with goal set to what he asked for and shipped listing what shipped, one short line each. Call it before anything else in this turn: a command or an edit first, the review's last step included, makes this a turn with a review of its own to come, and the call waits again. ${heldTail()}`
+  `GOAL ACCOMPLISHED BOX WAITING. Earlier in this request a call to ${TOOL} was refused until the end of turn review had run and Dan had answered it. That turn has ended and no box was shown since. If ${YOURS_DONE}, call ${TOOL} again now, with goal set to what he asked for and shipped listing what shipped, one short line each. Call it before anything else in this turn: a command or an edit first, the review's last step included, makes this a turn with a review of its own to come, and the call waits again. ${heldTail()}`

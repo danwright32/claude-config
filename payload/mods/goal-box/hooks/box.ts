@@ -37,7 +37,13 @@ export const NOT_HELD =
  */
 export const HELD_SAY = 'say in one line what the box is waiting on, unless you have said so already and it has not changed'
 
-/** How each prompt of this mod that asks for the box ends: what to do when part of the work is still the session's. */
+/**
+ * When each prompt of this mod that asks for the box says to call it (#3864): only the session's
+ * own part of the request has to be finished, so what is left for Dan alone is not counted.
+ */
+export const YOURS_DONE = 'every part of what Dan asked for that is yours to do is finished'
+
+/** How each of those prompts ends: what to do when part of the work is still the session's. */
 export const heldTail = (): string => `If part of it is still yours to do, do not call it, and ${HELD_SAY}.`
 
 export const DESCRIPTION = [
@@ -259,7 +265,7 @@ export const cardedSince = (verdicts: MergeFacts['verdicts'], since: number, box
  * before he picked more work in a picker, and this is asked when none was shown for that work.
  */
 export const askDoneText = (): string =>
-  `GOAL ACCOMPLISHED? Since Dan's last message a pull request merged and its is it live card was made, nothing this session started is still in flight, and no Goal accomplished box was shown for what he last asked for (his message, or work he has picked in a picker since). If every part of what Dan asked for is finished, call ${TOOL} now with goal set to what he asked for and shipped listing what shipped, one short line each. ${heldTail()}`
+  `GOAL ACCOMPLISHED? Since Dan's last message a pull request merged and its is it live card was made, nothing this session started is still in flight, and no Goal accomplished box was shown for what he last asked for (his message, or work he has picked in a picker since). If ${YOURS_DONE}, call ${TOOL} now with goal set to what he asked for and shipped listing what shipped, one short line each. ${heldTail()}`
 
 /**
  * Manual steps' record that the session recorded the last open step of a card through steps_done
@@ -289,7 +295,7 @@ export const emptiedOf = (value: unknown): Emptied | null | { why: string } => {
  * it a turn with a review of its own to come, and the call would wait for that.
  */
 export const askCardText = (): string =>
-  `GOAL ACCOMPLISHED? Every step on the manual steps card has now been recorded, and no Goal accomplished box was shown for what Dan last asked for. If every part of it that is yours to do is finished, call ${TOOL} now, before anything else in this turn, with goal set to what he asked for and shipped listing what shipped, one short line each. ${heldTail()}`
+  `GOAL ACCOMPLISHED? Every step on the manual steps card has now been recorded, and no Goal accomplished box was shown for what Dan last asked for. If ${YOURS_DONE}, call ${TOOL} now, before anything else in this turn, with goal set to what he asked for and shipped listing what shipped, one short line each. ${heldTail()}`
 
 /** What the session is told when its /goal's check finds it met: call the tool now. */
 export const askText = (condition: string): string =>

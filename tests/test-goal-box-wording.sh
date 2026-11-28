@@ -114,8 +114,11 @@ issues = text_of(ISSUES) or ''
 step = [l for l in issues.split('\n') if l.startswith('6 GOAL BOX')]
 check('the issue review has its one GOAL BOX step', None if len(step) == 1 else 'found %d in %s' % (len(step), ISSUES))
 step = step[0] if step else ''
-check('the issue review asks for one line when the box is held', None if 'one line: what it waits on' in step else 'its step 6 is %r' % step)
-check("the issue review counts only the session's own part of the request", None if 'your part done' in step else 'its step 6 is %r' % step)
+check('the issue review asks the session to say what the box waits on, once', None if 'else say once what it waits on' in step else 'its step 6 is %r' % step)
+check("the issue review counts only the session's own part of the request", None if 'your part done, call it' in step else 'its step 6 is %r' % step)
+# Both halves of the step sit under its two conditions: with a /goal set, or the tool not offered,
+# the box waits on nothing of the session's, and a line saying so every turn would be noise.
+check('the issue review asks for neither with a /goal set or the tool not offered', None if step.startswith('6 GOAL BOX, last (no /goal set, goal_accomplished offered): ') else 'its step 6 does not open with its two conditions around both halves: %r' % step)
 
 # Nothing a session reads about the box asks for silence.
 for rel, body in ((BOX, box), (REVIEW, text_of(REVIEW)), (REFLECTION, last), (ISSUES, step)):

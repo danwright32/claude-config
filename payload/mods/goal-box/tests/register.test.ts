@@ -2417,8 +2417,10 @@ test("no review at the turn's end: the session is asked once to call again, and 
   expect(asked()[0]?.origin).toMatchObject({ kind: 'plugin' })
   expect(asked()[0]?.text).toMatch(/was refused until the end of turn review had run and Dan had answered it\. That turn has ended and no box was shown since\./)
   expect(asked()[0]?.text).toContain(`call ${TOOL} again now`)
-  // #3864: a box held back is said in one line, where this message once asked for silence.
+  // #3864: a box held back is said in one line, where this message once asked for silence, and
+  // only the session's own part of the request has to be finished.
   expect(asked()[0]?.text.endsWith(HELD_TAIL)).toBe(true)
+  expect(asked()[0]?.text).toContain(`If ${YOURS_DONE}, call ${TOOL} again now`)
   // Sent as the mod's other prompts are: mod-kit's reload held back until it has gone (#2132).
   expect(w.held.filter(h => h === 'submit' || h.includes('ask-after-review'))).toHaveLength(3)
   // The message starts a turn that has changed nothing, so the call it asks for is not held.
@@ -3031,6 +3033,7 @@ test("the review's last step is one command whatever the transcript's path holds
 // unfinished work, and was told to say nothing of a box it held back. The description now says what
 // does not hold the box, and every place that asked for silence asks for one line.
 const HELD_TAIL = 'If part of it is still yours to do, do not call it, and say in one line what the box is waiting on, unless you have said so already and it has not changed.'
+const YOURS_DONE = 'every part of what Dan asked for that is yours to do is finished'
 
 test("the description says what does not hold the box: a step that is Dan's alone, a check /check-later scheduled, work he declined in a picker (#3864)", withKit, async ($, on) => {
   const { tools } = world(on)
@@ -3060,6 +3063,8 @@ test('the question about shipped work asks for one line where the box is held, i
   expect(asked).toHaveLength(1)
   expect(asked[0]?.text.endsWith(HELD_TAIL)).toBe(true)
   expect(asked[0]?.text).not.toMatch(/say nothing/)
+  // Only the session's own part has to be finished: what is left for Dan alone holds no box.
+  expect(asked[0]?.text).toContain(`If ${YOURS_DONE}, call ${TOOL} now`)
 })
 
 // ---- The prompt once the last step on the steps card is recorded (#3864) ----
@@ -3083,7 +3088,7 @@ test('no /goal: the last step on the steps card recorded, and no box for the req
   const asked = cardAsks(submitted)[0]
   expect(asked?.origin).toMatchObject({ kind: 'plugin' })
   expect(asked?.text).toBe(
-    `${ASKS_CARD}, and no Goal accomplished box was shown for what Dan last asked for. If every part of it that is yours to do is finished, call ${TOOL} now, before anything else in this turn, with goal set to what he asked for and shipped listing what shipped, one short line each. ${HELD_TAIL}`,
+    `${ASKS_CARD}, and no Goal accomplished box was shown for what Dan last asked for. If ${YOURS_DONE}, call ${TOOL} now, before anything else in this turn, with goal set to what he asked for and shipped listing what shipped, one short line each. ${HELD_TAIL}`,
   )
   // Sent as the mod's other prompts are: mod-kit's reload held back until it has gone (#2132).
   expect(w.held.filter(h => h === 'submit' || h.includes('ask-after-card'))).toHaveLength(3)
