@@ -2869,6 +2869,29 @@ test("a box held in one request, its turn interrupted, then Dan asks for somethi
   expect(owed()).toHaveLength(2)
 })
 
+// The later ask marks the request's message as sent, so where it goes out it hides whether the
+// hold itself was dropped. A /goal still set makes the later ask wait, and the hold shows.
+test("a typed message drops the hold even where the later ask has to wait: with a /goal still set at the new request's turn end, the old request's message is not sent there (#3843)", withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
+  const owed = () => submitted.filter(s => s.text.startsWith(ASKS_OWED))
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($, { reason: 'interrupt' })
+  await says($, 'Is the weekly one done?')
+  w.goal = { state: 'set', condition: 'complete issue 1563' }
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  expect(owed()).toEqual([])
+  w.goal = { state: 'none' }
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(asked()).toEqual([])
+  expect(owed()).toHaveLength(1)
+})
+
 test('work Dan picked in the turn the message starts is a request of its own: held again it earns one more message, and no third (#3843)', withKit, async ($, on) => {
   const { w, submitted } = world(on)
   const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
