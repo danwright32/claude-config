@@ -2013,7 +2013,9 @@ commit either, and this refusal only arrives at the push.
 
 A pull request labelled `changelog/announce` carries the post for agents under `## Announcement`,
 and Dan's words for the label were "it should ask me before applying the label". So the session
-writes the post to a file, runs `/no-ai-tells` on it, opens it in BBEdit with the front window flag,
+writes the post to a file, runs `/no-ai-tells` on it, runs
+`node ~/.claude/hooks/lib/changelog-entry.js announcement-refusal <file>` and changes the wording
+until that refuses nothing (#3846, below), opens it in BBEdit with the front window flag,
 and asks ONE picker of one question (`Approve the wording` or `Not yet`) naming the pull request or
 feature and the channel and ending `Save the file before you answer.`, with this metadata:
 
@@ -2057,7 +2059,72 @@ when all of these hold, each failure said in its own words:
   leave no more than two in a row, then open the file and ask him again. Blank lines after the last
   line of wording hide nothing and pass. The run is counted by `hooks/lib/changelog-entry.js`
   (`blankRunBeforeWording`, in the answer of its `announcement-hash` command), by the same reading
-  of a blank line the hash drops them by, and an answer without the count approves nothing.
+  of a blank line the hash drops them by, and an answer without the count approves nothing;
+- the merge would not refuse the wording for what it holds (#3846). On 2026-11-27 he approved, by
+  picker, wording whose first line was the mention followed by a sentence. Only the merge gate read
+  the rules for what a post may hold (the mention alone on its first line, only the markdown that
+  was measured to arrive in Slack, no dash as punctuation, no HTML comment), so the approval
+  counted, the label went on, the merge was refused for the opener, and he was asked a second
+  time. An Approve of wording the merge would refuse now approves nothing, and the refusal carries
+  the gate's code and its own words. Two rules came with the review of that change. Wording that
+  holds a carriage return inside a line is refused by the gate and so by the approval
+  (`ANNOUNCEMENT_CARRIAGE_RETURN`): the hash reads that character as a line's end and the rules
+  did not, so a block quote or a table behind it was judged by nothing. And a wording file in
+  which any line is a heading is refused (`WORDING_FILE_HEADING`): a pull request's block ends at
+  the next heading, so the block could never be that file whole. There is one judge and no copy of the rules:
+  `hooks/lib/changelog-entry.js`'s `blockRefusal` is what the merge gate judges a pull request's
+  block with, and its command line `announcement-refusal [--body] <file | ->` puts the same
+  function to a wording file (read as the block it becomes), printing `{refused, code, reason}`
+  and exiting 0 for wording the gate takes, 1 for wording it refuses and 3 for a file it cannot
+  read. It changes nothing. Of a file it also refuses a run of more than two blank lines above
+  wording (`WORDING_FILE_BLANK_RUN`), which the approval refuses a file for (#3703, above): the
+  count is the same `blankRunBeforeWording`, and `hooks/test-announce-approval.sh` holds the two
+  limits equal. So the command judges everything the approval refuses about what the file holds;
+  the file's size and its name are not content, and only the approval refuses those. Two of the
+  gate's sentences are about a pull request and are not true of a file, so the file form gives
+  words of its own under the gate's code: a file that holds no post (`EMPTY_ANNOUNCEMENT`), and
+  a file that begins with a byte order mark (`ANNOUNCEMENT_NO_OPENER`, naming the mark, since a
+  first line quoted with it reads as the mention alone). The library
+  hands that command the same bytes it hashed, and an answer
+  from it that cannot be read approves nothing. How to ask him, which the label hook and the merge
+  gate print, names the command as the step before the file is opened, so a session that follows
+  it never puts wording the merge would refuse in front of him.
+
+What is written to the record did not change with that rule. A note of wording the merge would
+refuse still holds the wording's hash, so his `Not yet` about it takes back what it always did, and
+its `why` says what an Approve of it is stopped by. An approval the record already held still
+counts wherever its wording passes. One of wording that does not pass could never merge, and
+`announce-label-ask.sh` refuses the label for it: before it looks for any approval, it puts the
+Announcement block the command would leave to the same judge and refuses wording the merge would
+refuse, with the gate's code and words. The hash and that judging share the library's one five
+second bound, so the hook's longest wait is what it was.
+
+Wording nobody could judge is not wording that was refused (the review of #3846). The hash and the
+judging are each one bounded question to `changelog-entry.js`, and either can run out of time on a
+loaded Mac. With no note that refuses the one call that met it. In a note it used to be permanent:
+when the review ran it on 2026-11-27,
+the note of good wording carried "did not judge the wording in 1.7 seconds" as its `why`, and a note
+that carries a `why` approves nothing for good. So a note whose reason is that the wording could not
+be judged now also says `"unjudged": true`, and the call that reads it judges the file again, only
+while the file's change time is still the one noted. What each state of a note reads as:
+
+| The note holds | An Approve read with it |
+|---|---|
+| its ids alone, or another repository or file than the picker names | is judged by the file as it stands, as with no note |
+| a hash, no `why` | counts, by the hash noted, when the change time noted is before his answer |
+| a `why`, no `unjudged` | approves nothing, for good, in the words of the `why` |
+| a `why` and `"unjudged": true`, the file unchanged since the note | has the file judged now (the three outcomes are below) |
+| a `why` and `"unjudged": true`, the file changed since or unreadable | approves nothing, and the refusal says to open the file and ask him again |
+| no change time, or one at or after his answer | approves nothing |
+
+A `why` with no `unjudged` is refused wording, a file that could not be read when noted, held no
+wording, was too large, held a long run of blank lines or changed while it was hashed, and any note
+written before the field. A file judged now and taken counts. One judged now and refused approves
+nothing, in the gate's words. One still not judged approves nothing for that call, and the next
+call judges again.
+
+The fourth row is the only way a note that carries a `why` ends in an approval, and it does so
+only by the file being judged and taken by the merge gate's own judge.
 
 What is hashed is the FILE as it stands, never a hash the session supplies, by
 `hooks/lib/changelog-entry.js`'s `announcementHash`: the sha256 of the one normalised form (line
@@ -2215,7 +2282,8 @@ the wording, and sleep mode can answer one with Dan asleep.
   `gh pr create --label`, `gh pr edit --add-label`, `gh issue edit --add-label` and a `gh api`
   write to a pull request's labels are refused unless the wording the command would leave is
   approved, read from its `--body`, from the file its `--body-file` names, or from GitHub for an
-  edit that gives neither. It asks for the pull request the command names by number or link (or
+  edit that gives neither. Wording the merge would refuse for what it holds is refused first,
+  approved or not, by the merge gate's own judge and in its words (#3846, above). It asks for the pull request the command names by number or link (or
   GitHub's answer names) and records nothing: the pull request that used an approval keeps it, and
   any other, or a command naming none (a create), goes through only while an approval of that
   wording is unused. A form the wording cannot be read from (`--fill`, a template, a body on
