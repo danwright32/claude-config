@@ -36,7 +36,8 @@ hook that slow is killed and the command goes unscreened.
       body moved up to follow the command that opens it where a command stands after the opener
       on its line, and a wrapper's single quoted string and backquotes written as the shell that
       reads them reads them. Exit 4, printing nothing, when there is none (claude-config#3739);
-      see second_reading().
+      see second_reading(). Exit 5, with OPENER_LINE_LIMIT alone on standard error, when one
+      line holds more commands after its openers than that many rounds of rewrites settle.
   shell-words.py tool       stdin: one command
       the gh or git subcommand it runs, as gh and git themselves find it past the options written in
       front (tool_field), else rtk's own subcommand (rtk_field, claude-config#1468), or nothing when
@@ -3477,11 +3478,17 @@ def _pairs_joined(s, plain):
     return (typed, both) if held is not None and not _named_more(either, held) else (s, plain)
 
 
-# How many times opener_lines() reads one text again before it stops with what it has rewritten.
-# One reading settles the first separator after an opener on every line that has one, so the
-# count that matters is how many such separators one line holds, or how deep one such line sits
-# inside another's body, never how many such lines there are.
+# How many rounds of rewrites opener_lines() makes of one text. One reading settles the first
+# separator after an opener on every line that has one, so the count that matters is how many
+# such separators one line holds, or how deep one such line sits inside another's body, never
+# how many such lines there are.
 OPENER_LINE_LIMIT = 64
+
+
+class Unsettled(Exception):
+    """opener_lines() made OPENER_LINE_LIMIT rounds of rewrites and the text still holds one to
+    make. A text rewritten that far and no further still hides whatever stands after the next
+    separator, so it is no reading to hand a hook, and no saying that nothing is hidden."""
 
 
 def opener_lines(s):
@@ -3510,11 +3517,11 @@ def opener_lines(s):
     A text that cannot be read to its end has its bodies moved as far as
     it was read, since the shell runs each line as it reads it, and no here string written, since
     the line the text ends on is one the shell never finishes reading; second_reading() gives the
-    result to a hook only as a reading apart from the text it always had. A text still not settled after
-    OPENER_LINE_LIMIT readings is given as far as it was rewritten.
+    result to a hook only as a reading apart from the text it always had. Raises Unsettled for a
+    text that still holds a rewrite to make after OPENER_LINE_LIMIT rounds of them.
     """
     text = s
-    for _ in range(OPENER_LINE_LIMIT):
+    for made in range(OPENER_LINE_LIMIT + 1):
         met = []
         try:
             commands(text, lines=met, typed=True)
@@ -3545,6 +3552,8 @@ def opener_lines(s):
                 floor = group[-1][1]
         if not edits:
             break
+        if made == OPENER_LINE_LIMIT:
+            raise Unsettled()
         for at, end, new in reversed(edits):
             text = text[:at] + new + text[end:]
     return text if text != s else None
@@ -3816,9 +3825,15 @@ def main(argv):
         return rc
     elif mode in ("flatten", "second"):
         # Exit 4, printing nothing, where there is no join to make, so ps_parse_payload goes on to
-        # the readers it always had; and for the second reading, where there is none.
+        # the readers it always had; and for the second reading, where there is none. Exit 5,
+        # with the limit alone on standard error, where the second reading was not settled within
+        # it (Unsettled): that is neither a reading nor a saying that there is none.
         # Written once, whole, as UTF-8 whatever the locale, as they write.
-        flat = flattened_payload(data) if mode == "flatten" else second_payload(data)
+        try:
+            flat = flattened_payload(data) if mode == "flatten" else second_payload(data)
+        except Unsettled:
+            sys.stderr.write(str(OPENER_LINE_LIMIT))
+            return 5
         if flat is None:
             return 4
         # This is the one mode that decodes JSON, and an escape in a payload can make a character

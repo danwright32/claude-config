@@ -512,7 +512,7 @@ ps__after_end() {   # $1 = the hook's name  $2 = the working folder, or nothing 
   exit 0
 }
 ps_both_readings() {   # $1 = the payload as the hook read it  $2 = the hook's time limit, in seconds  $3 = after, for a hook that runs after the command
-  local payload="${1-}" limit="${2-}" after="${3-}" hook="${BASH_SOURCE[1]-}" clean work rc name used left why=""
+  local payload="${1-}" limit="${2-}" after="${3-}" hook="${BASH_SOURCE[1]-}" clean work rc name used left why="" said over=""
   # Taken out of the environment once read, so nothing this run starts is told it is a reading.
   case "${PS_READING-}" in
     "first:$PPID") PS__READING=first; unset PS_READING; return 0 ;;
@@ -524,16 +524,27 @@ ps_both_readings() {   # $1 = the payload as the hook read it  $2 = the hook's t
   ps__may_hide "$clean" || return 0
   command -v python3 >/dev/null 2>&1 && [ -f "${PS_SHELL_WORDS:-}" ] || return 0
   name="${hook##*/}"
-  # Exit 4 is the reader saying there is no second reading. Any other failure is the reader
-  # not saying, which is not a command with nothing hidden.
-  printf '%s' "$clean" | python3 "$PS_SHELL_WORDS" second >/dev/null 2>&1; rc=$?
+  # Exit 4 is the reader saying there is no second reading. Exit 5 is the reader saying one line
+  # holds more commands after its heredoc openers than it rewrites, with that number alone on
+  # standard error: a text rewritten only that far would pass whatever stands after it. Any
+  # other failure is the reader not saying, which is not a command with nothing hidden.
+  said="$(printf '%s' "$clean" | python3 "$PS_SHELL_WORDS" second 2>&1 >/dev/null)"; rc=$?
   [ "$rc" -ne 4 ] || return 0
+  if [ "$rc" -eq 5 ]; then
+    case "$said" in ''|*[!0-9]*) ;; *) over="$said" ;; esac
+  fi
   # A gate that runs before the command refuses where the second reading cannot be judged, and
   # says how to write the command. A hook that runs after it has nothing left to refuse and must
   # not ask for the command again, which would run it twice: there the reason is kept in why,
   # the first reading is judged as it always was, and the hook ends on a notice.
   [ "$after" = after ] || after=""
-  if [ "$rc" -ne 0 ]; then
+  if [ -n "$over" ]; then
+    [ -n "$after" ] || {
+      printf 'BLOCKED: %s: one line of this command holds more than %s commands after its heredoc openers (or such lines stand more than that deep inside one another'\''s bodies), and %s is as far as the reader that looks for a command hidden on an opener'\''s line rewrites one, so what it hides was not judged. Write the commands that follow a heredoc opener on lines of their own, after the heredoc closing line, and send the whole command again (claude-config#3739).\n' "$name" "$over" "$over" >&2
+      exit 2
+    }
+    why="one line of it holds more than $over commands after its heredoc openers, which is as far as the reader that looks for a command hidden on an opener's line rewrites one"
+  elif [ "$rc" -ne 0 ]; then
     [ -n "$after" ] || {
       printf 'BLOCKED: %s: the reader that says whether this command hides another (lib/shell-words.py second) failed with exit %s, so whether it hides one was not judged. Write the command more simply, with nothing after a heredoc opener on its line and no line continued inside a quoted string or backquotes, and send it again (claude-config#3739).\n' "$name" "$rc" >&2
       exit 2

@@ -357,10 +357,27 @@ shows("a push after an opener is named where the last lines leave a parenthesis 
 # However many lines with an opener there are, and however many separators one such line holds.
 many = "".join("cat " + LL + "E; true\nx\nE\n" for _ in range(200))
 shows("a push after the opener on the two hundred and first such line is named", many + "cat " + LL + "EOF; " + PUSH + "\nbody\nEOF", ("", "git", "push", ""))
-deep = "".join("cat " + LL + "E%d; " % k for k in range(sw.OPENER_LINE_LIMIT + 6)) + PUSH + "".join("\nb\nE%d" % k for k in range(sw.OPENER_LINE_LIMIT + 6))
-got = sw.opener_lines(deep)
-row("a line with more separators after openers than the reader reads the text again for is given as far as it was rewritten, never as nothing",
-    "" if got is not None and got != deep else "opener_lines gave %r" % (got,))
+def openers_then(n, act):
+    """n openers on one line, then act, then their n bodies."""
+    return "".join("cat " + LL + "E%d; " % k for k in range(n)) + act + "".join("\nb\nE%d" % k for k in range(n))
+
+
+def unsettled(cmd):
+    """Whether the second reading of cmd is refused as one whose rewriting was not finished."""
+    try:
+        sw.second_payload(json.dumps({"tool_input": {"command": cmd}, "cwd": "/w"}))
+    except sw.Unsettled:
+        return True
+    return False
+
+
+row("the reader rewrites a line as far as 64 commands after its openers", "" if sw.OPENER_LINE_LIMIT == 64 else "OPENER_LINE_LIMIT is %r" % (sw.OPENER_LINE_LIMIT,))
+shows("a push after the 64th opener on one line is named", openers_then(64, PUSH + " origin feat"), ("", "git", "push", "origin feat"))
+row("a line with a 65th opener before the push is said to be unsettled, never handed over as far as it was rewritten",
+    "" if unsettled(openers_then(65, PUSH + " origin feat")) else "second_payload gave a reading, or none, with nothing said")
+row("and so is such a line with no push on it, since nothing was read that far to tell", "" if unsettled(openers_then(65, "echo done")) else "second_payload said nothing")
+row("and so is such a line inside a wrapper's string", "" if unsettled("bash -c '" + openers_then(65, PUSH) + "'") else "second_payload said nothing")
+row("a line that is settled in exactly the readings allowed is not said to be unsettled", "" if not unsettled(openers_then(64, "echo done")) else "it was said to be unsettled")
 # Ordinary commands have one reading, the one they always had.
 for what, cmd in (
         ("a heredoc commit with nothing after its opener", "git commit -F - " + LL + "EOF\na message; with a separator\nEOF\n" + PUSH),

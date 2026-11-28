@@ -442,6 +442,22 @@ payload_for "$PUSH" | BR_LIB="$T/lib-fails" BR_LOG="$T/log" bash "$HOOK" > "$T/o
 [ "$RC" = 2 ] && [ "$(cat "$T/err")" = "refused on the alone reading" ] && check "with that reader, a command that asks it nothing is judged as it always was" ok \
   || check "with that reader, a command that asks it nothing is judged as it always was" "exit $RC, said [$(cat "$T/err")]"
 
+# A line with more commands after its heredoc openers than the reader rewrites is not judged as
+# far as the reader got, which would pass whatever stands after that: it is refused, saying so.
+openers_then_push() { # openers_then_push <how many>: that many openers on one line, a push, then their bodies
+  python3 -c 'import sys
+n, lt = int(sys.argv[1]), "<" * 2
+sys.stdout.write("".join("cat %sE%d; " % (lt, k) for k in range(n)) + sys.argv[2] + " origin feat" + "".join("\nb\nE%d" % k for k in range(n)))' "$1" "$PUSH"
+}
+run_hook "$(openers_then_push 65)"
+case "$RC:$ERR:$(judged)" in
+  2:BLOCKED*"more than 64 commands"*"so what it hides was not judged"*"lines of their own"*:) check "a push after the 65th heredoc opener on one line is refused unread, saying the line holds more than the reader rewrites and how to write it" ok ;;
+  *) check "a push after the 65th heredoc opener on one line is refused unread, saying the line holds more than the reader rewrites and how to write it" "exit $RC, said [${ERR:0:300}], judged [$(judged)]" ;;
+esac
+run_hook "$(openers_then_push 64)"
+[ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && [ "$(judged)" = "first second" ] && check "a push after the 64th is still read, and refused by the second reading" ok \
+  || check "a push after the 64th is still read, and refused by the second reading" "exit $RC, said [${ERR:0:300}], judged [$(judged)]"
+
 # An opener's line whose <, ; or blank is written as a JSON escape of its code point is the same
 # command to the shell, so the look that starts the reader has to see it.
 ESC_LT='\u00''3c'; ESC_SEMI='\u00''3b'; ESC_BLANK='\u00''20'
@@ -495,6 +511,9 @@ after_notice "such a hook that hands over no time limit ends on a notice and exi
 payload_for "$HIDDEN" | BR_AFTER=after BR_LIB="$T/lib-fails" BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
 ERR="$(cat "$T/err")"
 after_notice "such a hook whose reader fails ends on a notice and exit 0" "failed with exit 1"
+run_after 0 600 "$(openers_then_push 65)"
+after_notice "such a hook handed a line with more openers than the reader rewrites ends on a notice and exit 0" "more than 64 commands"
+[ "$(judged)" = first ] && check "and there the first reading is still judged" ok || check "and there the first reading is still judged" "judged [$(judged)]"
 : > "$T/log"
 payload_for "$HIDDEN" | BR_AFTER=after TMPDIR="$T/absent/" BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
 OUT="$(cat "$T/out")"; ERR="$(cat "$T/err")"
