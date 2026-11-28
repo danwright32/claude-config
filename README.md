@@ -6421,7 +6421,8 @@ cannot work out) is refused as a check that could not be made, where before only
 which an endpoint was found was refused. And in a text or a string the shared reader gave up on,
 which it then cuts crudely into whatever may be a command, quoted words included, a write only
 ever adds to what a file was noted to hold and leaves it unread: a pretend write inside quotes
-used to replace the note, and the file was then run as what the pretend write said. That holds for sed
+used to replace the note, and the file was then run as what the pretend write said. The rule that a
+program is believed only where it is for certain the system's own holds for sed
 and git, and for what printf, echo and cat print, what tee writes and what cp, mv, ln, install
 and link copy: `./cat calm.sh > run.sh; bash run.sh` is refused as a check that could not be
 made. echo and printf by their bare names are the shell's builtins, which PATH does not move.
