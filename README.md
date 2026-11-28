@@ -6049,6 +6049,115 @@ A file sourced through a path it cannot work out is refused too, unread, since c
 the refusal names the script, the line and what it could not follow, so the path can be written
 plainly (a file run through such a path stays unread and allowed, behind the #2683 switch).
 
+Since claude-config#3497 a file run through a variable is read inside a shell function as it is at
+the top level (`payload/hooks/lib/function-values.py`). A function runs wherever it is called from,
+so the gate vouches for no directory inside one, and a value that was a relative path was left
+unread there: `run() { kept=posts.sh; bash "$kept"; }; run` passed where the same two commands at
+the top level were refused. Such a value is now read against the directory the reader follows, as
+the same path written out in the function always was. A variable that only a function sets, used
+after the call or in another function, is read with that one value, and a refusal found that way
+says the check could not be made, since the function may not have run. Each is a further reading,
+made only where the ones before it found nothing, so it can only refuse more. Not read: a name
+several functions set to different values, a name anything else in the text binds (an assignment
+at the top level, a `read`, a `for`, a `local`, `declare` or `typeset` with an option; a bare
+`local kept`, `declare kept` or `typeset kept` in a function is no second value and is not
+counted, nor is a value that is none, as in `local kept=""`; a declaration of several names, as
+in `local other kept=`, is read name by name), and a function
+called after a cd, whose relative path is read against the directory the reader follows. Some
+names are read both ways, with the value and with the name empty, and the command is refused as
+a check the gate could not make where either reading finds a reason: a name a function gives an
+empty value (`config=`, `local config=""`), a name `declare` or `typeset` declares in a
+function, bare or with a value, and a name declared in a declaration of several names that
+gives one of them a value. The
+shell hands `$runner $config posts.sh` the file that posts wherever the empty assignment is the
+last to run (written after the value, or with the value set on one branch only), wherever the
+command stands before the declaration, and wherever another function declares the name, and the
+gate does not work out which the command gets. So a quiet command of that shape is refused too
+where the file after the name posts (found by the third review of that change on 2026-11-27: 24
+commands that post passed with the value read alone). So is a quiet command typed at the prompt
+where nothing stands after the unquoted name (`local script=""`, `script=quiet.sh`, `bash
+$script`): with the name empty it is a bare shell reading its input. The same function in a
+script file passes, and so does the name in double quotes. A command through several such
+names is read once for every combination of them empty, the others keeping their values: read
+only with all of them empty at once, `$runner $config posts.sh` with both declared empty passed,
+where the shells run posts.sh whenever the runner has its value (the fourth review, the same
+day: 19 commands that post). That is 3 readings for two names and 63 for six, and a command
+through more than six is refused: it is read with all of them empty and no other way, and
+refused whatever that reading finds. Where it finds nothing, the refusal says what clears it:
+at most six such names through each command. A name declared by a `local` line that gives no
+value, and given no empty value anywhere, is read one way and is not counted, and the work can
+be split into commands of six such names or fewer. A plain assignment, a `local kept=value`
+and a bare `local kept` are read one way. Not covered: a name set by one of those three and
+used on a line before it, in another function, or where the assignment is not reached (under a
+condition that is false, in a subshell, a pipeline or a loop that does not run), and a function
+whose body is written in round brackets. A quiet
+script run through a variable in a function is refused wherever the same script named by a
+literal path there is: one that finds its own folder from `BASH_SOURCE` and sources a file beside
+it, since the folder a function runs in is not known to the gate. One
+command is left out of that further reading: a shell handed the script being read and nothing else
+(`sc_run(){ bash "${BASH_SOURCE[0]}" 2>&1; }` in a suite that runs itself), where a second reading
+of the same text can find nothing the first does not, and refused the suite over a path it could
+not work out with the directory unknown. It is left out only where the gate can show the second
+run is the reading under way: the same file by the same chain of names, the same shell, the same
+folder, no word handed to it, no input given, and nothing written or exported since the script
+began. Anything else is read as before, and the same script named by a literal path in a function
+is refused as it is on main.
+
+The same change holds the gate's own reading of what a heredoc feeds a program (`Judge.fed`,
+`payload/hooks/lib/heredoc-fed.py`) to where bash 3.2 and zsh end the body: only at a line that is
+the marker (a `<<-` lets its leading tabs go and nothing else), with the whole word after the `<<`
+as the marker, and after the body of a heredoc opened earlier on the line. It ended the body at a
+marker with a blank beside it and at the first letters of a longer marker, and the lines the shell
+went on feeding python3 were read as shell commands. It gives every line it gave before, and more
+where the shells feed more, for every place the command's text stands at. It finds that text
+wherever it stands, in a comment or a quoted text as well as where the shell runs it, and cannot
+tell which is which. So where the text stands at two places whose bodies run into one another
+past the place a body always ended (`# bash <<'E'` above the real `bash <<'E'`, whose body holds
+a line that is the marker with a blank beside it), the call is refused as a check the gate could
+not make: handing each place its lines whole reads the text once for each place, which ran a
+script of 300 such heredocs out of the gate's time, and handing a later place fewer let a script
+that posts through a variable pass (both found by the reviews of that change on 2026-11-27). The
+refusal says to write the command's text once. Not read, as on main: a text in which the command
+stands once more, later, with no marker line after it (`echo "ran: bash <<'E'"` below the
+heredoc), where the whole text is handed back and not taken for a body. More
+lines are not always a stricter reading: a line added at the end can weaken how the gate reads
+the lines before it (a quote left open has a shell's body read by the crude cut, which follows no
+variable; a later `sys.path` line is applied to an import that ran before it). So where any body
+grew and nothing was found, the gate judges the call once more with every body as it was before
+(`loose()` in that file, `both_readings()` in the gate), on what is left of the same 11 seconds
+(the gate's own budget, set and not measured), and refuses where either reading gives a reason,
+or where the time runs out. Reading a body further can then never allow a command the shorter
+reading refused (found by the review of that change on 2026-11-27, which built five commands main
+refused and it allowed). The second judgement is a whole judgement again, by a Judge of its own
+that is handed nothing the first kept on itself or on its classes, so a call with one such
+heredoc takes about twice as long as it did. Where it cannot tell where they end the body, the call is refused as a
+check the gate could not make: a marker that a backslash joins to the line before (which the
+shared reader refuses too, but not in a text it gives up on before it reaches that heredoc), more
+than one `<<` in the command, a marker whose first letters it reads and whose rest it does not, an
+opener line that ends in a backslash, a heredoc opened earlier on that line that cannot be read or
+never ends, and an unquoted body that no line ends and that holds a dollar sign or a backquote,
+which the shells expand. It reads a plain word, bare or in quotes (`word()` in that file is the
+whole rule); among those it does not read are a marker that holds a dollar sign or a backquote
+outside single quotes (inside them every shell takes the marker as written, and so does it), one
+with a character outside quotes that is not a letter, a digit or one of `_ . , : / @ % + = ^ -`,
+and one whose quote never closes. The refusal says how to write the marker so that it is read.
+
+A marker that reading never took for an opener at all is not refused for what it is (it gets the
+one refusal above, for the same command at two places whose bodies hold the same lines): one written with a
+backslash (`<<\EOF`), in quotes with a character that is no letter, digit or underscore, or bare
+and starting with such a character (`<<.E`, and `<<!`, an old way to write one, or `<<~E`). `cat
+<<'E\'` with a quiet body is an ordinary command, and `test-slack-drafts-comment-start.sh` pins
+it. `fed()` gave the command's own line for such a heredoc and no body, so `python3 <<\EOF`
+importing a module that posts passed, and so did `bash <<\EOF` fed a line naming a send route. It
+now gives that line and then the body, where it reads the marker and the end is certain, and goes
+on saying it is no body. An interpreter's imports and a send route's name are read there, and what
+a pipe from such a heredoc carries stays not worked out and refused, as before. Not read: the
+lines of a shell fed that way as commands (`bash <<\EOF` whose body runs a script that posts),
+what code fed to python3 that way runs beyond its imports, and a body whose marker holds a dollar
+sign or a backquote outside single quotes, or starts with a bare character that is no letter,
+digit or underscore and none of `. , : / @ % + = ^ - ! ~` (`python3 <<"E$"` and `python3 <<*`
+importing a module that posts pass, as they do on main).
+
 Since claude-config#2844 it also reads what a runner or a compiler runs without the command naming
 it as a script (`payload/hooks/lib/program-runs.py`): the script or module `python3 -m` runpy, pdb,
 cProfile, profile or trace runs, and the test modules `python3 -m unittest` and pytest collect,

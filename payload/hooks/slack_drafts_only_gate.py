@@ -1924,7 +1924,39 @@ def comment_why(line):
             "Write that # in quotes, or put the comment on a line of its own (claude-config#3464)" % line)
 
 
+# A function's commands read with the values its body sets, and which lines a heredoc feeds a
+# program, as bash 3.2 and zsh end it (claude-config#3497). Each is this gate's own reading, in a
+# file of its own so that this one does not grow.
+FunctionValues = load_lib("function_values", "function-values.py")
+FunctionValues.UNKNOWN_DIR = SH_UNKNOWN_DIR
+HeredocFed = load_lib("heredoc_fed", "heredoc-fed.py")
+# Which reading Judge.fed gives for this run: "short" is every body as it was before that change
+# and nothing more, and "grew" whether the reading it gives otherwise has differed from that for
+# any command so far. both_readings() sets the first once the second is set and the call was not
+# refused, and puts both back when it is done.
+FED = {"short": False, "grew": False}
+
+
 def heredoc_why(line, one_line=False, opener=""):
+    if opener == "marker":
+        # Named by Judge.fed, the gate's own reading of what a heredoc feeds a program (#3497).
+        return ("it feeds a program by a heredoc whose end the gate does not read, in the line `%s`: more "
+                "than one << stands in the command, or the end marker holds a dollar sign or a backquote "
+                "outside single quotes, a quote that never closes or another character the gate does not "
+                "read in one, or the line "
+                "ends in a backslash, or a heredoc opened earlier on the line cannot be read to its end, so "
+                "the gate cannot tell which lines the shell feeds the program. Write one << on the "
+                "command's last line, with the end marker as one plain word, in single quotes where "
+                "nothing in the body is to be expanded (<<'EOF') (claude-config#3497)" % line)
+    if opener == "places":
+        # Named by Judge.fed too: one command text at two places (Given in lib/heredoc-fed.py).
+        return ("it feeds a program by a heredoc, in the line `%s`, and the same command stands at more "
+                "than one place of the text, with lines after it that a shell would feed it from either "
+                "place. One of the places may be a comment, a quoted text or another heredoc's body, and "
+                "the gate cannot tell which one the shell runs, so it cannot tell which lines the program "
+                "is fed. Write the command's text once (reword the comment or the message that quotes "
+                "it), or end each heredoc with its marker alone on a line, with no blank beside it "
+                "(claude-config#3497)" % line)
     if one_line:
         return ("it opens a heredoc on the one line `%s`, and the gate cannot tell whether the commands "
                 "after it on that line are its body or commands: typed on one line, no shell gives the "
@@ -2156,6 +2188,24 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
     def unwatch(self):
         if self.clock is time.monotonic and hasattr(signal, "setitimer"):
             signal.setitimer(signal.ITIMER_REAL, 0)
+
+    def judged(self, cmd, cwd):
+        """The reason the call's command is refused, or None, for main(): line() under the budget's
+        timer, with what the reader raises for a text it will not vouch for turned into the
+        refusal it stands for. Raises OutOfTime where the budget passed, whatever the walk went
+        on to answer."""
+        self.watch()
+        try:
+            reason = self.line(cmd, cwd, 0, cmd)
+        except NulPath:
+            reason = self.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
+        except UnsureComment as e:
+            reason = self.unfollow(heredoc_why(e.line, e.one_line, e.opener) if e.heredoc else comment_why(e.line))
+        finally:
+            self.unwatch()
+        if self.overran:
+            raise self.overran  # interrupted, and the walk answered all the same (Judge.interrupt)
+        return reason
 
     @staticmethod
     def sized(path):
@@ -6185,12 +6235,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if reason:
             return self.mod_tests_seen(d, text, depth, reason)
         placed = self.sh_placed(text, d)
-        if not placed:
-            return None
         was, self.placing = self.placing, True
         try:
-            return self.mod_tests_seen(d, text, depth,
-                                       self.judge_written(d, placed, wrapper, why, depth, whole, fed_by or text))
+            def again(written):
+                return self.judge_written(d, written, wrapper, why, depth, whole, fed_by or text)
+            # And a third reading, only where the second found nothing too: a function's commands
+            # with the values its body sets written out (lib/function-values.py, claude-config#3497).
+            reason = (again(placed) if placed else None) or FunctionValues.wider_reason(self, text, d, placed, again)
+            return self.mod_tests_seen(d, text, depth, reason)
         finally:
             self.placing = was
 
@@ -6269,12 +6321,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 return f"{wrapper} runs a string, one of whose commands posts: {inner}"
         return self.judge_written(d, spaced, wrapper, why, depth, whole, text)
 
-    def sh_placed(self, text, d):
+    def sh_placed(self, text, d, taken=None):
         """One command's text with each word that holds a variable or a substitution written out,
         where its value is certain (sh_word, as a sourced file's path is worked out); None where no
         word is. A word whose value is not certain stays as written, so it names no file and is not
         read, as before: refusing it is the half of claude-config#2678 kept off until what it would
-        refuse in this repository is measured. A source or . command has its own reading (judge)."""
+        refuse in this repository is measured. A source or . command has its own reading (judge).
+        taken, a list, asks for the wider reading of a function's commands, and is given the names
+        that reading took from a function body (lib/function-values.py, claude-config#3497)."""
         if "$" not in text and "`" not in text:
             return None
         rest = self.rest_of(text)[0].lstrip()
@@ -6293,14 +6347,19 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if not toks or toks[0][0] != "word":
             return None
         wd, script = self.sh_cwd(d), self.shell["script"]
+        any_dir, var = FunctionValues.wider_words(self, taken)
         out, changed = [], False
         for kind, raw in toks:
             if kind == "op" and not SH_REDIRECT.fullmatch(raw):
                 break  # one command's words end at an operator that is not a redirection
             if kind == "word" and re.search(r"[$`]", raw):
-                v, splits = self.sh_word(raw, wd, self.sh_source_var, script, False)
-                if v is not None and not splits and (wd != SH_UNKNOWN_DIR or os.path.isabs(os.path.expanduser(v))):
+                mark = len(taken or ())
+                v, splits = self.sh_word(raw, wd, var, script, False)
+                if v is not None and not splits and (wd != SH_UNKNOWN_DIR or any_dir or len(taken or ()) > mark
+                                                     or os.path.isabs(os.path.expanduser(v))):
                     raw, changed = shlex.quote(v), True
+                elif taken:
+                    del taken[mark:]  # a word left as written took no value
             out.append(raw)
         return " ".join(out) if changed else None
 
@@ -7975,32 +8034,24 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         Worked out once for each (text, whole): it depends on them alone, and judging the claude-sync
         suite asked it 285 times of 190, the repeats 0.08 s of searching the suite's 1.8 MB again
         (claude-config#2918).
+
+        The reading itself is lib/heredoc-fed.py's (claude-config#3497): the lines this always
+        gave, and the lines after them up to where bash 3.2 and zsh end the heredoc, where that is
+        later. Where it cannot tell where they end it, it raises UnsureComment, which main()
+        refuses as a check it could not make, and which is never kept here.
+
+        Where that differs from what this always gave it says so (FED["grew"]), and both_readings() then
+        judges the call once more with FED["short"] set, when this gives what it always gave and
+        nothing else: a longer body can be read more weakly than the short one (loose() in
+        lib/heredoc-fed.py, review of #3497).
         """
-        lines, starts = lines_of(whole)
-        key = text.strip()
-        # The lines holding key, found by searching whole for it rather than each line in turn; one
-        # holding a line break is in no line.
-        ats, at = [], whole.find(key) if key and "\n" not in key else -1
-        while at >= 0:
-            i = bisect.bisect_right(starts, at) - 1
-            ats.append(i)
-            at = whole.find(key, starts[i + 1]) if i + 1 < len(starts) else -1
-        if not ats:
-            return whole, False
-        m = re.search(r"<<-?\s*(['\"]?)([A-Za-z0-9_]+)\1", text)
-        if not m:
-            return "\n".join(lines[i] for i in ats), False
-        bodies = []
-        for at in ats:
-            body = []
-            for ln in lines[at + 1:]:
-                if ln.strip() == m.group(2):
-                    break
-                body.append(ln)
-            else:
-                return whole, False  # a body never closed: read it all
-            bodies.append("\n".join(body))
-        return "\n".join(bodies), True
+        short = HeredocFed.loose(text, whole, lines_of)
+        if FED["short"]:
+            return short
+        got = HeredocFed.fed(text, whole, lines_of, lambda at, kind: UnsureComment(whole, at, kind))
+        if got != short:
+            FED["grew"] = True
+        return got
 
     @staticmethod
     def glued_option(w, any_option=False):
@@ -8238,6 +8289,63 @@ def phase_times():
     return times
 
 
+def class_held():
+    """Every dict, list and set kept on the Judge's own class or a class it is built from. Such a
+    one outlives a Judge, so two Judges in one process share it (starts_memo and four more in
+    lib/unknown-program.py, first_words and two more in lib/sh-walk-shapes.py, when the second
+    review of #3497 counted them, 2026-11-27). Found by looking, never from a list, so the next
+    one added is found too."""
+    return [v for klass in Judge.__mro__ for v in vars(klass).values() if isinstance(v, (dict, list, set))]
+
+
+def both_readings(sw, cmd, cwd, judges):
+    """The reason the call's command is refused, or None: Judge.judged, and a second time where a
+    heredoc's body was read further than it was before claude-config#3497 and nothing was found.
+    The lines added can weaken how the lines before them are read, so the call is judged once
+    more with every body as it was before (FED["short"]), and refused where either reading gives
+    a reason: reading a body further can never allow a command the shorter reading refused
+    (review of #3497). Each Judge made is put on judges, the last being the one that answered.
+
+    The second judgement is a Judge of its own, on what is left of the first one's time, so a
+    call that runs out there raises OutOfTime as the first would and is refused. It is handed
+    nothing the first worked out that is kept on a Judge or on its classes: every dict, list and
+    set of class_held that was empty before the first judgement is emptied again before the
+    second, and Judge.fed's answers are dropped. That holds for the first call of a process,
+    which for the hook is the only one (the finally says what a later call keeps). What it does
+    share is kept in a module, never
+    on a Judge, and keyed on a text or a name alone: how a text parses (remember_readings, PARSES
+    on disk, and the shared reader's own caches), how a Python text reads (_PY_READ), which
+    module a name is (lib/py-aliases.py), and the functools caches above. It costs a whole
+    judgement again, which for a large script is as long as the first (second review of #3497)."""
+    empty = [v for v in class_held() if not v]
+    judges.append(Judge(sw))
+    try:
+        reason = judges[-1].judged(cmd, cwd)
+        if not reason and FED["grew"]:
+            FED["short"] = True
+            Judge.fed.cache_clear()
+            for held in empty:
+                held.clear()
+            judges.append(Judge(sw))
+            judges[-1].clock, judges[-1].started = judges[0].clock, judges[0].started
+            reason = judges[-1].judged(cmd, cwd)
+        return reason
+    finally:
+        # Put back what this call set, so a second call judged in one process (a suite that loads
+        # this file) is not handed it: the two flags, and Judge.fed's answers, which after a second
+        # judgement are the short reading's, and handed to the next call they would have it judged
+        # once, by that reading alone (third review of #3497). In one respect that second call
+        # does not start as the first did: what the first left in the dicts, lists and sets on
+        # the Judge's classes is still there. They are not empty when it starts, so they are not
+        # among those emptied between its two judgements either, and nothing empties them after
+        # a call (fourth review of #3497, read from the code and not measured). Emptying them
+        # here would need a list telling what a judgement fills from what the classes hold from
+        # the start, which class_held exists to do without. The hook itself judges one call a
+        # process, so none of its verdicts rests on this.
+        FED.update(short=False, grew=False)
+        Judge.fed.cache_clear()
+
+
 def main():
     # First, so all of the judging runs on a performance core when the Mac is busy (claude-config#2918),
     # and traced, so a suite reads the level the kernel really gave it.
@@ -8285,24 +8393,16 @@ def main():
     if kept:
         PARSES[0] = _cache.Parses(kept.dirpath, CODE["shell-words.py"])
         recorder = kept.record([globals(), vars(sw)] + [vars(m) for m in LIBS if m is not _cache])
-    judge = Judge(sw)
+    judges = []
     try:
-        judge.watch()
-        try:
-            reason = judge.line(cmd, cwd, 0, cmd)
-        except NulPath:
-            reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
-        except UnsureComment as e:
-            reason = judge.unfollow(heredoc_why(e.line, e.one_line, e.opener) if e.heredoc else comment_why(e.line))
-        finally:
-            judge.unwatch()
-        if judge.overran:
-            raise judge.overran  # interrupted, and the walk answered all the same (Judge.interrupt)
+        reason = both_readings(sw, cmd, cwd, judges)
     except OutOfTime as e:
         # A verdict of its own, refused like any other, so the wrapper can say what to do instead
-        # for a merge (claude-config#2576).
-        print("outoftime\n" + judge.out_of_time(e.doing))
+        # for a merge (claude-config#2576). Raised by either judgement: a second one that runs
+        # out of what the first left is refused here too, never allowed.
+        print("outoftime\n" + judges[-1].out_of_time(e.doing))
         return
+    judge = judges[-1]
     if reason:
         # A reason carrying anything the walk could not follow or read (each recorded by unfollow
         # where it gives up: an import, a path it cannot work out, a file written earlier that it
