@@ -2381,8 +2381,9 @@ settled:
   settles it, and left alone the label goes back. A press of Copy or Mark sent disarms it. Armed
   is that session's own state, never the store, decided by the clock and not by a timer, and a
   session start forgets it. A settled announcement stays final. The row comes down as soon as a
-  draft is counted. So Copy and Mark sent are of use only while none has been: in the minutes
-  before the live card's draft is saved, and for as long as a draft cannot be saved or counted
+  draft is counted. So Copy and Mark sent are of use only while none has been: in the moment
+  between the live card, which pins the row, and its draft being counted, and for as long as a
+  draft cannot be saved or counted
   (wording that failed the claimed check, an error from Slack, a draft that differs).
   `/live` lists it. Every session
   started in that project says it in one line, to Dan and with the session's first prompt. And the
