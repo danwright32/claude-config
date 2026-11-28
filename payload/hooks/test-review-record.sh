@@ -236,6 +236,8 @@ r = subprocess.run([sys.executable, '-I', '-B', RECORD, 'answered'], capture_out
 check('the last step with no session and no transcript named is an error that says so', None if r.returncode == 2 and r.stderr.strip() else 'exit %d, err %r' % (r.returncode, r.stderr))
 code, out, err = record('answered', env={'CLAUDE_CODE_SESSION_ID': '../../etc/passwd', 'CLAUDE_TRANSCRIPT_ROOT': root})
 check('a session id that is not one never goes into a path', None if code == 2 and 'not a session id' in err else 'exit %d, err %r' % (code, err))
+code, out, err = record('answered', env={'CLAUDE_CODE_SESSION_ID': '0a1b2c3d-session\n', 'CLAUDE_TRANSCRIPT_ROOT': root})
+check('a session id with a line end after it is not one, and never goes into a path', None if code == 2 and 'not a session id' in err else 'exit %d, err %r' % (code, err))
 
 # ---- A record that cannot be read is said, never taken for none or answered ----
 t4 = transcript('broken', WORKED('p1'))

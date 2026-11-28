@@ -74,8 +74,9 @@ import uuid
 
 HANDED_SUFFIX = ".review-handed.json"
 ANSWERED_SUFFIX = ".review-answered.json"
-# What a session id looks like; anything else never goes into a path.
-SESSION_ID = re.compile(r"^[A-Za-z0-9-]+$")
+# What a session id looks like; anything else never goes into a path. It ends in \Z as the names
+# below do: `$` would also pass an id with a line end after it.
+SESSION_ID = re.compile(r"^[A-Za-z0-9-]+\Z")
 # A temp file a killed writer left is removed once it is this old.
 TEMP_MAX_AGE = 3600
 # What the tidy up may remove, by name: a record of a transcript (`<name>.jsonl` and one of the two
