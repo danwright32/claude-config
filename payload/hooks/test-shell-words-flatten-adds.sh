@@ -4,11 +4,10 @@
 #
 # A command after a heredoc's opener on its line, or split across a backslash and a line break in
 # a wrapper's string or inside backquotes, was hidden from every hook reading the flattened form.
-# The reader rewrites the command so that form shows it. The first rewrite handed the new text
-# over in place of the old one wherever a count of names said it named as much, and that hid
-# commands the old text named: a comment ending in a backslash in a wrapper's string swallowed the
-# next line, and a second command of the same name kept the count level. It also put a skip word
-# together from two halves no shell joins.
+# The reader rewrites the command so that form shows it. The rewritten text alone can hide a
+# command the old text names (a comment ending in a backslash in a wrapper's string swallows the
+# next line once the pair is taken out) and can put a skip word together from two halves no shell
+# joins, so it is only ever handed over beside the old text.
 #
 # What this suite holds, for every text of a family of made up commands:
 #   A1  the text a hook was handed before is in the new text whole, at its start or at its end;
@@ -61,9 +60,13 @@ SKIPS = (re.compile(r"(?:^|(?<=[ \t\n\r\f\v;&|]))([A-Za-z_][A-Za-z0-9_]*)=1(?=[ 
          re.compile(r"(?:^|(?<=[\s;&|]))([A-Za-z_][A-Za-z0-9_]*)=1(?=\s|\Z)"))
 
 
+ROWS = [0]
+
+
 def row(what, why=""):
     what = what.replace("\t", " ").replace("\n", " ")
     why = why.replace("\t", " ").replace("\n", "\\n")
+    ROWS[0] += 1
     sys.stdout.write(("FAIL\t%s\t%s\n" % (what, why)) if why else ("ok\t%s\n" % what))
 
 
@@ -301,20 +304,28 @@ for what, cmd in (
         ("a comment after an opener", "cat <<EOF; # note\nbody\nEOF"),
         ("a text only the crude cut reads", "cat <<EOF; " + PUSH + "\nbody\nEOF\n( echo")):
     unchanged("control: %s is handed over as it always was" % what, cmd)
+sys.stdout.write("end\t%d\n" % ROWS[0])
 PY
 py_rc=$?
 check "the python comparison ran to its end" "$([ "$py_rc" -eq 0 ] && echo ok || echo "it exited $py_rc")"
 
+# A run that compared nothing, or stopped part way, must not read as a pass: the comparison says
+# last how many rows it wrote, and that many must have been read here.
+rows_read=0
+rows_written=""
 while IFS=$'\t' read -r verdict what why; do
   case "$verdict" in
-    ok) check "$what" ok ;;
-    FAIL) check "$what" "$why" ;;
+    ok) rows_read=$((rows_read + 1)); check "$what" ok ;;
+    FAIL) rows_read=$((rows_read + 1)); check "$what" "$why" ;;
+    end) rows_written="$what" ;;
     *) check "a row of the comparison is one this suite reads" "got: $verdict" ;;
   esac
 done < "$T/rows.tsv"
-
-# A run that compared nothing must not read as a pass.
-[ "$pass" -ge 50 ] || check "the comparison checked its rows" "only $pass checks passed, of the 55 or so the table makes"
+if [ -n "$rows_written" ] && [ "$rows_written" -gt 0 ] 2>/dev/null && [ "$rows_read" -eq "$rows_written" ]; then
+  check "every row the comparison wrote was read" ok
+else
+  check "every row the comparison wrote was read" "read $rows_read rows, and the comparison says it wrote [${rows_written:-nothing}]"
+fi
 
 echo
 echo "passed: $pass, failed: $fail"
