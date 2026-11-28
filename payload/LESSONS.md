@@ -4761,6 +4761,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A job killed by its own time limit reports as cancelled, so an alert gated on not cancelled silences timeouts; tell the two apart another way.
 ## State and identity
 
+- **L872. A field recording a fact about who originated a record (their IP address, device or ad
+  attribution ID) must be written once, by the action that creates the record, never by code that
+  runs whenever a page showing the record loads, because every later visitor then replaces the
+  originator's value with their own.**
+  (trypennie#747, 2026-11-27)
+  NO CHECK: each project's update route schema must refuse origin fields, no shared scan fits
+  SHORT: A field recording who ORIGINATED a record (IP, device, ad ID) is written once at creation, never on page load, or any later visitor replaces it.
+
 - **L1032. A check that a file is still the one it was before must not rest on its device and inode
   alone, because a filesystem reuses a deleted file's inode for the next file created, so a
   replacement passes as the original; pair the inode with something a replacement changes, such as

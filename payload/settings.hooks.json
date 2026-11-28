@@ -257,6 +257,13 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/lessons-merge-gate.sh",
+            "timeout": 45,
+            "onFailure": "block",
+            "statusMessage": "Checking Dan has answered for the lesson entries the PR changes"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-work-names-publish.sh",
             "timeout": 45,
             "onFailure": "block",
@@ -540,6 +547,16 @@
         ]
       },
       {
+        "matcher": "mcp__.*__slack_send_message_draft",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/draft-edit-review-notice.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
@@ -710,6 +727,11 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/repo-visibility-notice.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/draft-edit-review-notice.sh",
+            "timeout": 5
           }
         ]
       }

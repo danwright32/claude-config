@@ -5,8 +5,9 @@ import { cardFrom, cardLines, carriedIn, carriedNote, donePrompt, DROPPED_AFTER_
 import type { DrawnAt, StepsVerdict } from './card.ts'
 import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
 import { clearTurnPages, notePinned, pagesAtStop, registerPages } from './pages.ts'
-import { PROSE_MARK, TURN_TIMEOUT_MS, turnAt } from './turn.ts'
-import { saysNoneNow, waitingPhrase } from './waiting.ts'
+import { PROSE_MARK, REFUSED_MARK, TURN_TIMEOUT_MS, turnAt } from './turn.ts'
+import { saysNoneNow, saysNothingFromRefusal, waitingPhrase } from './waiting.ts'
+import { apartFromTyped, onCard, typedCommands } from './typed.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { turnNow } from './mod-kit/turnnow.ts'
@@ -591,6 +592,26 @@ let interactive = false
 const proseStep = (phrase: string) =>
   `${PROSE_MARK} ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Check it against the current state, then put it on the card with the ${TOOL} tool: its direct link or a location Dan can find, its actions one per item, and any value to paste. Then say in one line that it is on the card. Only a step he can do now goes on the card; one waiting on something else stays in the issue. If nothing is actually left for Dan to do now, say so in one line instead.`
 
+// #3652: a slash command handed to Dan to type is a step like any other, and only an unfinished step
+// naming it answers for it, since a card of other steps closes once those are done and reads as all
+// done. It begins with PROSE_MARK, so the turn holding it is never blocked again (turn.ts).
+const typedStep = (commands: readonly string[]) => {
+  const named = commands.map(c => `\`${c}\``).join(', ')
+  return `${PROSE_MARK}: a command to type himself (${named}), and no unfinished step on the steps card holds it, so once he finishes the card's other steps it is forgotten. If he is to type it now, put it on the card with the ${TOOL} tool as a step of its own: location "paste it where you type your messages to me", and the whole command he types as its value. Pinning replaces the card, so pin it again with its unfinished steps and this one. Then say in one line that it is on the card. If he is not to type it now (you only named it, or offered it as an option), say so in one line instead.`
+}
+
+// #3842: a call the permission check refused may leave what it was for to Dan, and on 2026-11-27 a
+// session told him so in eight replies and pinned nothing. So a turn holding such a refusal, with no
+// call of the steps tool after it, is sent back once to pin the step or to say in one line that
+// nothing from it is his. Judged on the refusal in the session's own record (hooks/turn.ts), never
+// on what the reply says. It begins with REFUSED_MARK, so the turn holding it is never blocked again.
+// Kept to about 40 words (Dan, 2026-11-27: "Merge with a shorter hold"): a hold is printed to him as
+// well as to Claude, and of the 79 turns it would have held on the work MacBook in 30 days, 70 left
+// him nothing. It was 127 words. How a step is written and that pinning replaces the card are the
+// steps tool's own description to say, and it does.
+const refusedStep = (calls: number) =>
+  `${REFUSED_MARK}${calls > 1 ? ` (${calls} calls)` : ''}. A refusal is final. If it left Dan something to do, put that on the steps card (${TOOL}). If not, say exactly: "Nothing from the refusal is yours to do."`
+
 // A step another mod hands the card (#1107), answered by the hooks on the noun's events below, which
 // have the whole engine; the noun's own methods answer only when those hooks failed, and say so.
 const NOUN_UNANSWERED = "the manual steps mod's own hook did not answer"
@@ -880,6 +901,10 @@ export const register: Register = on => {
   // can sit in an earlier one while the last is the session reflection. Once the turn is read, the
   // turn itself says whether this mod already blocked in it, so it blocks at most once per turn even
   // in a chain another Stop hook started; unread, it falls back to the last message and to that chain.
+  // #3652: a slash command handed to Dan to type is answered only by an unfinished step naming it.
+  // #3842: a call the permission check refused in the turn is answered only by a step pinned after
+  // it, by the one line saying nothing from it is Dan's, or by the line saying none of the steps
+  // are his now, which answers every ask here. No other words of the reply answer it.
   on('classic.Stop', async ($, e, next) => {
     const r = await pagesAtStop($, e, next, interactive)
     if (!interactive) return r
@@ -895,7 +920,13 @@ export const register: Register = on => {
     // answers the page check, one acknowledgement read by both rules that ask for it (L330).
     if (saysNoneNow(said)) return r
     const phrase = said.map(waitingPhrase).find(p => p !== null) ?? null
-    if (!phrase) return r
+    // #3652: a slash command handed to Dan to type, judged against the card's steps, not its presence.
+    const commands = [...new Set(said.flatMap(typedCommands))]
+    // #3842: the calls of this turn the permission check refused with no step pinned after them, read
+    // from the turn itself, unless Claude said in one line that nothing from them is Dan's to do. An
+    // unread turn names none: the refusal is in the session's record and nowhere else.
+    const refused = turn.state === 'read' && !saysNothingFromRefusal(said) ? turn.refused : 0
+    if (!phrase && commands.length === 0 && refused === 0) return r
     let card: StepsCard | null
     try {
       card = (await $.state.get(cardRef)).value ?? null
@@ -903,10 +934,20 @@ export const register: Register = on => {
       // Unread, it is not taken as no card: blocking on a guess would send Claude to pin a card
       // that may already be there. Said, so a check that stops working is seen (fail loud).
       $.ui.log(`Manual steps could not read the steps card, so a step left in prose was not checked: ${message(err)}`)
-      return r
+      // #3842: a refused call is judged without the card, so it is still asked about.
+      return refused ? { ...r, block: r.block ? `${r.block}\n\n${refusedStep(refused)}` : refusedStep(refused) } : r
     }
-    if (card && !card.isCarried && nextStep(card) !== undefined) return r
-    const ours = proseStep(phrase)
+    const shown = card && !card.isCarried ? card : null
+    const missing = commands.filter(c => !onCard(shown, c))
+    // One step gets one ask (review of pull request 3677): a phrase found only in the words that hand
+    // a held command over is that command's step, which the command's ask already covers. A phrase
+    // anywhere else in the turn is another step, and keeps its own ask.
+    const other = missing.length ? (said.map(t => waitingPhrase(apartFromTyped(t, missing))).find(p => p !== null) ?? null) : phrase
+    // #3842: a refused call keeps its own ask too: a card pinned before a call was refused holds some
+    // other step than the one the refusal left.
+    const asks = [missing.length ? typedStep(missing) : null, other && !(shown && nextStep(shown) !== undefined) ? proseStep(other) : null, refused ? refusedStep(refused) : null].filter(a => a !== null)
+    if (!asks.length) return r
+    const ours = asks.join('\n\n')
     return { ...r, block: r.block ? `${r.block}\n\n${ours}` : ours }
   })
 
