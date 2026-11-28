@@ -7,7 +7,8 @@
 # the tool_use shape were read from real transcripts on 2026-11-02; CronCreate's input is the shape
 # tools/typescript/claude-code-types declares, since no real CronCreate call was on this Mac):
 #   1. a one shot CronCreate this turn that fires on a later day
-#   2. a Write or Edit to a project memory file naming a date after today
+#   2. a Write or Edit to a project memory file adding a date after today that the text it
+#      replaced did not hold (#3645)
 #   3. the assistant's own text this turn promising to check again on a later day
 # and the controls that must stay silent: a recurring cron, a one shot later today, a memory naming
 # only a past date, "tomorrow" inside a tool result or a quotation, a promise in an EARLIER turn,
@@ -77,6 +78,13 @@ elif kind == "tool":
 elif kind == "result":
     base.update(type="user", message={"role": "user",
                 "content": [{"type": "tool_result", "tool_use_id": args[0], "content": args[1]}]})
+elif kind == "result-tur":
+    # A tool result line with the structured record Claude Code keeps beside it: for a Write it
+    # holds type ("create" or "update") and, on an update, originalFile (shape read from real
+    # transcripts on 2026-11-26).
+    base.update(type="user", message={"role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": args[0], "content": args[1]}]},
+                toolUseResult=json.loads(args[2]))
 else:
     raise SystemExit("unknown kind " + kind)
 print(json.dumps(base))
@@ -182,6 +190,108 @@ t="$WORK/mem-not-memory.jsonl"; start "$t"
 { L tool w1 Write '{"file_path":"/fixture-home/Apps/Bidspoke/docs/plan.md","content":"Ship on 2026-11-05."}'
   L result w1 "File created successfully" ; } >> "$t"
 silent "control: a future date in a file that is not a memory stays silent" "$t"
+
+# ---- 2b. only a date the edit ADDS counts (#3645) ----
+# A memory edit that carries along a date already in the text it replaces left no new check: on
+# 2026-11-25 a clause added to an index line that had held a date since September stopped the turn
+# naming that date. Dates are compared by the day they name, after the same reading that finds
+# them, so one day written two ways is one date.
+fires_not() { # fires_not <label> <transcript> <text the reason must hold> <text it must not hold>
+  local out reason
+  out="$(run "$2")"
+  reason="$(printf '%s' "$out" | reason_of)"
+  if grep -q '"decision": *"block"' <<< "$out" && grep -qiF -- "$3" <<< "$reason" && ! grep -qiF -- "$4" <<< "$reason"; then
+    check "$1" ok
+  else
+    check "$1" "expected a block naming '$3' and not '$4', got: ${out:-nothing}"
+  fi
+}
+
+t="$WORK/mem-edit-kept.jsonl"; start "$t"
+{ L tool e1 Edit "{\"file_path\":\"$MEM\",\"old_string\":\"Repull EQX on 2026-11-05.\",\"new_string\":\"Repull EQX on 2026-11-05 and compare tradelines.\"}"
+  L result e1 "The file has been updated" ; } >> "$t"
+silent "a memory edit whose old and new text share one future date, adding none, stays silent" "$t"
+
+t="$WORK/mem-edit-added.jsonl"; start "$t"
+{ L tool e1 Edit "{\"file_path\":\"$MEM\",\"old_string\":\"Repull EQX once the bureau refreshes.\",\"new_string\":\"Repull EQX on 2026-11-05.\"}"
+  L result e1 "The file has been updated" ; } >> "$t"
+fires "control: a memory edit adding a future date its old text lacks fires" "$t" "Thu Nov 5"
+
+t="$WORK/mem-edit-kept-and-added.jsonl"; start "$t"
+{ L tool e1 Edit "{\"file_path\":\"$MEM\",\"old_string\":\"Recheck on 2026-11-04.\",\"new_string\":\"Recheck on 2026-11-04, then again on 2026-11-09.\"}"
+  L result e1 "The file has been updated" ; } >> "$t"
+fires_not "a memory edit keeping one future date and adding another names only the new one" "$t" "Mon Nov 9" "Wed Nov 4"
+
+t="$WORK/mem-edit-two-forms.jsonl"; start "$t"
+{ L tool e1 Edit "{\"file_path\":\"$MEM\",\"old_string\":\"Recheck on 2026-11-05.\",\"new_string\":\"Recheck on Nov 5th, once the bureau refreshes.\"}"
+  L result e1 "The file has been updated" ; } >> "$t"
+silent "a memory edit rewriting a future date in another form (ISO to month name) stays silent" "$t"
+
+t="$WORK/mem-edit-two-forms-back.jsonl"; start "$t"
+{ L tool e1 Edit "{\"file_path\":\"$MEM\",\"old_string\":\"Recheck on November 5, 2026.\",\"new_string\":\"Recheck on 2026-11-05.\"}"
+  L result e1 "The file has been updated" ; } >> "$t"
+silent "a memory edit rewriting a future date in another form (month name with year to ISO) stays silent" "$t"
+
+t="$WORK/mem-edit-replace-all.jsonl"; start "$t"
+{ L tool e1 Edit "{\"file_path\":\"$MEM\",\"old_string\":\"due 2026-11-05\",\"new_string\":\"due 2026-11-05 (bureau)\",\"replace_all\":true}"
+  L result e1 "The file has been updated" ; } >> "$t"
+silent "a replace_all memory edit carrying its future date along stays silent" "$t"
+
+t="$WORK/mem-edit-replace-all-added.jsonl"; start "$t"
+{ L tool e1 Edit "{\"file_path\":\"$MEM\",\"old_string\":\"due soon\",\"new_string\":\"due 2026-11-05\",\"replace_all\":true}"
+  L result e1 "The file has been updated" ; } >> "$t"
+fires "control: a replace_all memory edit adding a future date fires" "$t" "Thu Nov 5"
+
+t="$WORK/mem-multiedit-kept.jsonl"; start "$t"
+{ L tool m1 MultiEdit "{\"file_path\":\"$MEM\",\"edits\":[{\"old_string\":\"due 2026-11-05\",\"new_string\":\"due 2026-11-05 (bureau)\"},{\"old_string\":\"lead\",\"new_string\":\"the lead\"}]}"
+  L result m1 "Applied 2 edits" ; } >> "$t"
+silent "a MultiEdit to a memory carrying its future date along stays silent" "$t"
+
+t="$WORK/mem-multiedit-moved.jsonl"; start "$t"
+{ L tool m1 MultiEdit "{\"file_path\":\"$MEM\",\"edits\":[{\"old_string\":\"Repull on 2026-11-05.\",\"new_string\":\"Repull soon.\"},{\"old_string\":\"Notes:\",\"new_string\":\"Notes (repull 2026-11-05):\"}]}"
+  L result m1 "Applied 2 edits" ; } >> "$t"
+silent "a MultiEdit moving a future date from one line to another in the same call stays silent" "$t"
+
+t="$WORK/mem-multiedit-added.jsonl"; start "$t"
+{ L tool m1 MultiEdit "{\"file_path\":\"$MEM\",\"edits\":[{\"old_string\":\"due 2026-11-05\",\"new_string\":\"due 2026-11-05 (bureau)\"},{\"old_string\":\"Notes:\",\"new_string\":\"Notes, recheck 2026-11-09:\"}]}"
+  L result m1 "Applied 2 edits" ; } >> "$t"
+fires_not "control: a MultiEdit to a memory adding a future date names only that date" "$t" "Mon Nov 9" "Thu Nov 5"
+
+# A MultiEdit applies its edits in order, so a later edit's old text can hold a date an earlier
+# edit of the same call just wrote. That date was not in the file before the call.
+t="$WORK/mem-multiedit-chained.jsonl"; start "$t"
+{ L tool m1 MultiEdit "{\"file_path\":\"$MEM\",\"edits\":[{\"old_string\":\"Recheck soon.\",\"new_string\":\"Recheck on 2026-11-09.\"},{\"old_string\":\"Recheck on 2026-11-09.\",\"new_string\":\"Recheck on 2026-11-09, after the bureau refreshes.\"}]}"
+  L result m1 "Applied 2 edits" ; } >> "$t"
+fires "a MultiEdit whose later edit reworks a date its earlier edit added still names that date" "$t" "Mon Nov 9"
+
+t="$WORK/mem-edit-twice-to-once.jsonl"; start "$t"
+{ L tool e1 Edit "{\"file_path\":\"$MEM\",\"old_string\":\"Repull 2026-11-05. Compare tradelines 2026-11-05.\",\"new_string\":\"Repull and compare tradelines on 2026-11-05.\"}"
+  L result e1 "The file has been updated" ; } >> "$t"
+silent "a memory edit folding a future date written twice into once stays silent" "$t"
+
+# A Write replaces the whole file, and its tool call holds only the new content. The tool result
+# line Claude Code writes beside it records, for an update, the file as it was (originalFile), so
+# a date the file already held is compared against that. A new file, and a Write with no such
+# record (refused, or a result line shaped otherwise), count every future date, as before.
+t="$WORK/mem-write-update-kept.jsonl"; start "$t"
+{ L tool w1 Write "{\"file_path\":\"$MEM\",\"content\":\"Repull EQX on 2026-11-05 and compare tradelines.\\n\"}"
+  L result-tur w1 "The file has been updated" "{\"type\":\"update\",\"filePath\":\"$MEM\",\"content\":\"Repull EQX on 2026-11-05 and compare tradelines.\\n\",\"originalFile\":\"Repull EQX on 2026-11-05.\\n\",\"structuredPatch\":[]}" ; } >> "$t"
+silent "a Write updating a memory whose earlier content held the same future date stays silent" "$t"
+
+t="$WORK/mem-write-update-added.jsonl"; start "$t"
+{ L tool w1 Write "{\"file_path\":\"$MEM\",\"content\":\"Repull EQX on 2026-11-05, recheck 2026-11-09.\\n\"}"
+  L result-tur w1 "The file has been updated" "{\"type\":\"update\",\"filePath\":\"$MEM\",\"content\":\"x\",\"originalFile\":\"Repull EQX on 2026-11-05.\\n\",\"structuredPatch\":[]}" ; } >> "$t"
+fires_not "control: a Write updating a memory names only the future date its earlier content lacked" "$t" "Mon Nov 9" "Thu Nov 5"
+
+t="$WORK/mem-write-create.jsonl"; start "$t"
+{ L tool w1 Write "{\"file_path\":\"$MEM\",\"content\":\"Repull EQX on 2026-11-05.\\n\"}"
+  L result-tur w1 "File created successfully" "{\"type\":\"create\",\"filePath\":\"$MEM\",\"content\":\"Repull EQX on 2026-11-05.\\n\",\"structuredPatch\":[]}" ; } >> "$t"
+fires "control: a Write creating a memory naming a future date fires" "$t" "Thu Nov 5"
+
+t="$WORK/mem-write-refused.jsonl"; start "$t"
+{ L tool w1 Write "{\"file_path\":\"$MEM\",\"content\":\"Repull EQX on 2026-11-05.\\n\"}"
+  L result-tur w1 "Permission to use Write denied" "\"Error: Permission to use Write denied\"" ; } >> "$t"
+fires "control: a Write with no record of the earlier content still counts its future date" "$t" "Thu Nov 5"
 
 # ---- 3. a promise in the assistant's own words ----
 t="$WORK/promise-tomorrow.jsonl"; start "$t"
