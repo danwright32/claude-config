@@ -7,7 +7,16 @@ a run is the supervisor's own lock, and VERIFICATION_TIME_SCALE=0 (the poll dela
 VERIFICATION_DEADLINE_SCALE=0 (the run deadline) make those immediate where a test needs them.
 
 Serve must stop on every path, so every way a run can end is driven here: a normal stop, a ready
-command that never succeeds, serve dying by itself, the deadline, and the supervisor killed outright.
+command that never succeeds, serve dying by itself, the deadline, the supervisor killed outright, the
+caller going away while the run is starting or once it is up, and a stop that hangs.
+
+No test may leave a process behind (the #3807 review). Every run a test starts is tied to the test
+process by a lifeline, every stand in that holds a supervisor waits on a lock the test process
+alone holds, and the stand ins for serve and the suite the last class starts read a pipe only the
+test writes, so each ends when the test process does, however that went. The one exception is on
+purpose: the run the last class starts with NO lifeline can be tied to nothing, and its bound is a
+shortened deadline. Where a fault cannot be had without a race, a stand in blocks the thing waited
+on; no test sleeps to give a fault time to happen.
 """
 
 import contextlib
@@ -16,11 +25,13 @@ import fcntl
 import io
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -134,6 +145,67 @@ def wait_not_running(program, limit_s=20):
         time.sleep(0.05)
 
 
+def stop_limit(rdir):
+    """How long the product itself allows the stop of the run in `rdir`, which is what a test waits
+    for one: a shorter guess reads a correct stop on a loaded Mac as a hung one (the #3807 review)."""
+    with open(os.path.join(rdir, "areas.json")) as f:
+        return run_session.stop_wait_s(json.load(f)["timeouts"])
+
+
+def wait_for_file(path, limit_s):
+    """Wait on the condition, the file being there, and return what it holds, or None at the limit."""
+    deadline = time.monotonic() + limit_s
+    while True:
+        try:
+            with open(path) as f:
+                return f.read()
+        except FileNotFoundError:
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.05)
+
+
+def wait_group_empty(pgid, limit_s=30):
+    """Wait on the condition, no live member in the process group, and return those left at the limit."""
+    deadline = time.monotonic() + limit_s
+    while True:
+        left = live_members(pgid)
+        if not left or time.monotonic() >= deadline:
+            return left
+        time.sleep(0.05)
+
+
+# A stand in for a program the supervisor runs, written into a folder put first on its PATH. The
+# first call of it is HELD: it says which process it is, then waits for a lock the test holds, and
+# only then does the real program's work. The lock is released when the test lets go of it and also
+# when the test process is gone, however it went, so a held stand in can never outlive its test.
+HELD_FIRST = r'''#!%(python)s
+import fcntl, os, sys
+fake = os.environ["FAKE_DIR"]
+try:
+    os.mkdir(os.path.join(fake, "%(name)s-held"))
+except FileExistsError:
+    pass  # only the first call is held
+else:
+    said = os.path.join(fake, "%(name)s-held", "pid")
+    with open(said + ".tmp", "w") as f:
+        f.write(str(os.getpid()))
+    os.rename(said + ".tmp", said)
+    %(before)s
+    with open(os.path.join(fake, "hold.lock")) as lock:
+        fcntl.flock(lock, fcntl.LOCK_SH)
+%(then)s
+'''
+# The sandbox the monitor would run its canaries and serve under, standing in where a test must not
+# depend on what this Mac's real one reports: it drops `-f <profile>` and runs the command as it is.
+FAKE_SANDBOX = '#!/bin/sh\nshift 2\nexec "$@"\n'
+# The file a supervisor keeps beside its receipt for as long as a later `stop` may recover the run
+# by the process group numbers in the receipt, and what it holds. Written out here, not read from
+# run_session: the `stop` that reads it can be a later version than the supervisor that wrote it,
+# so the name and the words are a contract, and a test that borrowed them could not see one change.
+RECOVER_BY_RECEIPT, RECOVER_BY_RECEIPT_SAYS = "recover-by-receipt", "held\n"
+
+
 class RunFixture(unittest.TestCase):
     """The throwaway repository and the helpers both test classes use; it holds no tests."""
 
@@ -148,10 +220,49 @@ class RunFixture(unittest.TestCase):
         os.mkfifo(os.path.join(self.fake, "ready.fifo"))
         git(self.repo, "init", "-q")
         self.started = []
+        self.held = None
+        # Every run a test starts is tied to this process (claude-config#3682): it holds the write
+        # end, and when it dies, killed with its whole suite included, each run's supervisor sees the
+        # pipe end and stops its run. tearDown's stop never runs in a suite killed outright.
+        self.tie = os.pipe() if self.lifeline else None
+        # What a stop run inside this process was told about its file is this process's to remember
+        # for as long as it lives, and every test here is one process: no test starts with another's
+        # (the sixth #3807 review). Until this, only each test's own new folder kept them apart.
+        run_session.FORBIDDEN.clear()
+
+    lifeline = True
+
+    def hold(self):
+        """Take the lock every held stand in waits for. It is this process's alone, so it is let go
+        by let_go(), by tearDown, and by the system when this process is gone."""
+        self.held = os.open(os.path.join(self.fake, "hold.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(self.held, fcntl.LOCK_EX)
+
+    def let_go(self):
+        if self.held is not None:
+            os.close(self.held)
+            self.held = None
+
+    def stand_in(self, name, text):
+        """Write an executable stand in named `name` into the folder path_first() puts on the PATH."""
+        folder = os.path.join(self.fake, "bin")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, name)
+        with open(path, "w") as f:
+            f.write(text)
+        os.chmod(path, 0o755)
+        return path
+
+    def path_first(self):
+        return os.path.join(self.fake, "bin") + os.pathsep + os.environ.get("PATH", "")
 
     def tearDown(self):
+        self.let_go()  # before the stops below: a supervisor a stand in holds cannot finish one
         for rid in self.started:
             subprocess.run(self.cli("stop", rid), capture_output=True, text=True, env=self.env())
+        if self.tie:
+            for fd in self.tie:
+                os.close(fd)
         self.tmp.cleanup()
 
     def commit(self, **commands):
@@ -194,14 +305,19 @@ class RunFixture(unittest.TestCase):
     doc_over = {}
 
     def env(self, scale="1", deadline="1"):
-        return dict(os.environ, VERIFICATION_HOME=self.home, FAKE_DIR=self.fake,
-                    VERIFICATION_TIME_SCALE=scale, VERIFICATION_DEADLINE_SCALE=deadline, **self.extra_env)
+        env = dict(os.environ, VERIFICATION_HOME=self.home, FAKE_DIR=self.fake,
+                   VERIFICATION_TIME_SCALE=scale, VERIFICATION_DEADLINE_SCALE=deadline, **self.extra_env)
+        env.pop("VERIFICATION_LIFELINE_FD", None)
+        if self.tie:
+            env["VERIFICATION_LIFELINE_FD"] = str(self.tie[0])
+        return env
 
     def cli(self, *args):
         return [sys.executable, os.path.join(HERE, "run_session.py")] + list(args)
 
     def run_cli(self, *args, scale="1", deadline="1"):
-        return subprocess.run(self.cli(*args), capture_output=True, text=True, env=self.env(scale, deadline))
+        return subprocess.run(self.cli(*args), capture_output=True, text=True, env=self.env(scale, deadline),
+                              pass_fds=self.tie[:1] if self.tie else ())
 
     def start(self, sha, scale="1", areas="invoices", deadline="1"):
         r = self.run_cli("start", "--repo", self.repo, "--sha", sha, "--areas", areas, scale=scale,
@@ -209,6 +325,11 @@ class RunFixture(unittest.TestCase):
         if r.returncode == 0:
             self.started.append(json.loads(r.stdout)["receipt_id"])
         return r
+
+    def cut_lifeline(self):
+        """Close this process's write end of the lifeline, as its death would."""
+        os.close(self.tie[1])
+        self.tie = self.tie[:1]
 
     def receipt(self, rid):
         with open(os.path.join(self.home, "receipts", rid, "receipt.json")) as f:
@@ -252,6 +373,10 @@ class RunSessionTests(RunFixture):
         rdir = os.path.join(self.home, "receipts", rid)
         self.assertTrue(os.path.exists(os.path.join(rdir, "guides", "invoices.md")))
         self.assertTrue(os.path.exists(os.path.join(rdir, "areas.json")))
+        # While the supervisor has not begun to end its children, a later `stop` may recover the run
+        # by the numbers in the receipt, and the file beside the receipt says so.
+        with open(os.path.join(rdir, RECOVER_BY_RECEIPT)) as f:
+            self.assertEqual(f.read(), RECOVER_BY_RECEIPT_SAYS)
 
         d = self.run_cli("drive", rid, "--area", "invoices", "--", "open", "/invoices")
         self.assertEqual(d.returncode, 0, d.stderr)
@@ -267,6 +392,11 @@ class RunSessionTests(RunFixture):
         s = self.run_cli("stop", rid)
         self.assertEqual(s.returncode, 0, s.stderr)
         self.assert_fully_stopped(self.receipt(rid), "stop")
+        # Serve left by itself on the SIGTERM the stop sent it. A supervisor that started serve with
+        # the stop signals blocked hands serve that block, and then has to kill it (the #3807 review).
+        self.assertEqual(self.receipt(rid)["serve_exit"], 0, "serve did not end on the SIGTERM it was sent")
+        self.assertFalse(os.path.exists(os.path.join(rdir, RECOVER_BY_RECEIPT)),
+                         "a supervisor that ended its own groups left them to be recovered by number")
 
         again = self.run_cli("drive", rid, "--area", "invoices", "--", "open", "/")
         self.assertNotEqual(again.returncode, 0)
@@ -302,20 +432,197 @@ class RunSessionTests(RunFixture):
         r = self.start(self.commit())
         self.assertEqual(r.returncode, 0, r.stderr)
         rid = json.loads(r.stdout)["receipt_id"]
+        rdir = os.path.join(self.home, "receipts", rid)
         with open(os.path.join(self.fake, "serve.pid")) as f:
-            os.kill(int(f.read()), signal.SIGKILL)
-        run_session.wait_for_supervisor(os.path.join(self.home, "receipts", rid), timeout_s=30)
+            serve_pid = int(f.read())
+        # Serve is not this test's child, so this test cannot hold its number. The run's supervisor
+        # does: it keeps serve uncollected until its own stop, and its held lock, read here on the
+        # line before the signal, says it is alive and has not stopped.
+        self.assertIn(serve_pid, live_members(self.receipt(rid)["serve_pgid"]), "not a process of this run's serve")
+        self.assertTrue(run_session.supervisor_alive(rdir), "the supervisor that holds serve is gone")
+        os.kill(serve_pid, signal.SIGKILL)
+        run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
         rec = self.receipt(rid)
         self.assert_fully_stopped(rec, "serve_exited")
         self.assertEqual(rec["serve_exit"], -signal.SIGKILL)
+        # Serve is watched for, not collected, until its group is dealt with; the receipt reads as it always did.
+        self.assertEqual(rec["stop_detail"], "serve exited by itself with %s" % -signal.SIGKILL)
 
     def test_the_deadline_stops_serve(self):
         r = self.start(self.commit(ready="true"), scale="0", deadline="0")
         rid = self.only_receipt_id()
-        run_session.wait_for_supervisor(os.path.join(self.home, "receipts", rid), timeout_s=30)
+        rdir = os.path.join(self.home, "receipts", rid)
+        run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
         self.assert_fully_stopped(self.receipt(rid), "deadline")
         if r.returncode != 0:
             self.assertIn("serve-stopped", r.stderr)
+
+    def test_a_lifeline_that_is_not_a_pipes_read_end_is_refused_before_anything_starts(self):
+        sha = self.commit()
+        cases = [(self.tie[1], "not the read end of a pipe"), ("x", "names no open descriptor"),
+                 (999, "names no open descriptor")]
+        with open(os.path.join(self.fake, "plain-file"), "w") as plain:
+            cases.append((plain.fileno(), "not the read end of a pipe"))
+            for fd, said in cases:
+                env = dict(self.env(), VERIFICATION_LIFELINE_FD=str(fd))
+                r = subprocess.run(self.cli("start", "--repo", self.repo, "--sha", sha, "--areas", "invoices"),
+                                   capture_output=True, text=True, env=env,
+                                   pass_fds=(fd,) if isinstance(fd, int) and fd != 999 else ())
+                self.assertEqual(r.returncode, 4, (fd, r.stderr))
+                self.assertIn("lifeline-bad", r.stderr)
+                self.assertIn(said, r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "receipts")), "a refused start made a receipt")
+
+    def test_something_written_down_the_lifeline_does_not_stop_the_run(self):
+        r = self.start(self.commit())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["receipt_id"]
+        os.write(self.tie[1], b"still here\n")
+        # Wait on the condition, the supervisor having read it all, never a fixed time (L290).
+        deadline = time.monotonic() + 30
+        while pipe_pending(self.tie[0]) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(pipe_pending(self.tie[0]), 0, "the supervisor never read its lifeline")
+        self.assertTrue(run_session.supervisor_alive(os.path.join(self.home, "receipts", rid)))
+        self.assertIsNone(self.receipt(rid)["stopped_at"])
+        s = self.run_cli("stop", rid)
+        self.assertEqual(s.returncode, 0, s.stderr)
+        self.assert_fully_stopped(self.receipt(rid), "stop")
+
+    @unittest.skipIf(sys.platform != "darwin", "UNMEASURED, not passed: the monitor whose start holds the"
+                     " supervisor here only starts on macOS")
+    def test_a_caller_that_goes_while_the_run_is_starting_is_acted_on_once_serve_is_recorded(self):
+        # The supervisor is held inside the egress monitor's start, before serve exists, by a report
+        # stream that says nothing until the test lets it go. A stop acted on there would interrupt
+        # the start of a child, which leaves that child running with nothing recorded to stop it by
+        # (the #3807 review). So the stop must wait until serve's pid and group are in the receipt.
+        self.stand_in("log", HELD_FIRST % {
+            "python": sys.executable, "name": "log", "then": "",
+            "before": 'print("Filtering the log data using the fake predicate", flush=True)'})
+        self.hold()
+        self.extra_env = {"VERIFICATION_EGRESS_LOG": os.path.join(self.fake, "bin", "log"),
+                          "VERIFICATION_EGRESS_SANDBOX": self.stand_in("sandbox-exec", FAKE_SANDBOX)}
+        # egress_s is how long the monitor waits on that stream by itself: long, so only the test ends the hold.
+        self.doc_over = {"timeouts": {"ready_s": 20, "ready_interval_s": 1, "max_run_s": 3600, "stop_s": 10,
+                                      "egress_s": 120}}
+        sha = self.commit()
+        starting = subprocess.Popen(self.cli("start", "--repo", self.repo, "--sha", sha, "--areas", "invoices"),
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env(),
+                                    pass_fds=self.tie[:1])
+        self.addCleanup(starting.communicate)
+        self.assertTrue(wait_for_file(os.path.join(self.fake, "log-held", "pid"), 120),
+                        "the supervisor never started its report stream")
+        rid = self.only_receipt_id()
+        self.started.append(rid)
+        rdir = os.path.join(self.home, "receipts", rid)
+        self.assertIsNone(self.receipt(rid)["serve_pid"], "serve was started before the monitor was")
+        self.cut_lifeline()
+        self.assertEqual(wait_for_file(os.path.join(rdir, "stop-reason"), 120), "caller_gone",
+                         "the supervisor never saw its caller go")
+        self.let_go()  # the stream ends, the monitor gives up, and the supervisor goes on to start serve
+        try:
+            run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
+        except v.VerificationError as e:
+            self.fail("a stop asked for during the start was never acted on: %s" % e)
+        rec = self.receipt(rid)
+        self.assertIsNotNone(rec["serve_pid"], "the stop was acted on before serve's pid and group were"
+                             " recorded, so it interrupted the supervisor while it was starting: %s" % rec)
+        self.assertEqual(rec["serve_pgid"], rec["serve_pid"])
+        self.assertEqual(rec["stopped_by"], "caller_gone", rec)
+        self.assertEqual(wait_group_empty(rec["serve_pgid"]), [], "serve outlived the stop")
+        self.assertTrue(rec["worktree_removed"], rec)
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+
+    def test_a_second_stop_signal_does_not_interrupt_the_stop_already_under_way(self):
+        # The supervisor is held at the first thing a stop signal makes it do, reading why it was
+        # asked to stop: the reason file is a FIFO here, so that read waits for this test to write
+        # it. A second signal landing there used to end the read with the reason never taken, and
+        # the run was recorded as a supervisor error (the #3807 review).
+        r = self.start(self.commit())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["receipt_id"]
+        rdir = os.path.join(self.home, "receipts", rid)
+        rec = self.receipt(rid)
+        fifo = os.path.join(rdir, "stop-reason")
+        os.mkfifo(fifo)
+        try:
+            run_session.request_stop(rdir, "stop")
+            # Wait on the condition, the supervisor having the reason open to read: only then can
+            # this end be opened without blocking (ENXIO until a reader is there).
+            deadline, w = time.monotonic() + stop_limit(rdir), None
+            while w is None and time.monotonic() < deadline:
+                try:
+                    w = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError as e:
+                    if e.errno != errno.ENXIO:
+                        raise
+                    time.sleep(0.05)
+            self.assertIsNotNone(w, "the supervisor never came to read why it was asked to stop")
+            try:
+                self.assertTrue(run_session.supervisor_alive(rdir))
+                # The second stop signal, to the pid the supervisor's held lock vouches for. It is
+                # sent BEFORE the reason is written, so it reaches a supervisor still in that read.
+                os.kill(rec["supervisor_pid"], signal.SIGTERM)
+                os.write(w, b"stop")
+            finally:
+                os.close(w)
+        finally:
+            # Whatever went wrong above, no supervisor is left waiting for a reason nobody will
+            # write: this opens the FIFO as a writer whether or not a reader is there yet.
+            rw = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+            os.write(rw, b"stop")
+            os.close(rw)
+        try:
+            run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
+        except v.VerificationError as e:
+            self.fail("the supervisor did not finish its stop: %s" % e)
+        self.assert_fully_stopped(self.receipt(rid), "stop")
+        with open(os.path.join(rdir, "supervisor.log")) as f:
+            self.assertNotIn("Traceback", f.read(), "the second signal broke out of the stop")
+
+    def test_a_stop_that_hung_is_cut_off_once_the_caller_is_gone(self):
+        # The state process 77733 was left in on 2026-11-26 (claude-config#3820): a stop was asked
+        # for, the supervisor began it and never finished. Here the stop hangs because the first ps
+        # the supervisor runs, to see whether serve's group is empty, is held by this test.
+        self.stand_in("ps", HELD_FIRST % {"python": sys.executable, "name": "ps", "before": "pass",
+                                          "then": 'os.execv("/bin/ps", ["ps"] + sys.argv[1:])'})
+        self.hold()
+        # The scale makes a supervisor whose caller is gone give the stop no time at all before it
+        # cuts the run off: this stop can never finish, so nothing is lost by not waiting for it.
+        self.extra_env = {"PATH": self.path_first(), "VERIFICATION_STOP_LIMIT_SCALE": "0"}
+        r = self.start(self.commit())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["receipt_id"]
+        rdir = os.path.join(self.home, "receipts", rid)
+        rec = self.receipt(rid)
+        run_session.request_stop(rdir, "stop")
+        held = wait_for_file(os.path.join(self.fake, "ps-held", "pid"), stop_limit(rdir))
+        self.assertTrue(held, "the supervisor's stop never reached the ps this test holds")
+        self.assertTrue(run_session.supervisor_alive(rdir))
+        self.assertIsNone(self.receipt(rid)["stopped_at"])
+        self.cut_lifeline()
+        try:
+            run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
+        except v.VerificationError as e:
+            self.fail("a stop that hung was not ended once the caller of its run was gone: %s" % e)
+        done = self.receipt(rid)
+        self.assertEqual(done["stopped_by"], "caller_gone", done)
+        self.assertIn("cut off", done["stop_detail"])
+        self.assertIn("a stop asked for earlier (stop)", done["stop_detail"])
+        # A run that was cut off is never given a measured verdict, clean least of all.
+        self.assertEqual(done["egress"]["verdict"], "unmeasured", done["egress"])
+        self.assertIn("cut off", done["egress"]["why"])
+        self.assertIsNone(done["egress"].get("measured_to"))
+        self.assertEqual(done["stop_command_exit"], 0, "the project's stop command, which the hung stop had run")
+        self.assertTrue(done["worktree_removed"], done)
+        self.assertFalse(os.path.exists(rec["worktree"]), "worktree left behind")
+        self.assertEqual(wait_group_empty(rec["serve_pgid"]), [], "serve's group outlived the cut off")
+        if rec.get("egress_monitor_pgid"):
+            self.assertEqual(wait_group_empty(rec["egress_monitor_pgid"]), [], "the report stream outlived the cut off")
+        # The supervisor is gone, and so is the ps it was waiting on, which was in no recorded group
+        # but in the supervisor's own.
+        self.assertEqual(wait_gone([rec["supervisor_pid"], int(held)]), [], "left behind by the cut off")
+        self.assertFalse(os.path.exists(os.path.join(rdir, "egress-beat")), "the beat program's copy was left")
 
     def test_stop_recovers_when_the_supervisor_was_killed_outright(self):
         r = self.start(self.commit())
@@ -326,12 +633,22 @@ class RunSessionTests(RunFixture):
         if rec.get("egress_sandbox"):  # the monitor started, so its beat program is running from its copy
             self.assertTrue(os.path.exists(beat_program), "the monitor made no beat program")
             self.assertTrue(running_from(beat_program), "the beat program is not running")
+        rdir = os.path.join(self.home, "receipts", rid)
+        # The supervisor is not this test's child. Its held lock, read on the line before the
+        # signal, is what says the pid in the receipt is still its own, as it is for `stop` itself.
+        self.assertTrue(run_session.supervisor_alive(rdir), "the supervisor was gone before it was killed")
         os.kill(rec["supervisor_pid"], signal.SIGKILL)
         self.assertTrue(live_members(rec["serve_pgid"]), "serve should outlive its supervisor")
+        # Killed outright, the supervisor never began to end its groups, so the file that lets a
+        # later `stop` recover them by number is still there, and `stop` does as it always did.
+        with open(os.path.join(rdir, RECOVER_BY_RECEIPT)) as f:
+            self.assertEqual(f.read(), RECOVER_BY_RECEIPT_SAYS)
         s = self.run_cli("stop", rid)
         self.assertEqual(s.returncode, 0, s.stderr)
         rec = self.receipt(rid)
         self.assert_fully_stopped(rec, "recovered")
+        self.assertEqual(rec["stop_detail"], "the supervisor was gone without stopping serve")
+        self.assertEqual(rec["serve_survivors"], [])
         # The beat program ends by itself when its supervisor's death closes its input, and the
         # stop removes the copy it ran from (claude-config#3576).
         self.assertFalse(os.path.exists(beat_program), "the beat program's copy was left in the receipt folder")
@@ -749,9 +1066,23 @@ class NativeRunTests(RunFixture):
     def test_the_deadline_still_ends_a_native_run(self):
         self.start(self.commit(**self.native), deadline="0")
         rid = self.only_receipt_id()
-        run_session.wait_for_supervisor(os.path.join(self.home, "receipts", rid), timeout_s=30)
+        rdir = os.path.join(self.home, "receipts", rid)
+        run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
         rec = self.receipt(rid)
         self.assertEqual(rec["stopped_by"], "deadline", rec)
+        self.assertTrue(rec["worktree_removed"])
+        self.assertTrue(os.path.exists(os.path.join(self.fake, "stop-ran")))
+
+    def test_a_native_run_ends_when_its_lifeline_is_cut(self):
+        # With nothing served the supervisor sleeps out its deadline, and the stop must still wake it.
+        r = self.start(self.commit(**self.native))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["receipt_id"]
+        self.cut_lifeline()
+        rdir = os.path.join(self.home, "receipts", rid)
+        run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
+        rec = self.receipt(rid)
+        self.assertEqual(rec["stopped_by"], "caller_gone", rec)
         self.assertTrue(rec["worktree_removed"])
         self.assertTrue(os.path.exists(os.path.join(self.fake, "stop-ran")))
 
@@ -915,6 +1246,1751 @@ class StartSetupFailureTests(RunFixture):
         self.assertIn("disk-full", err.getvalue())
         self.assertIn("No space left on device", err.getvalue())
         self.assert_abandoned("start_error", "No space left on device")
+
+
+TIED_CHILD = ("import signal, sys\n"
+              "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+              "print('up', flush=True)\n"
+              "sys.stdin.read()\n")
+IN_PROCESS_LIMIT_S = 120  # how long a stop or a cut off run inside this process is waited for: a limit, never a wait
+LEAVES_WITHIN_S = 20  # how long a supervisor that must leave is waited for to leave: a limit, never a wait
+
+
+# Serve as a project's serve command often is: a leader that ends when it is asked to, and a process
+# it started, in its group, that does not. Both read the one pipe the test writes, so both end with it.
+LEADER_WITH_STRAGGLER = ("import subprocess, sys\n"
+                         "s = subprocess.Popen([sys.executable, '-c', %r], stdin=sys.stdin, stdout=subprocess.PIPE)\n"
+                         "s.stdout.readline()\n"
+                         "print('up', flush=True)\n"
+                         "sys.stdin.read()\n" % TIED_CHILD)
+# What a command started during a cut off says of itself: which of the stop signals it was born with blocked.
+SAYS_BLOCKED = ("import signal\n"
+                "held = signal.pthread_sigmask(signal.SIG_BLOCK, [])\n"
+                "print(sorted(s.name for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP) if s in held))\n")
+
+
+class Uncollectable:
+    """Stands in for serve's Popen where serve is killed and still does not go, the state the stop
+    of process 77733 was left in (claude-config#3820). It holds what the stop reads of a Popen: the
+    pid, and a returncode that stays None until something collects the process."""
+
+    def __init__(self, real):
+        self.pid = real.pid
+        self.returncode = None
+
+
+class FullDisk:
+    """Stands in for the supervisor's log on a disk with no room left: every write to it fails."""
+
+    def write(self, text):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    def flush(self):
+        pass
+
+
+class MonitorThatSaysClean:
+    """Stands in for the egress monitor: asked for its verdict, it would call the run clean."""
+
+    proc = None
+
+    def __init__(self):
+        self.asked = 0
+
+    def finish(self):
+        self.asked += 1
+        return {"verdict": "clean", "why": "nothing outside the allowed hosts was reached", "monitor": "a stand in"}
+
+
+class MonitorHoldingAStream(run_session.egress.Monitor):
+    """The real egress monitor, holding as its report stream a process the test started. Asked for
+    its verdict, it would call the run clean."""
+
+    def __init__(self, rdir, stream):
+        super().__init__(rdir, os.path.basename(rdir), [], 1)
+        self.proc, self.asked = stream, 0
+
+    def finish(self):
+        self.asked += 1
+        return {"verdict": "clean", "why": "nothing outside the allowed hosts was reached", "monitor": "a stand in"}
+
+
+class MonitorThatCannotStart(MonitorThatSaysClean):
+    """Stands in for the egress monitor on a Mac where it cannot start, as a supervisor makes one."""
+
+    def __init__(self, *args):
+        super().__init__()
+
+    def start(self):
+        return "a stand in that measures nothing"
+
+    def finish(self):
+        return {"verdict": "unmeasured", "why": "a stand in that measures nothing", "monitor": "a stand in"}
+
+
+class CutOffTests(RunFixture):
+    """A stop that cannot finish is cut off, and the receipt says so (the #3807 review).
+
+    These call the stop inside this process, on a receipt folder written here, so that the thing a
+    stop waits on can be a stand in that never comes. The processes standing in for serve and the
+    report stream each read a pipe only this process writes, so they end when it does; each is in a
+    session of its own, as the real ones are, and ignores SIGTERM. Nothing waits a fixed time.
+    """
+
+    lifeline = False
+
+    def setUp(self):
+        super().setUp()
+        quiet = contextlib.redirect_stderr(io.StringIO())  # a cut off says so on stderr, the supervisor's log
+        self.said = quiet.__enter__()
+        self.addCleanup(quiet.__exit__, None, None, None)
+        # These tests run a supervisor's stop inside this process, and a supervisor that leaves ends
+        # its own process and its process group. Here leaving is a stand in that says it was asked
+        # for, so a stop that leaves where no test expected it fails that test and ends nothing.
+        self.really_leave_now, self.left_this_process = run_session.leave_now, []
+        leaving = mock.patch.object(run_session, "leave_now", lambda: self.left_this_process.append(True))
+        leaving.start()
+        self.addCleanup(leaving.stop)
+        self.addCleanup(lambda: self.assertEqual(self.left_this_process, [], "a supervisor's stop run inside this"
+                                                 " test left, which would have ended the test process"))
+
+    def child(self, program=TIED_CHILD):
+        p = subprocess.Popen([sys.executable, "-c", program], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             start_new_session=True)
+        self.addCleanup(self.end_child, p)
+        self.assertEqual(p.stdout.readline(), b"up\n", "the stand in process did not start")
+        return p
+
+    def end_child(self, p):
+        if p.poll() is None:  # still this process's own child, so the pid is its and nobody else's
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+        p.stdin.close()
+        p.stdout.close()
+
+    def a_run_on_disk(self, stop_command=None, serve_command=None, recoverable=False, **over):
+        """A receipt folder as a supervisor leaves it in the middle of a run. Returns its path.
+
+        `recoverable` puts beside the receipt the file a supervisor keeps there from before it starts
+        its first child until it begins to end its children itself: the state of a run whose
+        supervisor is up, or was killed outright."""
+        rdir = os.path.join(self.home, "receipts", "20260101T000000Z-0000000-abcdef")
+        wt = os.path.join(rdir, "worktree")
+        os.makedirs(wt)
+        commands = {"stop": stop_command or 'echo ran >> "%s"' % os.path.join(self.fake, "stop-ran")}
+        if serve_command:
+            commands["serve"] = serve_command
+        with open(os.path.join(rdir, "areas.json"), "w") as f:
+            json.dump({"commands": commands, "egress": {"allow": []},
+                       "timeouts": {"stop_s": 1, "egress_s": 1, "max_run_s": 3600}}, f)
+        rec = dict(schema=v.RECEIPT_SCHEMA, receipt_id=os.path.basename(rdir), repo=self.repo, worktree=wt,
+                   stopped_at=None, stopped_by=None, stop_detail=None, serve_pid=None, serve_pgid=None,
+                   egress_monitor_pgid=None, egress={"verdict": "unmeasured", "why": run_session.EGRESS_WHY})
+        rec.update(over)
+        run_session.update_receipt(rdir, **rec)
+        if recoverable:
+            with open(os.path.join(rdir, RECOVER_BY_RECEIPT), "w") as f:
+                f.write(RECOVER_BY_RECEIPT_SAYS)
+        return rdir
+
+    def recoverable(self, rdir):
+        """Whether the file that lets a later `stop` recover the run by its recorded numbers is there, whole."""
+        try:
+            with open(os.path.join(rdir, RECOVER_BY_RECEIPT)) as f:
+                return f.read() == RECOVER_BY_RECEIPT_SAYS
+        except FileNotFoundError:
+            return False
+
+    @contextlib.contextmanager
+    def no_signal_reaches(self, *numbers):
+        """os.killpg and os.kill as stand ins, for code that may signal a number nothing holds.
+
+        Every group signal asked for is recorded and NONE is sent. A signal to one process is
+        recorded and not sent when it is for one of `numbers`; for any other pid it goes through,
+        because that is subprocess ending a command of its own that ran past its limit, a child it
+        holds. Yields the list of what was asked for."""
+        asked, kill = [], os.kill
+
+        def one(pid, sig):
+            if pid in numbers:
+                asked.append(("process", pid, signal.Signals(sig).name))
+            else:
+                kill(pid, sig)
+
+        with mock.patch.object(os, "killpg", lambda pgid, sig: asked.append(("group", pgid, signal.Signals(sig).name))), \
+                mock.patch.object(os, "kill", one):
+            yield asked
+
+    def stop_from_another_process(self, rdir, **stand_ins):
+        """`run_session.py stop <id>` as a later process runs it, inside this one so that what it
+        signals can be recorded. Returns the receipt, and what stop raised or None."""
+        raised = None
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, self.env()))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            for name, stand_in in stand_ins.items():
+                stack.enter_context(mock.patch.object(run_session, name, stand_in))
+            # A later process: it knows nothing of what a stop inside this one did.
+            stack.enter_context(mock.patch.dict(run_session.STOP_COMMAND, clear=True))
+            stack.enter_context(mock.patch.dict(run_session.LEFT, clear=True))
+            stack.enter_context(mock.patch.object(run_session, "FORBIDDEN", set()))
+            try:
+                run_session.stop(os.path.basename(rdir))
+            except v.VerificationError as e:
+                raised = e
+        return self.on_disk(rdir), raised
+
+    def on_disk(self, rdir):
+        with open(os.path.join(rdir, "receipt.json")) as f:
+            return json.load(f)
+
+    def stops_ran(self):
+        try:
+            with open(os.path.join(self.fake, "stop-ran")) as f:
+                return len(f.readlines())
+        except FileNotFoundError:
+            return 0
+
+    def test_a_killed_serve_that_cannot_be_collected_ends_the_stop_as_cut_off(self):
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid, egress_monitor_pgid=stream.pid)
+        stuck = Uncollectable(serve)
+        monitor = MonitorHoldingAStream(rdir, stream)
+        returned, waits, really = [], [], run_session.exited
+
+        def never_goes(child, limit_s):
+            # The stop's own two waits for serve to go run out at once, without sleeping, as they
+            # would in full for a serve that will not go. The cut off's wait after them is the real one.
+            waits.append(limit_s)
+            return really(child, limit_s) if len(waits) > 2 else False
+
+        # KILLED_WAIT_S is how long a killed serve is waited for. The stand in's wait runs out at
+        # once whatever the limit, so the value only has to be one the stop passes on.
+        with mock.patch.object(run_session, "KILLED_WAIT_S", 7), \
+                mock.patch.object(run_session, "exited", never_goes):
+            stop = threading.Thread(target=lambda: returned.append(
+                run_session.do_stop(rdir, "stop", proc=stuck, monitor=monitor)), daemon=True)
+            stop.start()
+            stop.join(IN_PROCESS_LIMIT_S)
+            self.assertFalse(stop.is_alive(), "the stop was still waiting, with no limit, for a killed serve it"
+                             " could not collect (it waited with limits %s)" % waits)
+        self.assertEqual(waits[:2], [1, 7], "serve gets stop_s to end, then KILLED_WAIT_S once it is killed")
+        self.assertEqual(len(returned), 1, "the stop raised instead of ending the run")
+        rec = returned[0]
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertTrue(rec["stopped_at"])
+        self.assertEqual(rec["stopped_by"], "stop", rec)
+        self.assertIn("cut off", rec["stop_detail"])
+        self.assertIn("could not be collected", rec["stop_detail"])
+        # Never a measured verdict for a run that was cut off: the monitor is not even asked.
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+        self.assertIn("cut off", rec["egress"]["why"])
+        self.assertEqual(monitor.asked, 0, "the monitor was asked for a verdict on a run that was cut off")
+        # Serve and the report stream are ended as the groups of two children this process still
+        # holds uncollected, and serve is collected last, so the receipt says truthfully how it ended.
+        self.assertEqual(rec["serve_exit"], -signal.SIGKILL, rec)
+        self.assertEqual(wait_group_empty(serve.pid), [], "serve's group outlived the cut off")
+        self.assertEqual(wait_group_empty(stream.pid), [], "the report stream's group outlived the cut off")
+        self.assertEqual(rec["serve_survivors"], [])
+        self.assertEqual((rec["stop_command_exit"], self.stops_ran()), (0, 1), "the project's stop command runs once")
+        self.assertTrue(rec["worktree_removed"], rec)
+        self.assertFalse(os.path.exists(rec["worktree"]))
+
+    def test_a_cut_off_runs_the_projects_stop_command_when_the_stop_never_got_to_it(self):
+        serve = self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid)
+        rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished", proc=serve)
+        self.assertEqual((rec["stop_command_exit"], self.stops_ran()), (0, 1))
+        self.assertEqual(rec["stopped_by"], "caller_gone", rec)
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+        self.assertEqual(rec["serve_exit"], -signal.SIGKILL, rec)
+        self.assertEqual(wait_group_empty(serve.pid), [])
+        self.assertTrue(rec["worktree_removed"], rec)
+
+    def test_an_areas_copy_that_cannot_be_read_is_said_once_when_a_cut_off_follows_the_stop(self):
+        # The stop reads the run's copy of areas.json for the project's stop command, and so does
+        # the cut off that follows it. One that cannot be read was said twice in the receipt.
+        rdir = self.a_run_on_disk()
+        self.addCleanup(run_session.STOP_COMMAND.pop, rdir, None)
+        rec = self.on_disk(rdir)
+        os.unlink(os.path.join(rdir, "areas.json"))
+        first_exit, detail, _ = run_session.project_stop(rdir, rec, None)
+        again_exit, detail, _ = run_session.project_stop(rdir, rec, detail)  # as the cut off calls it
+        self.assertEqual(detail.count("areas.json copy unreadable"), 1, detail)
+        self.assertEqual((first_exit, again_exit, self.stops_ran()), (None, None, 0))
+
+    def test_a_stop_that_finishes_after_the_run_was_cut_off_does_not_rewrite_the_receipt(self):
+        cut = {"verdict": "unmeasured", "why": "the run was cut off"}
+        rdir = self.a_run_on_disk(stopped_at="2026-01-01T00:00:00Z", stopped_by="caller_gone",
+                                  stop_detail="the stop did not finish and the run was cut off", egress=cut)
+        rec = run_session.do_stop(rdir, "stop", monitor=MonitorThatSaysClean())
+        for got in (rec, self.on_disk(rdir)):
+            self.assertEqual(got["egress"], cut, "a run that was cut off was given a verdict afterwards")
+            self.assertEqual((got["stopped_by"], got["stopped_at"]), ("caller_gone", "2026-01-01T00:00:00Z"))
+
+    def test_a_cut_off_after_the_run_ended_changes_nothing_and_signals_nothing(self):
+        serve = self.child()
+        clean = {"verdict": "clean", "why": "nothing outside the allowed hosts was reached"}
+        rdir = self.a_run_on_disk(stopped_at="2026-01-01T00:00:00Z", stopped_by="stop", egress=clean,
+                                  serve_pid=serve.pid, serve_pgid=serve.pid)
+        before = self.on_disk(rdir)
+        rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone", proc=serve)
+        self.assertEqual(rec, before)
+        self.assertEqual(self.on_disk(rdir), before)
+        self.assertIsNone(serve.poll(), "a run that had already ended was signalled again")
+        self.assertEqual(self.stops_ran(), 0)
+
+    def test_cutting_off_leaves_within_its_limit_even_when_the_receipt_cannot_be_written(self):
+        rdir = self.a_run_on_disk()
+        lock = open(os.path.join(rdir, "receipt.lock"), "a")
+        self.addCleanup(lock.close)
+        fcntl.flock(lock, fcntl.LOCK_EX)  # the receipt's own lock, held: the cut off cannot write its ending
+        left = threading.Event()
+        cut = threading.Thread(target=run_session.cut_off_and_leave, daemon=True,
+                               args=(rdir, "caller_gone", "its caller was gone"),
+                               kwargs={"limit_s": 0.05, "leave": left.set})
+        cut.start()
+        self.assertTrue(left.wait(IN_PROCESS_LIMIT_S), "the cut off never left though its limit had passed")
+        self.assertIsNone(self.on_disk(rdir)["stopped_at"])
+        lock.close()
+        cut.join(IN_PROCESS_LIMIT_S)
+        self.assertFalse(cut.is_alive())
+
+    def test_a_stop_reason_that_cannot_be_written_still_stops_the_run(self):
+        # A full disk when the lifeline ends: the watcher used to die there, and the run lived on to
+        # its deadline (the #3807 review). The stop must still be asked for, and still read as
+        # caller_gone though no reason file says so.
+        rdir = self.a_run_on_disk()
+        r, w = os.pipe()
+        os.close(w)
+        self.addCleanup(os.close, r)
+        gone, finished, woken = threading.Event(), threading.Event(), []
+        finished.set()  # the stop that follows finishes at once: this test is about the asking
+        with mock.patch.object(run_session, "record_stop_reason", side_effect=DISK_FULL):
+            run_session.watch_lifeline(rdir, r, gone, finished, 60, lambda: (None, None),
+                                       wake=lambda: woken.append(True))
+        self.assertEqual(woken, [True], "the supervisor was never told to stop")
+        self.assertTrue(gone.is_set())
+        self.assertIn("No space left on device", self.said.getvalue())
+        self.assertEqual(run_session.requested_reason(rdir, "caller_gone" if gone.is_set() else "stop"), "caller_gone")
+
+    def test_a_reason_that_cannot_be_written_leaves_no_empty_reason_behind(self):
+        # An empty reason file would stand as an earlier request for ever, and read as `stop`.
+        rdir = self.a_run_on_disk()
+        with mock.patch.object(run_session.os, "write", side_effect=DISK_FULL):
+            with self.assertRaises(OSError):
+                run_session.record_stop_reason(rdir, "caller_gone")
+        self.assertFalse(os.path.exists(os.path.join(rdir, "stop-reason")), "an empty reason file was left behind")
+        self.assertEqual(run_session.requested_reason(rdir, "caller_gone"), "caller_gone")
+        self.assertTrue(run_session.record_stop_reason(rdir, "caller_gone"), "a later reason could not be recorded")
+
+    def test_a_caller_that_is_gone_waits_as_long_as_a_stop_still_getting_somewhere_can_take(self):
+        # Every wait a stop makes, each at its limit: a stop that slow is slow, not hung, and a
+        # supervisor whose caller is gone must not cut it off (the lessons review of #3807).
+        timeouts = {"stop_s": 10, "egress_s": 30}
+        longest = (10  # the project's stop command
+                   + 10 + run_session.KILLED_WAIT_S  # serve, asked to end and then killed
+                   + 10 + 10  # serve's group, asked and then killed
+                   + run_session.COLLECT_S  # serve, collected last
+                   + run_session.egress.finish_budget_s(30))  # the monitor settling
+        self.assertGreaterEqual(run_session.stop_longest_s(timeouts), longest)
+        self.assertGreater(run_session.stop_longest_s(timeouts), run_session.stop_wait_s(timeouts))
+
+    def test_a_supervisor_whose_stop_finishes_in_time_is_not_cut_off(self):
+        rdir = self.a_run_on_disk()
+        r, w = os.pipe()
+        os.close(w)
+        self.addCleanup(os.close, r)
+        gone, finished, woken, left = threading.Event(), threading.Event(), [], []
+        finished.set()
+        run_session.watch_lifeline(rdir, r, gone, finished, 0, lambda: (None, None),
+                                   wake=lambda: woken.append(True), leave=lambda: left.append(True))
+        self.assertEqual((woken, left), ([True], []))
+        self.assertIsNone(self.on_disk(rdir)["stopped_at"], "a run whose stop had finished was cut off")
+        with open(os.path.join(rdir, "stop-reason")) as f:
+            self.assertEqual(f.read(), "caller_gone")
+
+    # -- a number is signalled only while a child this process holds pins it (the second #3807 review) --
+    #
+    # A process group's number is its leader's pid. It stays that group's for as long as the leader
+    # is this process's child and has not been collected. Once the leader is collected and the group
+    # is empty the system may give the number to any new process, so a signal sent to it then can
+    # land on a stranger. No test below really sends such a signal: where the code under test would
+    # have, os.killpg is a stand in that records the call.
+
+    def recorded_signals(self):
+        """os.killpg as a stand in that sends nothing and records what it was asked to send."""
+        asked = []
+        patch = mock.patch.object(os, "killpg", lambda pgid, sig: asked.append((pgid, signal.Signals(sig).name)))
+        patch.start()
+        self.addCleanup(patch.stop)
+        return asked
+
+    def test_a_cut_off_signals_no_number_whose_child_was_already_collected(self):
+        # The state a hung stop leaves: serve collected by the stop, the report stream collected by a
+        # monitor that could not start, both numbers in the receipt, and minutes gone by.
+        serve, stream = self.child(), self.child()
+        for p in (serve, stream):
+            os.killpg(p.pid, signal.SIGKILL)  # still this process's own uncollected child
+            p.wait()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid, egress_monitor_pgid=stream.pid)
+        asked = self.recorded_signals()
+        rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished",
+                                  proc=serve, monitor=MonitorHoldingAStream(rdir, stream))
+        self.assertEqual(asked, [], "the cut off signalled a number nothing held any longer: by then it can be"
+                         " the process group of something that has nothing to do with this run")
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+        self.assertEqual(rec["serve_exit"], -signal.SIGKILL, rec)
+        # What it did not signal, and why, is in the receipt: nothing is left without a word.
+        self.assertIn("not signalled", rec["stop_detail"])
+        self.assertIsNone(rec["serve_survivors"], "the members of a number nothing held were read as serve's")
+
+    def test_a_cut_off_signals_no_number_it_only_read_from_the_receipt(self):
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid, egress_monitor_pgid=stream.pid)
+        asked = self.recorded_signals()
+        rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished")
+        self.assertEqual(asked, [], "the cut off signalled numbers it was handed no child for")
+        self.assertIn("not signalled", rec["stop_detail"])
+        self.assertIn(str(serve.pid), rec["stop_detail"])
+        self.assertIn(str(stream.pid), rec["stop_detail"])
+
+    def test_a_cut_off_ends_the_stream_a_monitor_still_holds(self):
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid, egress_monitor_pgid=stream.pid)
+        monitor = MonitorHoldingAStream(rdir, stream)
+        rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished",
+                                  proc=serve, monitor=monitor)
+        self.assertEqual(wait_group_empty(serve.pid), [], "serve's group outlived the cut off")
+        self.assertEqual(wait_group_empty(stream.pid), [], "the report stream's group outlived the cut off")
+        self.assertEqual(rec["serve_exit"], -signal.SIGKILL, rec)
+        self.assertEqual(rec["serve_survivors"], [])
+        self.assertNotIn("not signalled", rec["stop_detail"])
+        self.assertEqual((rec["egress"]["verdict"], monitor.asked), ("unmeasured", 0))
+
+    def test_a_cut_off_does_not_list_a_process_that_is_still_dying_as_a_survivor(self):
+        # Every member of serve's group gets the same SIGKILL, and one can take a moment longer to go
+        # than the leader. Read once, right then, it was written down as having outlived the cut off.
+        serve = self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid)
+        really, reads = run_session.live_members, []
+
+        def still_dying_at_first(pgid):
+            reads.append(pgid)
+            return [4194303] if len(reads) == 1 else really(pgid)  # a pid no process can have
+
+        with mock.patch.object(run_session, "live_members", still_dying_at_first):
+            rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone", proc=serve)
+        self.assertEqual(rec["serve_survivors"], [], "a process still dying was recorded as a survivor")
+        self.assertEqual(set(reads), {serve.pid})
+
+    def test_a_stop_signals_serves_group_only_while_serve_is_still_uncollected(self):
+        # Serve's leader ends when asked and a process in its group does not. The stop must end that
+        # one too, and every signal it sends must go while the leader is still uncollected.
+        serve = self.child(LEADER_WITH_STRAGGLER)
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid)
+        really, sent = os.killpg, []
+
+        def killpg(pgid, sig):
+            held = serve.returncode is None
+            sent.append((pgid, signal.Signals(sig).name, "serve uncollected" if held else "serve COLLECTED"))
+            if held:  # a number nothing holds is never really signalled from a test: the call is only recorded
+                really(pgid, sig)
+
+        try:
+            with mock.patch.object(os, "killpg", killpg):
+                rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=MonitorThatSaysClean())
+            self.assertEqual([s for s in sent if s[2] != "serve uncollected"], [],
+                             "serve's group was signalled by a number serve no longer held")
+            self.assertEqual({s[0] for s in sent}, {serve.pid})
+            self.assertIn("SIGKILL", [s[1] for s in sent], "the process that ignores SIGTERM was never killed")
+            self.assertEqual(rec["serve_survivors"], [])
+            self.assertEqual(rec["serve_exit"], -signal.SIGTERM, rec)
+            self.assertEqual(serve.returncode, -signal.SIGTERM, "serve was not collected once its group was dealt with")
+            self.assertEqual(rec["egress"]["verdict"], "clean", "a stop that finished still asks the monitor")
+            self.assertEqual(rec["stop_detail"], None)
+        finally:
+            serve.stdin.close()  # ends whatever of the group is left, so nothing outlives this test
+            self.assertEqual(wait_group_empty(serve.pid), [], "a process of serve's group outlived the stop")
+
+    def test_seeing_that_a_child_has_gone_does_not_collect_it(self):
+        ways = [run_session.exited]
+        ways += [lambda c, s, way=way: way(c.pid, s) for way in run_session.EXIT_WATCHES if way is not None]
+        self.assertGreater(len(ways), 1, "no way of seeing a child go without collecting it was found on this machine")
+        for way in ways:
+            p = self.child()
+            self.assertFalse(way(p, 0.05), "a child that is running was seen as gone")
+            self.assertIsNone(p.returncode)
+            os.killpg(p.pid, signal.SIGKILL)  # still this process's own uncollected child
+            self.assertTrue(way(p, IN_PROCESS_LIMIT_S), "a killed child was never seen to go")
+            self.assertIsNone(p.returncode, "seeing it go collected it, and its number is then nobody's")
+            self.assertTrue(way(p, 0), "a child that had gone and was not collected was seen as running")
+            self.assertEqual(run_session.collect(p, IN_PROCESS_LIMIT_S), -signal.SIGKILL)
+            self.assertEqual(p.returncode, -signal.SIGKILL)
+            # The child is collected, so its number is nobody's: were the guard under test ever
+            # lost, a real signal here would land on whatever has the number now. A stand in.
+            with self.no_signal_reaches(p.pid) as asked:
+                self.assertIsNone(run_session.signal_own(p, signal.SIGKILL))
+            self.assertEqual(asked, [], "a collected child's number was signalled")
+
+    def test_a_child_that_no_way_can_watch_reads_as_cannot_tell_never_as_gone(self):
+        # Each way of seeing a child go can fail, the last one, ps, included. A failure must read
+        # as "cannot tell": True would say the child had gone, and an error raised out of a stop
+        # would end the supervisor in the middle of it with no ending recorded.
+        def fails(pid, limit_s):
+            raise OSError(errno.EIO, "a stand in that cannot watch anything")
+
+        p = self.child()
+        with mock.patch.object(run_session, "EXIT_WATCHES", (fails, None, fails)):
+            self.assertIsNone(run_session.exited(p, 0.05), "a child nothing could watch was read as gone, or as running")
+        self.assertIn("could not watch", self.said.getvalue())
+        self.assertIsNone(p.returncode)
+        self.assertIsNone(p.poll(), "the child is still running: nothing here had told it to go")
+
+    def test_a_stop_that_cannot_watch_serve_cuts_the_run_off_and_does_not_raise(self):
+        def fails(pid, limit_s):
+            raise OSError(errno.EIO, "a stand in that cannot watch anything")
+
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid, egress_monitor_pgid=stream.pid)
+        monitor = MonitorHoldingAStream(rdir, stream)
+        with mock.patch.object(run_session, "EXIT_WATCHES", (fails, None, fails)):
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=monitor)
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertEqual(rec["stopped_by"], "stop", rec)
+        self.assertIn("cut off", rec["stop_detail"])
+        self.assertIn("whether it had gone could not be read", rec["stop_detail"])
+        self.assertNotIn("could not be collected", rec["stop_detail"], "no wait of that length was made")
+        self.assertEqual((rec["egress"]["verdict"], monitor.asked), ("unmeasured", 0))
+        # Killed while this process still held it uncollected, and collected by the wait that needs no watch.
+        self.assertEqual(rec["serve_exit"], -signal.SIGKILL, rec)
+        self.assertEqual(wait_group_empty(serve.pid), [], "serve's group outlived the cut off")
+        self.assertEqual(wait_group_empty(stream.pid), [], "the report stream's group outlived the cut off")
+
+    def test_a_supervisor_that_cannot_watch_serve_stops_the_run_and_says_why(self):
+        # The supervisor's own wait for serve to go, the whole of an ordinary run. Read as "gone" it
+        # would record that serve exited by itself; read as "not gone" it would record a deadline
+        # that never came. It is neither: the run is stopped as a supervisor error that says so.
+        def fails(pid, limit_s):
+            raise OSError(errno.EIO, "a stand in that cannot watch anything")
+
+        self.hold()  # serve waits for this lock, which is this process's alone, so it ends when this process does
+        waits = ("import fcntl\nwith open(%r) as lock:\n    fcntl.flock(lock, fcntl.LOCK_SH)\n"
+                 % os.path.join(self.fake, "hold.lock"))
+        rdir = self.a_run_on_disk(serve_command='exec "%s" -c "%s"' % (sys.executable, waits))
+        r, w = os.pipe()
+        self.addCleanup(os.close, r)
+        for s in run_session.STOP_SIGNALS:
+            self.addCleanup(signal.signal, s, signal.getsignal(s))
+        with mock.patch.object(run_session, "EXIT_WATCHES", (fails, None, fails)), \
+                mock.patch.object(run_session.egress, "Monitor", MonitorThatCannotStart):
+            code = run_session.supervise(rdir, -1, w)
+        self.assertEqual(code, 0)
+        rec = self.on_disk(rdir)
+        self.assertEqual(rec["stopped_by"], "supervisor_error", rec)
+        self.assertIn("could not be watched", rec["stop_detail"])
+        self.assertIn("cut off", rec["stop_detail"])
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+        self.assertTrue(rec["serve_pgid"])
+        self.assertEqual(wait_group_empty(rec["serve_pgid"]), [], "serve outlived a supervisor that could not watch it")
+        # Asked to end and then killed with no wait between, so either signal can be the one that ended it.
+        self.assertIn(rec["serve_exit"], (-signal.SIGTERM, -signal.SIGKILL), rec)
+
+    def test_nothing_is_signalled_while_something_else_is_collecting_the_child(self):
+        # The egress monitor collects its own stream, through the stream's Popen, on the main thread.
+        # A Popen collects under a lock of its own, and a signal takes that lock too, so the stream
+        # cannot be collected between the check that it is still held and the signal. This test
+        # fails on a Python whose Popen no longer has that lock: the signal would then be unguarded.
+        p = self.child()
+        lock = getattr(p, "_waitpid_lock", None)
+        self.assertIsNotNone(lock, "a Popen no longer has the lock it collects under")
+        asked = self.recorded_signals()
+        with mock.patch.object(run_session, "COLLECTING_WAIT_S", 0.01):
+            with lock:  # as a wait with no limit holds it, which may collect the child at any moment
+                self.assertIsNone(run_session.signal_own(p, signal.SIGKILL))
+        self.assertEqual(asked, [], "a child that was being collected at that moment was signalled")
+        self.assertIs(run_session.signal_own(p, signal.SIGKILL), True)
+        self.assertEqual(asked, [(p.pid, "SIGKILL")])
+
+    def test_an_ignored_sigchld_is_set_back_to_its_default_when_the_harness_starts(self):
+        # A process that has set SIGCHLD to ignored has every child collected by the system the
+        # moment it exits: nothing would hold a number. This process sets it itself here, which is
+        # the case this Mac acts on. A setting only inherited from a caller is acted on by Linux and
+        # not by this Mac (measured for the third #3807 review), so this test says nothing of that.
+        self.addCleanup(signal.signal, signal.SIGCHLD, signal.getsignal(signal.SIGCHLD))
+        signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+        with mock.patch.dict(os.environ, self.env()):
+            run_session.main(["status", "20260101T000000Z-0000000-nosuch"])
+        self.assertEqual(signal.getsignal(signal.SIGCHLD), signal.SIG_DFL)
+        # And what the setting is for: a child that exits now stays this process's until it is collected.
+        p = self.child()
+        os.killpg(p.pid, signal.SIGKILL)  # still this process's own uncollected child
+        self.assertTrue(run_session.exited(p, IN_PROCESS_LIMIT_S))
+        self.assertEqual(run_session.collect(p, IN_PROCESS_LIMIT_S), -signal.SIGKILL,
+                         "the system collected the child behind this process")
+
+    # -- a `stop` that finds the supervisor gone signals the receipt's numbers only when the supervisor
+    #    never began to end them itself (the third #3807 review) --
+    #
+    # A supervisor that ended its own groups, or left by a cut off that ended them, leaves two numbers in the
+    # receipt that are by then nobody's. No test below sends a signal to one: os.killpg and os.kill
+    # are stand ins that record what was asked for.
+
+    def a_cut_off_that_leaves_no_ending(self, serve, stream):
+        """A supervisor whose cut off cannot write the receipt, a full disk, and so leaves with no
+        ending. Returns the receipt folder, with the two children collected as the system collects
+        them once their supervisor is gone: from here on their numbers are nobody's."""
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        left = []
+        with mock.patch.object(run_session, "update_receipt", side_effect=DISK_FULL):
+            run_session.cut_off_and_leave(rdir, "caller_gone", "its caller was gone", proc=serve,
+                                          monitor=MonitorHoldingAStream(rdir, stream),
+                                          limit_s=IN_PROCESS_LIMIT_S, leave=lambda: left.append(True))
+        self.assertEqual(left, [True])
+        self.assertIsNone(self.on_disk(rdir)["stopped_at"], "the cut off recorded an ending on a full disk")
+        for p in (serve, stream):  # killed by the cut off while this process held them
+            self.assertEqual(p.wait(IN_PROCESS_LIMIT_S), -signal.SIGKILL)
+        return rdir
+
+    def assert_recovered_without_a_signal(self, rec, asked, serve, stream):
+        self.assertEqual(asked, [], "a later stop signalled a number from the receipt of a run whose supervisor"
+                         " had ended those groups itself or left: by then it can be another program's")
+        self.assertEqual((rec["stopped_by"], rec["egress"]["verdict"]), ("recovered", "unmeasured"), rec)
+        self.assertTrue(rec["stopped_at"])
+        self.assertIn("not signalled", rec["stop_detail"])
+        self.assertIn(str(serve.pid), rec["stop_detail"])
+        self.assertIn(str(stream.pid), rec["stop_detail"])
+        self.assertIsNone(rec["serve_survivors"], "the members of a number nothing held were read as serve's")
+        self.assertIsNone(rec["serve_exit"])
+        self.assertTrue(rec["worktree_removed"], rec)
+
+    def assert_says_serve_unconfirmed(self, raised, serve_pgid):
+        """`stop` did not return 0: it refused by name, because serve's group was neither signalled
+        nor read, so the app may still be running (the fourth #3807 review)."""
+        self.assertIsNotNone(raised, "stop returned 0 for a run whose serve group it neither signalled nor read")
+        self.assertEqual((raised.problems[0][0], raised.code), ("serve-unconfirmed", 8), raised)
+        self.assertIn(str(serve_pgid), str(raised))
+        self.assertIn("may still be running", str(raised))
+
+    def test_a_stop_after_a_cut_off_that_left_no_ending_signals_no_number_from_the_receipt(self):
+        serve, stream = self.child(), self.child()
+        rdir = self.a_cut_off_that_leaves_no_ending(serve, stream)
+        with self.no_signal_reaches(serve.pid, stream.pid) as asked:
+            rec, raised = self.stop_from_another_process(rdir)
+        self.assert_recovered_without_a_signal(rec, asked, serve, stream)
+        self.assert_says_serve_unconfirmed(raised, serve.pid)
+        self.assertFalse(self.recoverable(rdir), "the supervisor ended its groups and left them to be recovered by number")
+
+    def test_a_stop_after_a_cut_off_that_left_no_ending_kills_no_stranger_that_took_the_number(self):
+        # As above, and by now each number is some other program's: ps shows a process under it.
+        # That is what used to earn the number a SIGKILL after the SIGTERM.
+        serve, stream = self.child(), self.child()
+        rdir = self.a_cut_off_that_leaves_no_ending(serve, stream)
+        with self.no_signal_reaches(serve.pid, stream.pid) as asked:
+            rec, raised = self.stop_from_another_process(
+                rdir, live_members=lambda pgid: [4194303] if pgid else [])  # a pid no process can have
+        self.assert_recovered_without_a_signal(rec, asked, serve, stream)
+        # Refused as unconfirmed, and never as serve-survived: the stranger is not serve outliving the stop.
+        self.assert_says_serve_unconfirmed(raised, serve.pid)
+
+    def test_a_stop_after_a_supervisor_killed_outright_signals_the_receipts_groups_as_before(self):
+        # The control. A supervisor killed outright never began to end its groups, so the file beside
+        # the receipt is still there and `stop` does what it always did: SIGTERM to each recorded
+        # group, and SIGKILL to one that has not gone. The signals are recorded here, not sent.
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        answers = {serve.pid: [[serve.pid], [], []], stream.pid: [[]]}  # serve's group outlives the SIGTERM
+
+        def members(pgid):
+            left = answers[pgid]
+            return left.pop(0) if len(left) > 1 else left[0]
+
+        with self.no_signal_reaches(serve.pid, stream.pid) as asked:
+            rec, raised = self.stop_from_another_process(rdir, wait_gone=lambda pgid, limit_s: not members(pgid),
+                                                         live_members=members)
+        self.assertEqual(asked, [("group", serve.pid, "SIGTERM"), ("group", serve.pid, "SIGKILL"),
+                                 ("group", stream.pid, "SIGTERM")])
+        self.assertIsNone(raised)
+        self.assertEqual((rec["stopped_by"], rec["egress"]["verdict"]), ("recovered", "unmeasured"), rec)
+        self.assertEqual(rec["stop_detail"], "the supervisor was gone without stopping serve")
+        self.assertEqual(rec["serve_survivors"], [])
+
+    def test_a_stop_signals_nothing_for_a_run_with_no_such_file_beside_its_receipt(self):
+        # A run started by a version of the harness older than the file, whose supervisor was then
+        # killed outright: serve is still running, and this `stop` cannot tell that from a supervisor
+        # that ended its groups and left. It signals nothing and says so. The cost is named in the
+        # receipt: what is left of the run under those numbers may still be running.
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid, egress_monitor_pgid=stream.pid)
+        with self.no_signal_reaches(serve.pid, stream.pid) as asked:
+            rec, raised = self.stop_from_another_process(rdir)
+        self.assert_recovered_without_a_signal(rec, asked, serve, stream)
+        self.assertIn("may still be running", rec["stop_detail"])
+        self.assert_says_serve_unconfirmed(raised, serve.pid)
+        self.assertIsNone(serve.poll(), "serve was ended though nothing was asked for")
+
+    def test_a_file_that_is_there_but_not_whole_lets_nothing_be_recovered_by_number(self):
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        os.truncate(os.path.join(rdir, RECOVER_BY_RECEIPT), 0)  # as a supervisor leaves it when it cannot remove it
+        with self.no_signal_reaches(serve.pid, stream.pid) as asked:
+            rec, raised = self.stop_from_another_process(rdir)
+        self.assert_recovered_without_a_signal(rec, asked, serve, stream)
+        self.assert_says_serve_unconfirmed(raised, serve.pid)
+
+    def test_stop_does_not_return_0_for_a_run_cut_off_without_signalling_serves_group(self):
+        # A receipt as a cut off leaves it when the supervisor no longer held serve: an ending, a
+        # serve group, and nothing read of it. `stop` on that run prints the receipt and refuses by
+        # name. No process has the number written here, and nothing is signalled: the run has ended.
+        nobody = 4194303
+        rdir = self.a_run_on_disk(stopped_at="2026-01-01T00:00:00Z", stopped_by="caller_gone", serve_pid=nobody,
+                                  serve_pgid=nobody, serve_survivors=None,
+                                  stop_detail="the stop did not finish and the run was cut off; not signalled:"
+                                              " serve's process group (%s)" % nobody)
+        with self.no_signal_reaches(nobody) as asked:
+            rec, raised = self.stop_from_another_process(rdir)
+        self.assertEqual(asked, [])
+        self.assert_says_serve_unconfirmed(raised, nobody)
+        self.assertEqual(rec["stopped_by"], "caller_gone", "a run that had ended was recorded again")
+
+    def test_stop_returns_0_for_a_native_run_recovered_without_signalling_its_report_stream(self):
+        # Nothing was served, so there is no app that may still hold a port: what is left is the
+        # harness's own report stream, which stop_detail names. That alone does not refuse the stop.
+        stream = self.child()
+        rdir = self.a_run_on_disk(egress_monitor_pgid=stream.pid)
+        with self.no_signal_reaches(stream.pid) as asked:
+            rec, raised = self.stop_from_another_process(rdir)
+        self.assertEqual(asked, [])
+        self.assertIsNone(raised)
+        self.assertEqual((rec["stopped_by"], rec["serve_survivors"]), ("recovered", []), rec)
+        self.assertIn("not signalled: the report stream's process group (%s)" % stream.pid, rec["stop_detail"])
+
+    def test_an_ordinary_stop_gives_up_recovery_by_number_before_its_first_signal(self):
+        # The supervisor's first act when it begins to end its children. From its first signal on,
+        # a number in the receipt can come free at any moment, so the file must already be gone.
+        # This serve ends on the SIGTERM it is sent, so no wait in the stop runs to its limit.
+        serve = self.child("import sys\nprint('up', flush=True)\nsys.stdin.read()\n")
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        really, sent = os.killpg, []
+
+        def killpg(pgid, sig):
+            sent.append((pgid, signal.Signals(sig).name, "recoverable" if self.recoverable(rdir) else "given up"))
+            if serve.returncode is None:  # still this process's own uncollected child
+                really(pgid, sig)
+
+        with mock.patch.object(os, "killpg", killpg):
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=MonitorThatSaysClean())
+        self.assertTrue(sent, "the stop signalled nothing")
+        self.assertEqual([s for s in sent if s[2] != "given up"], [],
+                         "serve's group was signalled while a later stop could still recover it by number")
+        self.assertEqual(rec["stopped_by"], "stop", rec)
+        self.assertEqual(wait_group_empty(serve.pid), [])
+
+    def test_a_native_runs_stop_gives_up_recovery_by_number_before_its_monitor_ends_the_stream(self):
+        # Nothing is served, so no signal of the stop's own is sent: the monitor ends the stream.
+        rdir = self.a_run_on_disk(recoverable=True)
+        seen = []
+
+        class Monitor(MonitorThatSaysClean):
+            def finish(inner):
+                seen.append(self.recoverable(rdir))
+                return super().finish()
+
+        run_session.do_stop(rdir, "stop", monitor=Monitor())
+        self.assertEqual(seen, [False], "the monitor ended its stream while a later stop could still recover it by number")
+
+    def test_a_cut_off_that_fails_before_its_own_kill_still_ends_serve_before_it_leaves(self):
+        # The cut off fails at its very first step, reading the receipt, before the kill of its own.
+        # Leaving is then the only thing left, and the kill made on the way out the only one there is.
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        unreadable = OSError(errno.EIO, "a stand in for a receipt that cannot be read")
+        left = []
+        with mock.patch.object(run_session, "read_receipt", side_effect=unreadable):
+            run_session.cut_off_and_leave(rdir, "caller_gone", "its caller was gone", proc=serve,
+                                          monitor=MonitorHoldingAStream(rdir, stream), limit_s=IN_PROCESS_LIMIT_S,
+                                          leave=lambda: left.append(self.recoverable(rdir)))
+        self.assertEqual(len(left), 1)
+        self.assertEqual(wait_group_empty(serve.pid, 5), [], "the supervisor left and serve was never ended")
+        self.assertEqual(wait_group_empty(stream.pid, 5), [], "the supervisor left and the stream was never ended")
+        self.assertIsNone(self.on_disk(rdir)["stopped_at"])
+        self.assertEqual(left, [False], "the supervisor left with its groups still to be recovered by number")
+
+    def test_recovery_by_number_is_given_up_even_when_the_file_cannot_be_removed(self):
+        rdir = self.a_run_on_disk(recoverable=True)
+        with mock.patch.object(os, "unlink", side_effect=PermissionError(errno.EPERM, "a stand in that removes nothing")):
+            self.assertTrue(run_session.forbid_recovery(rdir))
+        self.assertFalse(run_session.recovery_allowed(rdir), "a file emptied because it could not be removed still counted")
+        self.assertFalse(self.recoverable(rdir))
+
+    def test_a_file_that_can_be_neither_removed_nor_emptied_is_said_and_not_taken_for_removed(self):
+        rdir = self.a_run_on_disk(recoverable=True)
+        with self.removal_refused():
+            self.assertFalse(run_session.forbid_recovery(rdir))
+        self.assertIn("could not be confirmed", self.said.getvalue())
+        self.assertIn("a stand in that changes nothing", self.said.getvalue())
+        self.assertTrue(run_session.recovery_allowed(rdir))
+
+    # -- a file the supervisor cannot be seen to have removed (the fourth #3807 review) --
+    #
+    # Removing the file is a call to the disk, and a disk can hang as well as refuse. The supervisor
+    # waits a few seconds for it. A removal it cannot CONFIRM in that time leaves it one thing to
+    # do: leave, having signalled and collected nothing, so that what the file says is still true of
+    # the run, and a later `stop` ends the groups by number as for a supervisor killed outright. No
+    # test below sends a signal to a group: os.killpg and os.kill are stand ins that record what
+    # was asked for, and every `leave` is a stand in too.
+
+    def short_disk_wait(self):
+        """The wait for a file operation on a supervisor's way out, shortened: these tests are about
+        what follows once it has run out. One test below holds that the real wait is there and short."""
+        return mock.patch.object(run_session, "DISK_WAIT_S", 0.05, create=True)
+
+    def never_returns(self):
+        """A stand in for a call into a disk that hangs: it does not return while the test lasts. When
+        the test is over it ends the thread it held, with nothing said."""
+        over = threading.Event()
+        self.addCleanup(over.set)
+
+        def hangs(*args, **kwargs):
+            over.wait()
+            raise SystemExit
+
+        return hangs
+
+    @contextlib.contextmanager
+    def removal(self, stand_in):
+        """os.unlink and os.truncate with `stand_in` in their place for the supervisor's file alone.
+        Any other path goes through to the real call."""
+        def only_the_file(real):
+            def call(path, *args, **kwargs):
+                if str(path).endswith(RECOVER_BY_RECEIPT):
+                    return stand_in(path, *args, **kwargs)
+                return real(path, *args, **kwargs)
+            return call
+
+        with mock.patch.object(os, "unlink", only_the_file(os.unlink)), \
+                mock.patch.object(os, "truncate", only_the_file(os.truncate)):
+            yield
+
+    def removal_never_returns(self):
+        return self.removal(self.never_returns())
+
+    def removal_refused(self):
+        def refused(*args, **kwargs):
+            raise PermissionError(errno.EPERM, "a stand in that changes nothing")
+
+        return self.removal(refused)
+
+    def stuck_in_its_stop(self):
+        """Hold the lock an ending is decided under, as a main thread stuck in its stop for good
+        does. Returns what lets go of it, which the end of the test does too."""
+        run_session.ENDING.acquire()
+        let_go = []
+
+        def release():
+            if not let_go:
+                let_go.append(True)
+                run_session.ENDING.release()
+
+        self.addCleanup(release)
+        return release
+
+    def on_a_thread(self, work, *args, **kwargs):
+        thread = threading.Thread(target=work, args=args, kwargs=kwargs, daemon=True)
+        thread.start()
+        return thread
+
+    def assert_left_with_nothing_ended(self, rdir, asked, *children):
+        self.assertEqual(asked, [], "a group was signalled by a supervisor that could not confirm its file was gone")
+        self.assertTrue(self.recoverable(rdir))
+        self.assertIsNone(self.on_disk(rdir)["stopped_at"], "an ending was recorded, so no later stop would end the run")
+        for p in children:
+            self.assertIsNone(p.poll(), "a child was ended or collected")
+        self.assertEqual(self.stops_ran(), 0, "the project's stop command was run and the run then left to a later stop")
+        self.assertIn("leaving without ending the run", self.said.getvalue())
+
+    def test_the_cut_offs_limit_ends_the_supervisor_when_removing_the_file_never_returns(self):
+        # The state the limit is for: the main thread stuck in its stop for good, holding the lock an
+        # ending is decided under. The limit's own way out must not wait on the disk either.
+        hung, let_go, left = self.removal_never_returns(), self.stuck_in_its_stop(), threading.Event()
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        with self.short_disk_wait(), hung, self.no_signal_reaches(serve.pid, stream.pid) as asked:
+            cut = self.on_a_thread(run_session.cut_off_and_leave, rdir, "caller_gone", "its caller was gone",
+                                   proc=serve, monitor=MonitorHoldingAStream(rdir, stream), limit_s=0.05,
+                                   leave=left.set)
+            self.assertTrue(left.wait(LEAVES_WITHIN_S),
+                            "the supervisor never left: its limit waited on a removal that does not return")
+            self.assert_left_with_nothing_ended(rdir, asked, serve, stream)
+            let_go()  # the cut off itself now runs, meets the same removal, and leaves the same way
+            cut.join(LEAVES_WITHIN_S)
+            self.assertFalse(cut.is_alive())
+            self.assert_left_with_nothing_ended(rdir, asked, serve, stream)
+
+    def test_a_cut_off_that_cannot_confirm_the_removal_leaves_and_signals_nothing(self):
+        hung = self.removal_never_returns()
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        left = threading.Event()
+        with self.short_disk_wait(), hung, self.no_signal_reaches(serve.pid, stream.pid) as asked:
+            cut = self.on_a_thread(run_session.cut_off_and_leave, rdir, "caller_gone", "its caller was gone",
+                                   proc=serve, monitor=MonitorHoldingAStream(rdir, stream),
+                                   limit_s=IN_PROCESS_LIMIT_S, leave=left.set)
+            self.assertTrue(left.wait(LEAVES_WITHIN_S), "the cut off waited on a removal that does not return")
+            cut.join(LEAVES_WITHIN_S)
+            self.assertFalse(cut.is_alive())
+        self.assert_left_with_nothing_ended(rdir, asked, serve, stream)
+
+    def test_an_ordinary_stop_that_cannot_confirm_the_removal_leaves_and_signals_nothing(self):
+        hung = self.removal_never_returns()
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        monitor, left = MonitorHoldingAStream(rdir, stream), threading.Event()
+        with self.short_disk_wait(), hung, self.no_signal_reaches(serve.pid, stream.pid) as asked:
+            stop = self.on_a_thread(run_session.do_stop, rdir, "stop", proc=serve, monitor=monitor, leave=left.set)
+            self.assertTrue(left.wait(LEAVES_WITHIN_S), "the stop waited on a removal that does not return")
+            stop.join(LEAVES_WITHIN_S)
+            self.assertFalse(stop.is_alive())
+        self.assert_left_with_nothing_ended(rdir, asked, serve, stream)
+        self.assertEqual(monitor.asked, 0, "the monitor was asked to end its stream")
+
+    def test_a_file_that_can_be_neither_removed_nor_emptied_leaves_the_run_to_a_later_stop(self):
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        monitor, left = MonitorHoldingAStream(rdir, stream), []
+        with self.removal_refused(), self.no_signal_reaches(serve.pid, stream.pid) as asked:
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=monitor, leave=lambda: left.append(True))
+        self.assertIsNone(rec, "a supervisor that left recorded something")
+        self.assertEqual((left, monitor.asked), ([True], 0))
+        self.assert_left_with_nothing_ended(rdir, asked, serve, stream)
+        # The supervisor is gone as if it had been killed outright: its groups are alive under their
+        # own numbers, and a later `stop` ends them by the receipt as it always did. Recorded here,
+        # not sent, with a stand in saying each group went.
+        with self.no_signal_reaches(serve.pid, stream.pid) as asked:
+            rec, raised = self.stop_from_another_process(rdir, wait_gone=lambda pgid, limit_s: True,
+                                                         live_members=lambda pgid: [])
+        self.assertEqual(asked, [("group", serve.pid, "SIGTERM"), ("group", stream.pid, "SIGTERM")])
+        self.assertIsNone(raised)
+        self.assertEqual((rec["stopped_by"], rec["serve_survivors"], self.stops_ran()), ("recovered", [], 1), rec)
+
+    def test_a_supervisor_that_holds_no_child_records_its_ending_though_the_file_cannot_be_removed(self):
+        # With no child there is no number of its own to signal or collect, so nothing to leave for.
+        rdir = self.a_run_on_disk(recoverable=True)
+        left = []
+        with self.removal_refused():
+            rec = run_session.do_stop(rdir, "supervisor_error", detail="a stand in for a start that failed",
+                                      leave=lambda: left.append(True))
+        self.assertEqual(left, [])
+        self.assertEqual((rec["stopped_by"], rec["serve_survivors"]), ("supervisor_error", []), rec)
+
+    def test_a_stop_from_another_process_never_leaves_as_a_supervisor_does(self):
+        # `stop` runs in its caller's process group, and leaving kills the leaver's own group. A
+        # `stop` holds no child, so whatever the file is, it records the run and returns.
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid, egress_monitor_pgid=stream.pid)
+        os.mkdir(os.path.join(rdir, RECOVER_BY_RECEIPT))  # a folder of that name: neither removed nor emptied
+        left = []
+        with self.no_signal_reaches(serve.pid, stream.pid) as asked:
+            rec, raised = self.stop_from_another_process(rdir, leave_now=lambda: left.append(True))
+        self.assertEqual(left, [], "a stop from another process left as a supervisor does")
+        self.assert_recovered_without_a_signal(rec, asked, serve, stream)
+        self.assert_says_serve_unconfirmed(raised, serve.pid)
+
+    def test_a_log_that_never_returns_does_not_keep_a_supervisor_that_must_leave(self):
+        # The log is a file on the same disk. The lines a leaving supervisor says are waited for no
+        # longer than the removal was.
+        hangs, left = self.never_returns(), threading.Event()
+        serve = self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+
+        class Log:
+            write = flush = staticmethod(hangs)
+
+        with self.short_disk_wait(), self.removal_refused(), self.no_signal_reaches(serve.pid) as asked, \
+                contextlib.redirect_stderr(Log()):
+            self.on_a_thread(run_session.do_stop, rdir, "stop", proc=serve, leave=left.set)
+            self.assertTrue(left.wait(LEAVES_WITHIN_S), "the supervisor waited on a log line that does not return")
+        self.assertEqual(asked, [])
+        self.assertTrue(self.recoverable(rdir))
+
+    def test_leaving_does_not_wait_on_a_log_that_cannot_be_flushed(self):
+        # leave_now as it is, with the two calls that end the process as stand ins. This process is
+        # told it leads no group, so no signal to a group is even asked for.
+        hangs, exits, asked = self.never_returns(), threading.Event(), self.recorded_signals()
+
+        class Log:
+            write = flush = staticmethod(hangs)
+
+        with self.short_disk_wait(), contextlib.redirect_stderr(Log()), \
+                mock.patch.object(os, "getpgrp", lambda: -1), mock.patch.object(os, "_exit", lambda code: exits.set()):
+            self.on_a_thread(self.really_leave_now)
+            self.assertTrue(exits.wait(LEAVES_WITHIN_S), "leaving waited on a log that does not flush")
+        self.assertEqual(asked, [])
+
+    def test_the_wait_for_a_file_operation_on_the_way_out_is_a_few_seconds(self):
+        self.assertGreater(run_session.DISK_WAIT_S, 0)
+        self.assertLessEqual(run_session.DISK_WAIT_S, 5)
+
+    def test_work_waited_for_within_a_limit_says_what_became_of_it(self):
+        self.assertEqual(run_session.within(LEAVES_WITHIN_S, lambda a, b: a + b, 1, 2), (True, 3))
+        done, said = run_session.within(LEAVES_WITHIN_S, os.rmdir, os.path.join(self.fake, "not-there"))
+        self.assertFalse(done)
+        self.assertIsInstance(said, FileNotFoundError)
+        self.assertEqual(run_session.within(0.05, self.never_returns()), (False, None))
+
+    def test_work_waited_for_within_a_limit_is_born_with_the_stop_signals_blocked(self):
+        # A stop signal sent from outside must land on the main thread, where the wait it interrupts
+        # is. A thread made to do a file operation must not be where it lands instead.
+        before = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+        done, held = run_session.within(LEAVES_WITHIN_S, signal.pthread_sigmask, signal.SIG_BLOCK, [])
+        self.assertTrue(done)
+        self.assertLessEqual(set(run_session.STOP_SIGNALS), set(held))
+        self.assertEqual(signal.pthread_sigmask(signal.SIG_BLOCK, []), before, "the calling thread's own mask changed")
+
+    def test_a_stop_reason_whose_write_never_returns_still_wakes_the_supervisor(self):
+        rdir = self.a_run_on_disk()
+        gone, finished, woken = threading.Event(), threading.Event(), threading.Event()
+        finished.set()  # the stop that follows finishes at once: this test is about the asking
+        with self.short_disk_wait(), mock.patch.object(run_session, "record_stop_reason", self.never_returns()):
+            watch = self.on_a_thread(run_session.watch_lifeline, rdir, self.gone_caller(), gone, finished, 60,
+                                     lambda: (None, None), wake=woken.set)
+            self.assertTrue(woken.wait(LEAVES_WITHIN_S), "the supervisor was never told to stop")
+            watch.join(LEAVES_WITHIN_S)
+            self.assertFalse(watch.is_alive())
+        self.assertIn("could not be recorded", self.said.getvalue())
+
+    def test_a_stop_reason_that_cannot_be_read_does_not_keep_a_hung_stop_from_being_cut_off(self):
+        rdir = self.a_run_on_disk()
+        gone, finished, left = threading.Event(), threading.Event(), threading.Event()
+        with self.short_disk_wait(), mock.patch.object(run_session, "requested_reason", self.never_returns()):
+            watch = self.on_a_thread(run_session.watch_lifeline, rdir, self.gone_caller(), gone, finished, 0,
+                                     lambda: (None, None), wake=lambda: None, leave=left.set)
+            self.assertTrue(left.wait(LEAVES_WITHIN_S), "the run was never cut off: the watcher waited on a read")
+            watch.join(LEAVES_WITHIN_S)
+            self.assertFalse(watch.is_alive())
+        self.assertIn("cut off", self.on_disk(rdir)["stop_detail"])
+
+    def test_a_cut_off_sets_its_limit_without_waiting_on_the_areas_copy(self):
+        # The limit is the project's stop_s and some room, and stop_s is in a file. A read of it that
+        # never returns must not be what stands between a cut off and its limit.
+        rdir = self.a_run_on_disk()
+        left = threading.Event()
+        with self.short_disk_wait(), mock.patch.object(run_session, "run_timeouts", self.never_returns()):
+            cut = self.on_a_thread(run_session.cut_off_and_leave, rdir, "caller_gone", "its caller was gone",
+                                   leave=left.set)
+            self.assertTrue(left.wait(LEAVES_WITHIN_S), "the cut off waited on a read before it had a limit")
+            cut.join(LEAVES_WITHIN_S)
+            self.assertFalse(cut.is_alive())
+        self.assertIn("cut off", self.on_disk(rdir)["stop_detail"])
+
+    # -- where in a stop the file goes, and when in a start it comes (the fourth #3807 review) --
+
+    def says_whether_the_file_was_there(self):
+        """A project's stop command that writes down whether the supervisor's file was beside the
+        receipt when it ran, and where it writes it. It runs in the worktree, one folder below."""
+        said = os.path.join(self.fake, "file-when-the-stop-command-ran")
+        return 'if test -e "../%s"; then echo there; else echo gone; fi > "%s"' % (RECOVER_BY_RECEIPT, said), said
+
+    def test_a_stop_gives_up_recovery_by_number_before_the_projects_stop_command_when_serve_had_gone(self):
+        # Serve went by itself, so its number is held by nothing but this supervisor from here on, and
+        # the project's stop command can take a minute. The file must not outlast the first of that.
+        serve = self.child()
+        os.killpg(serve.pid, signal.SIGKILL)  # still this process's own uncollected child
+        self.assertTrue(run_session.exited(serve, IN_PROCESS_LIMIT_S))
+        command, said = self.says_whether_the_file_was_there()
+        rdir = self.a_run_on_disk(recoverable=True, stop_command=command, serve_pid=serve.pid, serve_pgid=serve.pid)
+        rec = run_session.do_stop(rdir, "serve_exited", proc=serve, monitor=MonitorThatSaysClean(), by_itself=True)
+        self.assertEqual(rec["stopped_by"], "serve_exited", rec)
+        with open(said) as f:
+            self.assertEqual(f.read(), "gone\n", "the project's stop command ran while a later stop could still"
+                             " recover the run by a number nothing but this supervisor held")
+
+    def test_a_stop_gives_up_recovery_by_number_before_the_projects_stop_command(self):
+        # The project's stop command is often what ends the app, so from the moment it starts the
+        # app's number may be held by nothing but this supervisor. This serve ends on its SIGTERM.
+        serve = self.child("import sys\nprint('up', flush=True)\nsys.stdin.read()\n")
+        command, said = self.says_whether_the_file_was_there()
+        rdir = self.a_run_on_disk(recoverable=True, stop_command=command, serve_pid=serve.pid, serve_pgid=serve.pid)
+        rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=MonitorThatSaysClean())
+        self.assertEqual(rec["stopped_by"], "stop", rec)
+        with open(said) as f:
+            self.assertEqual(f.read(), "gone\n", "the project's stop command ran before the file was removed")
+
+    def test_a_stop_that_cannot_list_serves_group_still_ends_it_and_records_its_ending(self):
+        # ps fails once the stop has removed the file and signalled serve. Raised out of the stop,
+        # that left a supervisor with no ending and no file: a later `stop` would then signal
+        # nothing, and whatever was left of serve's group would run on with nothing to end it by.
+        def ps_fails(pgid):
+            v.fail("ps-failed", "ps could not list processes: a stand in")
+
+        serve = self.child()  # ignores SIGTERM, so the stop has to kill it
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        monitor = MonitorThatSaysClean()
+        with mock.patch.object(run_session, "live_members", ps_fails):
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=monitor)
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertEqual((rec["stopped_by"], rec["serve_exit"]), ("stop", -signal.SIGKILL), rec)
+        self.assertIsNone(rec["serve_survivors"], "a group that could not be listed was recorded as empty")
+        self.assertIn("could not be read", rec["stop_detail"])
+        self.assertIn("a stand in", rec["stop_detail"])
+        self.assertEqual(monitor.asked, 1, "the stop did not go on to settle the monitor")
+        self.assertEqual(wait_group_empty(serve.pid), [], "serve's group outlived a stop that could not list it")
+        # And `stop` does not call that run stopped: nothing read what was left of serve's group.
+        rec, raised = self.stop_from_another_process(rdir)
+        self.assert_says_serve_unconfirmed(raised, serve.pid)
+
+    def test_the_file_is_there_and_whole_before_the_supervisor_starts_its_first_child(self):
+        # The order everything above rests on: a child that was started before the file existed and
+        # then lost its supervisor could never be ended by a later `stop`. Seen at the two places a
+        # supervisor starts a child: its monitor's start, which is what starts the report stream, and
+        # the first process the supervisor starts itself, which is serve. This serve exits at once.
+        rdir = self.a_run_on_disk(serve_command="exit 0")
+        test, seen = self, {"monitor": [], "process": []}
+
+        class Monitor(MonitorThatCannotStart):
+            def start(inner):
+                seen["monitor"].append(test.recoverable(rdir))
+                return super().start()
+
+        class Popen(subprocess.Popen):
+            def __init__(inner, *args, **kwargs):
+                seen["process"].append(test.recoverable(rdir))
+                super().__init__(*args, **kwargs)
+
+        r, w = os.pipe()
+        self.addCleanup(os.close, r)
+        for s in run_session.STOP_SIGNALS:
+            self.addCleanup(signal.signal, s, signal.getsignal(s))
+        self.assertFalse(self.recoverable(rdir), "the file was there before any supervisor was")
+        with mock.patch.object(run_session.egress, "Monitor", Monitor), mock.patch.object(subprocess, "Popen", Popen):
+            code = run_session.supervise(rdir, -1, w)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen["monitor"], [True], "the monitor was started, and with it the report stream, before the"
+                         " file was there")
+        self.assertEqual(seen["process"][:1], [True], "serve was started before the file was there")
+        rec = self.on_disk(rdir)
+        self.assertEqual((rec["stopped_by"], rec["serve_exit"]), ("serve_exited", 0), rec)
+        self.assertFalse(self.recoverable(rdir))
+        # And the supervisor read how serve ended off the handle it kept, and said it in its log.
+        self.assertIn("serve (process %s) ended with 0" % rec["serve_pid"], self.said.getvalue())
+
+    def test_a_cut_off_after_the_stop_left_survivors_says_their_group_was_not_signalled(self):
+        # The stop had dealt with serve's group, found processes that outlived its SIGKILL, collected
+        # serve and then hung. The cut off lists them and must say it did not signal them again.
+        serve = self.child()
+        os.killpg(serve.pid, signal.SIGKILL)  # still this process's own uncollected child
+        serve.wait()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid)
+        self.addCleanup(run_session.LEFT.pop, rdir, None)
+        run_session.LEFT[rdir] = [4194303]  # a pid no process can have
+        with self.no_signal_reaches(serve.pid) as asked:
+            rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished", proc=serve)
+        self.assertEqual(asked, [])
+        self.assertEqual(rec["serve_survivors"], [4194303])
+        self.assertIn("not signalled", rec["stop_detail"])
+        self.assertIn("serve's process group (%s)" % serve.pid, rec["stop_detail"])
+
+    # -- what the fifth #3807 review found --
+    #
+    # Every signal below is sent through signal_own to a child this process holds uncollected, or
+    # is recorded by a stand in and not sent.
+
+    def test_a_cut_off_ends_its_children_once_the_removal_was_confirmed_though_the_disk_then_hangs(self):
+        # The stop's first act had the system's yes: the file is gone. The disk then hangs, which is
+        # one way a stop comes to hang, and the cut off's own ask cannot be answered. The file cannot
+        # come back, so nothing but this supervisor can ever end the app: it must kill, not leave.
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        self.assertTrue(run_session.forbid_recovery(rdir))
+        self.assertFalse(self.recoverable(rdir))
+        left = threading.Event()
+        with self.short_disk_wait(), self.removal_never_returns():
+            cut = self.on_a_thread(run_session.cut_off_and_leave, rdir, "caller_gone", "its caller was gone",
+                                   proc=serve, monitor=MonitorHoldingAStream(rdir, stream),
+                                   limit_s=IN_PROCESS_LIMIT_S, leave=left.set)
+            self.assertTrue(left.wait(LEAVES_WITHIN_S), "the cut off never left")
+            cut.join(LEAVES_WITHIN_S)
+            self.assertFalse(cut.is_alive())
+        self.assertEqual(wait_group_empty(serve.pid, 5), [], "the supervisor left the app running with its file"
+                         " gone, so nothing would ever end it")
+        self.assertEqual(wait_group_empty(stream.pid, 5), [], "the supervisor left the report stream running with"
+                         " its file gone")
+        rec = self.on_disk(rdir)
+        self.assertEqual((rec["stopped_by"], rec["egress"]["verdict"], rec["serve_survivors"]),
+                         ("caller_gone", "unmeasured", []), rec)
+        self.assertNotIn("leaving without ending the run", self.said.getvalue())
+
+    def test_the_cut_offs_limit_ends_its_children_once_the_removal_was_confirmed_though_the_disk_then_hangs(self):
+        # The same, with the main thread stuck in its stop for good: the limit's own way out kills.
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid,
+                                  egress_monitor_pgid=stream.pid)
+        self.assertTrue(run_session.forbid_recovery(rdir))
+        let_go, left = self.stuck_in_its_stop(), threading.Event()
+        with self.short_disk_wait(), self.removal_never_returns():
+            cut = self.on_a_thread(run_session.cut_off_and_leave, rdir, "caller_gone", "its caller was gone",
+                                   proc=serve, monitor=MonitorHoldingAStream(rdir, stream), limit_s=0.05,
+                                   leave=left.set)
+            self.assertTrue(left.wait(LEAVES_WITHIN_S), "the supervisor never left")
+            self.assertEqual(wait_group_empty(serve.pid, 5), [], "the supervisor left the app running with its file"
+                             " gone")
+            self.assertEqual(wait_group_empty(stream.pid, 5), [], "the supervisor left the report stream running")
+            self.assertIsNone(self.on_disk(rdir)["stopped_at"])
+            self.assertNotIn("leaving without ending the run", self.said.getvalue())
+            let_go()  # the cut off itself now runs to its end, so nothing of it outlives the test
+            cut.join(IN_PROCESS_LIMIT_S)
+            self.assertFalse(cut.is_alive())
+
+    def test_a_removal_is_remembered_only_until_the_file_is_made_again(self):
+        # The memory is sound because one thing alone makes the file, and that thing forgets. And
+        # because of WHEN a supervisor calls it, which the sixth review's test of the order holds.
+        rdir = self.a_run_on_disk(recoverable=True)
+        self.assertTrue(run_session.forbid_recovery(rdir))
+        run_session.allow_recovery(rdir)
+        self.assertTrue(self.recoverable(rdir))
+        with self.removal_refused():
+            self.assertFalse(run_session.forbid_recovery(rdir), "a removal confirmed before the file was made again"
+                             " was taken for a removal of the new file")
+        self.assertTrue(self.recoverable(rdir))
+
+    def unread_ways(self):
+        """The two ways a stop fails to read what is left of serve's group: a ps that ran and failed,
+        and a ps that could not be started at all, as a fork refused at the process limit is."""
+        def ps_fails(pgid):
+            v.fail("ps-failed", "ps could not list processes: a stand in")
+
+        def ps_cannot_start(pgid):
+            raise OSError(errno.EAGAIN, "a stand in for a fork that was refused")
+
+        return (("ps failed", ps_fails), ("ps could not be started", ps_cannot_start))
+
+    def test_a_stop_whose_ps_cannot_be_started_still_ends_serves_group_and_records_its_ending(self):
+        # Raised out of the stop, that left no ending with the file already gone and serve's group
+        # asked to end and never killed: a later `stop` signals nothing.
+        serve = self.child()  # ignores SIGTERM, so the stop has to kill it
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        monitor = MonitorThatSaysClean()
+        with mock.patch.object(run_session, "live_members", dict(self.unread_ways())["ps could not be started"]):
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=monitor)
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertEqual((rec["stopped_by"], rec["serve_exit"]), ("stop", -signal.SIGKILL), rec)
+        self.assertIsNone(rec["serve_survivors"], "a group that could not be listed was recorded as empty")
+        self.assertIn("could not be read", rec["stop_detail"])
+        self.assertIn("a stand in for a fork that was refused", rec["stop_detail"])
+        self.assertEqual(wait_group_empty(serve.pid), [], "serve's group outlived a stop that could not list it")
+        rec, raised = self.stop_from_another_process(rdir)
+        self.assert_says_serve_unconfirmed(raised, serve.pid)
+
+    def test_a_cut_off_whose_ps_cannot_be_started_still_records_its_ending(self):
+        serve = self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        with mock.patch.object(run_session, "live_members", dict(self.unread_ways())["ps could not be started"]):
+            rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished",
+                                      proc=serve)
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertEqual((rec["stopped_by"], rec["serve_exit"]), ("caller_gone", -signal.SIGKILL), rec)
+        self.assertIsNone(rec["serve_survivors"])
+        self.assertIn("could not be read", rec["stop_detail"])
+        self.assertIn("a stand in for a fork that was refused", rec["stop_detail"])
+
+    def a_stop_that_could_not_read_serves_group_records_no_clean_verdict(self, way):
+        serve = self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        monitor = MonitorThatSaysClean()
+        with mock.patch.object(run_session, "live_members", dict(self.unread_ways())[way]):
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=monitor)
+        self.assertEqual(monitor.asked, 1, "the stop did not go on to settle the monitor")
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+        self.assertIn("could not read what was left of serve's process group (%s)" % serve.pid, rec["egress"]["why"])
+
+    def test_a_stop_whose_ps_failed_never_records_a_clean_egress_verdict(self):
+        # On main a ps that failed in the stop left no ending, and the later `stop` wrote unmeasured,
+        # which the merge check refuses. A stop that now records its ending must not turn that run
+        # into one that reads clean: nothing listed what was left of the app.
+        self.a_stop_that_could_not_read_serves_group_records_no_clean_verdict("ps failed")
+
+    def test_a_stop_whose_ps_could_not_be_started_never_records_a_clean_egress_verdict(self):
+        self.a_stop_that_could_not_read_serves_group_records_no_clean_verdict("ps could not be started")
+
+    def test_a_stop_that_could_not_read_serves_group_keeps_a_verdict_that_is_not_clean(self):
+        # What the monitor saw is never downgraded by what the stop could not read.
+        class MonitorThatSawSomething(MonitorThatSaysClean):
+            def finish(self):
+                return {"verdict": "not-clean", "why": "a stand in that saw a connection", "monitor": "a stand in"}
+
+        serve = self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        with mock.patch.object(run_session, "live_members", self.unread_ways()[0][1]):
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=MonitorThatSawSomething())
+        self.assertEqual((rec["egress"]["verdict"], rec["egress"]["why"]),
+                         ("not-clean", "a stand in that saw a connection"), rec["egress"])
+
+    def test_a_cut_off_after_a_stop_that_killed_serves_group_unread_says_so(self):
+        # The stop could not list serve's group, killed it unread, collected serve and then hung. Its
+        # own words for that were never written, so the cut off's receipt has to carry them.
+        serve = self.child()
+        os.killpg(serve.pid, signal.SIGKILL)  # still this process's own uncollected child
+        serve.wait()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid)
+        self.addCleanup(run_session.LEFT.pop, rdir, None)
+        run_session.LEFT[rdir] = None
+        with self.no_signal_reaches(serve.pid) as asked:
+            rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished", proc=serve)
+        self.assertEqual(asked, [])
+        self.assertIsNone(rec["serve_survivors"])
+        self.assertIn("serve's process group (%s)" % serve.pid, rec["stop_detail"])
+        self.assertIn("without being able to list", rec["stop_detail"])
+        rec, raised = self.stop_from_another_process(rdir)
+        self.assert_says_serve_unconfirmed(raised, serve.pid)
+        self.assertIn("without being able to list", str(raised))
+
+    def test_a_supervisor_whose_only_child_was_already_collected_records_its_ending(self):
+        # The report stream of a monitor that failed its own start is collected then and kept on the
+        # monitor. A supervisor holding nothing else has no number to signal or collect, so nothing
+        # to leave for, whatever its file says.
+        serve, stream = self.child(), self.child()
+        os.killpg(stream.pid, signal.SIGKILL)  # still this process's own uncollected child
+        stream.wait()
+        self.assertTrue(run_session.holds_a_child(serve, None))
+        self.assertTrue(run_session.holds_a_child(None, MonitorHoldingAStream(self.fake, serve)))
+        self.assertFalse(run_session.holds_a_child(stream, None), "a child already collected read as held")
+        self.assertFalse(run_session.holds_a_child(None, MonitorThatSaysClean()))
+        rdir = self.a_run_on_disk(recoverable=True)  # a stream that failed its start is not in the receipt
+        monitor, left = MonitorHoldingAStream(rdir, stream), []
+        with self.removal_refused(), self.no_signal_reaches(stream.pid) as asked:
+            rec = run_session.do_stop(rdir, "stop", monitor=monitor, leave=lambda: left.append(True))
+        self.assertEqual((left, asked), ([], []), "a supervisor with no child left to hold left without an ending")
+        self.assertEqual((rec["stopped_by"], monitor.asked), ("stop", 1), rec)
+
+    # -- what the sixth #3807 review found --
+    #
+    # Every signal below is sent through signal_own to a child this process holds uncollected, or
+    # is recorded by a stand in and not sent.
+
+    def git_cannot_be_started(self):
+        """git on a system that is refusing new processes: the call itself raises, as ps does there."""
+        def refused(repo, *args, check=True):
+            raise BlockingIOError(errno.EAGAIN, "a stand in for a fork that was refused at git")
+
+        return mock.patch.object(run_session, "git", refused)
+
+    def assert_ended_with_the_worktree_left(self, rec, rdir, reason, serve):
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertEqual((rec["stopped_by"], rec["serve_exit"], rec["worktree_removed"]),
+                         (reason, -signal.SIGKILL, False), rec)
+        self.assertIn("the worktree (%s) could not be removed" % rec["worktree"], rec["stop_detail"])
+        self.assertIn("a stand in for a fork that was refused at git", rec["stop_detail"])
+        self.assertIsNone(rec["serve_survivors"])
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+        self.assertEqual(wait_group_empty(serve.pid), [], "serve's group outlived a stop that could not list it")
+
+    def test_a_stop_on_a_system_refusing_new_processes_still_records_its_ending(self):
+        # A system that refuses ps refuses the git that removes the worktree a moment later. Raised
+        # out of the stop from there, that left no ending with the file gone and serve collected.
+        serve = self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        with mock.patch.object(run_session, "live_members", dict(self.unread_ways())["ps could not be started"]), \
+                self.git_cannot_be_started():
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=MonitorThatSaysClean())
+        self.assert_ended_with_the_worktree_left(rec, rdir, "stop", serve)
+
+    def test_a_cut_off_on_a_system_refusing_new_processes_still_records_its_ending(self):
+        serve = self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        with mock.patch.object(run_session, "live_members", dict(self.unread_ways())["ps could not be started"]), \
+                self.git_cannot_be_started():
+            rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished",
+                                      proc=serve)
+        self.assert_ended_with_the_worktree_left(rec, rdir, "caller_gone", serve)
+
+    def test_a_stop_that_finds_serve_already_collected_never_records_a_clean_egress_verdict(self):
+        # A cut off on the lifeline's thread collected serve and then failed before its own ending,
+        # and the stuck stop got to its own. That stop signalled nothing and read nothing of serve's
+        # group, so what it records is survivors None, and None never stands beside "clean".
+        serve = self.child()
+        os.killpg(serve.pid, signal.SIGKILL)  # still this process's own uncollected child
+        serve.wait()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid)
+        monitor = MonitorThatSaysClean()
+        with self.no_signal_reaches(serve.pid) as asked:
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=monitor)
+        self.assertEqual(asked, [])
+        self.assertEqual(monitor.asked, 1, "the stop did not go on to settle the monitor")
+        self.assertIsNone(rec["serve_survivors"])
+        self.assertEqual((rec["egress"]["verdict"], rec["egress"].get("measured_to")), ("unmeasured", None),
+                         rec["egress"])
+        self.assertIn("could not read what was left of serve's process group (%s)" % serve.pid, rec["egress"]["why"])
+
+    def test_the_file_is_made_before_the_one_other_thread_that_can_take_it_back_is_started(self):
+        # A removal confirmed between allow_recovery's forgetting and its write would be remembered
+        # with the file whole, and the next ask would then say yes without the disk. The lifeline's
+        # thread is the one other thread of a supervisor that asks for the removal, so the file is
+        # whole before that thread is started. Seen at the start itself, on the main thread.
+        rdir = self.a_run_on_disk(serve_command="exit 0")
+        test, seen = self, []
+
+        def lifeline(*args):
+            pass  # a stand in that watches nothing: the real one signals this process when its pipe ends
+
+        class Thread(threading.Thread):
+            def __init__(inner, *args, target=None, **kwargs):
+                inner.the_lifelines = target is lifeline
+                super().__init__(*args, target=target, **kwargs)
+
+            def start(inner):
+                if inner.the_lifelines:
+                    seen.append(test.recoverable(rdir))
+                super().start()
+
+        r, w = os.pipe()
+        self.addCleanup(os.close, r)
+        tie = os.pipe()
+        for fd in tie:
+            self.addCleanup(os.close, fd)
+        for s in run_session.STOP_SIGNALS:
+            self.addCleanup(signal.signal, s, signal.getsignal(s))
+        with mock.patch.object(run_session.egress, "Monitor", MonitorThatCannotStart), \
+                mock.patch.object(run_session, "watch_lifeline", lifeline), \
+                mock.patch.object(threading, "Thread", Thread):
+            code = run_session.supervise(rdir, -1, w, lifeline_fd=tie[0])
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, [True], "the lifeline's thread was started before the file was whole")
+        self.assertEqual(self.on_disk(rdir)["stopped_by"], "serve_exited")
+
+    def test_every_test_starts_with_no_removal_remembered(self):
+        # The memory lasts as long as the process, and every test here is one process. What keeps
+        # one test's yes from the next must not be that their folders happen to differ.
+        run_session.FORBIDDEN.add(os.path.join(self.home, "a folder an earlier test was told is gone"))
+        another = RunFixture("setUp")
+        another.setUp()
+        self.addCleanup(another.tearDown)
+        self.assertEqual(run_session.FORBIDDEN, set(), "a test would start with what another was told")
+
+    # -- the rest of what the second #3807 review found --
+
+    def gone_caller(self):
+        r, w = os.pipe()
+        os.close(w)
+        self.addCleanup(os.close, r)
+        return r
+
+    def test_a_log_that_cannot_be_written_does_not_stop_the_stop_being_asked_for(self):
+        # The supervisor's log is on the same disk as the receipt. With that disk full the line
+        # saying why the run is stopping used to raise, before the stop was asked for.
+        rdir = self.a_run_on_disk()
+        gone, finished, woken = threading.Event(), threading.Event(), []
+        finished.set()
+        with contextlib.redirect_stderr(FullDisk()):
+            run_session.watch_lifeline(rdir, self.gone_caller(), gone, finished, 60, lambda: (None, None),
+                                       wake=lambda: woken.append(True))
+        self.assertEqual(woken, [True], "the supervisor was never told to stop")
+
+    def test_a_log_that_cannot_be_written_does_not_stop_a_cut_off(self):
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid, egress_monitor_pgid=stream.pid)
+        left = []
+        with contextlib.redirect_stderr(FullDisk()):
+            run_session.cut_off_and_leave(rdir, "caller_gone", "its caller was gone", proc=serve,
+                                          monitor=MonitorHoldingAStream(rdir, stream),
+                                          limit_s=IN_PROCESS_LIMIT_S, leave=lambda: left.append(True))
+        self.assertEqual(left, [True])
+        self.assertEqual(wait_group_empty(serve.pid), [], "the supervisor left and serve was never ended")
+        self.assertEqual(wait_group_empty(stream.pid), [], "the supervisor left and the stream was never ended")
+        self.assertEqual(self.on_disk(rdir)["egress"]["verdict"], "unmeasured")
+        self.assertIn("cut off", self.on_disk(rdir)["stop_detail"])
+
+    def test_a_cut_off_that_cannot_write_its_ending_still_ends_serve_before_it_leaves(self):
+        serve, stream = self.child(), self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid, egress_monitor_pgid=stream.pid)
+        lock = open(os.path.join(rdir, "receipt.lock"), "a")
+        self.addCleanup(lock.close)
+        fcntl.flock(lock, fcntl.LOCK_EX)  # the receipt's own lock, held: the cut off cannot write its ending
+        left = threading.Event()
+        cut = threading.Thread(target=run_session.cut_off_and_leave, daemon=True,
+                               args=(rdir, "caller_gone", "its caller was gone"),
+                               kwargs={"proc": serve, "monitor": MonitorHoldingAStream(rdir, stream),
+                                       "limit_s": 0.05, "leave": left.set})
+        cut.start()
+        self.assertTrue(left.wait(IN_PROCESS_LIMIT_S), "the cut off never left though its limit had passed")
+        self.assertEqual(wait_group_empty(serve.pid, 5), [], "the supervisor left and serve was never ended")
+        self.assertEqual(wait_group_empty(stream.pid, 5), [], "the supervisor left and the stream was never ended")
+        lock.close()
+        cut.join(IN_PROCESS_LIMIT_S)
+        self.assertFalse(cut.is_alive())
+
+    def test_what_a_cut_off_starts_from_the_lifelines_thread_is_not_born_deaf_to_a_stop(self):
+        said = os.path.join(self.fake, "blocked")
+        rdir = self.a_run_on_disk(stop_command='"%s" -c "%s" > "%s"' % (sys.executable, SAYS_BLOCKED, said))
+        gone, finished, left = threading.Event(), threading.Event(), threading.Event()
+        watch = threading.Thread(target=run_session.watch_lifeline, daemon=True,
+                                 args=(rdir, self.gone_caller(), gone, finished, 0, lambda: (None, None)),
+                                 kwargs={"wake": lambda: None, "leave": left.set})
+        # The thread is born as the supervisor makes it: with the stop signals blocked.
+        before = signal.pthread_sigmask(signal.SIG_BLOCK, run_session.STOP_SIGNALS)
+        try:
+            watch.start()
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, before)
+        self.assertTrue(left.wait(IN_PROCESS_LIMIT_S), "the run was never cut off")
+        watch.join(IN_PROCESS_LIMIT_S)
+        with open(said) as f:
+            self.assertEqual(f.read().strip(), "[]", "the project's stop command was started with stop signals"
+                             " blocked, so nothing could have asked it to end")
+
+    def test_a_caller_that_goes_wakes_the_supervisor_even_when_an_earlier_stop_stands(self):
+        # A `stop` typed before the supervisor had recorded its pid writes the reason and can send
+        # no signal. Nothing else would ever wake that supervisor before its run was cut off.
+        rdir = self.a_run_on_disk()
+        self.assertTrue(run_session.record_stop_reason(rdir, "stop"))
+        gone, finished, woken = threading.Event(), threading.Event(), []
+        finished.set()
+        run_session.watch_lifeline(rdir, self.gone_caller(), gone, finished, 60, lambda: (None, None),
+                                   wake=lambda: woken.append(True))
+        self.assertEqual(woken, [True], "a supervisor with an earlier stop request standing was never woken")
+        self.assertEqual(run_session.requested_reason(rdir), "stop", "the earlier reason was rewritten")
+
+    def test_a_stop_landing_as_the_ok_pipe_closes_still_stops_the_run(self):
+        # The supervisor closes the pipe it says "ok" down. A stop acted on right as that close
+        # returned used to find the pipe still named, close it a second time, and die of that before
+        # it had stopped anything.
+        rdir = self.a_run_on_disk()
+        r, w = os.pipe()
+        self.addCleanup(os.close, r)
+        for s in run_session.STOP_SIGNALS:
+            self.addCleanup(signal.signal, s, signal.getsignal(s))
+        really, closes, null = os.close, [], os.open(os.devnull, os.O_RDONLY)
+        self.addCleanup(really, null)
+
+        def close(fd):
+            if fd != w:
+                return really(fd)
+            closes.append(fd)
+            if len(closes) > 1:  # a second close of the same number: said here, never done
+                raise OSError(errno.EBADF, "Bad file descriptor")
+            os.dup2(null, w)  # the pipe's end is closed, and the number is kept so nothing else can take it
+            self.addCleanup(really, w)
+            raise run_session.StopRequested()  # a stop signal, acted on as the close returns
+
+        with mock.patch.object(os, "close", close), \
+                mock.patch.object(run_session.egress, "Monitor", MonitorThatCannotStart):
+            code = run_session.supervise(rdir, -1, w)
+        self.assertEqual(closes, [w], "the ok pipe was closed twice")
+        self.assertEqual(code, 0)
+        rec = self.on_disk(rdir)
+        self.assertEqual((rec["stopped_by"], rec["worktree_removed"]), ("stop", True), rec)
+        self.assertEqual(os.read(r, 16), b"ok\n")
+        self.assertEqual(os.read(r, 16), b"", "the ok pipe was left open")
+
+
+# A test suite, as payload/hooks/test-skill-python-tests.sh runs one: this process builds the
+# fixture the tests above use, starts runs through it exactly as they do, says what it started, and
+# then waits to be killed. argv: the scripts folder, then one word for each run it is to hold, "tied"
+# (the fixture's lifeline in place, as every test above has it) or "untied" (no lifeline, as every
+# real run Dan's sessions start has it).
+#
+# It is itself tied to the test that started it (the #3807 review): it waits by reading its input,
+# a pipe only that test writes, so when that test is gone, however it went, the read ends and this
+# suite stops what it started and leaves. Killed, as the tests below kill it, it does none of that.
+# An untied run can be tied to nothing, which is what it is: its one bound is a shortened deadline.
+UNTIED_DEADLINE_SCALE = "0.25"  # of the fixture's 3600 seconds: 15 minutes, many times a slow test
+SUITE = r'''
+import json, os, subprocess, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import test_run_session as t
+held, said = [], []
+for word in sys.argv[2:]:
+    f = t.RunFixture()
+    f.lifeline = word == "tied"
+    f.setUp()
+    held.append(f)
+    r = f.start(f.commit(), deadline="1" if f.lifeline else t.UNTIED_DEADLINE_SCALE)
+    said.append({"base": os.path.dirname(f.repo), "home": f.home, "code": r.returncode,
+                 "out": r.stdout, "err": r.stderr})
+print(json.dumps(said), flush=True)
+sys.stdin.read()
+ended = []
+for f in held:
+    for rid in f.started:
+        subprocess.run(f.cli("stop", rid), capture_output=True, text=True, env=f.env())
+        ended.append(f.receipt(rid))
+print(json.dumps(ended), flush=True)  # its folders go when it leaves, so it says how each run ended
+'''
+SUITE_START_LIMIT_S = 600  # how long a suite may take to bring its runs up: a limit, never a wait
+
+
+def read_line(pipe, limit_s):
+    """One line from a pipe, waited for no longer than limit_s. Returns the line and None, or what
+    there was of one and why there is no more: the writer ended, or the limit passed."""
+    got, deadline = b"", time.monotonic() + limit_s
+    while not got.endswith(b"\n"):
+        left = deadline - time.monotonic()
+        if left <= 0 or not select.select([pipe], [], [], left)[0]:
+            return got, "it said nothing more within %ss" % limit_s
+        chunk = os.read(pipe.fileno(), 65536)
+        if not chunk:
+            return got, "it ended"
+        got += chunk
+    return got, None
+
+
+def alive(pid):
+    """Whether the pid names a process that is not a zombie, read straight from ps."""
+    out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    stat = out.stdout.strip()
+    return bool(stat) and not stat.startswith("Z")
+
+
+def pipe_pending(fd):
+    """How many bytes sit unread in the pipe whose read end is `fd`."""
+    import struct
+    import termios
+    return struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+
+
+def wait_gone(pids, limit_s=30):
+    """Wait on the condition, none of `pids` alive, and return those still alive at the limit."""
+    deadline = time.monotonic() + limit_s
+    while True:
+        left = [p for p in pids if p and alive(p)]
+        if not left or time.monotonic() >= deadline:
+            return left
+        time.sleep(0.05)
+
+
+class SuiteStoppedAsAGroupTests(unittest.TestCase):
+    """A suite killed as a process group must not leave a run of its own behind (claude-config#3682).
+
+    The supervisor starts in a session of its own, so a signal to the suite's group never reaches
+    it. Every process here is stopped by a pid or receipt this test recorded, never by matching a
+    command line (L1011), and nothing waits a fixed time (L290).
+    """
+
+    def start_suite(self, *ties):
+        """Start a suite that holds one run for each word in `ties`. Returns the suite and, for each
+        run in that order, its receipt folder and its receipt as it stood once the run was up."""
+        suite = subprocess.Popen([sys.executable, "-B", "-c", SUITE, HERE] + list(ties), stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        self.addCleanup(self.end_suite, suite)
+        # The suite prints once its runs are up, or dies saying why. The wait for that has a limit,
+        # so a start that hangs fails this test and can never hang it (the #3807 review).
+        line, why = read_line(suite.stdout, SUITE_START_LIMIT_S)
+        if why:
+            self.kill_suite(suite)
+            self.fail("the suite did not say what it started (%s); it said: %r %s"
+                      % (why, line, suite.stderr.read().decode(errors="replace")[-2000:]))
+        runs = []
+        for said in json.loads(line):
+            self.addCleanup(shutil.rmtree, said["base"], True)
+            self.assertEqual(said["code"], 0, said["err"])
+            rid = json.loads(said["out"])["receipt_id"]
+            rdir = os.path.join(said["home"], "receipts", rid)
+            with open(os.path.join(rdir, "receipt.json")) as f:
+                rec = json.load(f)
+            self.addCleanup(self.stop_run, said["home"], rid, rec)
+            self.assertTrue(run_session.supervisor_alive(rdir), "the run was not up when the suite said it was")
+            runs.append((rdir, rec))
+        return suite, runs
+
+    def kill_suite(self, suite):
+        """Stop the suite as a group, the way a cut short push gate does."""
+        if suite.poll() is None:
+            os.killpg(suite.pid, signal.SIGKILL)
+        suite.wait()
+
+    def end_suite(self, suite):
+        self.kill_suite(suite)
+        for pipe in (suite.stdin, suite.stdout, suite.stderr):
+            try:
+                pipe.close()
+            except OSError:
+                pass  # its reader is gone: there is nothing left to flush to
+
+    def stop_run(self, home, rid, rec):
+        """Stop the run by its receipt (which signals only the supervisor whose lock is held), then
+        confirm by the pids it recorded that nothing it started is left."""
+        env = dict(os.environ, VERIFICATION_HOME=home, VERIFICATION_TIME_SCALE="1", VERIFICATION_DEADLINE_SCALE="1")
+        env.pop("VERIFICATION_LIFELINE_FD", None)
+        subprocess.run([sys.executable, os.path.join(HERE, "run_session.py"), "stop", rid],
+                       capture_output=True, text=True, env=env)
+        self.assertEqual(wait_gone([rec["supervisor_pid"], rec["serve_pid"]]), [], "the run's processes outlived its stop")
+        for pgid in (rec["serve_pgid"], rec.get("egress_monitor_pgid")):
+            if pgid:
+                self.assertEqual(live_members(pgid), [], "process group %s outlived the stop" % pgid)
+
+    def on_disk(self, rdir):
+        with open(os.path.join(rdir, "receipt.json")) as f:
+            return json.load(f)
+
+    def assert_ended_by_its_lifeline(self, rdir, rec):
+        try:
+            run_session.wait_for_supervisor(rdir, timeout_s=stop_limit(rdir))
+        except v.VerificationError as e:
+            self.fail("the supervisor outlived the suite that started it: %s" % e)
+        done = self.on_disk(rdir)
+        self.assertEqual(done["stopped_by"], "caller_gone", done)
+        self.assertEqual(wait_gone([rec["serve_pid"]]), [], "serve outlived the supervisor that stopped it")
+        self.assertEqual(live_members(rec["serve_pgid"]), [], "serve's group outlived the stop")
+        self.assertTrue(done["worktree_removed"], done)
+
+    def test_a_run_ends_when_the_suite_that_started_it_is_stopped_as_a_group(self):
+        suite, (run,) = self.start_suite("tied")
+        self.kill_suite(suite)
+        self.assert_ended_by_its_lifeline(*run)
+
+    def test_a_run_with_no_lifeline_outlives_the_suite_that_started_it(self):
+        # Every real run: start returns, and the run must keep serving for the drive and stop calls
+        # that come in later processes, until stop, serve exiting or its deadline.
+        #
+        # Looking the moment the suite is dead proves nothing: a run wrongly tied to its caller would
+        # still be in the middle of stopping, with every sign of life (the #3807 review). So the suite
+        # holds a second run that IS tied, and this waits on the condition that one has ended by its
+        # lifeline, receipt written. Both runs lost the suite in the same instant, and by the time
+        # the tied one has finished a whole stop, an untied one that was going to react has: the
+        # first thing a lifeline that ends does is record why.
+        suite, (untied, tied) = self.start_suite("untied", "tied")
+        self.kill_suite(suite)
+        self.assert_ended_by_its_lifeline(*tied)
+        rdir, rec = untied
+        self.assertFalse(os.path.exists(os.path.join(rdir, "stop-reason")),
+                         "a run with no lifeline was asked to stop when its caller went")
+        self.assertTrue(run_session.supervisor_alive(rdir), "a run with no lifeline ended with its caller")
+        self.assertTrue(alive(rec["supervisor_pid"]))
+        self.assertTrue(live_members(rec["serve_pgid"]), "serve ended with the caller of a run that has no lifeline")
+        self.assertIsNone(self.on_disk(rdir)["stopped_at"])
+        # And it is still a run in every way: a later process stops it, and the receipt says `stop` did.
+        self.stop_run(os.path.dirname(os.path.dirname(rdir)), os.path.basename(rdir), rec)
+        self.assertEqual(self.on_disk(rdir)["stopped_by"], "stop")
+
+    def test_a_suite_whose_starter_is_gone_stops_the_run_it_held_and_leaves(self):
+        # The suite is not killed here. Its starter going away, which is all the death of this test
+        # would do to it, is its input ending: the untied run it holds would otherwise be left with
+        # nothing but its deadline (the #3807 review).
+        suite, ((rdir, rec),) = self.start_suite("untied")
+        limit = stop_limit(rdir) + 60  # read now: the suite's folders go with it
+        suite.stdin.close()
+        line, why = read_line(suite.stdout, limit)
+        self.assertIsNone(why, "the suite did not stop its run once the test that started it let go of it"
+                          " (%s); it said: %r" % (why, line))
+        (done,) = json.loads(line)
+        self.assertEqual((done["receipt_id"], done["stopped_by"]), (rec["receipt_id"], "stop"), done)
+        self.assertTrue(done["worktree_removed"], done)
+        try:
+            suite.wait(timeout=limit)
+        except subprocess.TimeoutExpired:
+            self.fail("the suite was still running after the test that started it let go of it")
+        self.assertEqual(wait_gone([rec["supervisor_pid"], rec["serve_pid"]]), [], "left behind by the suite")
+        self.assertEqual(live_members(rec["serve_pgid"]), [], "serve's group outlived the suite's stop")
 
 
 if __name__ == "__main__":

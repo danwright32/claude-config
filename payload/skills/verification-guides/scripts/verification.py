@@ -107,7 +107,7 @@ EXIT_BY_KIND = {
     "record-other-sha": 6,
     "bucket-unowned": 7, "bucket-ambiguous": 7,
     # run_session.py: the run itself failed
-    "ready-timeout": 8, "serve-stopped": 8, "serve-survived": 8, "supervisor-failed": 8,
+    "ready-timeout": 8, "serve-stopped": 8, "serve-survived": 8, "serve-unconfirmed": 8, "supervisor-failed": 8,
     "supervisor-hung": 8, "drive-failed": 8, "disk-full": 8, "start-error": 8, "start-cleanup-failed": 8,
 }
 

@@ -165,35 +165,93 @@ load_notice() {
 # as [[:space:]], so a match is only ever added, never lost.
 payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 
-# A refusal (claude-config#3472). The library names an ask and an allow and has no name for a
-# refusal; both are its one decision builder, _hn_decision_json, given the decision as its first
-# word, so a refusal is built by that same builder and its words are escaped and cut as theirs are.
+# A refusal (claude-config#3472). The library's hook_deny_json builds it (added for #3618; this
+# hook moved onto it in #3793), by the same builder as its ask and its allow, so its words are
+# escaped and cut as theirs are. The hook calls that public name and never the private builder
+# behind it (test-hook-notice.sh fails on a hook that names one).
 #
-# That builder is private to the library, and a refusal that is not printed is a command that runs:
-# the hook leaves with 0 either way, and Claude Code reads no decision as none. Beside a library
-# that loaded and had no such function (a copy from before 2026-11-16 that the sync held back, or
-# one in which the name changed), this printed nothing, so a command the hook meant to refuse ran
-# with no question at all. So what the builder printed is judged before it is passed on: it must be
-# one object, from { to }, naming deny as its decision. Anything else, nothing included, is replaced
-# by refuse_plain's object, which needs no library. Judged by its shape and in bash, since python3
-# is the first thing the builder itself may have lost. Whatever happens, a refusal is printed.
-REFUSAL_SHAPE='^\{.*"permissionDecision"[[:space:]]*:[[:space:]]*"deny".*\}$'
+# A refusal that is not printed is a command that runs: the hook leaves with 0 either way, and
+# Claude Code reads no decision as none. Beside a library that loaded and had no such function (a
+# copy from before #3618 that the sync held back), a call to it would print nothing, so a command
+# the hook meant to refuse would run with no question at all. So the function is looked for first.
+#
+# THE RULE for what it printed: the hook passes it on only when it is exactly one JSON object, with
+# nothing before or after it, whose only keys are hookSpecificOutput (a PreToolUse deny holding
+# only its event, its decision and at most a reason, all texts) and, at most, the library's notice
+# field holding a text. Anything else, nothing included, is replaced by refuse_plain's object, which
+# needs no library. Claude Code lets a call go ahead when a hook's object fails its validation, and
+# its top level continue, suppressOutput and decision are not texts, so a refusal beside one of
+# them written as a text is no refusal. An earlier form of this check took any one key beside the
+# refusal that held a text, and so took each of those (the second review of #3793).
+#
+# It is checked in two steps, since this hook may not write the notice field's name: a notice is
+# built by the library alone, and test-hook-notice.sh fails on a hook that names the field (#1906).
+#   1. refusal_shape reads the text as strict UTF-8 and then with Python's JSON reader, and
+#      answers "alone" for a refusal with no other key, "beside" for one with exactly one other
+#      key holding a text, and nothing for everything else. It never learns that key's name. For
+#      a refusal that is alone this step is all that decides, so its two rules on what stands
+#      inside the decision (only the event, the decision and a reason; every value a text) each
+#      have their own cases in section 7 of test-db-write-ask-unsure-line.sh (the third review of
+#      #3793 took both out and that suite still passed). Strict UTF-8 matters for one form: a
+#      lone surrogate written as three bytes, which the JSON reader takes when handed bytes.
+#   2. A refusal that is alone is passed on. One with a key beside it is passed on only when the
+#      library's hook_decision_verdict, the one place that names the key allowed there, is a
+#      function, returned 0 and said nothing. Beside a library with no such function (an older
+#      copy), or one whose function fails or says anything, refuse_plain's object goes out. So
+#      such a Mac loses the escaped words of a refusal that carries a notice, never the refusal.
+# What is still trusted is that function's own answer: a library whose hook_deny_json wrote a
+# wrong key and whose hook_decision_verdict called it fine would be passed on. test-hook-notice.sh
+# holds that function to each wrong text, and to a copy of itself with each rule taken out.
+#
+# Before the first review of #3793 the check was a bash match asking only for a { first, a } last
+# and the deny somewhere between, and a dot there takes a line break too, so a refusal cut short at
+# a brace, two objects on two lines, a raw line break inside the reason and an ask holding a deny
+# under another key all went out as the refusal (section 7 of test-db-write-ask-unsure-line.sh
+# holds every case named here). The hook reaches a refusal only through its classifier, which is
+# python3, so python3 is there. What a refused command costs in python3 starts, all of them
+# counted (the third review measured it with a counting stand in): the classifier is one. Beside
+# a missing library, or one with no hook_deny_json, that is all. Beside the real library its
+# builder is a second, and this check adds a third for a refusal with no notice and a fourth for
+# one that carries a notice, the fourth inside hook_decision_verdict. A text that is no refusal
+# costs the check one start before refuse_plain replaces it, and a builder that printed nothing
+# costs the check none, since refusal_shape returns before it reaches python3. A python3 that
+# cannot start, or says nothing, judges nothing, so refuse_plain's object goes out. Whatever
+# happens once the classifier has asked for a refusal, exactly one object is printed, and it is
+# a refusal.
+#
+# refusal_shape itself is written further down, below the place where this hook asks whether
+# python3 is there and names it when it is not: test-gate-payload-reader.sh holds every hook that
+# can refuse to asking for a reader before the first line that reaches for it, and its failure on
+# this hook's pull request (the function stood here, above that question) is why it moved.
 refuse_json() {
-  local built=""
+  local built="" shape="" said=""
   if [ "$NOTICE_LIBRARY" = missing ]; then
     refuse_plain "$1" "${2:-}" "lib/hook-notice.sh is missing beside this hook"
     return 0
   fi
-  if ! declare -F _hn_decision_json >/dev/null; then
-    refuse_plain "$1" "${2:-}" "lib/hook-notice.sh beside this hook has no _hn_decision_json, which builds a refusal, so this one is written without the characters that need escaping"
+  if ! declare -F hook_deny_json >/dev/null; then
+    refuse_plain "$1" "${2:-}" "lib/hook-notice.sh beside this hook has no hook_deny_json, which builds a refusal, so this one is written without the characters that need escaping"
     return 0
   fi
-  built="$(_hn_decision_json deny "$1" "${2:-}" 2>/dev/null)"
-  if payload_match "$built" "$REFUSAL_SHAPE"; then
+  built="$(hook_deny_json "$1" "${2:-}" 2>/dev/null)"
+  shape="$(refusal_shape "$built")" || shape=""
+  if [ "$shape" = alone ]; then
     printf '%s\n' "$built"
     return 0
   fi
-  refuse_plain "$1" "${2:-}" "_hn_decision_json in lib/hook-notice.sh beside this hook printed no refusal, so this one is written without the characters that need escaping"
+  if [ "$shape" != beside ]; then
+    refuse_plain "$1" "${2:-}" "hook_deny_json in lib/hook-notice.sh beside this hook printed no refusal, so this one is written without the characters that need escaping"
+    return 0
+  fi
+  if ! declare -F hook_decision_verdict >/dev/null; then
+    refuse_plain "$1" "${2:-}" "lib/hook-notice.sh beside this hook has no hook_decision_verdict, which checks what stands beside a refusal, so this one is written without the characters that need escaping"
+    return 0
+  fi
+  if said="$(hook_decision_verdict "$built" deny 2>&1)" && [ -z "$said" ]; then
+    printf '%s\n' "$built"
+    return 0
+  fi
+  refuse_plain "$1" "${2:-}" "hook_decision_verdict in lib/hook-notice.sh beside this hook did not take what hook_deny_json printed as a refusal with at most a notice beside it, so this one is written without the characters that need escaping"
 }
 
 # refuse_plain <reason> <notice> <why>: a refusal built with no library, keeping only characters
@@ -256,6 +314,42 @@ if ps_reader_missing python3; then
   [ "$db_call$commit_call" = 01 ] && hook_ask_json "db-write-ask.sh asks before this commit because python3 is not on PATH, so whether it adds a project to a test project list could not be told. Install python3 (claude-config#3023)"
   exit 0
 fi
+
+# refusal_shape <text>: step 1 of the rule above refuse_json. It prints "alone" for exactly one
+# object holding only a PreToolUse deny, "beside" for one with exactly one other key holding a
+# text, and nothing for everything else. Written here, below the question about python3 just
+# above, so that no line of this hook reaches for python3 before the hook has asked for it
+# (test-gate-payload-reader.sh). refuse_json, its one caller, runs only after the classifier.
+refusal_shape() {
+  [ -n "$1" ] || return 1
+  printf '%s' "$1" | python3 -I -c '
+import json, sys
+sys.stdout.reconfigure(errors="replace")
+def once(pairs):
+    d = dict(pairs)
+    if len(d) != len(pairs):
+        raise ValueError("a key is written twice")
+    return d
+raw = sys.stdin.buffer.read()
+if not (raw.startswith(b"{") and raw.endswith(b"}")):
+    sys.exit(1)
+try:
+    d = json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=once)
+except Exception:
+    sys.exit(1)
+h = d.get("hookSpecificOutput")
+if not (isinstance(h, dict) and h.get("hookEventName") == "PreToolUse" and h.get("permissionDecision") == "deny"
+        and set(h) <= {"hookEventName", "permissionDecision", "permissionDecisionReason"}
+        and all(isinstance(v, str) for v in h.values())):
+    sys.exit(1)
+others = [v for k, v in d.items() if k != "hookSpecificOutput"]
+if not others:
+    print("alone")
+elif len(others) == 1 and isinstance(others[0], str):
+    print("beside")
+else:
+    sys.exit(1)' 2>/dev/null
+}
 
 # -S: the hook uses the standard library only, and the site module was 5.2 ms of every start
 # (the personal MacBook, 2026-11-15, claude-config#3023).
