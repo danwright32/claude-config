@@ -3,7 +3,7 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { Mounted as KitMounted } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow, ModKitPane } from '../.claude-plugin/types/mod-kit/index.d.ts'
-import { DROPPED_AFTER_MS } from '../hooks/card.ts'
+import { DROPPED_AFTER_MS, EARLIER_SESSION } from '../hooks/card.ts'
 import { ASKED_PANE, FOLLOW_MS, UNASKED_PANE } from '../hooks/place.ts'
 import { STEPS_DESCRIPTION, VERDICT_DESCRIPTION, VERDICT_INPUT } from '../hooks/register.tsx'
 import type { StepsCard } from '../types/index.d.ts'
@@ -2301,6 +2301,19 @@ test('a step finished in an earlier session, pinned again here as already done, 
   await hand($, [step({ title: 'Sign out', url: 'https://a.example', checked: 'already-done' }), step({ title: 'Clear the cookies' })], 'Chrome sign out')
   // The carried step keeps how it finished, marked as an earlier session's; the new one is this session's.
   expect(stored(w.mem)?.steps[0]).toMatchObject({ finished: 'per-you', isEarlier: true })
+  expect(await call($, VERDICT, { step: 2, checked: 'checked' })).toMatch(/card is gone/)
+  expect(sets).toEqual([{ at: EMPTIED_AT, done: 1 }])
+})
+
+test('while the session\'s id cannot be read, a carried in step that names a session is counted, and one that names none is an earlier session\'s and is not (#3864)', withKit, async ($, on) => {
+  mock.clock(on, { now: EMPTIED_AT })
+  const sets = emptiedSets(on)
+  const kept: StepsCard = { heading: 'Chrome sign out', steps: [{ title: 'Sign out', url: 'https://a.example', pinnedBy: 's0' }, { title: 'Sign in again', url: 'https://b.example' }] }
+  const w = world(on, { sessionFails: true }, { [`card:${ROOT}`]: kept })
+  await start($)
+  await hand($, [step({ title: 'Sign out', url: 'https://a.example' }), step({ title: 'Sign in again', url: 'https://b.example' })], 'Chrome sign out')
+  expect(stored(w.mem)?.steps.map(s => s.pinnedBy)).toEqual(['s0', EARLIER_SESSION])
+  await call($, VERDICT, { step: 1, checked: 'checked' })
   expect(await call($, VERDICT, { step: 2, checked: 'checked' })).toMatch(/card is gone/)
   expect(sets).toEqual([{ at: EMPTIED_AT, done: 1 }])
 })
