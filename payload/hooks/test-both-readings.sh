@@ -226,7 +226,7 @@ if [ -x "$T/no-python/jq" ]; then
   [ "$RC" = 0 ] && [ "$(judged)" = alone ] && check "with no python3 there is no second reading, and the hook judges the first as it always did" ok \
     || check "with no python3 there is no second reading, and the hook judges the first as it always did" "exit $RC, judged [$(judged)], said [$(cat "$T/err")]"
 else
-  echo "UNMEASURED: jq is not on PATH, so the hook with no python3 has no reader left to run with"
+  echo "SUITE-PART-UNMEASURED the hook with no python3: jq is not on PATH, so the hook has no reader left to run with"
 fi
 : > "$T/log"
 payload_for "$HIDDEN" | TMPDIR="$T/absent/" BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
