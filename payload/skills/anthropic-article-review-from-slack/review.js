@@ -310,7 +310,7 @@ function validateEntry(e) {
     if (p.decision === 'accepted') {
       accepted++;
       if (!(typeof p.issue === 'string' && p.issue.trim()) && p.draftNote !== true) {
-        fail('The accepted proposal "' + p.summary + '" has no issue link, and no draftNote saying a draft reply was saved for a system the owner did not build. File the issue or save the draft before logging.');
+        fail('The accepted proposal "' + p.summary + '" has no issue link, and no draftNote saying a draft reply was saved for a system the owner did not build. File its issue before logging, and for a system the owner did not build save the draft that links it too; a draft alone is only for a system with no repository.');
       }
     }
   });
