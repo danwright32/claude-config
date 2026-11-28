@@ -2,8 +2,18 @@
 on anything wider than one window named by its id?
 
 Reads the hook payload on stdin. Exits 0 to pass, 3 to refuse (printing what the capture would take),
-and 4 when the command could not be read word by word (printing why), for the wrapper's crude reading
-to decide.
+6 to refuse a command holding a line the shared reader cannot vouch for (printing which line, why,
+and how to write it), and 4 when the command could not be read word by word (printing why), for the
+wrapper's crude reading to decide.
+
+The command is read twice (claude-config#3472). First as it always was, and what that reading finds
+is refused in the words it always was. Then as the reader gives it to a caller that asks which
+lines it is unsure of (lib/unsure-reading.py): a # every shell reads inside a word no longer hides
+the rest of its line, and a line the reader names (a # it cannot tell from a comment, a heredoc it
+cannot find the end of, an operator a backslash and a line break split) is one this judge could
+not check, so the command is refused saying so. Refusing by either reading means asking never
+refuses less than not asking did. When the second reading cannot be made at all (the door or the
+library behind it missing, a reader that cannot be asked), that is exit 4.
 
 Every command the line runs is read by lib/shell-words.py, the reading every gate shares: after a cd,
 in a chain, a pipe, a subshell or a substitution, behind assignments, redirections and the runners it
@@ -109,6 +119,33 @@ def verdict(args, through_xargs):
     return None
 
 
+def refusal(records):
+    """What the first screencapture of a reading would take beyond one window, else None."""
+    for _, text, _, _, _ in records:
+        passed = []
+        rest, _ = sw.command_rest(text, passed)
+        words = sw.command_words(rest)
+        if not words or words[0].split("/")[-1].lower() != NAME:
+            continue
+        why = verdict(words[1:], any(name == "xargs" for name, _ in passed))
+        if why:
+            return why
+    return None
+
+
+def unsure_door():
+    """(lib/unsure-reading.py, None), or (None, why it could not be loaded)."""
+    path = os.path.join(HOOKS, "lib", "unsure-reading.py")
+    try:
+        spec = importlib.util.spec_from_file_location("unsure_reading", path)
+        door = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(door)
+        return door, None
+    except Exception:
+        return None, (path + ", through which the reader is asked which lines it is unsure of, could not be "
+                      "loaded (reinstall the hooks with claude-sync pull)")
+
+
 def main():
     raw = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
     try:
@@ -129,19 +166,29 @@ def main():
     if not command:
         sys.exit(0)
     cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else ""
+
+    def read():
+        return refusal(sw.every_command(command, cwd, []))
+
+    # The reading this judge always made, refused in the words it always was.
+    failed = False
     try:
-        records = sw.every_command(command, cwd, [])
+        why = read()
     except Exception:
+        why, failed = None, True
+    if why:
+        say(why, 3)
+    # The reading the reader gives a caller that asks which lines it is unsure of (#3472).
+    door, missing = unsure_door()
+    got, fault = door.second(sw, read) if door else (None, missing)
+    if fault is not None and door and door.named(fault):
+        say(door.told(fault), 6)
+    if got:
+        say(got, 3)
+    if failed:
         say(os.path.join(HOOKS, "lib", "shell-words.py") + " could not read the command", 4)
-    for _, text, _, _, _ in records:
-        passed = []
-        rest, _ = sw.command_rest(text, passed)
-        words = sw.command_words(rest)
-        if not words or words[0].split("/")[-1].lower() != NAME:
-            continue
-        why = verdict(words[1:], any(name == "xargs" for name, _ in passed))
-        if why:
-            say(why, 3)
+    if fault is not None:
+        say(str(fault), 4)
     sys.exit(0)
 
 

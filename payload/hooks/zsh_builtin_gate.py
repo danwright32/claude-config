@@ -5,9 +5,19 @@ It also refuses, in zsh, a command assigning a lowercase name zsh ties to an upp
 PATH above all, which replaces the command search path (claude-config#2347).
 
 Reads the hook payload on stdin. Exits 0 to pass, 3 to refuse log (printing the fix, the full path
-and the first argument), 5 to refuse a tied name being assigned (printing the name and its twin), and
-4 when the command could not be read word by word (printing why), for the wrapper's crude reading to
-decide.
+and the first argument), 5 to refuse a tied name being assigned (printing the name and its twin), 6
+to refuse a command holding a line the shared reader cannot vouch for (printing which line, why,
+and how to write it), and 4 when the command could not be read word by word (printing why), for the
+wrapper's crude reading to decide.
+
+The command is read twice (claude-config#3472). First as it always was, and what that reading finds
+is refused in the words it always was. Then as the reader gives it to a caller that asks which
+lines it is unsure of (lib/unsure-reading.py): a # every shell reads inside a word no longer hides
+the rest of its line, and a line the reader names (a # it cannot tell from a comment, a heredoc it
+cannot find the end of, an operator a backslash and a line break split) is one this judge could
+not check, so the command is refused saying so. Refusing by either reading means asking never
+refuses less than not asking did. When the second reading cannot be made at all (the door or the
+library behind it missing, a reader that cannot be asked), that is exit 4.
 
 Measured with zsh 5.9 on 2026-11-04: the builtin still runs behind builtin, noglob, nocorrect, -,
 exec and time, and when the name is quoted or backslashed; the program runs behind command and env.
@@ -147,6 +157,41 @@ def shell_of(outer, wrapper):
     return head if head in sw.SHELLS else None
 
 
+def refusal(records):
+    """(what to print, the exit code) for the first command of a reading that this judge refuses,
+    else None."""
+    # shells[d] is the shell running the commands d wrappers deep; the Bash tool's own comes first.
+    shells = [os.path.basename(os.environ.get("SHELL", "")) or "zsh"]
+    for _, text, wrapper, _, depth in records:
+        del shells[depth + 1:]
+        here = shells[depth] if depth < len(shells) else None
+        if here == "zsh":
+            words = sw.command_words(text)
+            found = shadowed(words)
+            if found:
+                name, args = found
+                return " ".join([SHADOWED[name], args[0]]), 3
+            tied = tied_assignment(words)
+            if tied:
+                return tied + " " + TIED[tied], 5
+        if wrapper and wrapper not in ("direct", "source"):
+            shells.append(shell_of(here, wrapper))
+    return None
+
+
+def unsure_door():
+    """(lib/unsure-reading.py, None), or (None, why it could not be loaded)."""
+    path = os.path.join(HOOKS, "lib", "unsure-reading.py")
+    try:
+        spec = importlib.util.spec_from_file_location("unsure_reading", path)
+        door = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(door)
+        return door, None
+    except Exception:
+        return None, (path + ", through which the reader is asked which lines it is unsure of, could not be "
+                      "loaded (reinstall the hooks with claude-sync pull)")
+
+
 def main():
     raw = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
     try:
@@ -169,26 +214,28 @@ def main():
         say(unread, 4)
     if not command:
         sys.exit(0)
+    def read():
+        return refusal(sw.every_command(command))
+
+    # The reading this judge always made, refused in the words it always was.
+    unread = False
     try:
-        records = sw.every_command(command)
+        found = read()
     except Exception:
+        found, unread = None, True
+    if found:
+        say(*found)
+    # The reading the reader gives a caller that asks which lines it is unsure of (#3472).
+    door, why = unsure_door()
+    got, fault = door.second(sw, read) if door else (None, why)
+    if fault is not None and door and door.named(fault):
+        say(door.told(fault), 6)
+    if got:
+        say(*got)
+    if unread:
         say(os.path.join(HOOKS, "lib", "shell-words.py") + " could not read the command", 4)
-    # shells[d] is the shell running the commands d wrappers deep; the Bash tool's own comes first.
-    shells = [os.path.basename(os.environ.get("SHELL", "")) or "zsh"]
-    for _, text, wrapper, _, depth in records:
-        del shells[depth + 1:]
-        here = shells[depth] if depth < len(shells) else None
-        if here == "zsh":
-            words = sw.command_words(text)
-            found = shadowed(words)
-            if found:
-                name, args = found
-                say(" ".join([SHADOWED[name], args[0]]), 3)
-            tied = tied_assignment(words)
-            if tied:
-                say(tied + " " + TIED[tied], 5)
-        if wrapper and wrapper not in ("direct", "source"):
-            shells.append(shell_of(here, wrapper))
+    if fault is not None:
+        say(str(fault), 4)
     sys.exit(0)
 
 

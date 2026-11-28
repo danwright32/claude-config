@@ -1898,6 +1898,11 @@ hooks unless every command only reads. It lets through a function's name handed 
 only reads or prints it (`grep -n ar_readkeys_issue file`, echo, cat; not git, rg or sort, whose
 options can run a command), a grep of a pipe for any of
 the names, and a quoted heredoc fed to cat, tee or python that starts no process (an edit script).
+Since #3472 it reads the command twice, the second time as the shared reader gives it to a caller
+that asks which lines it is unsure of ("Gates that ask the reader which lines it is unsure of"):
+a function called on the rest of a line after a `#` the shell reads inside a word used to pass as a
+command that cannot write, and is refused, and a command naming a record that holds a line the
+reader names is refused as one it could not tell about.
 `test-pr-review.sh` reads every function of `lib/ai-review-common.sh` that reaches the secret or a
 read keys file and fails on one the gate does not refuse when called, and
 `test-pr-review-gate-records.sh` holds the two real commands refused on 2026-11-01 and every write
@@ -3913,6 +3918,11 @@ One more gate holds a rule the briefs give every agent, for everyone:
   a worktree of a repository that is itself in a temp folder. It judges the main session too. A path
   in any other variable or a substitution, a relative path after `cd -`, or a payload it cannot read
   is refused when it names a worktree add or move. For one command: `ALLOW_TEMP_WORKTREE=1`.
+  Since #3472 it reads the command twice, the second time as the shared reader gives it to a caller
+  that asks which lines it is unsure of ("Gates that ask the reader which lines it is unsure of",
+  below), so a worktree placed on the rest of a line after a `#` the shell reads inside a word is
+  judged, and a command naming a worktree add or move that holds a line the reader names is refused
+  as one whose path could not be read.
 
 And one holds the rule CLAUDE.md gives every worktree session about a stale base:
 
@@ -3975,6 +3985,78 @@ Reading an old checkout is the other half, and that one is said rather than refu
   with no file and 0.05 over three outside one, at a load average near 40.
   It is wired to SessionStart only, never to a prompt.
   Tests: `hooks/test-repo-visibility-notice.sh`.
+
+### Gates that ask the reader which lines it is unsure of
+
+Every gate reads a Bash command through one reader, `lib/shell-words.py`. It took a `#` for a
+comment by a rule the shell does not follow, so in 18 measured shapes (a `#` after an escaped
+character, after a `$( )`, on a line joined to the one before, and the like) the shell runs a
+command on the rest of that line that the reader left out, and a gate never judged it (#3464). The
+reader now reads on where every shell does, and names the lines it cannot vouch for, but only for a
+caller that asks: a `#` it cannot tell from a comment, a `#` it read on past and then could not
+read to the end, a heredoc it cannot find the end of (#3492, #3566), and an operator that a
+backslash and a line break split (#3504). A gate that does not ask is given the reading it always
+was (#3472).
+
+The gates that ask, and refuse a command holding a line the reader names as one they could not
+check: `slack-drafts-only-gate.sh` (#3464), `db-write-ask.sh` with `read-only-query-allow.sh`
+(#3472, the first group), and since the second group `check-zsh-builtins.sh`,
+`check-screenshot-window.sh`, `temp-worktree-gate.sh` and the check `pr-review-gate.sh` makes of a
+command naming the lessons review's read records (`lib/review-record-writes.py`). The rest of the
+callers do not ask yet, and #3472 lists them.
+
+Each of the four in the second group reads the command twice. First as it always did, and what
+that reading finds is refused in the words it always was. Then through `lib/unsure-reading.py`,
+the door to the reading that asks: where every shell reads the `#` inside a word the rest of the
+line is judged like any other command, and a line the reader names is refused, saying which line,
+which kind of line it is, and how to write the command so that it can be read. Refusing by either
+reading is what keeps a gate from refusing less than it did: where a `#` read as text opens a
+heredoc that holds a command as its text, only the first reading finds that command as a command.
+By the second reading alone the zsh check, the screenshot check and the temp worktree gate would
+pass it, and the review's check would refuse it in other words (a name in a heredoc the shell
+expands).
+
+The refusal for a named line is for any command that reaches the gate's judge, whatever stands on
+the line, since nothing can say what the shell runs there. What reaches each judge is decided on
+the whole tool call, its description included, and is wider than the gates' names suggest. The zsh
+check: `log`, `path`, `cdpath`, `fpath`, `manpath` or `module_path` as a word. The screenshot
+check: `screencapture`, or `./`, or a name ending `.sh`, `.bash`, `.zsh`, `.ksh` or `.command`, or
+`bash`, `sh`, `zsh`, `dash`, `ksh` or `source` followed by a space. The review's check: a command
+naming a record. The temp worktree gate: a command naming a worktree add or move. So a commit
+message that quotes ``./setup.sh # once`` between backquotes inside double quotes, and holds the
+word path, is refused by the zsh check and by the screenshot check, though it names neither `log`
+nor `screencapture`.
+
+The rule has one home. `lib/db-write-calls.py` decides whether a reading is sure
+(`asked_reading()`) and holds the sentence for each kind of line (`UNSURE`); `lib/unsure-reading.py`
+calls it and copies none of it, and adds the words for two kinds. One that library has no sentence
+for, a split operator, which the reader's own `split_operator()` tells from the other kinds. And
+one its sentences are untrue of, a `#` between backquotes that close on its line (backquotes
+written as text in a double quoted message, the commonest named line): that library says a
+backslash or a closing parenthesis stands before the `#` and to write it inside quotes, where it
+stands after a space and already is. The door tells that kind by three things, a backquote before
+the `#`, another after it on its line, and the reader's own `word_starts()` answering that a word
+starts there when asked as the reader asks it of text inside backquotes (`layered`), and says to
+write a backslash before each backquote or to use single quotes. The reader has no function that
+says why it named a line, so this rests on how it reads today: a `#` that `word_starts()` answers
+True for when asked that way is named only between such backquotes. A `#` inside backquotes that
+the reader names for a backslash before it (two backslashes and a space, or a backslash and a line
+break) keeps that library's sentence. Two rewritings do not clear the line, and are named again in
+the same words: single quotes put inside the double quotes, which quote nothing there, and a
+comment moved to a line of its own that itself holds a backquote. The sentences that library holds
+for the other kinds are shown as they are. Beside a library folder with
+no door, no `lib/db-write-calls.py`, or a reader that cannot be asked, each gate still refuses what
+it always did, and a command it can then read only once goes to what the gate already does with a
+command it cannot read: the crude reading for the zsh and screenshot checks, and a refusal for the
+other two. Suite: `hooks/test-unsure-reading-gates.sh`, which holds each gate's command behind
+every shape, each with the same command in plain sight and a harmless twin.
+
+What the second reading costs, on a command the judge reads (one that leaves at a gate's first
+match costs what it did): 30 runs a side taken turn about on 2026-11-27, on the personal MacBook at
+a load average of 23 to 27, gave medians of 59.0 ms before and 69.4 after for the zsh check, 54.8
+and 65.8 for the screenshot check, 76.6 and 89.1 for the temp worktree gate, and 70.4 and 80.9 for
+`pr-review-gate.sh` on a grep naming a record. Most of it is loading `lib/db-write-calls.py`, where
+the rule lives, which was 8 to 16 ms of python3 on the same day.
 
 ### What a push actually waits on
 
@@ -4232,7 +4314,11 @@ subagent's `git push --force`, refused
 2026-11-09: 0.034 to 0.038 seconds on `git push -u origin feat/x` from the main checkout, which
 names no worktree and leaves before anything loads; 0.040 to 0.043 seconds on the same push from a
 folder under `.claude/worktrees/`, whose name makes it read the command; 0.098 to 0.102 seconds on
-`git worktree add /tmp/wt-x`, refused. Five readings of each at load average 33 to 59
+`git worktree add /tmp/wt-x`, refused. Five readings of each at load average 33 to 59. Since #3472
+a command naming a worktree is read a second time, asking the reader which lines it is unsure of:
+on a `git worktree add` into `.claude/worktrees/`, which passes, 30 runs a side taken turn about on
+2026-11-27 at a load average of 23 to 27 gave a median of 76.6 ms before and 89.1 after, least 73.7
+and 84.5
 
 </td></tr>
 <tr><td>
@@ -4439,7 +4525,10 @@ find no rtk init; both with the full suite running beside it (load average 234)
 2026-11-04: 0.027 to 0.046 seconds on `ls -la`, five readings at load average 13 to 27, timed from
 outside, since a command not naming log as a word leaves before python starts; 0.055 to 0.070
 seconds on `git log -1`, which the judge reads. Over 129,500 past Bash commands on the personal
-MacBook, 7,604 (5.9%) reach the judge and 31 are refused
+MacBook, 7,604 (5.9%) reach the judge and 31 are refused. Since #3472 the judge reads the command
+a second time, asking the reader which lines it is unsure of: on `git log -1`, 30 runs a side taken
+turn about on 2026-11-27 at a load average of 23 to 27 gave a median of 59.0 ms before and 69.4
+after, least 53.2 and 65.6. A command that leaves before python starts costs what it did
 
 </td></tr>
 <tr><td>
@@ -4451,7 +4540,10 @@ MacBook, 7,604 (5.9%) reach the judge and 31 are refused
 2026-11-13: 0.004 to 0.010 seconds on `git push -u origin feat/2908-screenshot-window`, five
 readings at load average 22 to 43, timed from outside, since a command naming neither screencapture
 nor a shell script leaves before python starts; 0.055 to 0.090 seconds on a capture or a script run,
-which the judge reads
+which the judge reads. Since #3472 the judge reads the command a second time, asking the reader
+which lines it is unsure of: on `screencapture -l 4242 shot.png`, 30 runs a side taken turn about on
+2026-11-27 at a load average of 23 to 27 gave a median of 54.8 ms before and 65.8 after, least 52.5
+and 63.1
 
 </td></tr>
 <tr><td>

@@ -37,6 +37,10 @@ stands, and anything this file has no rule for is refused, never passed:
     open.
   - Beside a shell startup file or the installed hooks folder (where text runs later): refused unless
     every command only reads.
+  - In a command holding a line the shared reader cannot vouch for (a # it cannot tell from a
+    comment, a heredoc it cannot find the end of, an operator a backslash and a line break split):
+    refused, saying which line and how to write it, since what the shell runs there cannot be told
+    (claude-config#3472; judge() says how the command is read twice).
 
 This is a tripwire against a session writing such a command, not a sandbox: text built to evade it
 can, as a command built to evade the name match always could (helper"-"keys). And it judges one
@@ -186,13 +190,59 @@ def judge_body(quoted, before, body):
     raise Refuse("feeds a heredoc naming those records to %s, which can run it" % (prog or "a command"))
 
 
+def unsure_door():
+    """(lib/unsure-reading.py, None), or (None, why it could not be loaded)."""
+    path = os.path.join(_here, "unsure-reading.py")
+    try:
+        spec = importlib.util.spec_from_file_location("unsure_reading", path)
+        door = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(door)
+        return door, None
+    except Exception:
+        return None, (path + ", through which the reader is asked which lines it is unsure of, could not be "
+                      "loaded (reinstall the hooks with claude-sync pull)")
+
+
 def judge(cmd):
+    """Raises Refuse when cmd can write those records, or this cannot tell.
+
+    The command is read twice (claude-config#3472). First as it always was (_read), and what that
+    reading refuses is refused in the words it always was. Then as the reader gives it to a caller
+    that asks which lines it is unsure of (lib/unsure-reading.py): the reader took a # for a
+    comment where the shell reads it inside a word, so a function called on the rest of that line
+    was never judged, and the command passed as one that cannot write. Read the second way, the
+    rest of such a line is judged like any other, and a line the reader names (a # it cannot tell
+    from a comment, a heredoc it cannot find the end of, an operator a backslash and a line break
+    split) is one this cannot tell about, so the command is refused saying which line and how to
+    write it. A second reading that cannot be made at all is refused too: a reader that cannot
+    run must not pass what it was asked to judge (L490). Refusing by either reading means asking
+    never refuses less than not asking did."""
     if not names(cmd):
         return
     if HOME.search(cmd):
         raise Refuse("names those records and the folder they are kept in")
     if "<(" in cmd or ">(" in cmd:
         raise Refuse("names those records beside a process substitution, whose commands no gate reads")
+    _read(cmd)
+    door, why = unsure_door()
+
+    def again():
+        try:
+            _read(cmd)
+        except Refuse as e:
+            return str(e) or "names those records"
+        return None
+
+    got, fault = door.second(sw, again) if door else (None, why)
+    if fault is not None:
+        raise Refuse("names those records, and whether it writes them could not be told: "
+                     + (door.told(fault) if door and door.named(fault) else str(fault)))
+    if got:
+        raise Refuse(got)
+
+
+def _read(cmd):
+    """judge()'s refusal by one reading of the command, whichever the reader is giving."""
     records, crude = sw._records(cmd, "", 0)
     if crude:
         raise Refuse("names those records in a command holding a quote or substitution that never closes")

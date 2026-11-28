@@ -30,6 +30,16 @@
 # at the start of a command or of a quoted string, saying it could not be read, since it cannot tell
 # what the capture would hold; everything else passes. The fix is always available (name the window
 # with -l), so there is no override, as with check-zsh-builtins.sh.
+#
+# A LINE THE READER CANNOT VOUCH FOR (claude-config#3472). The reader took a # for a comment where
+# the shell reads it inside a word, so a screencapture on the rest of that line was never judged.
+# The judge now reads the command a second time, as the reader gives it to a caller that asks which
+# lines it is unsure of: where every shell reads the # inside a word the rest of the line is judged
+# like any other, and a command holding a line the reader names (a # it cannot tell from a comment,
+# a heredoc it cannot find the end of, an operator a backslash and a line break split) is refused
+# as one that could not be checked, saying which line and how to write it. That refusal is for any
+# command that reaches the judge, whatever stands on the line, since nothing can say what the shell
+# runs there.
 
 HOW="A capture of the screen, or of a region or a selection of it, takes whatever is on screen, which can be another app's private content: on 2026-11-13 a full screen screencapture -x put one into a transcript (claude-config#2908). Capture only the target app's window by its id: screencapture -l <windowid> <file>, the id being the window number CGWindowListCopyWindowInfo gives for a window owned by the target app's process (its PID resolved from its executable path, as CLAUDE.md \"Driving Dan's Machine\" says). When the window cannot be resolved, or a person should choose what is captured, ask Dan to look instead."
 
@@ -83,12 +93,19 @@ if [ "$have_ps" = 1 ]; then ps_reader_missing python3; else ! command -v python3
   && not_judged "python3 is not on PATH, and the command's words are read with it"
 [ -f "$JUDGE" ] || not_judged "$JUDGE, the judge, is missing (reinstall the hooks with claude-sync pull)"
 
-# The judge exits 0 to pass, 3 to refuse (printing what the capture would take), and 4 when it could
-# not read the command (printing why). Anything else is the judge failing, and the crude reading
-# decides.
+# The judge exits 0 to pass, 3 to refuse (printing what the capture would take), 6 to refuse a
+# command holding a line the shared reader cannot vouch for (printing which line, why, and how to
+# write it), and 4 when it could not read the command (printing why). Anything else is the judge
+# failing, and the crude reading decides.
 said="$(printf '%s' "$payload" | python3 "$JUDGE")"
 case $? in
   0) exit 0 ;;
+  6)
+    # A line the reader names is one no reading can vouch for: what the shell runs on it differs
+    # by shell, or cannot be found. So the command was not checked, and is refused saying which
+    # line and how to write it so that it can be read (claude-config#3472).
+    echo "BLOCKED: whether this command runs screencapture on more than one window could not be checked: $said." >&2
+    exit 2 ;;
   3)
     echo "BLOCKED: this command runs screencapture $said. $HOW" >&2
     exit 2 ;;

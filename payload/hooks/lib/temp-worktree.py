@@ -23,9 +23,11 @@ behind rtk, env, a cd or a `bash -c` string, with git's -C folders composed and 
 from wherever the command runs. Any other worktree command (list, remove, prune, lock) passes.
 
 WHAT CANNOT BE READ, and is refused: a path holding any other variable or a substitution, a relative
-path after `cd -`, a command line only the crude cut can read, and a wrapper whose string cannot be
-read, each only when the command names a worktree add or move (a variable or substitution in the
-path of one is always in a command that names it).
+path after `cd -`, a command line only the crude cut can read, a wrapper whose string cannot be
+read, and a line the shared reader cannot vouch for (a # it cannot tell from a comment, a heredoc it
+cannot find the end of, an operator a backslash and a line break split, claude-config#3472), each
+only when the command names a worktree add or move (a variable or substitution in the path of one
+is always in a command that names it).
 
 A REPOSITORY ALREADY IN A TEMP FOLDER loses nothing more by its worktree being there, so a worktree
 of one passes. The repository is the folder git names for `rev-parse --git-common-dir` from where the
@@ -206,9 +208,57 @@ def judge(path, base, said):
             "<the same command>." % (said, path, where))
 
 
+def unsure_door():
+    """(lib/unsure-reading.py, None), or (None, why it could not be loaded)."""
+    path = os.path.join(_here, "unsure-reading.py")
+    try:
+        spec = importlib.util.spec_from_file_location("unsure_reading", path)
+        door = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(door)
+        return door, None
+    except Exception:
+        return None, (path + ", through which the reader is asked which lines it is unsure of, could not be "
+                      "loaded (reinstall the hooks with claude-sync pull)")
+
+
 def bash(s, cwd):
+    """The refusal for a command line, or None; Unread when it names a worktree being placed and
+    cannot be read.
+
+    The line is read twice (claude-config#3472). First as it always was (_read), and what that
+    finds, or cannot read, is answered as it always was. Then as the reader gives it to a caller
+    that asks which lines it is unsure of (lib/unsure-reading.py): a # every shell reads inside a
+    word no longer hides a worktree placed on the rest of its line, and a line the reader names (a
+    # it cannot tell from a comment, a heredoc it cannot find the end of, an operator a backslash
+    and a line break split) is one nobody can read, so a command holding one that names a worktree
+    add or move is refused, as every command this cannot read is. Answering by either reading
+    means asking never refuses less than not asking did."""
     if "worktree" not in s:
         return None
+    said = _read(s, cwd)
+    if said:
+        return said
+    door, why = unsure_door()
+
+    def again():
+        try:
+            return _read(s, cwd)
+        except Unread as e:
+            # What the second reading cannot read is refused as the first's would be.
+            return e
+
+    got, fault = door.second(sw, again) if door else (None, why)
+    if fault is not None:
+        if PLACES.search(s):
+            raise Unread("where it goes could not be read: " + (door.told(fault) if door and door.named(fault) else str(fault)))
+        return None
+    if isinstance(got, Unread):
+        raise got
+    return got
+
+
+def _read(s, cwd):
+    """bash()'s answer by one reading of the line, whichever the reader is giving."""
     try:
         records, crude = sw._records(s, cwd, 0)
     except Exception as e:
