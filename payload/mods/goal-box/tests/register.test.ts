@@ -1231,9 +1231,9 @@ test('the prompt asking for carried steps to be checked says what to do in words
   expect(CHECK_CARRIED).toMatch(/^CARRIED STEPS\. /)
   expect(CHECK_CARRIED).toContain('carried over from an earlier session')
   expect(CHECK_CARRIED).toContain('pin them again with the manual steps tool')
-  // What the card following rests on (review of pull request 3870): manual steps knows a pinned
-  // step as the kept one by its title and its link or place, and one it does not know becomes this
-  // session's own step, which holds the close card until Dan has done it.
+  // What the card following rests on: manual steps knows a pinned step as the kept one by its
+  // title and its link or place, and one it does not know becomes this session's own step, which
+  // holds the close card until Dan has done it.
   expect(CHECK_CARRIED).toContain('Keep each title and link or place as it is, or the close card stays back.')
   // Its last sentence asks for a reply that is not a question: an answer ending on one keeps the card back.
   expect(CHECK_CARRIED).toMatch(/ Say in one line what you found, with no question\.$/)
@@ -1242,8 +1242,7 @@ test('the prompt asking for carried steps to be checked says what to do in words
   // It is sent while Dan is away too, when manual steps holds a card the session may already have
   // checked: so it does not say the steps were not checked, and it promises no card.
   for (const untrue of ['have not been checked', 'follows by itself']) expect(CHECK_CARRIED).not.toContain(untrue)
-  // Each time it is sent he reads it: ceilings under what it was before the review (81 words, 453
-  // characters), so it cannot grow unnoticed.
+  // Each time it is sent he reads it: ceilings in words and in characters, so it cannot grow unnoticed.
   expect(CHECK_CARRIED.split(/\s+/).length).toBeLessThan(81)
   expect(CHECK_CARRIED.length).toBeLessThan(453)
   // His writing rules: none of the three marks used as a break between words, each named by its code.
@@ -1312,9 +1311,9 @@ test("a new request of Dan's, with its own box and the steps still held, asks on
   expect(asksToCheck(submitted)).toHaveLength(2)
 })
 
-// A send that failed leaves a session that may stay idle, and an idle session has no next turn end
-// (review of pull request 3870): so the quiet period is armed again by the check itself, a bounded
-// number of times, and only the clock moves in these tests.
+// A send that failed leaves a session that may stay idle, and an idle session has no next turn
+// end: so the quiet period is armed again by the check itself, a bounded number of times, and only
+// the clock moves in these tests.
 const sendTries = (w: World) => w.held.filter(h => h === 'submit').length
 
 test('a prompt asking for carried steps to be checked that could not be sent is said in the reason and sent again once the session has been quiet for as long again, with no turn between (#3817)', withAll, async ($, on) => {

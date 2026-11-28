@@ -290,8 +290,8 @@ export const CHECK_CARRIED =
 
 /**
  * How many more times a prompt that could not be sent is tried while the session stays idle, one
- * quiet period apart. An idle session has no next turn end to try it at (review of pull request
- * 3870), and a bound keeps a send that can never enter from being tried every few minutes for good.
+ * quiet period apart. An idle session has no next turn end to try it at, and a bound keeps a send
+ * that can never enter from being tried every few minutes for good.
  */
 export const CARRIED_RETRIES = 3
 

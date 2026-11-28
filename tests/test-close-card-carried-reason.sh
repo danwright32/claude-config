@@ -15,8 +15,7 @@
 #    step it does not know becomes this session's own and holds the close card until Dan has done
 #    it. So the goal box's message (CHECK_CARRIED) tells the session to keep each title and link or
 #    place. Were manual steps to match by anything else, or the message to drop the instruction, the
-#    session would do as told and the card would stay back with nothing said (review of pull
-#    request 3870).
+#    session would do as told and the card would stay back with nothing said.
 #
 # This suite holds both together. It fails when the two reasons differ, when either can no longer
 # be read as a plain literal, when manual steps no longer gives that constant as the reason on a
