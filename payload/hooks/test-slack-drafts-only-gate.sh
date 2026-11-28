@@ -1694,8 +1694,8 @@ if filled_here and ratio <= ceiling:
 # limit as well (92.0 to 98.1), so those stay red under this rule. The rule: a reading
 # past the ceiling is unmeasured only where EVERY sample taken ran out and was read on the step
 # clock. One sample that finished inside the seconds and is past the ceiling fails the case as ever,
-# since it is the reading this limit is for; any sample at or under the ceiling passes as ever. The
-# limit does not move, and tools/ci-cold-cost-streak.sh turns main red when this has been the
+# since it is the reading this limit is for; any sample at or under the ceiling passes as ever. This
+# rule moves no limit, and tools/ci-cold-cost-streak.sh turns main red when this has been the
 # answer on main several trees in a row, so a real slowdown cannot hide here.
 if (ratio > ceiling and ran_out and len(ran_out) == len(ratios)
         and os.environ.get("SLACK_GATE_COST_RAN_OUT_UNMEASURED") == "1"):
@@ -2038,9 +2038,8 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   replayed "an ordinary reading on a slow runner, 10.671 s at 0.1574 s a unit, passes under that runner's limit of 79.9 units (#3863)" \
     "ok*logged: replay-speed *: 67.8 (*ceiling 79.9, samples 67.8;*" "$(replay_at "$speed_limit" median "$(planted 0.1574 10.671)")"
   # A rise where each judgement finishes 20 percent over the line fails at every speed. On the slow
-  # runner that is 81.4 units, which 83.2 let through, and 12.8 s of processor time: a judgement
-  # that long is planted as finished here, and where every one runs out of the gate's seconds the
-  # case is unmeasured (below).
+  # runner that is 81.4 units, which 83.2 let through. A judgement that long is planted here as
+  # finished; where every one runs out of the gate's seconds the case is unmeasured (below).
   replayed "a gate 20 percent dearer fails on a fast runner, 97.0 units past 95.3 (#3863)" \
     "judging it took at least*past 95.3, in each of 3 samples (97.0, 97.0, 97.0)*" "$(replay_at "$speed_limit" median "$(planted 0.0822 7.977 7.977 7.977)")"
   replayed "a gate 20 percent dearer fails on an ordinary runner, 84.7 units past 83.2 (#3863)" \

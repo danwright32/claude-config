@@ -6761,10 +6761,11 @@ every runner faster than 0.1314 s a unit, 31 of them by over 10 percent and the 
 it. A rise under about 18 percent on a fast runner now passes, where 83.2 sat 3 to 5 percent over a
 fast runner's ordinary reading and failed unchanged work with it.
 
-With every recorded run made dearer by one share, and a run counted as caught when no reading it
-recorded is inside the limit, the line catches 11 of the 173 at 10 percent where 83.2 catches 42
-(32 of them fast runners), 34 against 64 at 15 percent, 84 against 90 at 20, 118 against 106 at 25
-and 139 against 128 at 30. The larger counts at 25 and 30 percent are not more slowdowns caught.
+With every run recorded from 2026-11-25 to 2026-11-27 made dearer by one share, and a run counted
+as caught when no reading it recorded is inside the limit, the line catches 11 of the 173 at 10
+percent where 83.2 catches 42 (32 of them fast runners), 34 against 64 at 15 percent, 84 against 90
+at 20, 118 against 106 at 25 and 139 against 128 at 30. The larger counts at 25 and 30 percent are
+not more slowdowns caught.
 They come from slow runners alone (0.140 s a unit and over: 50 against 24 at 25 percent, 60 against
 44 at 30), and on a slow runner a reading past the limit is a judgement that does not finish inside
 the gate's 11 seconds. No judgement recorded as finishing took more than 11.67 s of processor time,
@@ -6783,9 +6784,9 @@ whether the case was unmeasured.
 
 The line is two numbers measured on one day (on the two days before, the middle run
 sits within 1 percent of it). When the gate's work for this command or GitHub's processors change
-a lot, fit it again from the notes a passing run prints. macOS keeps 67 by the least sample. The
-repository holds 15 of those 173 records, in the fixtures file above. The per run samples of the
-rest were read from GitHub's logs and are not in the repository, and issue #3406 holds their totals
+a lot, fit it again from the notes a passing run prints. macOS keeps 67 by the least sample. Of
+those 173 records the fixtures file above held 15 on 2026-11-28. The per run samples of the rest
+were read from GitHub's logs and are not in the repository, and issue #3406 holds their totals
 only, so the replay cannot be redone from the repository alone.
 
 Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
