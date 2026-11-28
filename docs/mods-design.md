@@ -3032,48 +3032,43 @@ required: three that must move (held, then passed), four that change or sit besi
 both ways. Not established: the work MacBook's records, and any call older than 2026-10-26.
 
 **A word a helper names through an operator, and a loop's word inside a substitution (#3602), for
-the design round guard.** Two readings of a script's own text, both in `rules.ts`.
-`calledWith` writes a call's word in place of each mention the body makes of it, and that covers a
-word named through one operator whose operand holds no expansion, quote or brace of its own
-(`OWN_FORM`). A piece (`${3:0:1500}`, `${@:2}`), an end taken off (`${1%.bak}`, `${1##*/}`) and a
-count (`${#1}`) are written as the whole word, or `0`, between two marks (`OWN_PIECE`,
-`OWN_PIECE_END`). What a piece spells is not worked out: it may be a flag (`sed "${2:0:2}"` handed
-`-i`), one part of a name (`"app/${2:0:4}.tsx"`), or a screen file the whole word does not name
-(`${2%.bak}` of `app/page.tsx.bak`). So the call goes unjudged only where every piece stands in a
-command that can do no more than print it (`pieceReaches`): the body is not read for the call
-where a piece shows up in what mod-kit's write reader gives for the body (a piece written to, or
-handed to a program that runs its words, to one the reader does not know, or to another function
-of the script), or stands in a command that is named by the piece, sets a variable (`read`,
-`printf -v`), feeds a pipe, or holds a word with the shape of a file the guard holds or a word the
-shell has still to expand (`sed "${2:0:2}" s/a/b/ "$f"`).
-A default, an alternative and `${1:?usage}` are written only where the shell gives the call's word
-as typed, or nothing (`${1:-none}` where the call typed a first word, `${4:+--flag}` where it typed
-no fourth). Where the shell may give the operand's own text (`${2:-app/page.tsx}` called with one
-word, or with a second the shell has still to expand) the body is not read for that call: that
-text is in no word of the call, and the reader of the script's own lines does not see it either.
-So a helper that prints the first 1,500 characters of what it compared runs, and a helper that
-hands a piece to a program, writes to it, or spells a name or a flag with it is held. Not caught: a
-helper handed only a name that is no screen file, which writes a screen file a piece of that name
-spells (`save(){ printf y > "${1%.bak}"; }; save app/page.tsx.bak`). A call is read only where it
-hands the helper a file the guard holds, and the same write typed with no helper is not caught
-either. A replacement
-(`${1/a/b}`) and a change of case, which give text the word does not hold, `${!1}`, `${1:=x}`,
-`${0}` and an operand holding an expansion (`${1:-$2}`) are not written out, and a body naming one
-is judged as a program the reader does not know, as is a body that keeps what it was handed in a
-variable.
-`handedToUnknown` gives no plain name the reader made from the text inside a command substitution
-(`fromInsideOutput`). mod-kit's write reader reads a word once for each word of a for loop whose
-variable it names, writing the loop's word in place wherever the variable stands, inside a
-substitution too, and gives each piece of a word holding a space as a name of its own. For
-`check "$1" "$(grep -qxF "$want" <<< "$code" && echo ok)"` in a loop over `'sysctl vm.swapusage'`
-that gave `sysctl` and `vm.swapusage` as files `check` was handed. Such a name is a word of the
-command inside the substitution, which the readers read as a command of its own. It is dropped
-only where the word's own name is a command's output, nothing beside its substitutions names a
-variable (`"$f$(date)"` may spell a name itself), and the name given holds no substitution (one
-that does is judged as a name the shell fills in, as before). Still held, each with a test in
-`tests/suite-text.test.ts`: a loop that writes each of its words, one that hands each to a program
-or to a helper that hands it on, and a loop's word handed over beside a substitution.
-Not covered, and still held: a helper that keeps what it was handed in a local variable and writes
+the design round guard: both still held, and what freeing them has to show.** Two suites of this
+repository are held for text that writes nothing. `tools/test-lessons-core-rerank.sh` hands its
+helper a page's name, and the helper prints `${3:0:1500}`: `calledWith` writes out only `$1`,
+`${1}`, `$@` and `$*`, so the body is not read and the call is judged as a program the reader does
+not know. `payload/skills/disk-full/test-disk-full-skill.sh` loops over command lines and looks
+for each with a quiet grep inside a command substitution that also prints quoted text holding a
+space. mod-kit's write reader (`eachOf`) writes the loop's word in place inside the substitution
+and gives each piece of a word holding a space as a name of its own, and the guard holds those
+names. The same loop with no quoted text in the substitution
+(`check "$(grep -q "$want" notes.txt && echo ok)"`) is not held.
+A reading for each was built and taken out again after review, because neither was true of every
+script. Writing a piece out and letting it stand where it is only printed let through scripts that
+were held before and do write a screen file:
+- a piece as the flag, the operand or the subcommand of a command the write reader knows as a
+  reader (`sed "${2:0:2}" s/a/b/ app/*` handed `-i`, `sort "${2%X}"` handed `-oapp/page.tsxX`,
+  and the same with find, awk, git, curl and dd);
+- a printed piece that reaches a writer: inside the body (a group or a subshell that is piped, a
+  process substitution, a file the body then runs), where the helper is called (the call piped,
+  inside a substitution, sent to a file that is then run, or made by a function that is itself
+  piped), through a function of the script named `echo`, or in the command that runs the script
+  (`bash suite.sh | xargs touch`);
+- a default's or an alternative's own text, given because the shell makes none or several of a
+  word of the call (`"$@"`, a bare variable, a pattern, braces, an array, a substitution);
+- a default or a usage check that gives the call's word, where that word is a flag, a program or
+  one part of a name (`sed "${2:-x}"` handed `-i`).
+Dropping a name the reader made inside a substitution let through a loop word holding a space
+that the substitution prints (`mystery $(echo $pair)`, `fix "$(echo "$spec" | cut -d' ' -f2)"`),
+and a helper that makes a name of the text the substitution prints.
+A reading that frees the two suites has to show three things of every script it frees: that the
+helper's commands can do no more than print or compare; that `echo` and `printf` are the shell's
+own, which means reading every file the script reads in (both suites read in
+`payload/hooks/lib/suite-deadline.sh` from outside their own folder, which `readInFile` does not
+read); and where what is printed goes, in the body, at each call, in the script and in the command
+that runs it. Every script named above is a test in `tests/suite-text.test.ts` that is held, and
+the two suites' own lines stand beside them, held too. A change that frees the suites turns those
+two into runs that pass unasked and leaves the rest held.
+Not covered either, and still held: a helper that keeps what it was handed in a local variable and writes
 a file of that name under a folder the suite made with mktemp (`make_repo` in
 test-lessons-advisory.sh), which needs the body's variables followed and the folder shown to be a
 temporary one; and the values of an array assignment (`never=( "$home/x/App.swift" )`), which

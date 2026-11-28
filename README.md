@@ -10832,15 +10832,6 @@ that mark too, whichever run is handed it (a program the reader does not know, a
 tool: `mystery "x \$(a | b) y"` runs), unless it names a look changing file anywhere in its text,
 where it is judged as before and held, as is a word with no mark or with anything but the reader's
 own `true` for one,
-a helper's body read with the call's word in place also where it names the word through an
-operator (`${3:0:1500}`, `${1%.bak}`, `${#1}`, `${@:2}`: a piece or a count may stand only in a
-command that prints it, so a helper that prints the start of what it compared runs, and one that
-hands a piece to a program, writes to it, or spells a flag or part of a name with it is still held;
-`${1:-none}` is read only where the shell gives the call's own word or nothing, never the default's
-own text), and a plain name the reader makes from the text inside a command
-substitution (a for loop's word, written in place where the loop's variable is named inside
-`"$(grep -c "$want" notes.txt)"`) judged as no file the script hands on, while a loop that writes
-each of its words or hands each to a program is still held,
 while what the script itself was handed, passed on to such a program (`mystery "$1"`), is still not
 caught), a patch git apply, git am or patch reads from a file judged
 since #3022 by the files it changes (mod-kit's patch reader, placed as the command places them), and
