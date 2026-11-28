@@ -809,6 +809,199 @@ mkscript e1.sh "python3 -c 'import os, re" "re.search(r\"(^|/)payload(/|\$)\", \
 runbash "bash $FIX/scripts/e1.sh" "$HOOKS_DIR"
 refused "#3775 kept until decided: an inline script in a script file, holding a link call and a quoted pattern with a slash, run inside a payload folder"
 
+echo "what the redirection word was hiding inside a payload folder is refused for itself"
+
+# WHAT THE WORD WAS HIDING (claude-config#3775, found in review 2026-11-28). Inside a payload folder
+# every script holding a link command with a redirection was refused for the redirection word, and
+# that refusal also covered writes the script really makes there. With the word no longer placed,
+# each of those is read for what it is. Every script here is made up and none is run.
+#
+# A link command given ONE name makes the link in the folder it runs in, under that name's last part.
+mkscript o1.sh "ln -s $FIX/elsewhere/a.txt 2>/dev/null"
+runbash "bash $FIX/scripts/o1.sh" "$HOOKS_DIR"
+refused "#3775 a link command given one name, its errors sent to /dev/null, run inside a payload folder: the link lands there"
+says "#3775 naming the link it makes there" "a write to $HOOKS_DIR/a.txt."
+mkscript o2.sh "ln -s $FIX/elsewhere/a.txt"
+runbash "bash $FIX/scripts/o2.sh" "$HOOKS_DIR"
+refused "#3775 the same with no redirection, which was let through before"
+mkscript o3.sh "ln -s \"\$p\" 2>/dev/null"
+runbash "bash $FIX/scripts/o3.sh" "$HOOKS_DIR"
+refused "#3775 one name that is a value: what the link is called cannot be told, the folder it lands in can"
+says "#3775 naming the folder" "a write to $HOOKS_DIR"
+mkscript o3b.sh "ln -s \"\$T/a.txt\" >/dev/null 2>&1"
+runbash "bash $FIX/scripts/o3b.sh" "$HOOKS_DIR"
+refused "#3775 one name under a value: its last part is what the link is called"
+says "#3775 naming the link" "a write to $HOOKS_DIR/a.txt."
+printf 'import os\nos.system("ln -s %s/elsewhere/a.txt 2>/dev/null")\n' "$FIX" > "$FIX/scripts/o4.py"
+runbash "python3 $FIX/scripts/o4.py" "$HOOKS_DIR"
+refused "#3775 a python script file running a link command given one name as one string"
+mklarge o5.sh "ln -s $FIX/elsewhere/a.txt 2>&1"
+runbash "bash $FIX/scripts/o5.sh" "$HOOKS_DIR"
+refused "#3775 a large script whose link command is given one name"
+mkscript o6.sh "cd $HOOKS_DIR" "ln -s $FIX/elsewhere/a.txt 2>/dev/null"
+runbash "bash $FIX/scripts/o6.sh" "$FIX/elsewhere"
+refused "#3775 a link command given one name after the script moves into a payload folder"
+runbash "bash $FIX/scripts/o1.sh" "$FIX/elsewhere"
+allowed "#3775 control: a link command given one name, run outside any checkout, is let through"
+runbash "bash $FIX/scripts/o1.sh" "$FIX/dev"
+allowed "#3775 control: so is one run at the root of the checkout, where the link is no payload file"
+mkscript o8.sh "cd \"\$T\"" "ln -s $FIX/elsewhere/a.txt 2>/dev/null"
+runbash "bash $FIX/scripts/o8.sh" "$HOOKS_DIR"
+allowed "#3775 control: and one run after the script moves to a folder named by a value"
+
+# A redirection written against the target of the one before it is a redirection of its own.
+# shellcheck disable=SC2016
+printf 'import os\nos.system("ln -s $A $B/t </dev/null>out.txt")\n' > "$FIX/scripts/g1.py"
+runbash "python3 $FIX/scripts/g1.py" "$HOOKS_DIR"
+refused "#3775 a python string whose link command writes a file there, the redirection written against the one before it"
+says "#3775 naming the file" "a write to $HOOKS_DIR/out.txt."
+mklarge g2.sh "ln -s \"\$A\" \"\$B/t\" </dev/null>out.txt"
+runbash "bash $FIX/scripts/g2.sh" "$HOOKS_DIR"
+refused "#3775 a large script whose link command does the same"
+says "#3775 naming the file" "a write to $HOOKS_DIR/out.txt."
+# shellcheck disable=SC2016
+printf 'import os\nos.system("ln -s $A $B/t 2>/dev/null;echo>c")\n' > "$FIX/scripts/g3.py"
+runbash "python3 $FIX/scripts/g3.py" "$HOOKS_DIR"
+refused "#3775 a python string whose second command writes a file there, written against the first"
+# shellcheck disable=SC2016
+printf 'import os\nos.system("ln -s $A $B/t </dev/null;tee>out.txt")\n' > "$FIX/scripts/g4.py"
+runbash "python3 $FIX/scripts/g4.py" "$HOOKS_DIR"
+refused "#3775 and with a tee whose output is sent to a file there"
+# shellcheck disable=SC2016
+printf 'import os\nos.system("ln -s $A $B/t </dev/null>payload/hooks/out.txt")\n' > "$FIX/scripts/g5.py"
+runbash "python3 $FIX/scripts/g5.py" "$FIX/dev"
+refused "#3775 the same write to a payload file from the root, which was let through before"
+# shellcheck disable=SC2016
+printf 'import os\nos.system("ln -s $A $B/t >/dev/null</dev/null")\n' > "$FIX/scripts/g6.py"
+runbash "python3 $FIX/scripts/g6.py" "$HOOKS_DIR"
+allowed "#3775 control: two redirections written together that write nothing there are let through"
+mklarge g7.sh "ln -s \"\$A\" \"\$B/t\" 2>/dev/null</dev/null"
+runbash "bash $FIX/scripts/g7.sh" "$HOOKS_DIR"
+allowed "#3775 control: and in a large script"
+
+# A string cut into words by the script itself is run with no shell, so nothing is a redirection:
+# each of its words is a word of the link command, as written.
+printf 'import subprocess\nsubprocess.run("ln -s %s/elsewhere/a.txt <b".split())\n' "$FIX" > "$FIX/scripts/x1.py"
+runbash "python3 $FIX/scripts/x1.py" "$HOOKS_DIR"
+refused "#3775 a python script file running a split string: no shell reads it, so <b is the link's name"
+says "#3775 naming that link" "a write to $HOOKS_DIR/<b."
+printf 'import subprocess\nsubprocess.run("ln -s %s/elsewhere/a.txt 2>&1".split())\n' "$FIX" > "$FIX/scripts/x2.py"
+runbash "python3 $FIX/scripts/x2.py" "$HOOKS_DIR"
+refused "#3775 and with 2>&1 for the link's name"
+printf 'import subprocess\nsubprocess.run("ln -s %s/elsewhere/a.txt %s/elsewhere/b.txt <b".split())\n' "$FIX" "$FIX" > "$FIX/scripts/x3.py"
+runbash "python3 $FIX/scripts/x3.py" "$HOOKS_DIR"
+refused "#3775 a split string naming two files and <b, which is then the folder the links are made in"
+printf 'import subprocess\nsubprocess.check_call("ln -s %s/elsewhere/a.txt %s/elsewhere/b.txt 2>&1".split(" "))\n' "$FIX" "$FIX" > "$FIX/scripts/x4.py"
+runbash "python3 $FIX/scripts/x4.py" "$HOOKS_DIR"
+refused "#3775 and split at a blank it is given"
+printf 'exec("ln -s %s/elsewhere/a.txt %s/elsewhere/b.txt <b".split)\n' "$FIX" "$FIX" > "$FIX/scripts/x5.rb"
+runbash "ruby $FIX/scripts/x5.rb" "$HOOKS_DIR"
+refused "#3775 and split with no brackets, as ruby writes it"
+printf 'import subprocess\nsubprocess.run("ln -s %s/elsewhere/a.txt %s/elsewhere/l 2>/dev/null", shell=True)\n' "$FIX" "$FIX" > "$FIX/scripts/x6.py"
+runbash "python3 $FIX/scripts/x6.py" "$HOOKS_DIR"
+allowed "#3775 control: the same words run by a shell, which takes the redirection out, are let through"
+# A string is read up to the first quote mark of either kind. One that stops at a mark unlike the
+# one it opened with is not read to its end, so its words are placed as they were before: nothing
+# says how many names the link command is given, or that what follows the mark is no name.
+printf 'import os\nos.system("ln -s %s/elsewhere/a.txt 2>/dev/null \x27b\x27")\n' "$FIX" > "$FIX/scripts/c1.py"
+runbash "python3 $FIX/scripts/c1.py" "$HOOKS_DIR"
+refused "#3775 a python string whose link command names the link in quotes after a redirection, which is not read that far"
+printf 'import os\nos.system("ln -s %s/elsewhere/a.txt \x27%s/elsewhere/my link\x27")\n' "$FIX" "$FIX" > "$FIX/scripts/c2.py"
+runbash "python3 $FIX/scripts/c2.py" "$HOOKS_DIR"
+allowed "#3775 control: a string stopped at a quote mark before the name of a link made elsewhere is not taken for a link command given one name"
+
+# What an output redirection of ANY command of a shell script file writes is a write, read by the
+# same reading. Every other write a script file makes is named after the call, as before.
+mkscript l1.sh "ln -s \"\$A\" \"\$B/t\" 2>/dev/null" "echo hi > out.txt"
+runbash "bash $FIX/scripts/l1.sh" "$HOOKS_DIR"
+refused "#3775 a script whose link command has a redirection and whose next line writes a file there"
+says "#3775 naming the file that line writes" "a write to $HOOKS_DIR/out.txt."
+mkscript l2.sh "echo hi > out.txt"
+runbash "bash $FIX/scripts/l2.sh" "$HOOKS_DIR"
+refused "#3775 the line that writes there with no link command beside it, which was let through before"
+mkscript l3.sh "echo hi >> payload/hooks/out.txt"
+runbash "bash $FIX/scripts/l3.sh" "$FIX/dev"
+refused "#3775 a line of a script file adding to a payload file, run from the root"
+mkscript l4.sh "echo hi > \"\$T/out.txt\"" "echo hi > /dev/null 2>&1" "echo hi >&2" "cat < in.txt"
+runbash "bash $FIX/scripts/l4.sh" "$HOOKS_DIR"
+allowed "#3775 control: lines writing under a value, to /dev/null and to a descriptor, and one reading a file there"
+mkscript l5.sh "if [[ \"\$a\" > b ]]; then :; fi" "if (( n > 5 )); then :; fi" "x=\$(( n > 5 ))" "echo \"a > b\" 'c > d'"
+runbash "bash $FIX/scripts/l5.sh" "$HOOKS_DIR"
+allowed "#3775 control: a > in a test, in an arithmetic and in quotes is no redirection"
+mkscript l6.sh "cd \"\$T\"" "echo hi > out.txt"
+runbash "bash $FIX/scripts/l6.sh" "$HOOKS_DIR"
+allowed "#3775 control: a line writing a relative file after the script moves to a folder named by a value"
+runbash "bash $FIX/scripts/l2.sh" "$FIX/elsewhere"
+allowed "#3775 control: the line that writes a relative file, run outside any checkout"
+
+# LET THROUGH UNTIL DECIDED (claude-config#3775). 3808's head refused each of these inside a
+# payload folder, only for the redirection word of the link command beside it; main lets each
+# through, and so does this gate with no link command in the script. What a program writes by its
+# own arguments is not read from a script file, and a link whose name is a value is not judged
+# (the pull request of #3689): both are named after the call. Refusing them before it is Dan's
+# choice (the pull request that added these lines).
+mkscript u1.sh "ln -s \"\$A\" \"\$B/t\" 2>/dev/null" "touch out.txt"
+runbash "bash $FIX/scripts/u1.sh" "$HOOKS_DIR"
+allowed "#3775 let through until decided: a link command with a redirection, then a touch of a file there"
+mkscript u2.sh "ln -s \"\$A\" \"\$B/t\" 2>&1 | tee log.txt"
+runbash "bash $FIX/scripts/u2.sh" "$HOOKS_DIR"
+allowed "#3775 let through until decided: a link command whose output is piped to a tee writing a file there"
+mklarge u3.sh "echo hi > out.txt"
+runbash "bash $FIX/scripts/u3.sh" "$HOOKS_DIR"
+allowed "#3775 let through until decided: a large script, read as text for its links alone, whose line writes a file there"
+# shellcheck disable=SC2016
+printf 'import os\nos.system("ln -s $A $B/t 2>/dev/null")\nopen("out.txt", "w").write("x")\n' > "$FIX/scripts/u4.py"
+runbash "python3 $FIX/scripts/u4.py" "$HOOKS_DIR"
+allowed "#3775 let through until decided: a python script file with such a link command that also opens a file there for writing"
+mkscript u5.sh "ln -s $FIX/elsewhere/a.txt \"\$N\" 2>/dev/null"
+runbash "bash $FIX/scripts/u5.sh" "$HOOKS_DIR"
+allowed "#3775 let through until decided: a link whose name is a value, with a redirection, run inside a payload folder"
+mkscript u6.sh "ln -s $FIX/elsewhere/a.txt \"\$N\""
+runbash "bash $FIX/scripts/u6.sh" "$HOOKS_DIR"
+allowed "#3775 control: the same link with no redirection is let through, as it was"
+
+# Three readings a change could undo with every case above still passing (found in review).
+mkdir -p "$FIX/elsewhere/my dir"
+mkscript q1.sh "ln -s $FIX/elsewhere/a.txt \"$FIX/elsewhere/my dir/l\" 2>/dev/null"
+runbash "bash $FIX/scripts/q1.sh" "$HOOKS_DIR"
+allowed "#3775 a link elsewhere whose quoted name holds a blank is one word, and is let through"
+mklarge q2.sh "ln -s \"\$A\" \"\$B/t\" &>out.txt"
+runbash "bash $FIX/scripts/q2.sh" "$HOOKS_DIR"
+refused "#3775 a large script whose link command sends both outputs to a file there with &>"
+says "#3775 naming the file" "a write to $HOOKS_DIR/out.txt."
+mklarge q2root.sh "ln -s \"\$A\" \"\$B/t\" &>payload/hooks/out.txt"
+runbash "bash $FIX/scripts/q2root.sh" "$FIX/dev"
+refused "#3775 and to a payload file, from the root"
+mkscript q3.sh "ln -s \"\$A\" \"\$B/t\" <&3"
+runbash "bash $FIX/scripts/q3.sh" "$HOOKS_DIR"
+allowed "#3775 a link command whose input is copied from a descriptor writes nothing there"
+mkscript q4.sh "ln -s \"\$A\" \"\$B/t\" <&-"
+runbash "bash $FIX/scripts/q4.sh" "$HOOKS_DIR"
+allowed "#3775 nor does one whose input is closed"
+
+# A named descriptor is a descriptor: what follows its operator is read as after a number.
+mkscript n1.sh "ln -s \"\$A\" \"\$B/t\" {fd}>/dev/null"
+runbash "bash $FIX/scripts/n1.sh" "$HOOKS_DIR"
+allowed "#3775 output sent to /dev/null through a named descriptor writes nothing there"
+runbash "bash $FIX/scripts/w12.sh" "$HOOKS_DIR"
+says "#3775 and the file one writes there is named by its own name" "a write to $HOOKS_DIR/named.txt."
+# KEPT UNTIL DECIDED (claude-config#3775): a target that is a value, its operator a word of its
+# own. Written against its operator the same target is let through by main, by 3808's head and
+# here, as any value is. Letting the spaced spelling through lets a write to a value through that
+# 3808's head refuses, so it is refused as it was and the choice is Dan's.
+mkscript n2.sh "ln -s \"\$A\" \"\$B/t\" 2> \"\$T/err\""
+runbash "bash $FIX/scripts/n2.sh" "$HOOKS_DIR"
+refused "#3775 kept until decided: errors sent to a file named through a value, the operator a word of its own"
+mkscript n3.sh "ln -s \"\$A\" \"\$B/t\" 2> \$T/err"
+runbash "bash $FIX/scripts/n3.sh" "$HOOKS_DIR"
+refused "#3775 kept until decided: the same with the value unquoted"
+mkscript n4.sh "ln -s \"\$A\" \"\$B/t\" 2> \$(mktemp)"
+runbash "bash $FIX/scripts/n4.sh" "$HOOKS_DIR"
+refused "#3775 kept until decided: errors sent to a file a command names"
+mkscript n5.sh "ln -s \"\$A\" \"\$B/t\" 2>\$T/err"
+runbash "bash $FIX/scripts/n5.sh" "$HOOKS_DIR"
+allowed "#3775 control: the value written against its operator is let through, as it was"
+
 echo "a path in a command string takes nothing from the read of the whole command"
 
 # WHAT A STRING'S SEGMENTS PLACE (claude-config#3775, found in review 2026-11-27). An open( call

@@ -1336,7 +1336,8 @@ for m in re.finditer(OPENED_PATH, shell_text):
 # script.
 #
 # ONLY a link is read from a file, and only where it can be PLACED, with the file an output
-# redirection of that link command names (place_link). Every other write a script file
+# redirection names: one of that link command (place_link), and one of any command of a shell
+# script file the shared reader takes (shell_redirections). Every other write a script file
 # makes is still caught after the call, by its destination, as before. A link whose path holds a
 # value only the script knows is not judged here: the suites of this repository make such links in
 # temporary folders by the hundred, and judging each as the payload write it may be would refuse
@@ -1489,35 +1490,66 @@ def script_links(text, base, bare):
                 break
             add_maybe(m.group(1), base)
     for m in re.finditer(LN_STRING, text):
-        place_link(m.group(1), base, True)
+        # LN_STRING stops at the first quote mark of either kind. Stopped at one unlike the mark
+        # the string opened with, it is not read to its end, and its words are placed as written.
+        whole = text[m.start(1) - 1] == text[m.end() - 1]
+        place_link(m.group(1), base, True, whole and not CUT_BY_THE_SCRIPT.match(text, m.end()), whole)
 
 # A REDIRECTION IS NO WORD OF A LINK COMMAND (claude-config#3775). The shell takes every
 # redirection out of a command before the program is given its words, so one left among them is
 # placed as a file the command writes: 2>/dev/null is relative, and lands in the folder the
 # command runs in. The shared reader takes them out (unredirected, which tells a quoted > from
-# the operator).
+# the operator), after a space is written before one glued to the word before it (spaced): read
+# without it, the second of </dev/null>out.txt was part of the target of the first, and a read.
 #
 # What a redirection WRITES is a write: the file an output redirection names is placed. One that
-# only reads, or copies or closes a descriptor, writes no file. Where the words cannot say what
-# is written (the target holds a value, the redirection runs a command, or its form is not read
-# here) every word of it is placed, the reading that sees more writes, never fewer.
+# only reads, or copies or closes a descriptor, writes no file. A descriptor written as a name in
+# braces is read as one written as a number. Where the words cannot say what is written (the
+# target holds a value, the redirection runs a command, or its form is not read here) every word
+# of a redirection of a link command is placed, the reading that sees more writes, never fewer.
+#
+# THE WORD WAS ALSO HIDING REAL WRITES (found in review 2026-11-28). Inside a payload folder every
+# script holding a link command with a redirection was refused for that word, whatever else it
+# did, so taking the word out let through what the refusal had covered by accident. Each of
+# those a rule that is true of every script can read is read for itself:
+#   a link command given ONE name makes the link in the folder it runs in (place_link);
+#   a string the script cuts into words itself is run with no shell, so nothing in it is a
+#   redirection and each word is a word of the link command (CUT_BY_THE_SCRIPT);
+#   what an output redirection of ANY command of a shell script file writes is a write
+#   (shell_redirections).
+# What a program writes by its own arguments (touch, tee, cp, an inline script) is still not read
+# from a script file, and a link whose name is a value is still not judged: both are named after
+# the call, and the suite pins them as let through until Dan decides.
+CUT_BY_THE_SCRIPT = re.compile(r"\s*\.\s*split\b")
+NAMED_DESCRIPTOR = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}(?=[<>])")
+
+def redirection_told(r):
+    """The files one redirection writes, as it is written: none for one that only reads, or copies
+    or closes a descriptor. None where its words cannot say."""
+    named_one = NAMED_DESCRIPTOR.match(r)
+    m = _sw.REDIRECT_WORD.match(r[named_one.end():] if named_one else r)
+    if not m or "(" in r or "`" in r:
+        return None
+    op = m.string[:m.start(1)].lstrip("0123456789")
+    target = m.group(1).strip()
+    if op in ("<", "<<", "<<-", "<<<", "<&"):
+        return []
+    if op == ">&" and re.match(r"(?:[0-9]+-?|-)\Z", target):
+        return []
+    if target and not SHELL_VALUE.search(target):
+        try:
+            named = _sw.shell_split(target)
+        except Exception:
+            named = []
+        if len(named) == 1:
+            return named
+    return None
+
 def redirection_writes(r, crude):
     """The words to place for one redirection of a link command, as it is written."""
-    m = _sw.REDIRECT_WORD.match(r)
-    if m and "(" not in r and "`" not in r:
-        op = r[:m.start(1)].lstrip("0123456789")
-        target = m.group(1).strip()
-        if op in ("<", "<<", "<<-", "<<<", "<&"):
-            return []
-        if op == ">&" and re.match(r"(?:[0-9]+-?|-)\Z", target):
-            return []
-        if target and not SHELL_VALUE.search(target):
-            try:
-                named = _sw.shell_split(target)
-            except Exception:
-                named = []
-            if len(named) == 1:
-                return named
+    told = redirection_told(r)
+    if told is not None:
+        return told
     if not crude:
         try:
             return _sw.shell_split(r)
@@ -1525,14 +1557,18 @@ def redirection_writes(r, crude):
             pass
     return r.split()
 
-def place_link(text, base, crude):
-    """Place what one link command writes: each word it is given that is no option, and what its
-    redirections write. text starts at the command name. crude cuts its words at blanks alone, as
-    the text of a string or of a large script was always cut."""
-    try:
-        bare, taken = _sw.unredirected(text)
-    except Exception:
-        bare, taken = text, []
+def place_link(text, base, crude, shell=True, whole=True):
+    """Place what one link command writes: each word it is given that is no option, the link it
+    makes in the folder it runs in when it is given one name, and what its redirections write.
+    text starts at the command name. crude cuts its words at blanks alone, as the text of a string
+    or of a large script was always cut. With no shell to read it nothing is a redirection. A
+    text that is not the whole command cannot say how many names the command is given."""
+    bare, taken = text, []
+    if shell:
+        try:
+            bare, taken = _sw.unredirected(_sw.spaced(text))
+        except Exception:
+            bare, taken = text, []
     words = None
     if not crude:
         try:
@@ -1541,9 +1577,14 @@ def place_link(text, base, crude):
             words = None
     if words is None:
         words = bare.split()
-    for w in words[1:]:
-        if not w.startswith("-"):
-            add_placed(w, base)
+    named = [w for w in words[1:] if not w.startswith("-")]
+    for w in named:
+        add_placed(w, base)
+    if whole and len(named) == 1:
+        # The link is called by the last part of the one name it is given. Where that part is a
+        # value the folder is still known, and the folder is placed.
+        last = named[0].strip("\"\x27").rstrip("/").rsplit("/", 1)[-1]
+        add_placed("./" + last if last and not SHELL_VALUE.search(last) else ".", base)
     for r in taken:
         for w in redirection_writes(r, crude):
             add_placed(w, base)
@@ -1557,6 +1598,30 @@ def shell_links(text, base):
         rest, words = text, text.split()
     if words and words[0].rsplit("/", 1)[-1] in ("ln", "link"):
         place_link(rest, base, False)
+
+# The shared reader cuts a [[ ]] test at an && or || inside it, so the pieces after the first
+# reach this gate as commands of their own, and a > in one compares two strings. From the piece
+# that opens a test to the one that closes it nothing is read as a redirection.
+inside_test = [False]
+
+def shell_redirections(text, base):
+    """What the output redirections of one command of a shell script file write, each placed where
+    its words say it. One whose words cannot say is left, as the name of a link that is a value is."""
+    try:
+        whole = _sw.spaced(text)
+        rest = _sw.command_rest(whole)[0]
+        opens = rest.lstrip().startswith("[[")
+        if opens or inside_test[0]:
+            inside_test[0] = "]]" not in whole
+            return
+        # A redirection written before the command name is no part of the rest.
+        before = whole[:len(whole) - len(rest)] if rest and whole.endswith(rest) else ("" if rest else whole)
+        taken = _sw.unredirected(before)[1] + _sw.unredirected(rest)[1]
+    except Exception:
+        return
+    for r in taken:
+        for w in redirection_told(r) or ():
+            add_placed(w, base)
 
 def heredoc_written():
     """The files this command writes from a heredoc of its own, whose text is in the command."""
@@ -1595,8 +1660,9 @@ try:
         if is_own:
             left[(d, text, depth)] -= 1
         else:
-            # A command of a script file: only a link it makes is read.
+            # A command of a script file: a link it makes, and what its output redirections write.
             shell_links(text, b)
+            shell_redirections(text, b)
             script_links(text, b, bool(TICK_LANGUAGE.search(text)))
         path = _sw.script_file(why) if wrapper else None
         head = ""
