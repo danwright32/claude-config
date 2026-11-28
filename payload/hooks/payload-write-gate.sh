@@ -1331,7 +1331,8 @@ for m in re.finditer(OPENED_PATH, shell_text):
 # is searched for the calls that make a link, the ones LINK_CALLS and LN_STRING name for an inline
 # script.
 #
-# ONLY a link is read from a file, and only where it can be PLACED. Every other write a script file
+# ONLY a link is read from a file, and only where it can be PLACED, with the file an output
+# redirection of that link command names (place_link). Every other write a script file
 # makes is still caught after the call, by its destination, as before. A link whose path holds a
 # value only the script knows is not judged here: the suites of this repository make such links in
 # temporary folders by the hundred, and judging each as the payload write it may be would refuse

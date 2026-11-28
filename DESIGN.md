@@ -2586,6 +2586,31 @@ loop on past the names it cannot open also reads the link commands written after
 stop had left unread and, in a call naming no payload path, let through with nothing said: a
 script that ran nine scripts and then linked a payload folder was allowed.
 
+A redirection is no word of a link command (#3775). The reading of a script file's link commands
+placed every word that was no option as a file the command writes, a redirection among them, and
+a relative word lands in the folder the command runs in. So `ln -s "$a" "$b" 2>/dev/null` in a
+suite made the gate refuse a run of that suite from inside a payload folder, for a write to a
+file named `2>/dev/null`. The check that asks about every suite's run asks from the root of a
+checkout, where the same word lands outside payload, so it passed. Found by the count over
+recorded commands on 2026-11-27, before the change that added the reading merged. The
+redirections are now taken out first, by the reader every gate shares (`unredirected`, which
+tells a quoted `>` from the operator), in the three places such a command is read: a command of a
+shell script, the text of a script too large for that reader, and an `ln` command a script file
+runs as one string. What a redirection writes is still judged: the file an output redirection
+names is placed, which also refuses `>payload/hooks/x` written with the name against the
+operator, a real write that was let through as a folder called `>payload`. One that reads, or
+copies or closes a descriptor, writes no file. Where the words cannot say what is written (the
+target holds a value, the redirection runs a command, `>|`, which the reader cuts at its `|`)
+they are placed exactly as before.
+
+Two other words of a script are still taken for a write that may be none, and are left as they
+were because no reading of them is right for every script. The text a symbolic link holds
+(`ln -s 999999 "$STATE/lock"`) is placed in the folder the command runs in, though it is read
+from the folder the link is in, which here is a value. And a made up link command handed to a
+function as a quoted string is read as an inline script that makes a link, since the function
+may run it: the write gate's own two suites are refused from a primary checkout for that, and
+are the two refusals `tests/test-suite-runs-pass-write-gate.sh` lists as expected.
+
 Measured 2026-11-26 on the personal MacBook at a load of about 8 to 10, two rounds of 15 samples
 an arm: a command with no interpreter went from a median of 127 to 128 ms to 133 to 134 ms; a
 copy typed directly from 197 to about 210 ms (the real path step now loads two more modules); an

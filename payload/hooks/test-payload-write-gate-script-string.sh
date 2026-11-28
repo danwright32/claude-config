@@ -660,6 +660,12 @@ refused "#3775 control: errors added to a file there"
 mkscript w4.sh "ln -s \"\$A\" \"\$B/t\" > payload/hooks/log.txt"
 runbash "bash $FIX/scripts/w4.sh" "$FIX/dev"
 refused "#3775 control: output sent to a payload file, run from the root"
+# With its name against the operator the same write was let through: read as one word,
+# >payload/hooks/log.txt names a folder called >payload, which is no payload folder.
+mkscript w4glued.sh "ln -s \"\$A\" \"\$B/t\" >payload/hooks/log.txt"
+runbash "bash $FIX/scripts/w4glued.sh" "$FIX/dev"
+refused "#3775 output sent to a payload file with its name against the operator, run from the root, is refused"
+says "#3775 naming the file" "a write to $FIX/dev/payload/hooks/log.txt."
 mkscript w5.sh "ln -s \"\$A\" \"\$B/t\" &> all.log"
 runbash "bash $FIX/scripts/w5.sh" "$HOOKS_DIR"
 refused "#3775 control: both outputs sent to a file there"
