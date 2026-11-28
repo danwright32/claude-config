@@ -96,7 +96,7 @@ _alternation(){   # " A B C " -> "A|B|C", empty for an empty set
 PER_RUN_NAMES=" "
 FIXED_TMP_NAMES=" "
 classify_names(){   # classify_names <file>
-  local assigns entry name value alt hop
+  local assigns lists
   PER_RUN_NAMES=" "; FIXED_TMP_NAMES=" "
   # Nothing to classify unless the file assigns a name a fixed temp path in the first place, and
   # almost none do. Exactly equivalent to running the whole thing, because FIXED_TMP_NAMES can only
@@ -109,44 +109,58 @@ classify_names(){   # classify_names <file>
   # Four hops is measured against the real files rather than chosen: the longest chain in this repo
   # is three (a mktemp root, a temp directory under it, a file under that). A chain longer than this
   # stops being resolved, which leaves it unaccused rather than wrongly accused.
-  for hop in 1 2 3 4; do
-    alt="$(_alternation "$PER_RUN_NAMES")"
-    while IFS= read -r entry; do
-      [ -n "$entry" ] || continue
-      entry="${entry#"${entry%%[![:space:]]*}"}"
-      entry="${entry#export }"
-      name="${entry%%=*}"
-      value="${entry#*=}"
-      case "$name" in ''|*[!A-Za-z0-9_]*) continue ;; esac
-      case "$PER_RUN_NAMES" in *" $name "*) continue ;; esac
-      # Matched in the shell rather than through `producer | grep -q`. That shape leaves on its
-      # first match and kills the producer, so under pipefail the pipeline reports the death
-      # instead of the answer (L183), and this runs once per assignment in every suite in the
-      # tree, which turned a guard that took under a second into one that took fifty.
-      case "$value" in
-        *mktemp*|*'$$'*|*'$RANDOM'*) PER_RUN_NAMES="$PER_RUN_NAMES$name "; continue ;;
-      esac
-      [ -n "$alt" ] || continue
-      if [[ "$value" =~ \$[{]?($alt)([^A-Za-z0-9_]|$) ]]; then
-        PER_RUN_NAMES="$PER_RUN_NAMES$name "
-      fi
-    done <<CLASSEOF
-$assigns
-CLASSEOF
-  done
-  while IFS= read -r entry; do
-    [ -n "$entry" ] || continue
-    entry="${entry#"${entry%%[![:space:]]*}"}"
-    entry="${entry#export }"
-    name="${entry%%=*}"
-    value="${entry#*=}"
-    case "$name" in ''|*[!A-Za-z0-9_]*) continue ;; esac
-    case "$PER_RUN_NAMES" in *" $name "*) continue ;; esac
-    [[ "$value" =~ ^[[:space:]]*${FIXED_TMP} ]] || continue
-    FIXED_TMP_NAMES="$FIXED_TMP_NAMES$name "
-  done <<CLASSEOF2
-$assigns
-CLASSEOF2
+  #
+  # Worked out in ONE perl pass over the assignments, never a shell step per assignment per hop
+  # (claude-config#3662, L297): on 2026-11-25 that loop spent 42 seconds of processor time on the
+  # sync suite's 3,831 assignments, nearly all of this suite's cost. The rules are the loop's, step
+  # for step: the leading blanks and one `export ` taken off; the name before the first `=`, skipped
+  # unless it is letters, digits and underscores; a name already per run skipped; per run when its
+  # value names mktemp, `$$` or `$RANDOM`, at once, or when it mentions `$NAME` or `${NAME` followed
+  # by anything but a name character, where NAME was already per run when the hop began; then fixed
+  # when a name not per run has a value that opens, after blanks, with FIXED_TMP, read from the
+  # environment so the pattern stays the one written above. A name assigned twice is listed twice,
+  # as before. Each list comes back on a line of its own, in the order the loop built it.
+  #
+  # The assignments go in on standard input, never in the environment: Linux refuses any one
+  # environment string over 128 KB (MAX_ARG_STRLEN) before perl starts, and the sync suite's are
+  # 260 KB (measured 2026-11-25), so on CI it would have been reported as unclassified.
+  lists="$(SI_FIXED_TMP="$FIXED_TMP" perl -e '
+    my $fixed = $ENV{SI_FIXED_TMP};
+    my $in = do { local $/; <STDIN> };
+    my @e;
+    for my $entry (split /\n/, defined $in ? $in : "") {
+      next if $entry eq "";
+      $entry =~ s/^[[:space:]]+//;
+      $entry =~ s/^export //;
+      my $i = index($entry, "=");
+      my ($name, $value) = $i < 0 ? ($entry, $entry) : (substr($entry, 0, $i), substr($entry, $i + 1));
+      next if $name eq "" || $name =~ /[^A-Za-z0-9_]/;
+      push @e, [$name, $value];
+    }
+    my (%per, @per);
+    for my $hop (1 .. 4) {
+      my $alt = join "|", @per;
+      my $re = length($alt) ? qr/\$[{]?(?:$alt)(?:[^A-Za-z0-9_]|\z)/ : undef;
+      for (@e) {
+        my ($name, $value) = @$_;
+        next if $per{$name};
+        if ($value =~ /mktemp|\$\$|\$RANDOM/) { $per{$name} = 1; push @per, $name; next; }
+        next unless $re;
+        if ($value =~ $re) { $per{$name} = 1; push @per, $name; }
+      }
+    }
+    my $start = qr/^[[:space:]]*(?:$fixed)/;
+    my @fixed = map { $_->[0] } grep { !$per{$_->[0]} && $_->[1] =~ $start } @e;
+    print join(" ", "", @per, ""), "\n", join(" ", "", @fixed, ""), "\n";
+  ' <<< "$assigns")" || lists=""
+  PER_RUN_NAMES="${lists%%$'\n'*}"
+  FIXED_TMP_NAMES="${lists#*$'\n'}"
+  # Two lists or nothing: a perl that did not answer is not a file with no names in it (L10), so
+  # the caller is told, and shares_a_path reports the file rather than passing it.
+  case "$lists" in
+    " "*$'\n'" "*) ;;
+    *) PER_RUN_NAMES=" "; FIXED_TMP_NAMES=" "; return 1 ;;
+  esac
   return 0
 }
 
@@ -154,7 +168,10 @@ shares_a_path(){   # shares_a_path <file>  -> the offending lines, if any
   local alt varref pattern
   grep -nE "$OWN_PATTERN" "$1" 2>/dev/null || true
   grep -nE "$SHARED_PATTERN" "$1" 2>/dev/null || true
-  classify_names "$1"
+  classify_names "$1" || {
+    echo "the names this file assigns could not be classified (perl gave no answer), so a shared temp path reached through one of them was not looked for"
+    return 0
+  }
   alt="$(_alternation "$FIXED_TMP_NAMES")"
   # No names to look for is not the same question as no matches, so the pattern is never built from
   # an empty set: an alternation with nothing in it matches an empty string and would report every
@@ -260,6 +277,54 @@ var_blank="$(shares_a_path "$GOODVAR")"
 [ "$(shares_a_path "$BADFIX" | grep -c .)" = 2 ] \
   && check "and the own-directory half is still asked by the combined check" ok \
   || check "and the own-directory half is still asked by the combined check" "it found $(shares_a_path "$BADFIX" | grep -c .) of the 2 planted"
+
+# THE NAMES ARE CLASSIFIED IN ONE PASS PER FILE, NOT ONE SHELL STEP PER ASSIGNMENT PER HOP
+# (claude-config#3662, L297). On 2026-11-25 the sync suite's 3,831 assignments, 1,957 of them per
+# run, cost the shell loop 42 seconds of processor time (one sample, load average 131), because each
+# assignment not yet per run was matched against an alternation of every per run name, compiled
+# afresh, on each of four hops: most of the 53 seconds of processor time this suite took alone (60
+# of wall clock, one sample at a load average of 18), and it took 75 inside the push gate, the gate's
+# largest scanner on a push that changes no suite. A file of that shape is
+# classified here, a throwaway root, 1,500 names under it and 500 plain ones, and the processor time
+# it takes (user and system, the shell's and its children's, never the wall clock, which measures the
+# Mac's load: L290) must stay under 3 seconds. The shell loop took 12.8 on it (one sample, load
+# average 49 to 98), the perl pass 0.13. Each value is padded so the assignments come to about 250
+# KB, as the sync suite's do, past the 128 KB Linux allows one environment string, so a hand off
+# through the environment fails here on CI rather than only on the real tree.
+{
+  printf 'ROOT_T="$(mktemp -d)"\n'
+  printf 'SHARED="%s/one-fixed-name.txt"\n' "$TD"
+  awk 'BEGIN { pad = sprintf("%0100d", 0); for (i = 0; i < 1500; i++) printf "P%d=\"$ROOT_T/p%d/%s\"\n", i, i, pad; for (i = 0; i < 500; i++) printf "V%d=\"plain value %d %s\"\n", i, i, pad }'
+  printf 'D1="$ROOT_T/a"\nD2="$D1/b"\nD3="$D2/c"\n'
+  printf 'printf x %s "$SHARED"\n' "$GT$GT"
+} > "$TMPROOT/many-assigns.sh"
+_ci_t="$( { TIMEFORMAT='%U %S'; time classify_names "$TMPROOT/many-assigns.sh"; } 2>&1 >/dev/null )"
+_ci_cpu="$(printf '%s\n' "$_ci_t" | awk 'NF == 2 { printf "%.2f", $1 + $2 }')"
+classify_names "$TMPROOT/many-assigns.sh"
+[ "$FIXED_TMP_NAMES" = " SHARED " ] \
+  && check "a file of 2,000 assignments has its one fixed temp name found" ok \
+  || check "a file of 2,000 assignments has its one fixed temp name found" "the fixed names came back as '$FIXED_TMP_NAMES'"
+_ci_missing=""
+for _ci_n in ROOT_T P0 P1499 D1 D2 D3; do
+  case "$PER_RUN_NAMES" in *" $_ci_n "*) ;; *) _ci_missing="$_ci_missing $_ci_n" ;; esac
+done
+case "$PER_RUN_NAMES" in *" V0 "*|*" SHARED "*) _ci_missing="$_ci_missing (and a plain name was taken for per run)" ;; esac
+[ -z "$_ci_missing" ] \
+  && check "and the names under its throwaway root are followed to the end of their chain" ok \
+  || check "and the names under its throwaway root are followed to the end of their chain" "missing:$_ci_missing"
+[ "$(shares_a_path "$TMPROOT/many-assigns.sh" | grep -c .)" = 1 ] \
+  && check "and the one write through the fixed name is reported" ok \
+  || check "and the one write through the fixed name is reported" "it reported: $(shares_a_path "$TMPROOT/many-assigns.sh")"
+# A perl that gives no answer is not a file with nothing to report: the file is reported, so the
+# tree check fails naming it rather than passing a file nobody classified (L10).
+_ci_nop="$(perl() { return 1; }; shares_a_path "$BADVAR")"
+case "$_ci_nop" in
+  *"could not be classified"*) check "a classification that gives no answer reports the file instead of passing it" ok ;;
+  *) check "a classification that gives no answer reports the file instead of passing it" "it reported: ${_ci_nop:-nothing}" ;;
+esac
+awk -v c="${_ci_cpu:-x}" 'BEGIN { exit !(c ~ /^[0-9.]+$/ && c + 0 < 3) }' \
+  && check "and classifying it takes under 3 seconds of processor time ($_ci_cpu)" ok \
+  || check "and classifying it takes under 3 seconds of processor time" "it took '${_ci_cpu:-unread}' (the time keyword printed '$_ci_t'), so the names are being worked out a shell step at a time again"
 
 # ---------------------------------------------------------------------------
 # The real tree. Read from git, so an untracked scratch copy of a suite is not counted.
