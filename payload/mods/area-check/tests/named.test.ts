@@ -9,7 +9,8 @@ import { APP, HOME, KIT, NAMED_TEXTS, SCAN_TEXTS, bash, refusal, world } from '.
 // handed and write no file git tracks there. Its own text cannot be read to say so (values named by
 // variables, the claude command from the environment, libraries that keep logs and install the
 // compiler), so it was held on every run. Only that script, at that path, in that repository, handed
-// one folder, in a command that gives it no setting and runs the script once, with nothing but a
+// one folder (which it alone may follow with names of mods in it, #3856, at the end of this file),
+// in a command that gives it no setting and runs the script once, with nothing but a
 // change of folder before it and readers its output is piped into after it,
 // with the text its checkout left the default branch with; everything else is judged as before. tests/test-area-check-check-mods-read-only.sh runs the real script and the real reader.
 // Since #3093 an equals sign holds the run only where it may set a value for the script: anywhere

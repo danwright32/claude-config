@@ -22,7 +22,8 @@
 #   - The rule itself, run on mod-kit's REAL reader of a command and real git
 #     (tests/area-check-named-rule.mjs, shared with the suite of the other script let through by
 #     name, #3082), lets through only that
-#     script at its path from the root of a checkout of its repository, handed one folder, in a
+#     script at its path from the root of a checkout of its repository, handed one folder (which,
+#     for this script alone, may be followed only by names of mods in it, #3856), in a
 #     command that gives it no setting, names none of the variables its programs are named by
 #     before it (CLAUDE_BIN and the others in byValue, #3154), and runs the script once, with nothing but a change of folder
 #     before it and readers its output is piped into after it, with its texts

@@ -628,8 +628,8 @@ test("a held Bash command is named as a command that writes the file, and is sen
   expect(r).not.toContain('Before editing it')
 })
 
-// #3856: a subagent whose brief keeps a hold on a command for the main session was told only how to
-// decide it, so it stopped with nothing to hand over.
+// #3856: a brief may keep a hold on a command for the main session, and the decide tool takes a
+// decision only from the agent the call was held for, so the agent is told what to hand over.
 const HAND_BACK = ' If your brief does not let you decide a hold on a command, neither decide this one nor send the command another way: stop and hand back to the main session the command as you sent it, the id of this call (toolu_1) and the reason above. The main session can read what the command runs, then run it itself and decide the hold on its own call, or tell you that this one is yours to decide.'
 
 test("a subagent's held command ends with what to hand back to the main session when it may not decide, naming the call's id (#3856)", () => {
