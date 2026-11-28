@@ -6,7 +6,7 @@
 // or interpreter runs as its program (program.ts) and judges inline code (code.ts), so a shell fed
 // its script on standard input is read as the commands it runs, as a shell's -c always was.
 import { codeVerdict, type CodeVerdict } from './code.ts'
-import { SHELLS, execsOf, findRoots, kindOf, languageOf, readProgram, splitsWords, type Lang, type Program, type Script, type Stdin } from './program.ts'
+import { SHELLS, execsOf, findRoots, kindOf, languageOf, readProgram, splitsWords, type Lang, type Program, type Reading, type Script, type Stdin } from './program.ts'
 
 export { SHELLS }
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
@@ -1832,10 +1832,11 @@ const ownRedirects = (words: readonly string[]): string[] => {
 const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][], literal?: boolean[], unexpanded?: boolean[], derived?: (Derived | null)[], worked?: (string | null)[], compares?: boolean[], followed?: (string | null)[]) => {
   const stdin = ownStdin(words, fed) ?? feed.stdin
   const kind = kindOf(words[0])
-  const { program, script } = kind ? readProgram(words, stdin) : {}
+  const { program, script, splits: emulated } = kind ? readProgram(words, stdin) : ({} as Reading)
   if (kind === 'shell' && program && 'text' in program) {
     const inner: Feed = program.stdin ? { stdin: { unreadable: 'fed the rest of the script the shell reads' } } : { pipedFrom: feed.pipedFrom, stdin }
-    const splitting = splitsWords(words[0]) ? { splits: true } : {}
+    // zsh told to emulate sh or ksh splits words as they do (#3621, `zsh --emulate sh -c '...'`).
+    const splitting = splitsWords(words[0]) || emulated ? { splits: true } : {}
     // A shell whose own command the reader stops in (#3491): each command of its script is unread.
     const stopped = feed.stops && !feed.unread ? { unread: feed.stops } : {}
     out.push(...readLine(program.text, opts, { ...inner, ...carried(feed), ...stopped, ...splitting, behind: behindIt(feed, words[0]) }))

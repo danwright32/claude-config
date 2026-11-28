@@ -1086,7 +1086,11 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   (mod-kit's `hooks/program.ts` since #712): a flag that takes a value takes the rest of its cluster or the next word, so
   ruby's `-rtime` and perl's `-Mfeature` are no `-e`, perl's `-lane` is `-l -a -n -e`, and node's
   `-pe` is `-p -e`; every script given is judged where the language runs every one, and a program
-  in a file (`awk -f`, `sed -f`) cannot be read. The code is then judged per language by what it can
+  in a file (`awk -f`, `sed -f`) cannot be read. A shell's options are that shell's own (#3621,
+  measured on zsh 5.9): zsh's `--emulate` takes the shell to emulate as its next word and its `-O`
+  takes none (bash's does), so `zsh --emulate sh -c '...'` is read as the commands in its text,
+  split into words as the emulated shell splits them, and never as a zsh script file named `sh`.
+  The code is then judged per language by what it can
   do (mod-kit's `hooks/code.ts` since #712), for python, node (and deno, bun), ruby, perl, AppleScript, awk and sed:
   write or update a file (python's `open` in any of w, a, x or +, pathlib, `os` and `shutil`;
   node's `fs` write, stream and remove calls; ruby's `File`, `IO`, `FileUtils`; perl's `open` for

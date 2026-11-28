@@ -158,3 +158,88 @@ describe('the commands a find -exec runs, read like any other (#712, #730)', () 
     expect(commands(`find src -name '*.ts'`)).toEqual([['find', 'src', '-name', '*.ts']])
   })
 })
+
+// #3621: zsh's --emulate takes the shell to emulate in the next word, and the reader took that word
+// (`sh`) for a script file zsh runs. The text after -c was never read, and on 2026-11-24 a guard
+// worded a hold about a zsh script file that did not exist. Each shell's options are that shell's
+// own, measured and never read off a name. Measured 2026-11-26 on the personal MacBook, zsh 5.9,
+// one run of each shape, by handing zsh the option and then two script files that each print
+// their own name (the first prints when the option took nothing, the second when it took a word):
+// - `--emulate` takes the next word whatever it is. It must stand before every other option:
+//   after one (`zsh -f --emulate sh ...`) zsh refuses and runs nothing. `--emulate=sh` is refused.
+// - `-o` and `+o` take a value, the rest of the word or the next word. No other letter takes one,
+//   -O and +O included (they take a value in bash), and no other long option does.
+// - emulating sh or ksh, zsh splits an unquoted value into words; emulating csh or zsh it does not.
+describe("zsh's options that take a value are zsh's own (#3621)", () => {
+  const TEXT = 'echo $(git rev-parse HEAD)'
+  // What `sh -c` or `zsh -c` makes of a text, said as run by zsh: the reading the option must not change.
+  const underZsh = (cmd: string, shell: string) => JSON.parse(JSON.stringify(pipeline(cmd)).split(`"behind":["${shell}"]`).join('"behind":["zsh"]'))
+  test('--emulate takes the shell to emulate as its next word, so the text after -c is the commands', () => {
+    expect(commands(`zsh --emulate sh -c 'make test'`)).toEqual([['make', 'test']])
+    expect(commands(`zsh -f --emulate sh -c 'make test'`)).toEqual([['make', 'test']])
+    expect(scripts(`zsh --emulate sh -c 'make test'`)).toEqual([undefined])
+    expect(scripts(`zsh -f --emulate sh -c 'make test'`)).toEqual([undefined])
+  })
+  test('the controls: the same command without the option, and with an option that takes nothing', () => {
+    expect(commands(`zsh -c 'make test'`)).toEqual([['make', 'test']])
+    expect(commands(`zsh -f -c 'make test'`)).toEqual([['make', 'test']])
+    expect(commands(`zsh --no-rcs -c 'make test'`)).toEqual([['make', 'test']])
+    expect(commands(`zsh -f --no-rcs -c '${TEXT}'`)).toEqual([['git', 'rev-parse', 'HEAD'], ['echo', '$(git rev-parse HEAD)']])
+  })
+  test('a substitution in that text is read as the command it runs, and no script file is named', () => {
+    for (const before of ['--emulate sh', '-f --emulate sh']) {
+      expect(commands(`zsh ${before} -c '${TEXT}'`)).toEqual([['git', 'rev-parse', 'HEAD'], ['echo', '$(git rev-parse HEAD)']])
+      expect(scripts(`zsh ${before} -c '${TEXT}'`)).toEqual([undefined, undefined])
+      // Read as sh reads it, since zsh emulating sh splits words as sh does.
+      expect(pipeline(`zsh ${before} -c '${TEXT}'`)).toEqual(underZsh(`sh -c '${TEXT}'`, 'sh'))
+    }
+    // Without the option the text is read as zsh reads it, as it was.
+    expect(scripts(`zsh -c '${TEXT}'`)).toEqual([undefined, undefined])
+    expect(scripts(`zsh -f -c '${TEXT}'`)).toEqual([undefined, undefined])
+  })
+  test('a script file after the option and its value is the script, the words after it its arguments', () => {
+    expect(scripts('zsh --emulate sh run.sh a')).toEqual([{ files: ['run.sh'] }])
+    expect(scripts('zsh --emulate ksh -x run.sh -c a')).toEqual([{ files: ['run.sh'] }])
+    // The controls.
+    expect(scripts('zsh run.sh a')).toEqual([{ files: ['run.sh'] }])
+    expect(scripts('zsh -x run.sh -c a')).toEqual([{ files: ['run.sh'] }])
+  })
+  test('the text is read as the emulated shell splits words: sh and ksh split, csh and zsh do not', () => {
+    const splits = (cmd: string) => pipeline(cmd).map(c => c.splits)
+    expect(splits(`sh -c 'cp $A b'`)).toEqual([[[], [0], []]])
+    expect(splits(`zsh --emulate sh -c 'cp $A b'`)).toEqual([[[], [0], []]])
+    expect(splits(`zsh --emulate ksh -c 'cp $A b'`)).toEqual([[[], [0], []]])
+    expect(splits(`zsh --emulate csh -c 'cp $A b'`)).toEqual([undefined])
+    expect(splits(`zsh --emulate zsh -c 'cp $A b'`)).toEqual([undefined])
+    expect(splits(`zsh -c 'cp $A b'`)).toEqual([undefined])
+    // A word no run here measured is read the cautious way, as splitting.
+    expect(splits(`zsh --emulate other -c 'cp $A b'`)).toEqual([[[], [0], []]])
+  })
+  test('fed its script on standard input after the option, zsh reads that script, split as the emulated shell splits', () => {
+    const fed = (shell: string) => pipeline(`${shell} <<'EOF'\ncp $A b\nEOF`).map(c => [c.words, c.script, c.splits])
+    expect(fed('zsh --emulate sh')).toEqual([[['cp', '$A', 'b'], undefined, [[], [0], []]]])
+    // The controls: sh itself, and zsh without the option, which splits nothing.
+    expect(fed('sh')).toEqual([[['cp', '$A', 'b'], undefined, [[], [0], []]]])
+    expect(fed('zsh')).toEqual([[['cp', '$A', 'b'], undefined, undefined]])
+    expect(fed('zsh -f')).toEqual([[['cp', '$A', 'b'], undefined, undefined]])
+  })
+  test('-O takes nothing in zsh, so the word after it is the script or the -c that gives the text', () => {
+    expect(commands(`zsh -O -c 'make test'`)).toEqual([['make', 'test']])
+    expect(commands(`zsh +O -c 'make test'`)).toEqual([['make', 'test']])
+    expect(scripts('zsh -O run.sh')).toEqual([{ files: ['run.sh'] }])
+    expect(scripts('zsh -xO run.sh a')).toEqual([{ files: ['run.sh'] }])
+  })
+  test('the controls: -o still takes its value in zsh, and -O still takes one in bash', () => {
+    expect(commands(`zsh -o shwordsplit -c 'make test'`)).toEqual([['make', 'test']])
+    expect(commands(`zsh -oshwordsplit -c 'make test'`)).toEqual([['make', 'test']])
+    expect(scripts('zsh -o shwordsplit run.sh')).toEqual([{ files: ['run.sh'] }])
+    expect(scripts('zsh +o shwordsplit run.sh')).toEqual([{ files: ['run.sh'] }])
+    expect(commands(`bash -O extglob -c 'make test'`)).toEqual([['make', 'test']])
+    expect(scripts('bash -O extglob run.sh')).toEqual([{ files: ['run.sh'] }])
+    expect(scripts('bash +O extglob run.sh')).toEqual([{ files: ['run.sh'] }])
+  })
+  test('--emulate is no option of the other shells, which refuse it and run nothing: their reading is as it was', () => {
+    // Measured 2026-11-26: bash 3.2 and ksh93 end with a usage error, dash with "Illegal option".
+    for (const shell of ['bash', 'sh', 'dash', 'ksh']) expect(scripts(`${shell} --emulate sh -c 'make test'`)).toEqual([{ files: ['sh'] }])
+  })
+})
