@@ -295,13 +295,13 @@ export const typedCommands = (text: string): string[] => [...new Set(handed(stra
 // The sentence right after a hand over asking to be told that same command is done: "Tell me when
 // it is done", "Tell me once it's loaded", "Tell me when you have run it". Its "it" can only be the
 // command just handed over, so it is that step, not another (second review of pull request 3677). So
-// is the command named by what it is or starts: "the command", a word of its own name ("the reload"
-// of `/reload-plugins`), or the panel a planning command starts ("Tell me when the panel has
-// finished"). A report back on anything else ("when you have clicked **Approve**", "when the deploy
-// has finished") is another step.
+// is the command named by what it is or starts: "the command", or the panel a planning command
+// starts ("Tell me when the panel has finished"). A report back on anything else ("when you have
+// clicked **Approve**", "when the deploy has finished") is another step, and a word of the
+// command's own name is no sign of it ("the code" after `/code-review`).
 const STARTS: Readonly<Record<string, string>> = { '/plan-council': 'panel', '/plan-lite': 'panel' }
 const reportsBack = (command: string): RegExp => {
-  const named = ['command', ...command.slice(1).split(/[-_:]/).filter(w => w.length > 2), STARTS[command] ?? ''].filter(Boolean).map(escaped).join('|')
+  const named = ['command', STARTS[command] ?? ''].filter(Boolean).join('|')
   return new RegExp(String.raw`^\s+(?:please\s+)?tell me\s+(?:(?:when|once)\s+(?:it|that|this|the\s+(?:${named}))\b|(?:when|once)\s+you(?:'ve| have)\s+(?:done|run|typed|finished)\s+(?:it|that|this)\b|(?:that\s+)?(?:it's|it is|that's|that it's|that it is)\s+(?:done|finished|loaded|in place)\b)[^.!?\n]*(?:[.!?](?=\s|$))?`, 'i')
 }
 

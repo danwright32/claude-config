@@ -331,10 +331,11 @@ describe('apartFromTyped', () => {
   })
   test('asking to be told when what the command starts has finished is the same step: one ask (#3865)', () => {
     expect(leftOver('Paste this:\n\n```\n/plan-council Plan the venue import\n```\n\nTell me when the panel has finished.', ['/plan-council'])).toBeNull()
-    expect(leftOver('Type `/reload-plugins`. Tell me when the reload has finished.', ['/reload-plugins'])).toBeNull()
     expect(leftOver('Run `/compact`. Tell me once the command is done.', ['/compact'])).toBeNull()
   })
   test('asking to be told when something else has finished keeps its own ask (#3865)', () => {
+    // A word of the command's own name is no sign the report is about it: "the code", "the next".
+    expect(leftOver('Run `/code-review` on your branch. Tell me when the code is merged.', ['/code-review'])).not.toBeNull()
     expect(leftOver('Paste this:\n\n```\n/plan-council Plan the venue import\n```\n\nTell me when the deploy has finished.', ['/plan-council'])).not.toBeNull()
     expect(leftOver('Type `/reload-plugins`. Tell me when the panel has finished.', ['/reload-plugins'])).not.toBeNull()
   })

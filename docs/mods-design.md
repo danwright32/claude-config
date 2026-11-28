@@ -2587,8 +2587,9 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   introduces it and not the one before it on the line ("You ran the first half. Paste the
   second:"); a list under a line saying what the session needs ("I need two things:"); and
   whatever follows a code block that is never closed, which hides nothing. A report back that
-  names the command, a word of its name or the panel a planning command starts is the command's
-  own step and gets no second ask ("Tell me when the panel has finished").
+  names the command, or the panel a planning command starts, is the command's own step and gets
+  no second ask ("Tell me when the panel has finished"); a word of the command's own name is no
+  sign of that ("the code" after `/code-review`).
   Left as built, each pinned by a test named for what it does today, and put to Dan: "you have
   to" after an opening clause with no comma is missed ("Before I can go on you have to type
   `/compact`"), since "In the old design you must type `/compact` yourself" has the same shape
