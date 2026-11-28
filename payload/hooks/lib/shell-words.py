@@ -3208,7 +3208,8 @@ def flattened(s):
 
     Which pairs the shell removes is commands()'s reading of the text as typed (its `joined`): one
     inside single quotes, in a comment or in the text of a heredoc's body stays, written as it
-    always was. Where that reading cannot be vouched for (it cannot read the text to its end, or
+    always was (one inside single quotes or backquotes is read again below, as the shell that
+    reads them does). Where that reading cannot be vouched for (it cannot read the text to its end, or
     names a line it is unsure of) nothing is joined and the text is flattened as it always was.
     An operator a backslash and a line break split is named in `unsure` too and is no such doubt:
     the joined text holds it whole, so the text is joined as it was before those were named
@@ -3242,7 +3243,7 @@ def flattened(s):
         moved = opener_lines(typed)
         if moved is not None:
             typed, flat = moved, _richer(flat, moved.replace("\n", FLAT_BREAK))
-    if "'" in typed or "`" in typed:
+    if ("\\\n" in typed or "<<" in typed) and ("'" in typed or "`" in typed):
         inner = inner_typed(typed)
         if inner is not None:
             flat = _richer(flat, inner.replace("\n", FLAT_BREAK))

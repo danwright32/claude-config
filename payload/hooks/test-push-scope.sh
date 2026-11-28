@@ -2676,9 +2676,8 @@ got="$(printf 'not json at all \\\n' | python3 "$PS_SHELL_WORDS" flatten)"; rc=$
 # `cat <<EOF; git push`, then the body and its closing line: the shell runs every command on the
 # opener's line and reads the body from the line after. The segmented form writes that line break as
 # "; ", so the reader cannot tell it from the ; after the opener: it took that ; for the line break
-# that starts the body, and the push for the body's first line. No backslash is involved. Measured
-# 2026-11-26 on bash 3.2.57 and zsh 5.9: check-style-guide.sh, check-gh-view-comments.sh,
-# check-gh-watch-interval.sh and check-rtk-init.sh each exited 0 on a command their shell ran.
+# that starts the body, and the push for the body's first line. No backslash is involved, and a
+# gate reading that form let through a push its shell ran.
 # The shared reader now hands a hook the same program with each body moved up to follow the command
 # that opens it, the shape the segmented form has always been read right in, and a heredoc the
 # text gives no body at all (its opener on the last line) written as the here string it amounts to.

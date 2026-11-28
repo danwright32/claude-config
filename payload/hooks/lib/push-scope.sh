@@ -301,9 +301,10 @@ sys.exit(1 if v is None or isinstance(v, str) else 0)' 2>/dev/null
 # words: `echo ok &&`, the pair, `git push` was no push to any hook reading the segmented form, and
 # neither was `git`, the pair, `push`, nor an add, a commit or a gh pr create written the same way.
 # So a segmented command holding the pair is flattened by lib/shell-words.py (its flatten mode),
-# which takes out each pair the shell removes, leaves one inside single quotes, a comment or a
-# heredoc's body as it was, and never hands back a text naming fewer commands than the plain
-# flattening does. That needs python3 and the reader's file; with either missing, or a command
+# which takes out each pair the shell removes, leaves one in a comment or a heredoc's body as it
+# was, takes one inside single quotes or backquotes out only where the shell reading that string
+# or those backquotes runs a command the text otherwise hides (claude-config#3739), and never
+# hands back a text naming fewer commands than the plain flattening does. That needs python3 and the reader's file; with either missing, or a command
 # that reader cannot vouch for, the text is flattened as it always was. The pair is found in the
 # raw payload first, by every way JSON can spell it, so a command holding none starts nothing more.
 #
