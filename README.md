@@ -12506,10 +12506,13 @@ read for it. A box refused this way and
 not shown by the turn's end is asked for once more, once per request, by a message the mod sends
 in place of the turn end's other question, because the hooks do not hand a review over at every
 such turn's end. That message, every other prompt of the mod that asks for the box, and the box
-itself go out through one function (`leave` in `hooks/register.ts`;
-`tests/test-goal-box-one-way-out.sh` fails when a send or a showing is written anywhere else),
-which weighs the review first: no prompt for a request's box is sent over a review that was
-handed over and that Dan has not answered, since each starts a new turn, where the record reads
+itself go out through one function (`leave` in `hooks/register.ts`), which weighs the review first.
+`tests/test-goal-box-one-way-out.sh` scans every file of the mod for the spellings of a send and of
+a showing that it lists, and fails on one outside that function; a spelling it does not list passes
+it, its header says which are known, and what a site inside the function does is held by the mod's
+own tests, never by the scan. The review is weighed first because of what a prompt does: no prompt
+for a request's box is sent over a review that was handed over and that Dan has not answered,
+since each starts a new turn, where the record reads
 none and the box would show behind the unanswered review. The record ends with its turn, and a
 prompt can fall due in a later turn nobody typed to start (a card made there, a call refused
 there), so the mod reads the record once at every turn end of the main conversation, whatever is

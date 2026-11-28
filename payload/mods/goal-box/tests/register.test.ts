@@ -295,6 +295,8 @@ type World = {
   began: string[]
   /** #3843: a line the mod logs that matches this cannot be written: the log throws. */
   logFails?: RegExp
+  /** #3843: a message typed with exactly this text is dropped by a hook beneath, so it never enters the session. */
+  dropsTyped?: string
 }
 // manual steps' four reasons for not showing a step it was handed (addStep, word for word).
 const NOT_SHOWN = {
@@ -494,7 +496,7 @@ const world = (on: On, init: Partial<World> = {}) => {
       const fails = w.submitFails.shift()
       if (fails === 'throw') throw new Error('the session is shutting down')
       if (fails === 'drop') return { drop: 'held by a guard beneath' } as never
-    }
+    } else if (w.dropsTyped !== undefined && e.text === w.dropsTyped) return { drop: 'held by a guard beneath' } as never
     submitted.push({ text: e.text, origin: e.origin })
     return { text: e.text } as never
   })
@@ -3841,6 +3843,36 @@ test('a message Dan types ends what was kept: the question about shipped work fo
   await turnEnds($)
   expect(sentKinds(submitted)).toEqual(['DONE'])
   expect(seen).toEqual([])
+})
+
+test("a message of Dan's that a hook beneath dropped ends nothing: an unanswered review the turn ends kept still stops the question about shipped work (#3843, #2523)", withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { dropsTyped: 'Merge PR 1700' })
+  await start($)
+  await says($, 'Tidy the notes')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  expect(await says($, 'Merge PR 1700')).toEqual({ drop: 'held by a guard beneath' })
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  expect(seen).toEqual([WAITING_LINE])
+})
+
+test("a message of Dan's that a hook beneath dropped ends nothing: a record that could not be read is still said at the prompt sent after it (#3843, #2523)", withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { dropsTyped: 'And merge PR 1701' })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.review = UNREAD_AT_END
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  expect(await says($, 'And merge PR 1701')).toEqual({ drop: 'held by a guard beneath' })
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE'])
+  expect(seen.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
 })
 
 test('a review answered later in the same turn ends what that turn end kept, and one answered in a later turn does not answer the earlier one (#3843, #2523)', withLive, async ($, on) => {

@@ -49,8 +49,8 @@ import { CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOO
 //    sees, once per request, and once a message he typed has begun another request the held box
 //    is asked for once at a later turn's end (askOwed).
 //
-// The box is the tool's result: drawn as mod-kit's card, its heading in the success colour, and as
-// text led by the goal wherever the card is not drawn (#2512).
+// The box is what the tool returns, drawn as mod-kit's card, its heading in the success colour, and
+// as text led by the goal wherever the card is not drawn (#2512).
 
 const interactiveRef = { plugin: 'goal-box', key: 'interactive' } as const
 const promptsRef = { plugin: 'goal-box', key: 'prompts' } as const
@@ -327,8 +327,9 @@ const unmarkAsked = async ($: EngineInterface, id: string): Promise<void> => {
 // A prompt of this mod that asks for the box starts a turn whose call would show it, and the box
 // itself is a call's result. Both go out through `leave` and nowhere else, so whether an end of
 // turn review is handed over and not answered is weighed in one place for all of them.
-// tests/test-goal-box-one-way-out.sh fails when the engine's prompt call, the card or the box's
-// text is reached anywhere outside it.
+// tests/test-goal-box-one-way-out.sh scans the mod for the spellings of a send and of a showing
+// it lists, and fails on one outside this function. A spelling it does not list passes it, and
+// what a site inside this function does is held by the mod's own tests, never by that scan.
 
 /** A prompt that asks for the box, due at the end of a turn of the main conversation. */
 type BoxPrompt = {
