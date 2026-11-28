@@ -147,6 +147,8 @@ const stepsMod: { name: string; register: Register } = {
     })
     on('turn.complete', async ($, e, next) => {
       await $.state.set({ plugin: 'manual-steps', key: 'card' } as never, JSON.parse((await $.process.run(['__others', 'card'])).stdout) as never)
+      // #3864: its record that the session recorded the last open step of a card.
+      await $.state.set({ plugin: 'manual-steps', key: 'emptied' } as never, JSON.parse((await $.process.run(['__others', 'emptied'])).stdout) as never)
       return next(e)
     })
   },
@@ -227,6 +229,8 @@ type World = {
   view: (q: { pr: string; repo?: string; cwd?: string; token?: string }) => Gh
   /** #3770: the manual steps card in manual steps' state, null when none is pinned. */
   stepsCard: unknown
+  /** #3864: manual steps' record that the last open step of a card was recorded; absent is none yet. */
+  stepsEmptied?: unknown
   compactQueued: unknown
   compactFollowUp: unknown
   /** mod-kit's holds in its state (null leaves them unset). */
@@ -392,6 +396,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     }
     if (e.argv[0] === '__others') {
       if (e.argv[1] === 'card') return ok(JSON.stringify(w.stepsCard))
+      if (e.argv[1] === 'emptied') return ok(JSON.stringify(w.stepsEmptied ?? null))
       if (e.argv[1] === 'compact') return ok(JSON.stringify({ queued: w.compactQueued, followUp: w.compactFollowUp }))
       return ok(JSON.stringify(w.holds))
     }
@@ -2412,7 +2417,8 @@ test("no review at the turn's end: the session is asked once to call again, and 
   expect(asked()[0]?.origin).toMatchObject({ kind: 'plugin' })
   expect(asked()[0]?.text).toMatch(/was refused until the end of turn review had run and Dan had answered it\. That turn has ended and no box was shown since\./)
   expect(asked()[0]?.text).toContain(`call ${TOOL} again now`)
-  expect(asked()[0]?.text).toMatch(/If part of it is still to do, do not call it and say nothing of the box\.$/)
+  // #3864: a box held back is said in one line, where this message once asked for silence.
+  expect(asked()[0]?.text.endsWith(HELD_TAIL)).toBe(true)
   // Sent as the mod's other prompts are: mod-kit's reload held back until it has gone (#2132).
   expect(w.held.filter(h => h === 'submit' || h.includes('ask-after-review'))).toHaveLength(3)
   // The message starts a turn that has changed nothing, so the call it asks for is not held.
@@ -3017,4 +3023,294 @@ test("the review's last step is one command whatever the transcript's path holds
   expect(reviewRead({ exitCode: 1, stdout: '', stderr: '' })).toEqual({ unread: "the read of the review's record exited 1" })
   const odd = reviewRead({ exitCode: 0, stdout: 'null', stderr: '' })
   expect('unread' in odd ? odd.unread : 'read as a state').toMatch(/names no state/)
+})
+
+// ---- What does not hold the box, and what a session says when it holds it (#3864) ----
+// On 2026-11-27 a session finished what Dan asked for and showed no box: it counted a draft only he
+// could send, a check /check-later had scheduled and work he had declined in a picker as its own
+// unfinished work, and was told to say nothing of a box it held back. The description now says what
+// does not hold the box, and every place that asked for silence asks for one line.
+const HELD_TAIL = 'If part of it is still yours to do, do not call it, and say in one line what the box is waiting on, unless you have said so already and it has not changed.'
+
+test("the description says what does not hold the box: a step that is Dan's alone, a check /check-later scheduled, work he declined in a picker (#3864)", withKit, async ($, on) => {
+  const { tools } = world(on)
+  await start($)
+  const said = tools[0]?.description ?? ''
+  expect(said).toMatch(/These do not hold the box, since none is work of yours: a step only Dan can take \(a draft he sends, a command he types, a setting he changes\), a check \/check-later has put on the To Do list, and work he declined in a picker\./)
+  // The picked answer to the issue's first question: his step holds the box only with work behind it.
+  expect(said).toMatch(/A step of his on the steps card holds the box only while work of your own waits behind it\./)
+  // What the tool itself refuses for is said as before.
+  expect(said).toMatch(/It refuses while anything is still in flight \(an agent still running, a merge or deploy not confirmed, a pull request this session touched still open\)/)
+})
+
+test('the description says a box held back is said in one line, once, and never asks for silence (#3864)', withKit, async ($, on) => {
+  const { tools } = world(on)
+  await start($)
+  const said = tools[0]?.description ?? ''
+  expect(said).toMatch(/If you hold the box back because part of the request is still yours to do, say in one line what the box is waiting on, unless you have said so already and it has not changed\./)
+  expect(said).not.toMatch(/say nothing/)
+})
+
+test('the question about shipped work asks for one line where the box is held, in place of silence (#3864, #2523)', withLive, async ($, on) => {
+  const { submitted } = world(on, { verdicts: CARDED })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  const asked = submitted.filter(s => s.text.startsWith(ASKS_DONE))
+  expect(asked).toHaveLength(1)
+  expect(asked[0]?.text.endsWith(HELD_TAIL)).toBe(true)
+  expect(asked[0]?.text).not.toMatch(/say nothing/)
+})
+
+// ---- The prompt once the last step on the steps card is recorded (#3864) ----
+// The end of turn review asks for the box while a card's steps are still open, and nothing asked
+// again once Dan had done them. Manual steps keeps a record of the session recording a card's last
+// open step (when, and how many of the session's own steps were done), and at the turn's end this
+// mod asks the session once for each such record, with no /goal set.
+const ASKS_CARD = 'GOAL ACCOMPLISHED? Every step on the manual steps card has now been recorded'
+const EMPTIED = { at: NOW + 60_000, done: 2 }
+const cardAsks = <S extends { text: string }>(submitted: S[]): S[] => submitted.filter(s => s.text.startsWith(ASKS_CARD))
+
+test('no /goal: the last step on the steps card recorded, and no box for the request, and the session is asked once (#3864)', withAll, async ($, on) => {
+  const { w, submitted, cards } = world(on)
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  w.stepsEmptied = EMPTIED
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+  const asked = cardAsks(submitted)[0]
+  expect(asked?.origin).toMatchObject({ kind: 'plugin' })
+  expect(asked?.text).toBe(
+    `${ASKS_CARD}, and no Goal accomplished box was shown for what Dan last asked for. If every part of it that is yours to do is finished, call ${TOOL} now, before anything else in this turn, with goal set to what he asked for and shipped listing what shipped, one short line each. ${HELD_TAIL}`,
+  )
+  // Sent as the mod's other prompts are: mod-kit's reload held back until it has gone (#2132).
+  expect(w.held.filter(h => h === 'submit' || h.includes('ask-after-card'))).toHaveLength(3)
+  // Not twice for one record, however many turns end.
+  await turnStarts($, 't2')
+  await turnEnds($)
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+  // The turn the prompt starts has changed nothing, so the call it asks for shows the box.
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  expect(await cards()).toHaveLength(1)
+})
+
+test('no /goal: a second card worked through later in the same request is asked about once more (#3864)', withAll, async ($, on) => {
+  const { w, submitted } = world(on, { stepsEmptied: EMPTIED })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+  w.stepsEmptied = { at: EMPTIED.at + 1, done: 1 }
+  await turnEnds($)
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(2)
+})
+
+test('a /goal still set: the steps card emptying asks nothing, then or once the goal is cleared (#3864)', withAll, async ($, on) => {
+  const { w, submitted } = world(on, { stepsEmptied: EMPTIED, goal: { state: 'set', condition: 'complete milestone 80' } })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  w.goal = { state: 'none' }
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+})
+
+test('a /goal that could not be read: nothing is asked yet, and it is asked once the goal reads as none (#3864)', withAll, async ($, on) => {
+  const { w, submitted } = world(on, { stepsEmptied: EMPTIED, goal: { state: 'unreadable', why: 'the transcript could not be read' } })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  w.goal = { state: 'none' }
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+})
+
+test('a met /goal whose box is still owed is asked for by its own prompt alone; with that box shown, a card worked through for a later request is asked about (#3864)', withAll, async ($, on) => {
+  const { w, submitted } = world(on, { stepsEmptied: EMPTIED, goal: MET })
+  await start($)
+  await says($, 'Finish issue 1563')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(GOAL_PROMPT))).toHaveLength(1)
+  expect(cardAsks(submitted)).toEqual([])
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  // The box for the goal covers that request, so the card that emptied under it asks nothing.
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  await says($, 'Now run the one off test')
+  w.stepsEmptied = { at: EMPTIED.at + 5, done: 1 }
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+})
+
+test("a subagent's turn end and an interrupted turn ask nothing about the card, and the main conversation's next turn end still asks (#3864)", withAll, async ($, on) => {
+  const { submitted } = world(on, { stepsEmptied: EMPTIED })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($, { agentId: 'a1' })
+  await turnEnds($, { isAborted: true, reason: 'aborted' })
+  expect(cardAsks(submitted)).toEqual([])
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+})
+
+test('a headless session is never asked about the card (#3864)', withAll, async ($, on) => {
+  const { submitted } = world(on, { stepsEmptied: EMPTIED })
+  await start($, false)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+})
+
+test('a card whose steps were all taken off undone asks nothing, then or later (#3864)', withAll, async ($, on) => {
+  const { submitted, logs } = world(on, { stepsEmptied: { at: EMPTIED.at, done: 0 } })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  expect(logs.filter(l => /no step on the steps card that emptied was done in this session, so the session is not asked about the Goal accomplished box/.test(l))).toHaveLength(1)
+})
+
+test('a box already shown for the request: the card emptying asks nothing, and nothing once Dan asks for something new (#3864)', withAll, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  w.stepsEmptied = EMPTIED
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  await says($, 'Now make the status bar quieter')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+})
+
+test('a card that emptied before Dan asked this session for anything asks nothing, then or after his first message (#3864)', withAll, async ($, on) => {
+  const { submitted } = world(on, { stepsEmptied: EMPTIED })
+  await start($)
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+})
+
+test('an agent still running, or a pull request still open: the card emptying asks nothing until it is settled, then asks once (#3864)', withAll, async ($, on) => {
+  const { w, submitted } = world(on, { stepsEmptied: EMPTIED, agents: [{ id: 'a1', status: 'running', description: 'Fix issue 1702' }], links: [link('danwright32/claude-config', 1700)], open: { 'danwright32/claude-config': { exitCode: 0, stdout: '[{"number":1700}]' } } })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  w.agents = [{ id: 'a1', status: 'completed' }]
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  w.open = {}
+  await turnEnds($)
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+})
+
+test("an unanswered review at the turn's end stops the prompt about the card, for that record for good (#3864, #3843)", withAll, async ($, on) => {
+  const { w, submitted, logs } = world(on, { stepsEmptied: EMPTIED, review: reviewSays('handed') })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  expect(logs.filter(l => /handed over this turn and Dan has not answered it, so the session is not asked about the Goal accomplished box now the steps card has emptied/.test(l))).toHaveLength(1)
+  w.review = reviewSays('none')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+})
+
+test("the review's record cannot be read at the turn's end: the prompt about the card is still sent, and Dan is told it was sent without knowing (#3864, #3843)", withAll, async ($, on) => {
+  const { submitted, logs } = world(on, { stepsEmptied: EMPTIED, review: UNREAD_AT_END })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+  expect(logs.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+})
+
+test('a prompt about the card that could not be sent is said and sent again at the next turn end (#3864)', withAll, async ($, on) => {
+  const { submitted, logs } = world(on, { stepsEmptied: EMPTIED, submitFails: ['drop'] })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  expect(logs.join('\n')).toMatch(/The last step on the steps card was recorded, but the session could not be asked about the Goal accomplished box \(held by a guard beneath\); it is asked again at the next turn end\./)
+  await turnEnds($)
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+})
+
+test("one prompt a turn end: where work shipped too, only that question is sent, and the card's is not sent after it (#3864, #2523)", withAll, async ($, on) => {
+  const { submitted } = world(on, { stepsEmptied: EMPTIED, verdicts: CARDED })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toHaveLength(1)
+  expect(cardAsks(submitted)).toEqual([])
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+})
+
+test("one prompt a turn end: the message after a refused call stands in for the card's prompt too (#3864, #3843)", withAll, async ($, on) => {
+  const { w, submitted } = world(on)
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/its end of turn review is still to come/)
+  w.stepsEmptied = EMPTIED
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
+  expect(cardAsks(submitted)).toEqual([])
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+})
+
+test("manual steps' record in a shape this mod does not read asks nothing and is said in the debug log, never taken for a card worked through (#3864)", withAll, async ($, on) => {
+  const { w, submitted, logs } = world(on, { stepsEmptied: { at: 'yesterday', done: 2 } })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  w.stepsEmptied = { at: EMPTIED.at }
+  await turnEnds($)
+  w.stepsEmptied = 'emptied'
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  expect(logs.filter(l => /manual steps' record that the steps card emptied could not be read \(/.test(l))).toHaveLength(3)
+})
+
+test('with manual steps not loaded there is no record, and nothing is asked about a card (#3864)', withLive, async ($, on) => {
+  const { submitted, logs } = world(on, { stepsEmptied: EMPTIED })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  expect(logs.filter(l => /steps card emptied/.test(l))).toEqual([])
+})
+
+test("the box's own refusals stand after the card empties: an agent running, a merge not confirmed and an unanswered review each still refuse the call (#3864)", withAll, async ($, on) => {
+  const { w, cards } = world(on, { stepsEmptied: EMPTIED, agents: [{ id: 'a1', status: 'running', description: 'Fix issue 1702' }] })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  expect((await box($, ASKED)).deny).toMatch(/^No box yet: .*Fix issue 1702/)
+  w.agents = []
+  w.verdicts = { 'danwright32/claude-config#1700': { state: 'deploying', at: NOW } }
+  await turnEnds($)
+  expect((await box($, ASKED)).deny).toMatch(/still deploying/)
+  w.verdicts = {}
+  await turnEnds($)
+  w.review = reviewSays('handed')
+  expect((await box($, ASKED)).deny).toMatch(/the end of turn review was handed to you this turn and is not on record as answered/)
+  expect(await cards()).toEqual([])
 })

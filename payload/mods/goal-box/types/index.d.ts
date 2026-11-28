@@ -33,6 +33,13 @@ declare module 'claude-code' {
       requestAt: number
       /** The value of `prompts` when the session was last asked whether its work was finished (#2523). */
       askedDone: number
+      /**
+       * #3864: the time (`at`) of manual steps' newest record of a steps card worked through that
+       * has been dealt with: the session was asked about the box for it, or it was passed over for
+       * good (no step done, a /goal set, a box already shown, no request yet, another prompt sent
+       * in its place, a review left unanswered).
+       */
+      cardAsked: number
       /** Every box shown in this session, oldest first. */
       shown: GoalBoxShown[]
       /** The met goals the session has already been told to show the box for, by judgement id. */

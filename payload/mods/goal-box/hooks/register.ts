@@ -3,7 +3,7 @@ import { cutCall, cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import { pickerCame } from './request.ts'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
-import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
+import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askCardText, askDoneText, askText, boxText, cardOf, cardedSince, decide, emptiedOf, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Emptied, type Holds, type Linked } from './box.ts'
 import { WORK_TEST_MS, alreadyShownText, answered, workRead, workTestArgv, type WorkRead } from './request.ts'
 import { REVIEWS_OFF_SUFFIX, REVIEW_STATE_MS, answeredCommand, answersMainReview, askAgainText, canBeTurnWork, notMainReviewText, promptedUnreadText, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, type ReviewRead, type ReviewWait } from './review.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
@@ -44,6 +44,10 @@ import { CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOO
 //    record (review.ts), and a box refused so and never shown is asked for once at the turn's end.
 //    No prompt of this mod about the box is sent at a turn's end over a review that was handed
 //    over that turn and is not answered (endRecord).
+//    What is left for Dan alone is not work still open (#3864): the tool's description says what
+//    does not hold the box and asks for one line when the session holds it back (box.ts NOT_HELD,
+//    HELD_SAY), and a turn end after the session recorded the last open step of a steps card asks
+//    it once more whether the work is finished (askAfterCard, from manual steps' record).
 //
 // The box is the tool's result: drawn as mod-kit's card, its heading in the success colour, and as
 // text led by the goal wherever the card is not drawn (#2512).
@@ -69,6 +73,9 @@ const closedRef = { plugin: 'goal-box', key: 'closed' } as const
 const leftBehindRef = { plugin: 'goal-box', key: 'leftBehind' } as const
 // What the card reads of the mods beside it; each may not be loaded.
 const stepsCardRef = { plugin: 'manual-steps', key: 'card' } as const
+// #3864: manual steps' record of a card worked through, and the newest one this mod has dealt with.
+const stepsEmptiedRef = { plugin: 'manual-steps', key: 'emptied' } as const
+const cardAskedRef = { plugin: 'goal-box', key: 'cardAsked' } as const
 const compactQueuedRef = { plugin: 'status-bar', key: 'compactQueued' } as const
 const compactFollowUpRef = { plugin: 'status-bar', key: 'compactFollowUp' } as const
 const modkitHoldsRef = { plugin: 'mod-kit', key: 'holds' } as const
@@ -351,29 +358,32 @@ const sendHeld = async ($: EngineInterface, id: string, what: string, text: stri
  * The end of turn review's record is asked first, through `record` (endRecord): a review handed
  * over this turn that Dan has not answered spends the request's question unsent.
  */
-const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<void> => {
+const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<boolean> => {
   const since = (await $.state.get(requestAtRef)).value
-  if (since === undefined) return
+  if (since === undefined) return false
   const prompts = (await $.state.get(promptsRef)).value ?? 0
   const asked = await $.state.get(askedDoneRef)
-  if (asked.value !== undefined && asked.value >= prompts) return
+  if (asked.value !== undefined && asked.value >= prompts) return false
   const facts = mergeFactsOf((await $.state.get(owedRef)).value as unknown, (await $.state.get(verdictsRef)).value as unknown)
   if ('why' in facts) {
     debug($, `is it live's record could not be read (${facts.why}), so whether work shipped since Dan's last message is not known and the session was not asked about the box`)
-    return
+    return false
   }
   const shown = (await $.state.get(shownRef)).value ?? []
-  if (shown.some(s => s.prompts >= prompts)) return
-  if (!cardedSince(facts.verdicts, since, Math.max(-Infinity, ...shown.map(s => s.at)))) return
+  if (shown.some(s => s.prompts >= prompts)) return false
+  if (!cardedSince(facts.verdicts, since, Math.max(-Infinity, ...shown.map(s => s.at)))) return false
   const holds = await boxHolds($)
-  if (holds.length) return
+  if (holds.length) return false
   const end = await record()
-  if (!(await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet) return
-  if (end.unanswered) return debug($, `${UNANSWERED}, so the session is not asked whether the work is finished for this request`)
+  if (!(await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet) return false
+  if (end.unanswered) {
+    debug($, `${UNANSWERED}, so the session is not asked whether the work is finished for this request`)
+    return false
+  }
   const failed = await sendHeld($, 'ask-done', 'the prompt asking whether the work is finished', askDoneText())
   if (failed === undefined) {
     if (end.unread !== undefined) $.ui.log(promptedUnreadText(end.unread))
-    return
+    return true
   }
   for (let i = 0; i < 10; i++) {
     const held = await $.state.get(askedDoneRef)
@@ -381,6 +391,84 @@ const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>): 
     if ((await $.state.set(askedDoneRef, asked.value ?? -1, { ifVersion: held.version })).isSet) break
   }
   $.ui.log(`Work shipped since Dan's last message, but the session could not be asked whether the work is finished (${failed}); it is asked again at the next turn end.`)
+  return false
+}
+
+// ---- The steps card worked through (#3864) ----
+
+/** Manual steps' record of a card worked through, read and held to its shape; null where there is none to act on, said in the debug log where it cannot be read. */
+const emptiedNow = async ($: EngineInterface): Promise<Emptied | null> => {
+  const emptied = emptiedOf((await $.state.get(stepsEmptiedRef as never)).value as unknown)
+  if (emptied !== null && 'why' in emptied) {
+    debug($, `manual steps' record that the steps card emptied could not be read (${emptied.why}), so the session is not asked about the Goal accomplished box for it`)
+    return null
+  }
+  return emptied
+}
+
+/**
+ * Marks manual steps' newest record of a card worked through as dealt with, so no later turn end
+ * asks about it. False when it already was, or another turn end marked it first.
+ */
+const spendCard = async ($: EngineInterface, emptied: Emptied): Promise<boolean> => {
+  const asked = await $.state.get(cardAskedRef)
+  if (asked.value !== undefined && asked.value >= emptied.at) return false
+  return (await $.state.set(cardAskedRef, emptied.at, { ifVersion: asked.version })).isSet
+}
+
+/** The same, where another prompt about the box was sent at this turn end and stands in for the card's. */
+const spendCardNow = async ($: EngineInterface): Promise<void> => {
+  const emptied = await emptiedNow($)
+  if (emptied) await spendCard($, emptied)
+}
+
+/**
+ * #3864: with no /goal, asks the session once whether the work is finished when it has recorded the
+ * last open step of a steps card. The end of turn review asks while the card's steps are still
+ * open, and nothing asked again once Dan had done them. Once for each record manual steps keeps.
+ *
+ * Passed over for good, with nothing sent: a card none of whose steps was done in this session (all
+ * taken off undone, or all another session's), since nothing was finished by it; one that emptied
+ * before Dan asked this session for anything; and one whose request already has its box.
+ * Left for a later turn end: a card that emptied while something the box refuses for is in flight.
+ * The end of turn review's record is asked last, through `record` (endRecord): a review handed over
+ * this turn that Dan has not answered spends the record unsent, as it spends the turn end's other
+ * question. Claimed before it is sent, so two turn ends at once ask once, and released when the
+ * prompt did not enter, so a passing failure is asked again at the next turn end (L368).
+ */
+const askAfterCard = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<void> => {
+  const emptied = await emptiedNow($)
+  if (!emptied) return
+  const asked = await $.state.get(cardAskedRef)
+  if (asked.value !== undefined && asked.value >= emptied.at) return
+  const prompts = (await $.state.get(promptsRef)).value ?? 0
+  const shown = (await $.state.get(shownRef)).value ?? []
+  const passed = emptied.done < 1
+    ? 'no step on the steps card that emptied was done in this session'
+    : prompts < 1
+      ? 'the steps card emptied before Dan asked this session for anything'
+      : shown.some(s => s.prompts >= prompts)
+        ? "the Goal accomplished box was already shown for Dan's latest request when the steps card emptied"
+        : undefined
+  if (passed !== undefined) {
+    if (await spendCard($, emptied)) debug($, `${passed}, so the session is not asked about the Goal accomplished box`)
+    return
+  }
+  if ((await boxHolds($)).length) return
+  const end = await record()
+  if (!(await $.state.set(cardAskedRef, emptied.at, { ifVersion: asked.version })).isSet) return
+  if (end.unanswered) return debug($, `${UNANSWERED}, so the session is not asked about the Goal accomplished box now the steps card has emptied`)
+  const failed = await sendHeld($, 'ask-after-card', 'the prompt asking about the Goal accomplished box now the steps card has emptied', askCardText())
+  if (failed === undefined) {
+    if (end.unread !== undefined) $.ui.log(promptedUnreadText(end.unread))
+    return
+  }
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(cardAskedRef)
+    if (held.value !== emptied.at) break
+    if ((await $.state.set(cardAskedRef, asked.value ?? -1, { ifVersion: held.version })).isSet) break
+  }
+  $.ui.log(`The last step on the steps card was recorded, but the session could not be asked about the Goal accomplished box (${failed}); it is asked again at the next turn end.`)
 }
 
 // ---- A picker answer followed by work (#3843) ----
@@ -1048,11 +1136,21 @@ export const register: Register = on => {
     const record = endRecord($)
     // #3843: a call refused until the review was answered, and no box since. One prompt a turn end,
     // so this one stands in for the two below, which ask for the same call.
-    if (await askAfterReview($, record)) return r
+    // #3864: one prompt a turn end. Where this one or the question about shipped work is sent, it
+    // stands in for the prompt about a steps card worked through, which asks for the same call.
+    if (await askAfterReview($, record)) {
+      await spendCardNow($)
+      return r
+    }
     const goal = await goalNow($)
+    // #3864: a card worked through under a /goal still set asks nothing, then or once the goal is
+    // cleared: the goal's own check is what asks. One that could not be read leaves the card's
+    // prompt for a turn end where it can.
+    if (goal.state === 'set') await spendCardNow($)
     if (goal.state !== 'none') return r
     if (!goal.met) {
-      await askIfDone($, record)
+      if (await askIfDone($, record)) await spendCardNow($)
+      else await askAfterCard($, record)
       return r
     }
     // A met goal's prompt is not spent by an unanswered review, as the other two are: its box is the
@@ -1060,7 +1158,11 @@ export const register: Register = on => {
     // Asked about already, or its box already shown (markAsked's own two tests): nothing to send, so
     // the record is not asked either.
     const metId = goal.met.id
-    if (((await $.state.get(askedRef)).value ?? []).includes(metId) || ((await $.state.get(shownRef)).value ?? []).some(s => s.key === `goal:${metId}`)) return r
+    const isMetShown = ((await $.state.get(shownRef)).value ?? []).some(s => s.key === `goal:${metId}`)
+    // #3864: with the met goal's box shown no /goal is set and none is owed a box, so a steps card
+    // worked through since is asked about as it is with no goal at all.
+    if (isMetShown) await askAfterCard($, record)
+    if (isMetShown || ((await $.state.get(askedRef)).value ?? []).includes(metId)) return r
     const end = await record()
     if (end.unanswered) {
       debug($, `${UNANSWERED}, so the prompt for the met /goal waits for a later turn end`)

@@ -20,8 +20,30 @@ export const GOAL_MAX = 300
 export const LINE_MAX = 200
 export const SHIPPED_MAX = 12
 
+/**
+ * What does not hold the box (#3864): none of it is work the session still has to do, so a session
+ * that counts it as unfinished never shows the box. The last sentence is the rule for a step of
+ * Dan's on the steps card. The tool refuses for none of this: only the session can tell whose a
+ * step is. The end of turn review instructions say the same in Dan's voice, and
+ * tests/test-goal-box-wording.sh holds them to these words.
+ */
+export const NOT_HELD =
+  'These do not hold the box, since none is work of yours: a step only Dan can take (a draft he sends, a command he types, a setting he changes), a check /check-later has put on the To Do list, and work he declined in a picker. A step of his on the steps card holds the box only while work of your own waits behind it.'
+
+/**
+ * What a session does when it holds the box back for work of its own (#3864): one line, on the turn
+ * it first holds it and again only when what it waits on changes. Silence there left Dan unable to
+ * tell a box held on purpose from one forgotten.
+ */
+export const HELD_SAY = 'say in one line what the box is waiting on, unless you have said so already and it has not changed'
+
+/** How each prompt of this mod that asks for the box ends: what to do when part of the work is still the session's. */
+export const heldTail = (): string => `If part of it is still yours to do, do not call it, and ${HELD_SAY}.`
+
 export const DESCRIPTION = [
   "Shows Dan the green Goal accomplished box: the goal, then what shipped. Call it once, in the turn where the work Dan asked for in this session is finished: every part of his request done, every pull request merged with the merge confirmed, every deploy confirmed live.",
+  NOT_HELD,
+  `If you hold the box back because part of the request is still yours to do, ${HELD_SAY}.`,
   'With a /goal set, do not call it yourself: when the goal\'s own check finds it met, you are told to call it.',
   'goal: what Dan asked for, in a few words of his own terms. shipped: one short line per thing that shipped, issues closed and pull requests merged and live, each naming its number (for example "#1563 closed: Goal accomplished box", "PR #1700 merged and live").',
   'It refuses while anything is still in flight (an agent still running, a merge or deploy not confirmed, a pull request this session touched still open), naming what; settle that and call it again. It shows once per thing Dan asked for: once for his message, and again once work he then picked in a picker is finished (an answer you did no work after is not a new request).',
@@ -237,7 +259,37 @@ export const cardedSince = (verdicts: MergeFacts['verdicts'], since: number, box
  * before he picked more work in a picker, and this is asked when none was shown for that work.
  */
 export const askDoneText = (): string =>
-  `GOAL ACCOMPLISHED? Since Dan's last message a pull request merged and its is it live card was made, nothing this session started is still in flight, and no Goal accomplished box was shown for what he last asked for (his message, or work he has picked in a picker since). If every part of what Dan asked for is finished, call ${TOOL} now with goal set to what he asked for and shipped listing what shipped, one short line each. If part of it is still to do, do not call it and say nothing of the box.`
+  `GOAL ACCOMPLISHED? Since Dan's last message a pull request merged and its is it live card was made, nothing this session started is still in flight, and no Goal accomplished box was shown for what he last asked for (his message, or work he has picked in a picker since). If every part of what Dan asked for is finished, call ${TOOL} now with goal set to what he asked for and shipped listing what shipped, one short line each. ${heldTail()}`
+
+/**
+ * Manual steps' record that the session recorded the last open step of a card through steps_done
+ * (#3864), as its state holds it: when, which tells one such moment from the next, and how many of
+ * the card's steps were done in this session and were this session's own.
+ */
+export type Emptied = { at: number; done: number }
+
+/**
+ * Manual steps' record as read, held to the shape its contract gives (L50), or why it is not in
+ * that shape. Absent or null is no record: manual steps not loaded, or no card worked through yet.
+ */
+export const emptiedOf = (value: unknown): Emptied | null | { why: string } => {
+  if (value === undefined || value === null) return null
+  const e = value as { at?: unknown; done?: unknown }
+  if (typeof e !== 'object' || Array.isArray(e)) return { why: 'it is not a record' }
+  if (typeof e.at !== 'number' || !Number.isFinite(e.at)) return { why: 'it has no time' }
+  if (typeof e.done !== 'number' || !Number.isInteger(e.done) || e.done < 0) return { why: 'it has no count of steps done' }
+  return { at: e.at, done: e.done }
+}
+
+/**
+ * What the session is told, with no /goal, once it has recorded the last open step of a steps card
+ * and no box was shown for the request (#3864). The end of turn review asks for the box while the
+ * card's steps are still open, so the turn a card empties on is often the one the work finishes on,
+ * after that review has run. "Before anything else in this turn": a command or an edit first makes
+ * it a turn with a review of its own to come, and the call would wait for that.
+ */
+export const askCardText = (): string =>
+  `GOAL ACCOMPLISHED? Every step on the manual steps card has now been recorded, and no Goal accomplished box was shown for what Dan last asked for. If every part of it that is yours to do is finished, call ${TOOL} now, before anything else in this turn, with goal set to what he asked for and shipped listing what shipped, one short line each. ${heldTail()}`
 
 /** What the session is told when its /goal's check finds it met: call the tool now. */
 export const askText = (condition: string): string =>

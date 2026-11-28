@@ -1,7 +1,7 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
 import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedIn, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, held as heldFor, heldNote, heldSteps, keepAdded, keepFinished, nextStep, paneColumns, pinnedBy, pressed, sent, unheld, untoldSteps, VERDICTS } from './card.ts'
+import { cardFrom, cardLines, carriedIn, carriedNote, donePrompt, DROPPED_AFTER_MS, emptiedBy, finish, fold, held as heldFor, heldNote, heldSteps, keepAdded, keepFinished, nextStep, paneColumns, pinnedBy, pressed, sent, unheld, untoldSteps, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
 import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
 import { clearTurnPages, notePinned, pagesAtStop, registerPages } from './pages.ts'
@@ -29,6 +29,8 @@ const AMBER = 'warning'
 const cardRef = { plugin: 'manual-steps', key: 'card' } as const
 const placeRef = { plugin: 'manual-steps', key: 'place' } as const
 const waitingRef = { plugin: 'manual-steps', key: 'waiting' } as const
+// When Claude's verdict last finished the last open step of a card, for the goal box (#3864).
+const emptiedRef = { plugin: 'manual-steps', key: 'emptied' } as const
 
 // An error as words, a member another mod's loaded copy lacks said as the one sentence naming the
 // skew and its remedy (#1281, mod-kit's hooks/skew.ts, of which hooks/mod-kit/skew.ts is the copy).
@@ -654,6 +656,28 @@ const withdrawStep: Hook<'manualSteps.withdraw'> = async ($, e) => {
   return { value: { isWithdrawn } }
 }
 
+/**
+ * Keeps that Claude's verdict finished the last open step of `card` (#3864), for a mod that acts on
+ * a card worked through: the goal box asks the session about its box then. Only a verdict through
+ * steps_done is kept. A step another mod finishes or takes off through the noun is that mod's own
+ * housekeeping, and the close this session card goes that way. The step is recorded by now, so a
+ * record that cannot be kept is said in the debug log and never fails the verdict.
+ */
+const noteEmptied = async ($: EngineInterface, card: StepsCard, at: number): Promise<void> => {
+  let session: string | undefined
+  try {
+    const id: unknown = await $.session.id()
+    if (typeof id === 'string' && id) session = id
+  } catch (err) {
+    $.ui.log(`manual-steps: could not read this session's id, so a step done on the card counts as this session's whoever pinned it: ${message(err)}`, { to: 'debug' })
+  }
+  try {
+    await $.state.set(emptiedRef, emptiedBy(card, session, at))
+  } catch (err) {
+    $.ui.log(`manual-steps: could not record that the last step on the card was recorded, so the goal box is not told: ${message(err)}`, { to: 'debug' })
+  }
+}
+
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -836,6 +860,7 @@ export const register: Register = on => {
     if ('refusal' in out) return { deny: out.refusal }
     const done = nextStep(out.card) === undefined
     if (done) await change($, () => ({ card: null, out: undefined }))
+    if (done) await noteEmptied($, out.card, at)
     await refresh($)
     return { result: done ? 'Every step is finished, so the card is gone.' : `Step ${String(input.step)} recorded; ${left(out.card)}.` }
   }).catch(($, e, next) => cutOwn('the manual steps mod', next))

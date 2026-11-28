@@ -90,6 +90,23 @@ export type StepsCard = {
   isCarried?: boolean
 }
 
+/**
+ * That Claude's verdict (steps_done) finished the last open step of a card, so the card went
+ * (#3864). Another mod reads it from this mod's state to act on a card worked through: the goal box
+ * asks the session about its box. A step another mod finishes or takes off through the noun writes
+ * none.
+ */
+export type StepsEmptied = {
+  /** When, in epoch milliseconds, which tells one such moment from the next. */
+  at: number
+  /**
+   * How many of the card's steps were done in this session, checked by Claude or taken on Dan's
+   * word, and were this session's own or name no session. None when every step left was taken off
+   * undone, was found done when pinned, or was another session's or another mod's.
+   */
+  done: number
+}
+
 /** A step another mod hands the card (#1107): the steps tool's own fields, a link or a location required. */
 export type ManualStepsAdded = {
   title: string
@@ -150,8 +167,9 @@ declare module 'claude-code' {
     /**
      * The card the pane and band draw from, where it is shown (the band, or the pane by its id),
      * and the turn a Done waits on; and the main turn running now, by its id, or null (#734, #1703).
-     * In $.state so a reload keeps them. And the pages of steps published this turn (#1811).
+     * In $.state so a reload keeps them. And the pages of steps published this turn (#1811), and
+     * the last time Claude's verdict finished a card's last open step (#3864).
      */
-    'manual-steps': { card: StepsCard | null; place: StepsPaneId | 'band' | null; waiting: StepsWaiting | null; runningTurn: string | null; pages: StepsPages | null }
+    'manual-steps': { card: StepsCard | null; place: StepsPaneId | 'band' | null; waiting: StepsWaiting | null; runningTurn: string | null; pages: StepsPages | null; emptied: StepsEmptied | null }
   }
 }

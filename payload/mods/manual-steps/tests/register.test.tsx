@@ -2184,3 +2184,110 @@ test('a held Done answered not done, pressed again while idle, goes once and is 
   await w.clock.settle()
   expect(w.prompts).toEqual(['step 1 done'])
 })
+
+// ---- The record that the card emptied (#3864) ----
+// The goal box asks the session about its box once the last open step has been recorded through
+// steps_done. This mod keeps, in its state, when that happened and how many of this session's own
+// steps were done, so the goal box can tell a card Dan worked through from one taken off undone.
+const emptiedSets = (on: On) => {
+  const sets: unknown[] = []
+  on('state.set', async ($s, e, next) => {
+    const x = e as { key?: string; value?: unknown }
+    if (x.key === 'emptied') sets.push(x.value)
+    return next(e)
+  })
+  return sets
+}
+const EMPTIED_AT = Date.UTC(2026, 10, 27, 20, 0)
+
+test('the last open step recorded as done leaves a record of when, and of how many steps were done; a step still open leaves none (#3864)', withKit, async ($, on) => {
+  mock.clock(on, { now: EMPTIED_AT })
+  const sets = emptiedSets(on)
+  world(on)
+  await start($)
+  await hand($, [step(), step({ title: 'Purge the cache' })])
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/^Step 1 recorded/)
+  expect(sets).toEqual([])
+  expect(await call($, VERDICT, { step: 2, checked: 'per-you' })).toBe('Every step is finished, so the card is gone.')
+  expect(sets).toEqual([{ at: EMPTIED_AT, done: 2 }])
+})
+
+test('a card whose every step was taken off undone leaves a record that says none was done; one done beside one taken off says one (#3864)', withKit, async ($, on) => {
+  mock.clock(on, { now: EMPTIED_AT })
+  const sets = emptiedSets(on)
+  world(on)
+  await start($)
+  await hand($, [step()])
+  expect(await call($, VERDICT, { step: 1, checked: 'withdrawn' })).toMatch(/card is gone/)
+  expect(sets).toEqual([{ at: EMPTIED_AT, done: 0 }])
+  await hand($, [step(), step({ title: 'Purge the cache' })])
+  await call($, VERDICT, { step: 1, checked: 'checked' })
+  expect(await call($, VERDICT, { step: 2, checked: 'withdrawn' })).toMatch(/card is gone/)
+  expect(sets).toEqual([{ at: EMPTIED_AT, done: 0 }, { at: EMPTIED_AT, done: 1 }])
+})
+
+test('a step found done when it was pinned is not counted as done in this session (#3864)', withKit, async ($, on) => {
+  mock.clock(on, { now: EMPTIED_AT })
+  const sets = emptiedSets(on)
+  world(on)
+  await start($)
+  await hand($, [step({ checked: 'already-done' }), step({ title: 'Purge the cache' })])
+  expect(await call($, VERDICT, { step: 2, checked: 'checked' })).toMatch(/card is gone/)
+  expect(sets).toEqual([{ at: EMPTIED_AT, done: 1 }])
+})
+
+test('a step another session pinned, carried in and pinned again here, is not counted as this session\'s (#3864)', withKit, async ($, on) => {
+  mock.clock(on, { now: EMPTIED_AT })
+  const sets = emptiedSets(on)
+  const kept: StepsCard = { heading: 'Chrome sign out', steps: [{ title: 'Sign in again', url: 'https://b.example', pinnedBy: 's0' }] }
+  world(on, {}, { [`card:${ROOT}`]: kept })
+  await start($)
+  await hand($, [step({ title: 'Sign in again', url: 'https://b.example' })], 'Chrome sign out')
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/card is gone/)
+  expect(sets).toEqual([{ at: EMPTIED_AT, done: 0 }])
+})
+
+test('a step pinned while the session\'s id could not be read is counted: whose it is cannot be told, and it was done here (#3864)', withKit, async ($, on) => {
+  mock.clock(on, { now: EMPTIED_AT })
+  const sets = emptiedSets(on)
+  world(on, { sessionFails: true })
+  await start($)
+  await hand($, [step()])
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/card is gone/)
+  expect(sets).toEqual([{ at: EMPTIED_AT, done: 1 }])
+})
+
+test('a step another mod finishes or takes off through the noun leaves no record, though the card goes (#3864)', withCaller, async ($, on) => {
+  const sets = emptiedSets(on)
+  const w = world(on)
+  await start($)
+  await addStep($)
+  expect(await finishStep($)).toEqual({ isFinished: true })
+  expect(stored(w.mem)).toBeUndefined()
+  await addClose($)
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  expect(await band($)).toBeUndefined()
+  expect(sets).toEqual([])
+})
+
+test('a step another mod added and finished is not counted when the session then records the last step (#3864)', withCaller, async ($, on) => {
+  mock.clock(on, { now: EMPTIED_AT })
+  const sets = emptiedSets(on)
+  world(on)
+  await start($)
+  await hand($, [step()])
+  await addStep($)
+  expect(await finishStep($)).toEqual({ isFinished: true })
+  expect(await call($, VERDICT, { step: 1, checked: 'withdrawn' })).toMatch(/card is gone/)
+  expect(sets).toEqual([{ at: EMPTIED_AT, done: 0 }])
+})
+
+test('the record cannot be kept: the step is recorded all the same, and the debug log says the goal box is not told (#3864)', withKit, async ($, on) => {
+  const w = world(on)
+  on('state.set', async ($s, e, next) => ((e as { key?: string }).key === 'emptied' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await hand($, [step()])
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toBe('Every step is finished, so the card is gone.')
+  expect(stored(w.mem)).toBeUndefined()
+  expect(w.logs.filter(l => l.startsWith('manual-steps: could not record that the last step on the card was recorded, so the goal box is not told: '))).toHaveLength(1)
+})
