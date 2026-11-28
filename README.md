@@ -7468,7 +7468,8 @@ untested says so on the summary's first line and in a second notice,
 such a run is neither compared nor kept as main's baseline. None of it can turn a run red: the tool
 exits 0 and every step it adds continues on an error. `merge-when-ready.sh` reads those notices back
 from each check's annotations before it merges and prints them, so a merge's log says what its green
-did not cover.
+did not cover. Checks that reused an earlier green run of the same tree carry no notice of their own;
+the helper follows them to that run's notice and prints it too, naming the run (#3312, 2026-11-26).
 
 It also runs, on the merging Mac, what the checks did not test where the pull request touches it
 (Dan's decision of 2026-11-20, "Only suites the change touches"). Once every gate allows the merge,

@@ -749,6 +749,10 @@ check_eq "#3312 a run that reused an earlier one of the same tree merges" "0" "$
 check "#3312 saying which run it followed" "The checks at ${UT_HEAD:0:7} reused workflow run 800, which tested the same tree (${UT_TREE:0:12}, on commit 2222222), so its list of what it did not test is used." "$out"
 check_eq "#3312 its records fetched from that run" "1" "$(count gh-calls 'run download 800')"
 check_eq "#3312 and the suite the change touches run here" "1" "$(count runner-calls 'part ')"
+# The log of the merge names what that run left untested, as it does for a run with a notice of its
+# own: until 2026-11-26 it said only that the reused run's list was used, and named none of it.
+check "#3312 the merge log names what the reused run did not test" "Check suite of workflow run 800, which the checks at ${UT_HEAD:0:7} reused, Not tested by the checks: 3 parts in 3 suites were not tested on the runner" "$out"
+check "#3312 each part of it, the ones not run here too" "    test-a.sh: no Chrome" "$out"
 ut_reused "$UT_TREE"; rm -rf "$ST/artifacts-800"
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 a reused run whose records are gone refuses the merge" "1" "$rc"
