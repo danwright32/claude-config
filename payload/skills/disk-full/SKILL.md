@@ -112,6 +112,21 @@ space warning names these holders itself when swap is more than 2% of the disk a
 already firing, and, with the disk to spare, when swap is also more than 90% of its own total (exit
 5, #2559).
 
+A process left running with no parent can be the cause too, and no folder size shows it either. On
+2026-11-24 19 shells a builder agent's commands had started ran on for about 90 minutes after the
+agent ended, churning temporary files: free space fell 42 GB, through the file event log and swap,
+while nothing under the home folder grew. A low or falling warning names any process with parent 1
+whose process group leader is gone, that has run at least 10 minutes and has used at least 0.1% of
+one processor over its life (#3561), and hands over `ps -o pid,ppid,etime,time,command -p` with the
+ids it found, which only reads. To list the candidates yourself (launchd's own jobs lead their
+group, so they are left out):
+
+```bash
+ps -axS -o pid,ppid,pgid,etime,time,comm | awk 'NR == 1 || ($2 == 1 && $1 != $3)'
+```
+
+Whether to stop one is Dan's decision, never a session's: the warning names, and nothing stops it.
+
 ### 4. Where the weight is
 
 ```bash
