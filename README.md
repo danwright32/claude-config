@@ -12506,10 +12506,10 @@ read for it. A box refused this way and
 not shown by the turn's end is asked for once more, once per request, by a message the mod sends
 in place of the turn end's other question, because the hooks do not hand a review over at every
 such turn's end. The mod asks the record again before it sends that message, or any other prompt
-about the box at a turn's end (the question about shipped work, the prompt for a met /goal, the
-later ask below): none is sent over a review that was handed over that turn and that Dan has not
-answered, since each starts a new turn, where the record reads none and the box would show behind
-the unanswered review. The message and the question are then spent for the request, the prompt
+about the box at a turn's end: none is sent over a review that was handed over that turn and
+that Dan has not answered, since each starts a new turn, where the record reads none and the box
+would show behind the unanswered review. The message and the question about shipped work are
+then spent for the request, the prompt
 for a met /goal waits for a later turn end, and Dan is told in one line he sees, once per request,
 that the box is waiting on the review (his choice of 2026-11-27: "One line, then one later ask").
 The record reads the same when he left a picker unanswered, when the session did the review and

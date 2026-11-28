@@ -596,9 +596,8 @@ const reviewNow = async ($: EngineInterface, prompts: number): Promise<ReviewWai
 
 /**
  * What the record says at a turn's end, asked before any prompt of this mod about the box is sent.
- * Every such prompt (the one message after a refused call, the question about shipped work, the
- * prompt for a met /goal) starts a new turn, the record reads none under a new prompt, and the call
- * the prompt asks for would show the box. So where a review was handed over this turn and Dan has
+ * Every such prompt starts a new turn, the record reads none under a new prompt, and the call the
+ * prompt asks for would show the box. So where a review was handed over this turn and Dan has
  * not answered it (he closed its picker, it closed while he was away, the session asked in prose
  * and stopped), no prompt is sent, and a prompt added later must ask here first too. A record that
  * cannot be read stops nothing, since a box that never shows is the worse fault, and the prompt that
@@ -1165,7 +1164,7 @@ export const register: Register = on => {
     const seq = (await $.state.get(closeSeqRef)).value ?? 0
     await $.state.set(closeAnswerRef, { seq, text: e.answer })
     $.clock.after(QUIET_MS, () => void closeCheck($, seq).catch(err => debug($, `the close this session card could not be judged (${errorText(err, MOD)})`)))
-    // #3843: none of the three prompts below is sent over an end of turn review Dan has not answered
+    // #3843: no prompt below is sent over an end of turn review Dan has not answered
     // (endRecord). The record is asked by whichever is about to send, once for this turn end.
     const record = endRecord($)
     // #3843: an earlier request's held box, once Dan has typed since. One prompt a turn end, so this

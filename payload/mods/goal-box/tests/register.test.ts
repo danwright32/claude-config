@@ -2767,9 +2767,9 @@ test("Dan asleep by the turn's end, with a review handed over before he fell asl
   expect(await cards()).toEqual([])
 })
 
-// The mod's two older prompts at a turn's end start a new turn just as the message above does, so
-// each would show the box behind an unanswered review the same way. No prompt of the mod about the
-// box is sent over a review that is handed over and not answered.
+// Every prompt of the mod about the box at a turn's end starts a new turn just as the message above
+// does, so each would show the box behind an unanswered review the same way. None is sent over a
+// review that is handed over and not answered.
 const GOAL_PROMPT = 'GOAL ACCOMPLISHED. The /goal'
 
 test("an unanswered review at the turn's end stops the question about shipped work too, with or without an earlier refused call, and for the rest of the request (#3843, #2523)", withLive, async ($, on) => {
