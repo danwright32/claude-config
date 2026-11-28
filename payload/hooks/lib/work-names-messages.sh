@@ -16,7 +16,8 @@
 #
 # WHAT A PUSH ADDS. Every commit reachable from HEAD that is on neither the branch's upstream (already
 # pushed) nor the remote's default branch (already published, or about to be by somebody else's
-# merge). A branch with no upstream is therefore judged against the default branch alone, and a
+# merge). A branch with no upstream, or one whose upstream is a local branch (which says nothing of
+# what the remote holds, claude-config#3454), is therefore judged against the default branch alone, and a
 # repository that knows no remote at all has nothing published, so every commit in it is one the
 # push adds: judged, never skipped. Merge commits are judged too, since a squash message carries
 # theirs. HEAD is what is judged, as every other push gate here judges it.
@@ -44,7 +45,7 @@ esac
 [ -n "$WNM_HERE" ] && WNM_HERE="$(cd "$WNM_HERE" 2>/dev/null && pwd)"
 
 wnm_push_messages() {   # $1 = the push command
-  local scanner="${WNM_SCANNER:-$WNM_HERE/work-names.py}" up def stream rc
+  local scanner="${WNM_SCANNER:-$WNM_HERE/work-names.py}" up named def stream rc
   local -a not=()
   WNM_OUT=""; WNM_JUDGED=""; WNM_BASE=""
   if ps_commit_in_chain "$1"; then
@@ -52,13 +53,20 @@ wnm_push_messages() {   # $1 = the push command
     return 3
   fi
   git rev-parse --verify --quiet HEAD >/dev/null 2>&1 || return 0
-  up="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
-  git rev-parse --verify --quiet "$up" >/dev/null 2>&1 || up=""
+  # A commit is left out only when the REMOTE holds it. The upstream says so only when it is a
+  # branch on a remote, read through the library and never here (claude-config#3454): a local
+  # upstream nobody pushed took its own commits out of the messages read, though this push sends
+  # them. Whether it is also this branch's base does not matter here, since a commit on any branch
+  # of the remote is published.
+  up="$(ps_upstream_remote 2>/dev/null)" || up=""
+  [ -z "$up" ] || git rev-parse --verify --quiet "$up" >/dev/null 2>&1 || up=""
+  named="$(ps_upstream_ref 2>/dev/null)" || named=""
   def="$(ps__default_ref 2>/dev/null)"
   [ -n "$up" ] && not+=("^$up")
   [ -n "$def" ] && [ "$def" != "$up" ] && not+=("^$def")
   if [ -n "$up" ] && [ -n "$def" ] && [ "$up" != "$def" ]; then WNM_JUDGED="the commits on neither $up nor $def"
   elif [ -n "$up" ]; then WNM_JUDGED="the commits not on $up"
+  elif [ -n "$def" ] && [ -n "$named" ]; then WNM_JUDGED="the commits not on $def (the branch's upstream, $named, is a branch of this checkout, which says nothing of what the remote holds)"
   elif [ -n "$def" ]; then WNM_JUDGED="the commits not on $def (the branch has no upstream yet)"
   else WNM_JUDGED="every commit, since this repository knows no remote branch to compare against"; fi
   WNM_BASE="$(git merge-base HEAD "${up:-$def}" 2>/dev/null)"

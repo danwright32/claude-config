@@ -2495,6 +2495,29 @@ refs widget#5"
 out="$(wn_fire "$RW" "git push")"; rc=$?
 [ "$rc" -eq 0 ] && check "#1995 a commit already on the upstream is not judged again, only what the push adds" ok \
   || check "#1995 a commit already on the upstream is not judged again, only what the push adds" "exit=$rc out=$out"
+# An upstream that is a LOCAL branch nobody pushed says nothing about what the remote holds
+# (claude-config#3454): its commits are ones this push adds, and their messages are read.
+git -C "$RW" checkout -q -b localbase main
+wn_commit "$RW" "Stage the reader
+
+it named acme-hq/widget#7 on a branch nobody pushed"
+named="$(git -C "$RW" rev-parse --short HEAD)"
+git -C "$RW" checkout -q -b onlocal
+wn_commit "$RW" "Use the staged reader
+
+refs widget#8"
+git -C "$RW" branch -q --set-upstream-to=localbase >/dev/null 2>&1
+[ "$(git -C "$RW" rev-parse --symbolic-full-name '@{u}' 2>/dev/null)" = "refs/heads/localbase" ] \
+  && check "#3454 fixture: the branch's upstream is a local branch origin does not hold" ok \
+  || check "#3454 fixture: the branch's upstream is a local branch origin does not hold" "upstream=$(git -C "$RW" rev-parse --symbolic-full-name '@{u}' 2>&1)"
+out="$(wn_fire "$RW" "git push origin onlocal")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "commit $named:3: a work organisation name" <<< "$out" \
+  && check "#3454 a commit on a never pushed local upstream is one the push adds, and its message is read" ok \
+  || check "#3454 a commit on a never pushed local upstream is one the push adds, and its message is read" "exit=$rc out=$out"
+grep -q -F "the commits not on origin/main" <<< "$out" \
+  && check "#3454 and the refusal says what was judged, never naming the local upstream as already pushed" ok \
+  || check "#3454 and the refusal says what was judged, never naming the local upstream as already pushed" "out=$out"
+git -C "$RW" checkout -q feature
 # A work REPOSITORY named in a new commit's message, in plain prose, is published by the squash merge
 # as surely as an organisation, so it stops the push too (claude-config#2111). The list is the suite's
 # fake one, so the name is an invented one.

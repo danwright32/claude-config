@@ -35,7 +35,8 @@
 # push would be reviewed one commit short. So the base comes from ps_pushed_base in lib/push-scope.sh,
 # which tries, each step only when the one before it cannot answer:
 #   1. the upstream's previous tip, from its reflog, when it is an ancestor of HEAD: exactly what
-#      this push added, on a branch pushed before;
+#      this push added, on a branch pushed before (an upstream that is not the branch's base, a
+#      local branch above all, is not read while step 2 can answer, claude-config#3454);
 #   2. the merge-base with the remote's default branch: the whole branch, on a first push;
 #   3. ps_merge_base over ps_base_ref, the plain push answer, which lands on HEAD~1.
 #
