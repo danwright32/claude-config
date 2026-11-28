@@ -42,6 +42,8 @@ import { CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOO
 //    Since #3843 the box also waits for the turn's end of turn review: it is refused while that
 //    review is still to come or is handed over and not on record as answered, by the review's own
 //    record (review.ts), and a box refused so and never shown is asked for once at the turn's end.
+//    No prompt of this mod about the box is sent at a turn's end over a review that was handed
+//    over that turn and is not answered (endRecord).
 //
 // The box is the tool's result: drawn as mod-kit's card, its heading in the success colour, and as
 // text led by the goal wherever the card is not drawn (#2512).

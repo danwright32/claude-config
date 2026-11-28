@@ -3007,6 +3007,10 @@ test("the review's last step is one command whatever the transcript's path holds
   expect(answeredCommand(`${under}'s MacBook Pro/.claude/projects/-repo/s1.jsonl`)).toBe(
     `python3 ~/.claude/hooks/lib/review-record.py answered --transcript '${under}'\\''s MacBook Pro/.claude/projects/-repo/s1.jsonl'`,
   )
+  // And that command, quoted so, is known for the main conversation's last step under such a path.
+  const apostrophe = `${under}'s MacBook Pro/.claude/projects/-repo/s1.jsonl`
+  expect(answersMainReview(answeredCommand(apostrophe), apostrophe)).toBe(true)
+  expect(answersMainReview(answeredCommand(`${under}/other.jsonl`), apostrophe)).toBe(false)
   expect(reviewRead({ exitCode: 0, stdout: '{"state": "handed", "turn": "p1"}\n', stderr: '' })).toEqual({ state: 'handed' })
   expect(reviewRead({ exitCode: 0, stdout: '{"state": "none"}', stderr: 'a warning' })).toEqual({ state: 'none' })
   expect(reviewRead({ exitCode: 3, stdout: '{"state": "answered"}', stderr: 'review-record: it could not be read\n' })).toEqual({ unread: 'review-record: it could not be read' })

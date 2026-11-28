@@ -419,10 +419,13 @@ kept += [os.path.basename(put(n, t, age=a)) for n, t, a in (
     ('mine.jsonl.review-handed.json', 'my own notes, not a record', 2 * HOUR),
     ('mine.jsonl.review-answered.json', '{"turn": "p1"}', 2 * HOUR),
     ('list.jsonl.review-handed.json', '[1, 2]', 2 * HOUR),
+    # Reads as a record, and is far larger than any record this file writes.
+    ('big.jsonl.review-handed.json', A_RECORD + ' ' * 70000, 2 * HOUR),
 )]
-# A folder named as a record, a link named as a record, and a record inside a folder beneath.
+# A folder named as a record, a link named as a record (pointing at a file that holds one), and a
+# record inside a folder beneath.
 os.mkdir(os.path.join(folder, 'dir.jsonl.review-handed.json'))
-os.symlink(os.path.join(folder, 'notes.txt'), os.path.join(folder, 'link.jsonl.review-handed.json'))
+os.symlink(os.path.join(folder, 'x.review-handed.json'), os.path.join(folder, 'link.jsonl.review-handed.json'))
 os.mkdir(os.path.join(folder, 'beneath'))
 with open(os.path.join(folder, 'beneath', 'deep.jsonl.review-handed.json'), 'w') as f:
     f.write(A_RECORD)
@@ -437,7 +440,7 @@ code, out, err = record('handed', '--transcript', t9)
 kept += ['kept.jsonl.review-handed.json']
 left = sorted(os.listdir(folder))
 check('a hand over removes the records of transcripts that have gone and its own temp files past an hour old', None if not [n for n in removed if n in left] else 'still there: %r' % [n for n in removed if n in left])
-check('and nothing else: a fresh temp file, a file not named as it names one, a file that holds no record of its, a folder, a link, a folder beneath, the record of a transcript that is a dangling link', None if left == sorted(kept) else 'gone that should have stayed: %r; there that should not be: %r' % (sorted(set(kept) - set(left)), sorted(set(left) - set(kept))))
+check('and nothing else: a fresh temp file, a file not named as it names one, a file that holds no record of its or is far too large to be one, a folder, a link, a folder beneath, the record of a transcript that is a dangling link', None if left == sorted(kept) else 'gone that should have stayed: %r; there that should not be: %r' % (sorted(set(kept) - set(left)), sorted(set(left) - set(kept))))
 check('the record beneath is untouched', None if os.path.exists(os.path.join(folder, 'beneath', 'deep.jsonl.review-handed.json')) else 'it was removed')
 check('and it says nothing of what it left alone, the folder named as a record included', None if code == 0 and not err else 'exit %d, it said %r' % (code, err))
 
