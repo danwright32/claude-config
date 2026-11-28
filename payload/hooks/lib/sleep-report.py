@@ -679,17 +679,61 @@ def issues_named(keys):
     return and_list(names)
 
 
-def undone_row(n, held):
+# A refusal listed on its own names the call and the work it fell on (#3210). On 2026-11-18 a wake
+# message listed 45 rows of "Failed a repo not named: the auto mode classifier refused Bash:
+# Classifier unavailable", with nothing to act on. The refusal note never records a repository or
+# an issue (scope modes refusalNote writes tool, reason, what, by and cwd), so the row names the
+# issues its session held then, and says "not recorded" for each of these the record lacks rather
+# than calling an absent field a repository not named.
+REFUSED_PREFIX = "the auto mode classifier refused "
+
+
+def is_refusal(n):
+    """A failed note for a refusal by auto mode's check, as scope modes writes it, or as it did
+    before #3158 recorded the reason (its text, and its tool)."""
+    tool = n.get("tool")
+    return (n["kind"] == "failed" and isinstance(tool, str) and tool.strip() != ""
+            and (isinstance(n.get("reason"), str) and n["reason"].strip() != "" or text_of(n).startswith(REFUSED_PREFIX)))
+
+
+def _call(n):
     what = " ".join(str(n.get("what") or "").split())
-    tool = str(n.get("tool") or "a call not named")
-    if not held:
+    return "%s: %s" % (str(n.get("tool") or "a call not named"), what or "what it was not recorded")
+
+
+def _at(n):
+    return et_time(n["at"]) if num(n.get("at")) else "a time not recorded"
+
+
+def _session_unrecorded(n):
+    return not isinstance(n.get("by"), str) or not n["by"]
+
+
+def refusal_row(n, held):
+    reason = " ".join(str(n.get("reason") or "").split())
+    if not reason:
+        text, prefix = text_of(n), "%s%s: " % (REFUSED_PREFIX, n.get("tool"))
+        reason = text[len(prefix):].strip() if text.startswith(prefix) else ""
+    if _session_unrecorded(n):
+        during = "by a session not recorded, so the issue it was for is not known"
+    elif not held:
+        during = "the issue it was for not recorded (its session held no claim then)"
+    else:
+        during = "while %s %s being worked" % (issues_named(held), "was" if len(held) == 1 else "were")
+    return "Refused by auto mode's safety check at %s (%s), %s: %s" % (
+        _at(n), reason or "reason not recorded", during, _call(n))
+
+
+def undone_row(n, held):
+    if _session_unrecorded(n):
+        why = "by a session not recorded, so whether its work went on is not known"
+    elif not held:
         why = "and its session finished no work after it"
     elif len(held) == 1:
         why = "while %s was being worked and not finished after it" % issues_named(held)
     else:
         why = "while %s were being worked, not all finished after it" % issues_named(held)
-    return "Refused with no verdict at %s and not sent again unchanged, %s: %s%s" % (
-        et_time(n["at"]) if num(n.get("at")) else "an unknown time", why, tool, ": %s" % what if what else "")
+    return "Refused with no verdict at %s and not sent again unchanged, %s: %s" % (_at(n), why, _call(n))
 
 
 def no_verdict_folds(notes):
@@ -930,6 +974,9 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
             continue
         if n["kind"] == "parked":
             row = "Parked %s%s: %s" % (where(n), " (branch %s)" % n["branch"] if n.get("branch") else "", text_of(n))
+        elif is_refusal(n):
+            # Listed one per line, whether the check judged it or a group too small to fold (#3210).
+            row = refusal_row(n, held_at(notes, n.get("by"), n["at"]) if num(n.get("at")) else [])
         elif n["kind"] == "failed":
             row = "Failed %s: %s" % (where(n), text_of(n))
         else:

@@ -13062,7 +13062,12 @@ never sent again unchanged and run, and after which its session did not finish t
 (#3223). That work counts as finished when every issue the session had claimed by then, and not yet
 ended, was noted done afterwards; a session holding no claim finished its work when it later noted
 something done or a step of progress. A real refusal by the check is always
-its own row. At wake, Parked and failed rows in the same words are one picker saying how many there
+its own row, and so is each of one or two refusals with no verdict for a reason. Every refusal
+listed on its own names its time in ET, the reason, the call (its command or file) and the issues
+its session had claimed and not yet ended then, and says "not recorded" for each of those the
+night's notes do not hold: a refusal note records no repository or issue of its own, so a session
+that claimed nothing gives none (#3210). The folded line's count and the refusals listed outside it
+add up to every refusal in the notes, a sum the report's suite checks. At wake, Parked and failed rows in the same words are one picker saying how many there
 are (#3223). How an issue ended is read from one record, its session's done note (#3276): an end
 the overnight driver wrote (its park after 2 hours, a limit the code sets, not measured; its
 attempts limit; its circuit breaker) is not
