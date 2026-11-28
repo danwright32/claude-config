@@ -609,7 +609,7 @@ def make(py_nodes, unknown_dir):
                     return "an archive, which Python runs by the __main__.py inside it"
                 return None
             has_main = self.is_file(os.path.join(path, "__main__.py"))
-            for folder in (path, (self.made_dirs.get(os.path.realpath(path)) or (None,))[0]):
+            for folder in (path, (self.dir_from(os.path.realpath(path)) or (None,))[0]):
                 try:
                     names = sorted(os.listdir(folder)) if folder else []
                 except OSError:

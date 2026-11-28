@@ -242,7 +242,7 @@ def make(shell_bang, assign, marker, unknown_dir, max_depth, runs_refused):
                     names.append("./" + rel if word.startswith("./") else rel)
             folder = os.path.realpath(os.path.join(base, os.path.dirname(word)))
             pattern = _glob_regex(os.path.basename(word))
-            for made in self.made:
+            for made in self.noted_files():
                 if os.path.dirname(made) == folder and re.fullmatch(pattern, os.path.basename(made)):
                     names.append(os.path.join(os.path.dirname(word), os.path.basename(made)))
             return names or [word]

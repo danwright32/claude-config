@@ -6316,15 +6316,22 @@ A text the shared reader gives up on (a quote left open, in a heredoc fed to a s
 file, a sourced file, a string handed to `bash -c` or `eval`, or the command itself) is cut crudely
 into whatever may be a command, words inside quotes included. A write among those may be words a
 shell only prints, so it never takes the place of what the gate noted before (claude-config#3878).
-A file written there keeps what it was noted to hold and also holds something the gate could not
-read; a folder copied there has every file under it unread; and a `PYTHONPATH` exported there is
+A file written there may hold what it was noted to hold, what is written, or something the gate
+could not read; a folder copied there has every file under it unread; and a `PYTHONPATH` exported there is
 one the gate could not read, so an import Python would look for on it is refused as a check that
 could not be made, while an import found beside the script is read as before. The same holds for
 a script on disk that such a text runs or sources, since the words that run it may be quoted.
 What such a text writes, copies or moves onto, moves away, removes or makes a folder is touched
-from then on, and so is a path above or below it. After that a note is replaced in one place
-(`note_set`) and only where the text is read whole and neither the target nor the source of a
-copy is touched; anywhere else it only gains, and the target is then touched too. A copy from a
+from then on, and so is a path above or below it. A note is set in one place (`note_set`), always
+as the write written last, which is how a gate that follows no such text reads the path. What the
+path held before is gone for certain only where the text is read whole and neither the target nor
+the source of a copy is touched; anywhere else it stays one more thing the path may hold, and the
+target is then touched too. Those things are never read as one text, where a held file with no
+newline at its end, or one longer than the gate reads, would take in or hide the text after it:
+one reader (`ways`) lists them, and the whole call is judged once for each (`Readings`), the write
+written last first, and refused if any of those runs refuses. One too long to read whole, more
+than `MAX_WAYS` of them for one path, or more than `MAX_READINGS` runs for one call, is refused
+as a check that could not be made. A copy from a
 touched source can fail whole and leave its target as it was: after `cp post.sh b`, a heredoc
 given up on that holds `rm calm.sh` and `cp -R calmdir calm.sh` makes `cp -R calm.sh b` fail, and
 `bash b` runs the post. A write of printed text gains only for a touched target, since a shell
