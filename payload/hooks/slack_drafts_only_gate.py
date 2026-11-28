@@ -2970,7 +2970,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         that was made from such a one (note_one). The copy that note stands for may be words a shell
         only prints, so the path may still be the file it was before, and a copy to it or from it
         is noted both ways (claude-config#3878)."""
-        return real in self.made_dirs_unsure and not os.path.isdir(real)
+        return real in self.made_dirs_unsure
 
     def copied_onto(self):
         """The piece a path gains where a copy into it as a directory may be a copy onto it as a
@@ -3095,22 +3095,21 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             came = (src_real, src.rstrip("/") or src)
             # A source that may still be a file (dir_unsure) leaves a target that may be one too.
             maybe_file = self.dir_unsure(src_real)
-            if not doubt:  # onto a path that is a file, a directory is not copied at all
-                if roughly:
-                    # The copy may be words a shell only prints, so it never stands in the place of
-                    # what the directory was noted as copied from before: that is kept beside it
-                    # (made_from_known), and every file under it is also unread. The directory is
-                    # still noted as one, copied from this source, so that a later copy, move or run
-                    # of it is followed to the source as it is in text read whole (#3878).
-                    was = self.made_dirs.get(real)
-                    if was and was != came and was not in self.made_dirs_kept.setdefault(real, []):
-                        self.made_dirs_kept[real].append(was)
-                    self.made_unknown.append((glob.escape(real.rstrip("/")) + "/*", roughly[0][2]))
-                self.made_dirs[real] = came
-                if roughly or maybe_file:
-                    # Never taken back: a later copy of a directory onto a path that is a file
-                    # fails, so no copy read whole shows the path to be a directory.
-                    self.made_dirs_unsure.add(real)
+            if roughly:
+                # The copy may be words a shell only prints, so it never stands in the place of what
+                # the directory was noted as copied from before: that is kept beside it
+                # (made_from_known), and every file under it is also unread. The directory is still
+                # noted as one, copied from this source, so that a later copy, move or run of it is
+                # followed to the source as it is in text read whole (claude-config#3878).
+                was = self.made_dirs.get(real)
+                if was and was != came and was not in self.made_dirs_kept.setdefault(real, []):
+                    self.made_dirs_kept[real].append(was)
+                self.made_unknown.append((glob.escape(real.rstrip("/")) + "/*", roughly[0][2]))
+            self.made_dirs[real] = came
+            if roughly or maybe_file:
+                # Never taken back: a later copy of a directory onto a path that is a file fails,
+                # so no copy read whole shows the path to be a directory.
+                self.made_dirs_unsure.add(real)
             if not maybe_file:
                 return
         pieces = self.pieces_of(src, where)

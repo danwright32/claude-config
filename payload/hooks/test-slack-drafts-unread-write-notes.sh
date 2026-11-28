@@ -306,7 +306,8 @@ refused "#3884 the same after a script read whole, sourced the same way, has had
 says "#3884 and the refusal says where Python looks could not be read" "$PYDOUBT"
 run_s "D=.; export PYTHONPATH=cleanlib; \$D ./kept-post.sh; \$D ./rough-post.sh"
 refused "#3884 a file that exports the path of a module that posts, read the same two ways"
-# The command the review of #3884 wrote for this. Both gates refuse it before the memo is asked.
+# A file that sources one by a variable, sourced from a string handed to eval both times: the
+# folder it runs in is not certain there, so it is refused before the memo is asked.
 run_s "export PYTHONPATH=postlib; eval '. ./via.sh'; export PYTHONPATH=postlib; eval '$(lines 'echo "a; . ./via.sh; b"' "$OPEN")' ; python3 run.py"
 refused "#3884 quoted words that source a file read earlier in a string handed to eval, which sources one by a variable"
 
@@ -345,6 +346,11 @@ run_s "cp -R postdir a; cp -R calmdir/ a; cp -R a b; bash b/run.sh"
 allowed "#3884 a folder copied over a copied folder in text read whole still replaces what it was copied from"
 run_s "cp -R calmdir made; cp calm.sh made; bash made/calm.sh; bash made/run.sh"
 allowed "#3884 a script copied into a folder copied in text read whole is read as before"
+# A copy that a shell can only make into a folder leaves the file of that name as it was.
+run_s "cp calm.sh made; $(fed 'cp calm.sh made/; bash made' "$(quoted 'cp -R calmdir made')" "$OPEN")"
+allowed "#3884 a copy to the path with a slash after it does not touch a file that quoted words name a folder copied onto"
+run_s "cp calm.sh made; $(fed 'cp calm.sh writer.sh made; bash made' "$(quoted 'cp -R calmdir made')" "$OPEN")"
+allowed "#3884 nor does a copy of two files to it"
 run_s "export PYTHONPATH=postlib; export PYTHONPATH=cleanlib; python3 run.py"
 allowed "#3878 an export the reader reads whole still replaces the one before it"
 run_s "eval '$(lines 'export PYTHONPATH=postlib' "$OPEN")' ; export PYTHONPATH=cleanlib; python3 run.py"
