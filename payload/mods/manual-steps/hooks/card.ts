@@ -312,9 +312,10 @@ export const carriedIn = (card: StepsCard): StepsCard => ({
  * that acts on a card worked through: when, and how many of its steps were done in this session
  * and were this session's own. Counted: a step Claude checked or took on Dan's word. Not counted:
  * one taken off undone, one found done when it was pinned or finished in an earlier session, one
- * another mod added (that mod finishes it, not Claude), and one another session pinned. A step
- * that names no session, or any step while this session's id is not known, is counted: whose it is
- * cannot be told, and it was done here.
+ * another mod added (that mod finishes it, not Claude), and one another session pinned, which
+ * includes one marked as an earlier session's whether or not this session's id is known. A step
+ * that names no session is counted, and so is one naming a session while this session's id is not
+ * known: whose it is cannot be told, and it was done here.
  */
 export const emptiedBy = (card: StepsCard, session: string | undefined, at: number): StepsEmptied => {
   const isDoneHere = (s: StepsStep) => (s.finished === 'checked' || s.finished === 'per-you') && !s.isEarlier && !s.isAdded
