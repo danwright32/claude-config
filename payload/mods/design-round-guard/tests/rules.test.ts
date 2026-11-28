@@ -80,6 +80,7 @@ import {
   keptInTemp,
   scriptHidesWrites,
   gitMove,
+  mayQuoteRedirect,
   movedFiles,
   pickedFiles,
   moveUnread,
@@ -622,6 +623,57 @@ test('#3279: gitMove reads what to ask git for each move, nothing for a move tha
   expect(pull && 'remedy' in pull ? pull.remedy : '').toContain('Run git fetch as its own command first')
   // The words a refusal quotes are cut short where a message makes them long.
   expect(g(`merge -m ${'x'.repeat(200)} topic`)?.said.length).toBe(120)
+})
+
+// #3651: mod-kit's reader gives a command's redirects among its words, each output redirect a word
+// of its own, and gitMove took every one for a commit. Given the call's text, it reads the move
+// without them; `words` here are as the reader gives them for the text beside them.
+test('#3651: gitMove reads a move without the redirects typed among its words, and with every word where a quote may make one of them an argument', () => {
+  const ask = (words: string[], typed = `git ${words.join(' ')}`) => {
+    const m = gitMove({ sub: words[0], args: words.slice(1) }, typed)
+    return m && 'ask' in m ? m.ask : m
+  }
+  const MAIN = { ask: 'merge', commits: ['origin/main'] }
+  for (const redirect of [['2>&1'], ['>&2'], ['2>&-'], ['>', 'merge.log'], ['>>', 'merge.log'], ['>|', 'merge.log'], ['2>', '/dev/null'], ['2>>', 'err.log'], ['&>', 'merge.log'], ['&>>', 'merge.log'], ['>&', 'merge.log'], ['<', '/dev/null'], ['0<', 'answers.txt'], ['>', 'merge.log', '2>&1'], ['>']]) {
+    expect({ redirect, ask: ask(['merge', '--ff-only', 'origin/main', ...redirect]) }).toEqual({ redirect, ask: MAIN })
+    expect({ redirect, ask: ask(['merge', ...redirect, '--ff-only', 'origin/main']) }).toEqual({ redirect, ask: MAIN })
+  }
+  // Every commit the move names is still one of its words, on either side of the redirect.
+  expect(ask(['merge', 'a', '2>&1', 'b', '>', 'merge.log', 'c'])).toEqual({ ask: 'merge', commits: ['a', 'b', 'c'] })
+  // An option's value is the word the shell leaves after it.
+  expect(ask(['merge', '-m', '2>&1', 'msg', 'topic'])).toEqual({ ask: 'merge', commits: ['topic'] })
+  // Each move is read the same way, and one left naming no commit is read as naming none.
+  expect(ask(['merge', '2>&1'])).toEqual({ ask: 'merge', commits: ['@{upstream}'] })
+  expect(ask(['rebase', 'origin/main', '2>&1'])).toEqual(MAIN)
+  expect(ask(['rebase', '--show-current-patch', '2>&1'])).toBeUndefined()
+  expect(ask(['cherry-pick', 'abc1234', '>', 'pick.log'])).toEqual({ ask: 'picks', revs: ['abc1234'] })
+  expect(ask(['revert', '--no-edit', 'HEAD~2', '2>&1'])).toEqual({ ask: 'picks', revs: ['HEAD~2'], revert: true })
+  expect(ask(['reset', '--hard', '2>&1'])).toEqual({ ask: 'tree', commit: 'HEAD', worktree: true })
+  expect(ask(['stash', 'pop', '2>&1'])).toEqual({ ask: 'stash', entry: 'stash@{0}' })
+  expect(ask(['stash', '>', 'stash.log', 'pop'])).toEqual({ ask: 'stash', entry: 'stash@{0}' })
+  expect(ask(['switch', '-c', 'new', '2>&1'])).toBeUndefined()
+  expect(ask(['switch', '2>&1', 'topic'])).toEqual({ ask: 'name', name: 'topic', orPath: false })
+  expect(ask(['checkout', '-b', 'new', '>', 'branch.log'])).toBeUndefined()
+  // A checkout of one name is the move it is, where two words read as a restore of paths.
+  expect(ask(['checkout', 'topic', '2>&1'])).toEqual({ ask: 'name', name: 'topic', orPath: true })
+  expect(ask(['checkout', 'topic', '>', 'switch.log'])).toEqual({ ask: 'name', name: 'topic', orPath: true })
+  expect(ask(['checkout', 'topic', '--', '2>&1'])).toEqual({ ask: 'name', name: 'topic', orPath: false })
+  expect(ask(['checkout', 'topic', '--', 'app/page.tsx', '2>&1'])).toBeUndefined()
+  // What a refusal quotes is the words as typed.
+  expect(gitMove({ sub: 'merge', args: ['origin/main', '2>&1'] }, 'git merge origin/main 2>&1')?.said).toBe('git merge origin/main 2>&1')
+  // A word that only begins as a redirect does is never the reader's word for one: it is an argument.
+  for (const word of ['>>merged', '>fix', '2>&1x', '<wip>', '<<<', '<<EOF', '->', '=>', '>(tee', 'a>b']) expect({ word, ask: ask(['merge', '-m', word, 'topic'], 'git merge -m x topic') }).toEqual({ word, ask: { ask: 'merge', commits: ['topic'] } })
+  // With no text to read, and where the text may hold a `<` or `>` typed as a character of a word,
+  // every word after the subcommand is a word of the move, as before.
+  expect(gitMove({ sub: 'merge', args: ['origin/main', '2>&1'] })).toEqual({ said: 'git merge origin/main 2>&1', ask: { ask: 'merge', commits: ['origin/main', '2>&1'] } })
+  expect(ask(['merge', '-m', '>', 'topic'], "git merge -m '>' topic")).toEqual({ ask: 'merge', commits: ['topic'] })
+  expect(ask(['merge', '>', 'topic'], 'git merge \\> topic')).toEqual({ ask: 'merge', commits: ['>', 'topic'] })
+  expect(ask(['merge', 'topic', '2>&1'], 'git commit -m "a -> b" && git merge topic 2>&1')).toEqual({ ask: 'merge', commits: ['topic'] })
+  expect(ask(['merge', 'topic', '2>&1'], 'git commit -m "<br>" && git merge topic 2>&1')).toEqual({ ask: 'merge', commits: ['topic', '2>&1'] })
+  const quoted = ["'>'", '">"', '\\>', "'2>&1'", '"2>"\'&1\'', "2'>'&1", '2\\>\\&1', "'2''>'", '"<"', '\\<', "$'\\x3e'", '$"x"', '>"$LOG"', '"$A">out', "2>&1'"]
+  for (const word of quoted) expect({ word, may: mayQuoteRedirect(`git merge -m ${word} topic`) }).toEqual({ word, may: true })
+  const plain = ['git merge --ff-only origin/main 2>&1 | tail -2', 'git merge origin/main > merge.log', 'git merge origin/main 2>/dev/null && echo "done"', 'git merge origin/main > "$LOG"', "git merge -m 'a > b' topic", 'git -C "/w/slate" merge topic 2>&1', "bash -c 'git merge topic 2>/dev/null'", 'git merge topic 2>&1 # it\'s done', 'git merge topic 2>&1\necho "next"']
+  for (const typed of plain) expect({ typed, may: mayQuoteRedirect(typed) }).toEqual({ typed, may: false })
 })
 
 // #3337: the mainline number of a cherry-pick or revert names the parent each commit is read
