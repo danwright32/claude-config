@@ -1345,7 +1345,7 @@ want_pending "git add \"named.txt && git commit -qm x && git push" "WIDENED|name
 want_pending "git add gone.txt && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
   "#457 an add naming a path that is not there widens and says so"
 # A new file added by name beside an add with -u (claude-config#3879): the tracked changes AND the
-# named file, which no gate read while the answer was the tracked changes alone.
+# named file, which is untracked and so is in no reading of the tracked changes.
 want_pending "git add named.txt && git add -u && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
   "#3879 an add naming an untracked file beside an add -u takes that file and the tracked changes"
 want_pending "git add -u && git add named.txt && git commit -qm x && git push" "EXACT|named.txt|tracked.txt" \
@@ -1374,13 +1374,15 @@ pending_lists "git add named.txt && git commit -qm 'a \$(git add -u) b' && git p
 # A second command in the segment, or a double dash before the -u, and they are read.
 pending_lists "git add named.txt & git add -u && git commit -qm x && git push" named.txt \
   "#3879 a file named before a single ampersand and an add -u is read"
+pending_lists "git add named.txt & git add -u && git commit -qm x && git push"$'\n''echo "never closed' named.txt \
+  "#3879 a file named before a single ampersand and an add -u is read in a command nobody can read"
 pending_lists "git add named.txt \$(git add -u) && git commit -qm x && git push" named.txt \
   "#3879 a file named beside an add -u inside a substitution is read"
 pending_lists "git add -- -u named.txt && git commit -qm x && git push" named.txt \
   "#3879 a file named after a double dash and a -u is read"
 # A named path that is not there beside the tracked reading (claude-config#3879): the add cannot be
 # accounted for, as when it stands alone, so the whole working tree is listed and the caller says
-# so. The tracked reading used to list the tracked changes only and call that exact.
+# so.
 want_pending "git add gone.txt && git commit -qam x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \
   "#3879 an add naming a path that is not there beside commit -a widens and says so"
 want_pending "git add gone.txt && git add -u && git commit -qm x && git push" "WIDENED|named.txt|stranger.txt|sub/new.txt|tracked.txt" \

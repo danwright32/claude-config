@@ -360,9 +360,9 @@ W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
 run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qam copy && git push"
 want_style_code 0 "an add beside commit -a does not take an untracked file nobody named"
 
-# 5c. An add naming a NEW file AND another add with -u take both (claude-config#3879). The shared
-#     reader answered with the tracked changes alone, and an untracked file is not among them, so
-#     the file the command named was read by nobody.
+# 5c. An add naming a NEW file AND another add with -u take both (claude-config#3879): the
+#     tracked changes -u takes, and the named file, which is untracked and so is in no reading of
+#     the tracked changes.
 W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
 run_style_hook "$E2E" "cd $W && git add app/copy.ts && git add -u && git commit -qm copy && git push"
 want_style_code 2 "#3879 a new file added by name beside an add -u is judged"
