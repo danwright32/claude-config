@@ -1688,3 +1688,75 @@ test('a test runner that really writes a held file is still held: a flag that up
   }
   expect(held).toEqual(writers.map(c => `${c}: held`))
 })
+
+// #3856: a script in the session's notes folder, handed a checkout to read and a scratch folder to
+// write into, is held for the checkout. Its text is read, and its one write is named by what it is
+// handed, which the reader of a python or node program does not follow to the argument that names
+// it. So it stays held, and a subagent that may not decide a hold on a command is told what to hand
+// back to the main session.
+const NOTES = '/notes/s1/3808-count'
+const COUNT_PY = "import json, os, sys\nmode, out, tree, work = sys.argv[1:5]\nrows = sorted(os.listdir(os.path.join(tree, 'gen')))\nwith open(os.path.join(out, 'rows.json'), 'w') as f:\n    json.dump(rows, f)\nprint(len(rows))\n"
+const MEASURE_TS = "import { readdirSync, writeFileSync } from 'node:fs'\nimport { join } from 'node:path'\nconst [tree, out] = process.argv.slice(2)\nwriteFileSync(join(out, 'measured.json'), JSON.stringify(readdirSync(join(tree, 'gen'))))\n"
+const PLANT_PY = "import os, sys\nopen(os.path.join(sys.argv[1], 'gen', 'f1.ts'), 'a').write('x')\n"
+const COUNT = `python3 -I -B ${NOTES}/count.py plant /scratch/s1/planted ${APP} /scratch/s1/work`
+const MEASURE_RUN = `node ${NOTES}/measure.ts ${APP} /scratch/s1/measured`
+const handBackFor = (id: string) => ` If your brief does not let you decide a hold on a command, neither decide this one nor send the command another way: stop and hand back to the main session the command as you sent it, the id of this call (${id}) and the reason above. The main session can read what the command runs, then run it itself and decide the hold on its own call, or tell you that this one is yours to decide.`
+const notesWorld = ($: unknown, on: Parameters<typeof world>[1]) => {
+  const w = genWorld($, on, 26)
+  w.ctl.folders.push(APP)
+  w.files[`${NOTES}/count.py`] = COUNT_PY
+  w.files[`${NOTES}/measure.ts`] = MEASURE_TS
+  w.files[`${NOTES}/plant.py`] = PLANT_PY
+  return w
+}
+// Why each was held is read from the log, which says it of the checkout the script is handed
+// whatever words the hold puts it in.
+const heldForCheckout = (w: ReturnType<typeof world>) => w.records().filter(x => x.kind === 'unread').map(x => [x.word, x.decision])
+
+test("a subagent's script handed a checkout to read and a scratch folder to write into is held, and told what to hand back to the main session (#3856)", KIT, async ($, on) => {
+  const w = notesWorld($, on)
+  for (const [i, command] of [COUNT, MEASURE_RUN].entries()) {
+    const why = refusal(await bash($ as never, w, command, { agentId: 'a1' }, `b${i + 1}`))
+    expect(why).toContain('The area check held this Bash command')
+    expect(why.endsWith(`Then send the Bash command again, unchanged.${handBackFor(`b${i + 1}`)}`)).toBe(true)
+  }
+  expect(heldForCheckout(w)).toEqual([[APP, 'held'], [APP, 'held']])
+  // The hold is still the agent's own to decide where its brief lets it, and the command then runs.
+  expect((await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON }, { agentId: 'a1' })).deny).toBeUndefined()
+  expect((await bash($ as never, w, COUNT, { agentId: 'a1' }, 'b3')).result).toBe('done')
+  // The main session's own run of the same command is held for itself, with nothing to hand back.
+  const mine = refusal(await bash($ as never, w, MEASURE_RUN, {}, 'b4'))
+  expect(mine).toContain('The area check held this Bash command')
+  expect(heldForCheckout(w).at(-1)).toEqual([APP, 'held'])
+  expect(mine).not.toContain('hand back')
+  expect(mine.endsWith('Then send the Bash command again, unchanged.')).toBe(true)
+})
+
+test('a script handed a checkout that only reads and prints, its output sent to a scratch file by the command, runs unheld (#2920, #3856)', KIT, async ($, on) => {
+  const w = notesWorld($, on)
+  w.files[`${NOTES}/reads.ts`] = "import { readdirSync } from 'node:fs'\nimport { join } from 'node:path'\nconsole.log(JSON.stringify(readdirSync(join(process.argv[2], 'gen'))))\n"
+  w.files[`${NOTES}/reads.py`] = "import json, os, sys\nprint(json.dumps(sorted(os.listdir(os.path.join(sys.argv[1], 'gen')))))\n"
+  expect((await bash($ as never, w, `node ${NOTES}/reads.ts ${APP} > /scratch/s1/measured.json`, { agentId: 'a1' })).result).toBe('done')
+  expect((await bash($ as never, w, `python3 -I -B ${NOTES}/reads.py ${APP} > /scratch/s1/rows.json`, { agentId: 'a1' }, 'b2')).result).toBe('done')
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+})
+
+// Each is held today and must stay held: nothing here is read as only reading the checkout.
+const HANDED_A_CHECKOUT: [string, string][] = [
+  ['a script whose text writes under the checkout it is handed first', `python3 -I -B ${NOTES}/plant.py ${APP} /scratch/s1/work`],
+  ['a script whose text cannot be read', `python3 -I -B ${NOTES}/gone.py plant /scratch/s1/planted ${APP} /scratch/s1/work`],
+  ['a script named through a variable', `S=${NOTES}/count.py; python3 -I -B "$S" plant /scratch/s1/planted ${APP} /scratch/s1/work`],
+  ['a script of the same name in another folder, whose text writes into the checkout', `node /elsewhere/measure.ts ${APP} /scratch/s1/measured`],
+]
+
+test("a subagent's script that may write into the checkout it is handed, or cannot be read, stays held, with what to hand back (#3856)", KIT, async ($, on) => {
+  const w = notesWorld($, on)
+  w.files['/elsewhere/measure.ts'] = "import { writeFileSync } from 'node:fs'\nwriteFileSync(process.argv[2] + '/gen/f1.ts', 'x')\n"
+  const held: string[] = []
+  for (const [i, [what, command]] of HANDED_A_CHECKOUT.entries()) {
+    const r = await bash($ as never, w, command, { agentId: 'a1' }, `s${i + 1}`)
+    const why = r.result === 'done' ? 'ran' : refusal(r)
+    held.push(why.includes('The area check held this Bash command') && why.endsWith(handBackFor(`s${i + 1}`)) ? `held: ${what}` : `${what}: ${why}`)
+  }
+  expect(held).toEqual(HANDED_A_CHECKOUT.map(([what]) => `held: ${what}`))
+})

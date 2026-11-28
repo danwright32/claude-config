@@ -12353,8 +12353,30 @@ stay where they were. A path that only starts with `..` (`../`, `../../x`) is fo
 A copy of mod-kit loaded before #3093 carries no setting and names no runner, so the rule first
 asks the reader about a line it knows the answer for (`A=1; B=2 env true`), and where the answer
 lacks the setting, the runner or the command that only sets a value, no run is let through.
+Since #3856 the folder may be followed by names of mods in it, the form that checks only those
+(`bash tools/check-mods.sh payload/mods manual-steps`, #3622), which was held for being handed more
+than one folder. Each word after the folder must be a plain name (letters, digits, dots, dashes and
+underscores, starting with a letter or a digit) of a folder directly inside it that holds
+`.claude-plugin/plugin.json`: the script reads `<folder>/<name>` and never opens the name as a
+path. The words are judged as they are typed, read from the command's own text, and never only as
+the reader of commands hands them on: that reader leaves out an option, a dash alone, an empty
+word, an address and a path on another machine, and works a sum of whole numbers out, so each of
+those after the script holds the run. So does any text the rule cannot follow to the end of the
+script's words: an expansion, a backslash, a pattern, a quote around anything but plain characters
+and blanks, a quote or a comment before the script, or the script's path written twice. A name in
+whole quotes, redirects among the names, and a reader or a comment after them are read.
+Such a run writes what a whole folder's run writes, less the record of the build the mods
+last passed on. With `CHECK_MODS_ROUND` already in the environment, a run that passes also writes
+under the home folder's state, and nothing in the checkout: it adds its round's file to
+`mods-last-passed.tsv.rounds/<round>/`, removes the folders of other rounds there more than a day
+old, and, once its round names every mod of the folder, writes the record itself and removes its
+own round's folder (with `CHECK_MODS_LAST_PASSED` in the environment too, the record and the
+rounds are where that names). No command can give a round or move the record, since any setting in
+front of the script holds the run. Only `tools/check-mods.sh` takes names; the other script let
+through by name is held on a second word as before.
 Anything else is judged as before: a script of that name in another repository or elsewhere in the
-checkout, a changed copy, a second argument, a file or a pattern in place of the folder, another
+checkout, a changed copy, a second argument that is no name of a mod in the folder, a file or a
+pattern in place of the folder, another
 shell, the file its output is redirected into, and the script chained with any other command, in a
 loop or in a function, which is judged with that command as before. Each such run is one
 `named-reader` line in the log, `passed` or `judged` with why.

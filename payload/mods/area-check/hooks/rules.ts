@@ -1031,8 +1031,8 @@ const cardFacts = (h: Held): { reason: string; safeWay: string; note?: string } 
   return { reason: parts.join(' '), safeWay: 'Claude decides whether this command goes ahead for every file it names, folds a structural fix in, or restructures first.' }
 }
 
-/** What the held session reads: the facts, and how to decide under this call's id. */
-export const holdRefusal = (h: Held): string => {
+/** The facts of a hold, and how to decide under this call's id. */
+const howToDecide = (h: Held): string => {
   const c = holdCard(h)
   const facts = [c.reason, c.note].filter(Boolean).join(' ')
   const call = (rest: string) => `${DECIDE_TOOL} with {"call": "${h.id}", ${rest}}`
@@ -1048,6 +1048,22 @@ export const holdRefusal = (h: Held): string => {
   if (h.tool === 'Bash') return `The area check held this ${heldCall(h)}. ${facts} Decide: call ${ways.join('; or ')}. Then send the Bash command again, unchanged.`
   return `The area check held this ${h.tool} to ${h.rel}. ${facts} Before editing it, decide: call ${ways.join('; or ')}. Then send the ${h.tool} again, unchanged.`
 }
+
+/**
+ * What a hold on a subagent's Bash command says last (#3856). The hold is the agent's own to decide
+ * (decision 8), but a brief may keep a hold on a command for the main session, and the decide tool
+ * takes a decision only from the agent the call was held for. So the main session can only run the
+ * command itself, where the hold is its own, or say the agent may decide: it needs the command to
+ * run it, and this call's id to say which hold the agent may decide. An edit's hold is always the agent's to decide, so it
+ * gets no such sentence, nor does the main session's own command.
+ */
+export const handBack = (h: Held): string =>
+  h.tool === 'Bash' && h.agent !== null
+    ? ` If your brief does not let you decide a hold on a command, neither decide this one nor send the command another way: stop and hand back to the main session the command as you sent it, the id of this call (${h.id}) and the reason above. The main session can read what the command runs, then run it itself and decide the hold on its own call, or tell you that this one is yours to decide.`
+    : ''
+
+/** What the held session reads: the facts, how to decide under this call's id, and what a subagent that may not decide a held command hands back. */
+export const holdRefusal = (h: Held): string => `${howToDecide(h)}${handBack(h)}`
 
 /** The restructure question as Dan reads it in the dialog; Fold in only where an issue was shown. */
 export const restructureQuestion = (h: Held): { question: string; options: { label: Answer; description: string }[] } => {

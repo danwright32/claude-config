@@ -6025,6 +6025,20 @@ facts and the bar are unchanged.
   for itself (decision 8); its call id goes in a set so `tool.check` does not judge it again, the
   shape the design round guard uses. A query asked with no call id runs nothing and is passed, and
   so is a subagent edit with no call id, which names nothing a decision could be taken under.
+- **A subagent's held command says what to hand back (#3856).** A subagent decides its own holds,
+  but an orchestrated agent's brief keeps a hold on a command for the main session, and the hold
+  said only how to decide, so such an agent stopped with nothing to hand over. The refusal of a
+  subagent's Bash command now ends by saying that an agent whose brief does not let it decide
+  neither decides nor sends the command another way, and hands back the command, the call's id and
+  the reason (`handBack` in `rules.ts`). The decide tool still takes a decision only from the agent
+  the call was held for, so the main session runs the command itself, deciding the hold on its own
+  call, or tells the agent it may decide. The sentence changes nothing about which command is
+  held (the same issue's other half, names of mods after the folder of `tools/check-mods.sh`, does,
+  and is in the README's account of the scripts let through by name). A script
+  handed a checkout to read and a scratch folder to write into stays held: the reader gives a
+  python or node program's write named by an argument with no word of which argument names it, so
+  reading the script cannot show the checkout is only read. One that only reads and prints, its
+  output sent to a file by the command, is read as writing nothing and runs (#2920).
 - **A shell write (#2142).** A Bash command is judged at the same two points, by what
   `$.modkit.writes` says it writes, read through `shellTargets` in `rules.ts`: a redirect, a copy or
   an in place edit, an emptying, git writing a path, a script's file arguments, and an inline
