@@ -9607,6 +9607,21 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   A line that is not JSON, is nested too deep to parse, or carries an id that is not a string is
   counted on its file's MALFORMED line, and the rest of that file is read. Any of these puts
   `complete=no` on END.
+
+  What it counts follows what is sent (claude-config#3646). An attachment is sized by its
+  `rendered` text; one with none (a deferred tools record, most hook successes) is never sent, is
+  left out, and is counted by type on NOT_SENT. The one exception is the prompt snapshot: it has
+  no `rendered` text but records the system prompt and tool list every request is sent, so each
+  request carries the newest snapshot's size once (a later one replaces it, never adds to it), on
+  its own SNAPSHOT line. That differs from the issue's wording, which left the snapshot out;
+  leaving it out took the interactive estimate on PostRoll from 0.93 to 0.68. Thinking that a
+  transcript stores empty (a signature only) is inferred from the reply's `output_tokens` less
+  what it shows, and reported on its own INFERRED line with the ratio it would give, never inside
+  the KIND line's estimate. HOOK lines list the hooks carried most; one Claude Code recorded only
+  as "command hook N" is named from `--settings` (default `~/.claude/settings.json`) as the Nth
+  command hook of its event across every matcher, a repeated command counted once, and labelled
+  as inferred from today's settings, because adding a hook renumbers those after it. The rule was
+  fitted to refusals, not read from Claude Code, and a project's own hooks may shift it.
 - Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`,
   `tools/test-transcript-shares.sh`.
 
