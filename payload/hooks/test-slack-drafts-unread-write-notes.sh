@@ -209,6 +209,13 @@ lacks "#3878 and it is not called a post" "REFUSED: this command posts to Slack"
 run_s "$(lines 'export PYTHONPATH=cleanlib' 'python3 run.py' "$OPEN")"
 refused "#3878 a calm module on a PYTHONPATH exported in a text given up on is refused"
 lacks "#3878 and it is not called a post" "REFUSED: this command posts to Slack"
+# Where Python looks is unread from the export on, so an import of the standard library is too.
+printf '%s\n' 'import os' > "$S/std.py"
+run_s "$(lines 'export PYTHONPATH=cleanlib' 'python3 std.py' "$OPEN")"
+refused "#3884 an import of the standard library after an export in a text given up on is refused too"
+says "#3884 and the refusal says where Python looks could not be read" "$PYDOUBT"
+run_s "$(lines 'python3 std.py' "$OPEN")"
+allowed "#3884 the same import in a text given up on that exports nothing"
 run_s "$(lines 'bash writer.sh' 'bash made.sh' "$OPEN")"
 refused "#3878 a calm file written by a script that a text given up on runs, then run, is refused"
 
