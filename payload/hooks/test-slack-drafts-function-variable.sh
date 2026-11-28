@@ -660,15 +660,32 @@ if counts["binds"]:
 class Unread:
     sets = False
 got = gate.FunctionValues.both_ways(None, Unread(), {"kept"})
+# The first reason found is the answer, so the order the combinations of empty names are read in
+# is part of what is refused and in which words. itertools is the yardstick here only: the gate's
+# libraries import no module the judgement cache has not classified.
+import itertools
+made, differ = getattr(gate.FunctionValues, "combinations", None), []
+if made is None:
+    differ.append("lib/function-values.py has no combinations of its own")
+else:
+    for n in range(7):
+        order = ["n%d" % i for i in range(n)]
+        for size in range(n + 2):
+            mine, theirs = list(made(order, size)), list(itertools.combinations(order, size))
+            if mine != theirs:
+                differ.append("%d of %d names: %r, where itertools gives %r" % (size, n, mine[:3], theirs[:3]))
 print("; ".join(wrong) or "ok")
 print("counted assignment=%d binds=%d" % (counts["assignment"], counts["binds"]))
 print("unread %s" % ("ok" if got == {"kept"} else "of the one name asked about, %r came back" % (sorted(got),)))
+print("order %s" % ("; ".join(differ[:3]) or "ok"))
 PY
 counted="$(python3 -B "$T/counted.py" "$DIR/slack_drafts_only_gate.py" "$FV" 2>&1)"
 check "reading a function's values does not grow with the square of a script's functions" "$(printf '%s\n' "$counted" | head -n 1)"
 echo "  $(printf '%s\n' "$counted" | grep '^counted ' || echo 'no count was printed')"
 unread="$(printf '%s\n' "$counted" | grep '^unread ' || echo 'unread no answer was printed')"
 check "a name in a text whose commands cannot be read is read both ways" "${unread#unread }"
+order="$(printf '%s\n' "$counted" | grep '^order ' || echo 'order no answer was printed')"
+check "the combinations of empty names are read in the order itertools.combinations gives, for 0 to 6 names" "${order#order }"
 
 echo
 

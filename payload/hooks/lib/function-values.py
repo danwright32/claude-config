@@ -79,7 +79,6 @@ Each function takes the gate's Judge as its first argument: these are its readin
 slack_drafts_only_gate.py only so that file does not grow.
 """
 import bisect
-import itertools
 import os
 import re
 import shlex
@@ -472,6 +471,17 @@ def no_empty_words(judge, text):
                     for kind, raw in judge.sh_tokens(text))
 
 
+def combinations(order, size):
+    """Every way of taking size of order's items, each as a tuple in order's own order, the
+    earliest positions first: what itertools.combinations(order, size) gives, in the same order."""
+    if size == 0:
+        yield ()
+        return
+    for i in range(len(order) - size + 1):
+        for rest in combinations(order[i + 1:], size - 1):
+            yield (order[i],) + rest
+
+
 def empty_reason(judge, text, d, seen, taken, judge_again):
     """(the names of taken that are read both ways (both_ways), those of them the reading that
     found a reason had empty, that reason or None). Made only where the reading with the values
@@ -494,7 +504,7 @@ def empty_reason(judge, text, d, seen, taken, judge_again):
     if not names:
         return names, names, None
     judged, order, over = {text, *seen}, sorted(names), len(names) > MOST_BOTH
-    further = [] if over else [set(c) for size in range(1, len(order)) for c in itertools.combinations(order, size)]
+    further = [] if over else [set(c) for size in range(1, len(order)) for c in combinations(order, size)]
     for some in [names] + further:
         bare = without(text, some)
         k.empty = some
