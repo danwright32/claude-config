@@ -2250,7 +2250,13 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   on the card unfinished, by its title, is not added twice. It is shown as a new card is and never
   held while Dan is away, since the caller decides when to add; on a card carried from an earlier
   session, or one already held because he is away, it is kept and stays held with the rest, and
-  the caller is answered not shown in the same words for both. A later pin through the steps tool,
+  the caller is answered not shown with a value saying which hold it is (`held`, #3817):
+  `unchecked` for carried steps nobody has checked in this session, `away` for a card this session
+  pinned while he was away, each with a reason in words of its own. The second is a mark on the
+  card in the session's state (`isPinnedAway`), set by the steps tool's call alone when scope modes
+  holds the card, and dropped whenever the card is kept in the store or read from it, so it is the
+  one record that this session has checked and pinned the steps it holds and no later session
+  inherits it. A later pin through the steps tool,
   which replaces the card, keeps such a step at its end while it is unfinished, unless the new card
   names it, since it is not Claude's to drop. `$.manualSteps.finish({ title })` finishes that
   step as checked, whichever step is open, and `$.manualSteps.withdraw({ title })` (#3770) takes it
@@ -6061,9 +6067,11 @@ file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.
   own per request of Dan's (`CHECK_CARRIED` in `hooks/close.ts`) asking it to check the carried
   steps and pin them again, and writes one reason naming the carried card. A session that does
   not pin them gets no card for that request, which he accepted with the option. The goal box
-  knows a held card by manual steps' own reason, said again in `hooks/close.ts` because a mod
+  knows why a card is held by the value in manual steps' answer (`held`), never by the words of
+  its reason. The two values and the two reasons are said again in `hooks/close.ts` because a mod
   cannot read another mod's files, and `tests/test-close-card-carried-reason.sh` fails when the
-  two differ.
+  two mods differ, when the two values or the two reasons become one, or when the goal box
+  compares the words.
   - *What is expected, and what it rests on.* The session pins the steps, the old steps card
     comes back with its notification, and the close card is added below it at the next quiet turn
     end. No real session had been sent the prompt when this was written, so nobody has seen it
@@ -6081,14 +6089,19 @@ file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.
     ends it. After those it is tried again only at a quiet turn end after the session's next turn,
     and the reason written says which of the two it is. Bounded, so a send that can never enter is
     not tried every few minutes for good.
-  - *While Dan is away, not decided.* Manual steps holds every card pinned while he is away (#621)
-    and answers a step added to it in the same words as for a carried card, so the goal box cannot
-    tell the two apart. A session is therefore asked then too, once for each request that gets a
-    box, including one that had already checked and pinned its carried steps, and the close card
-    cannot follow until he is home and the steps are pinned once more. The prompt and the reasons
-    are worded to be true in that case (the prompt does not say the steps were never checked and
-    promises no card), and nothing else was changed: how this case should behave is Dan's choice,
-    put to him with the review of pull request 3870.
+  - *While Dan is away, decided 2026-11-27.* Manual steps holds every card pinned while he is away
+    (#621), so a card whose carried steps the session has already checked and pinned is held too,
+    and the close card cannot follow until he is home and the steps are pinned once more. Three
+    ways to behave were put to him: ask at every request that gets a box, never ask while he is
+    away, or ask only for steps nobody has checked. His answer by picker on 2026-11-27: "Ask only
+    if unchecked (Recommended)". So manual steps answers a step added to a held card with one of two values,
+    and the goal box asks the session to check only for `unchecked`. For `away` it takes its close
+    step back, sends nothing, and writes that the session has pinned the steps already and the
+    card can follow once they are showing. Carried steps nobody has checked are still asked about
+    while he is away, once, so they are ready to show when he is home; the prompt promises no
+    card, since the steps then pinned stay held. An answer with any other value, or none, is read
+    as neither and written as any other pin that was not shown. Never asking while away was not
+    taken because unchecked steps would then wait for the session's next turn after he is home.
   - *Not pulled:* reading manual steps' card from its state before the pin and never adding the
     step, which would save the add and the take back but rest on a second fact about another mod's
     state. It would also end the goal box's part in one fault of manual steps' own: each add and

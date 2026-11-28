@@ -11444,7 +11444,12 @@ marked "an earlier session" by the session that carries it in. Another mod adds
 a step through `$.manualSteps.add`, takes it off as done with `finish` and as withdrawn with
 `withdraw` (#3770: drawn "taken off, not done", the card going when nothing is left); a step it adds
 with `sessionOnly` is never kept for the next session, and one with `noDone` is drawn with no Done
-and leaves the heading without "waiting on you" (the goal box's close this session card). While
+and leaves the heading without "waiting on you" (the goal box's close this session card). A step
+added to a held card stays held with it, and the answer says which hold it is by a value, `held`
+(#3817): `unchecked` for steps carried from an earlier session that nobody has checked in this
+one, `away` for a card this session pinned while Dan was away, each with a reason in words of its
+own. The card records the second as a mark set by the steps tool's call alone and never kept in
+the store, so the next session starts with the steps unchecked. While
 Dan is
 away, a new card goes to the scope modes mod's held card (`$.scopeModes.hold`) instead of the Mac. A
 card pinned with a step Dan can do now also sends him a macOS notification through the goal
@@ -12077,9 +12082,12 @@ saw no environment at all, and nothing is decided from it. The next turn start t
 down as withdrawn; it comes back only after the next box. A steps card carried from an earlier
 session and not yet checked (#3817; Dan, 2026-11-27: "Ask the session to check first"): manual
 steps holds such a card, and any step added to it, until the session has checked the steps and
-pinned them again, so the pin comes back not shown with manual steps' reason for a held card
-(`CARRIED_HELD` in `hooks/close.ts`, held to manual steps' own words by
-`tests/test-close-card-carried-reason.sh`). The goal box then takes back the close step it just
+pinned them again, so the pin comes back not shown, with a value saying why the card is held
+(`held`, here `unchecked`). The goal box decides by that value alone (`heldKind` in
+`hooks/close.ts`), never by the words of the reason; it says manual steps' two values and two
+reasons again in that file, and `tests/test-close-card-carried-reason.sh` fails when the two mods
+differ, when the two values or reasons become one, or when the goal box compares the words. The
+goal box then takes back the close step it just
 added (left there it would come along onto the card when the session pins, while it is still
 working; one that could not be taken back is taken back at the next turn start), sends the
 session one prompt of its own, once per request of Dan's, asking it to check the carried steps
@@ -12094,10 +12102,16 @@ at the next quiet turn end. By the code that needs three things. Each step is pi
 title and link or place it had, which is how manual steps knows it as the earlier session's (the
 same suite holds the prompt to that rule); a step pinned under other words becomes this
 session's own and keeps the close card back until Dan has done it. Dan is at home: manual steps
-holds every card pinned while he is away, and answers the goal box in the same words, so a
-session is asked then too, once for each request that gets a box, and the close card waits until
-he is home and the steps are pinned once more. And the session's reply does not end on a
-question. When every carried step is found done the close card stands alone. A session that does
+holds every card pinned while he is away, so the steps a session pins then stay held, and the
+close card waits until he is home and they are pinned once more. And the session's reply does
+not end on a question. When every carried step is found done the close card stands alone.
+While Dan is away (Dan, 2026-11-27, by picker: "Ask only if unchecked"): a card this session
+pinned while he was away is answered with the other value, `away`. For it the goal box takes its
+close step back, sends no prompt, and writes one reason saying the session has pinned the steps
+already and the card can follow once they are showing. So a session is asked while he is away
+only for carried steps it has not checked, and not again once it has pinned them, at that
+request or a later one. An answer with any other value, or with none, is neither: it is written
+as any other pin that was not shown, with nothing asked and nothing taken back. A session that does
 not pin them gets no card for that request, and a turn that began while the pin was out is not
 asked. How manual steps holds a carried card is unchanged, and a step this session pinned that
 is still undone keeps the card back as before.
