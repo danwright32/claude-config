@@ -3344,13 +3344,35 @@ These choices were made by the session that built the fix, not by Dan, and are h
   aside after a refused sync, and the pull that sets aside what stands in its way) listed names
   without `-z`, so a name git quotes named no file: it was sent unscanned by the first two, and by
   the third reported as a deletion and left behind, or taken for a file outside the payload.
-- **A staged copy whose name holds a line break is left in the clone, and said (#3499).** Chosen by
-  the session that built it, and Dan's to change. Setting a copy aside is safe only because the
-  apply that follows keeps this Mac's own unsent file, and the apply reads its lists a line at a
-  time: in the suite on 2026-11-23, with such a copy set aside, the apply removed the file from
-  the config. Left where it is, which is what happened before the list was read by name, the
-  config keeps it. The cost is that a receive over the same file is refused by git until the file
-  is renamed, and the refusal says so. The lasting fix is in the apply, which is not this change.
+- **A staged copy whose name holds a line break is left in the clone, and said (#3499, #3540).**
+  Chosen by the session that built it, and Dan's to change. In the suite on 2026-11-23, with such a
+  copy set aside, the apply removed the file from the config. The lasting fix is #3540, below: the
+  sync no longer carries such a name, so the send never stages one and the apply never touches
+  this Mac's copy. A staged copy can then only be one an older version left, and it stays left:
+  set aside, it was measured on 2026-11-25 to keep this Mac's file, but where it held lines this
+  Mac's copy lacks it becomes a conflict copy whose name holds the same character, and the reports
+  of conflict copies read their lists one name to a line. The cost: a receive over the same file
+  is refused by git, and since no receive changes such a copy any more and a send only commits it as it stands, renaming this
+  Mac's file no longer clears it, so the refusal says to move the copy out of the clone.
+- **A name holding a control character is not carried, both ways (#3540).** The apply's steps pass
+  lists of files one name to a line: rsync's itemized lines (`locally_ahead_paths`,
+  `deleted_leftovers_here`, `past_release_paths`, the mirror's record of what it applied), git's
+  name lists (`unapplied_paths`), here documents and the applied log. rsync, Homebrew's and the one
+  macOS ships alike, prints every control character but a tab as `\#ooo`, so the name matched no
+  file, the unsent file was never held back, and `--delete` removed it; measured 2026-11-25, a
+  plain pull did it with no refused send before it. Reading every list NUL separated was ruled
+  out: rsync cannot itemize that way, and a shell variable cannot hold a NUL, so it would mean
+  rewriting every list in the apply as files, with the next new list free to break it again. So
+  one pattern in `COMMON_EXCLUDES` (`UNCARRIED_NAME_GLOB`) keeps such a name out of every mirror,
+  both ways, as `*.local.json` is kept out: the send never stages it and the apply neither removes
+  nor replaces this Mac's copy, nor receives one. `report_uncarried_names` says so once a run, in
+  the send's staging or the apply, and in `status`, naming each file through `name_on_one_line`,
+  which now writes every control character as an escape. It makes no check pass more: such a file
+  is no longer sent, so there is nothing for the scans to read. Not a desktop notice: the file
+  waits on a rename, which the line and `status` both say. The same change made
+  `unaccounted_line_count` take its second file through awk's environment rather than `-v`: BSD
+  awk refused a value holding a line break ("newline in string") and read a backslash in a name as
+  an escape, and the empty answer that left was taken for "nothing only in the staged copy".
 
 Ruled out as well: the send gate declaration (`# send-gate: scans ...`, #809), which would have run
 the check's whole suite on every send. Measured 2026-11-22: 9.8, 10.1 and 12.8 seconds a run at a

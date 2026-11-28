@@ -442,6 +442,26 @@ unset _mv
 # sync. Excluded here, for every mirrored tree, so it holds on the receiving side too and --delete
 # never removes the receiving Mac's own copy. A mod's top level tsconfig.json is NOT excluded: the
 # engine only writes one where none exists and leaves an existing one alone, so it is source.
+#
+# A NAME HOLDING A CONTROL CHARACTER IS NOT CARRIED, AND IS NEVER TOUCHED (claude-config#3540). The
+# steps that decide what the apply may overwrite or delete pass their lists of files between them
+# one name to a line: rsync's itemized lines, git's name lists, here documents, awk and the applied
+# log. rsync, both the one Homebrew installs and the one macOS ships, prints every control character
+# but a tab as an escape (a line break as \#012), so the name it printed matched no file, and the
+# step that holds back this Mac's unsent edits never saw the file. The mirror's --delete then
+# removed it: measured on 2026-11-25, a plain pull deleted an unsent hooks file named with a line
+# break, with no refused send before it, and a held sync did the same after it set the staged copy
+# aside, printing "awk: newline in string". Reading every list NUL separated cannot be done, because
+# rsync has no way to itemize that way and a shell variable cannot hold a NUL. So such a name is
+# excluded from every mirror, both ways: the send never stages it, the apply's --delete never
+# removes this Mac's copy and never copies one over it, and a copy the shared repo holds is never
+# received. report_uncarried_names says so in every run that meets one, naming each with the
+# character written as an escape. A tab is left out of the set because both rsyncs print it as it
+# is and every list here reads it, and so is everything else: a backslash, a leading dash, a space,
+# a letter outside ASCII.
+UNCARRIED_NAME_CHARS="$(printf '\001\002\003\004\005\006\007\010\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\177')"
+UNCARRIED_NAME_GLOB="*[$UNCARRIED_NAME_CHARS]*"
+COMMON_EXCLUDES+=(--exclude="$UNCARRIED_NAME_GLOB")
 
 # desktop alert (no-op if disabled or the notifier isn't installed). Not shown while the Mac is
 # asleep (sleep mode, claude-config#841): what it would have said goes to the log instead, for the
@@ -5530,6 +5550,7 @@ note_held_back(){   # $1 = a newline separated list of paths relative to the pay
 stage_local_to_payload(){
   [ -d "$CLAUDE_HOME" ] || die "no config dir at $CLAUDE_HOME"
   mkdir -p "$PAYLOAD"
+  report_uncarried_names   # the mirror below never stages them; said so (claude-config#3540)
   # -c is load-bearing, not a nicety. Without it rsync quick-checks on size plus
   # mtime at ONE-SECOND granularity, so a same-size edit (a one character fix in
   # a hook, a swapped word in CLAUDE.md) whose timestamp lands in the same second
@@ -7755,6 +7776,7 @@ apply_payload_to_local(){
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
   move_shared_files_to_local # before anything reads or mirrors them (claude-config#1526)
+  report_uncarried_names     # every mirror below leaves them alone; said so (claude-config#3540)
   # What the shared repo changed that this Mac has not applied, worked out ONCE for the steps below
   # (claude-config#2472). merge_rule_files, preserve_local_conflicts and locally_ahead_paths each
   # asked unapplied_paths, about nine programs every time, and nothing between them moves HEAD, the
@@ -9481,8 +9503,14 @@ local_only_entries(){   # $1 = ours  $2 = theirs
 #
 # One awk process reading both, rather than a shell loop spawning two per candidate line: the inputs
 # here are whole rule files, and this runs once per set-aside copy on every status and every pull.
+#
+# The second file's name reaches awk through its environment, never -v (claude-config#3540): -v reads
+# backslash escapes in the value and BSD awk refuses a value holding a line break outright ("newline
+# in string"), and the empty answer that left read as "nothing only in the first", so a held sync
+# took a staged copy for one this Mac's config already held. A failure is now a failure, which
+# only_in_first says as "could not be compared".
 unaccounted_line_count(){   # $1 = ours  $2 = theirs
-  comm -23 <(sort -u "$1") <(sort -u "$2") 2>/dev/null | awk -v theirs="$2" '
+  comm -23 <(sort -u "$1") <(sort -u "$2") 2>/dev/null | CS_UNACCOUNTED_THEIRS="$2" awk '
     function collapse(s) {
       sub(/^[[:space:]]*#+[[:space:]]*/, "", s)
       gsub(/[[:space:]]+/, " ", s)
@@ -9491,11 +9519,13 @@ unaccounted_line_count(){   # $1 = ours  $2 = theirs
     }
     BEGIN {
       body = ""
-      while ((getline l < theirs) > 0) body = body " " collapse(l)
+      theirs = ENVIRON["CS_UNACCOUNTED_THEIRS"]
+      while ((r = (getline l < theirs)) > 0) body = body " " collapse(l)
+      unread = (r < 0)
       gsub(/[[:space:]]+/, " ", body)
     }
     { c = collapse($0); if (c == "") next; if (index(body, c) == 0) n++ }
-    END { print n+0 }
+    END { if (unread) exit 2; print n+0 }
   '
 }
 
@@ -9505,8 +9535,12 @@ only_in_first(){   # $1 = ours  $2 = theirs
   if [ ! -f "$2" ]; then printf 'the live file is gone'; return 0; fi
   detail="$(local_only_entries "$1" "$2")"
   if is_blank "$detail"; then
-    n="$(unaccounted_line_count "$1" "$2")"
-    [ "${n:-0}" -gt 0 ] && detail="${n} lines"
+    # Empty means nothing is only in the first, so a comparison that did not finish is never empty.
+    n="$(unaccounted_line_count "$1" "$2")" || n=""
+    case "$n" in
+      ''|*[!0-9]*) detail="what it holds could not be compared with the other copy" ;;
+      *) [ "$n" -gt 0 ] && detail="${n} lines" ;;
+    esac
   fi
   printf '%s' "${detail% }"
   return 0
@@ -10674,12 +10708,75 @@ names_in_both(){   # $1 $2 = files of NUL separated names
     prev="$n"; have=1
   done
 }
-# A file name as it is written into one line of a message or a record: a line break or a tab in it
-# is written as git writes them, so one name stays one line and one field.
+# A file name as it is written into one line of a message or a record: a line break, a tab or a
+# carriage return in it is written as git writes them, and any other control character as a
+# backslash and three octal digits (claude-config#3540), so one name stays one line and one field
+# and nothing in it can move a terminal's cursor.
 name_on_one_line(){   # $1 = a file name
-  local s="$1" nl=$'\n' tab=$'\t'
-  s="${s//$nl/\\n}"; s="${s//$tab/\\t}"
+  local s="$1" nl=$'\n' tab=$'\t' cr=$'\r' out="" ch k
+  s="${s//$nl/\\n}"; s="${s//$tab/\\t}"; s="${s//$cr/\\r}"
+  case "$s" in
+    *["$UNCARRIED_NAME_CHARS"]*)
+      for (( k = 0; k < ${#s}; k++ )); do
+        ch="${s:k:1}"
+        case "$ch" in
+          ["$UNCARRIED_NAME_CHARS"]) out+="$(printf '\\%03o' "'$ch")" ;;
+          *) out+="$ch" ;;
+        esac
+      done
+      s="$out" ;;
+  esac
   printf '%s' "$s"
+}
+
+# THE NAMES THE SYNC DOES NOT CARRY, and the sentence saying so (claude-config#3540, see
+# UNCARRIED_NAME_GLOB). Every mirror excludes them, so without this line a file would simply never
+# arrive and never leave, and nothing would say why (L98). Found by find, NUL ended and read from a
+# file, so the finding itself never splits a name. A folder so named is named once, not its contents;
+# conflict copies and what the mirrors never read (.git, .trash, bytecode) are left out.
+uncarried_names(){   # $1 = a root, the config or the payload -> each such path under its mirrored trees, relative to the root, NUL ended
+  local d
+  for d in "${MIRROR_DIRS[@]}" skills; do
+    [ -d "$1/$d" ] || continue
+    find "$1/$d" \( -name .git -o -name .trash -o -name __pycache__ \) -prune \
+      -o -name "$UNCARRIED_NAME_GLOB" ! -name '*.conflict-*' -print0 -prune 2>/dev/null || true
+  done
+}
+uncarried_names_shown(){   # $1 = a root -> each name on one line of text, space separated, or nothing; fails when it could not look
+  local list n shown=""
+  list="$(scratch_file)" || return 1
+  uncarried_names "$1" > "$list"
+  while IFS= read -r -d '' n; do shown+="$(name_on_one_line "${n#"$1"/}") "; done < "$list"
+  rm -f "$list"
+  printf '%s' "${shown% }"
+}
+# Said once a run, by whichever step meets them first: the send's staging or the apply. $1 = where:
+# "stderr" for a sync, a send or a receive, "status" for the status report.
+UNCARRIED_TOLD=0
+report_uncarried_names(){
+  [ "$UNCARRIED_TOLD" = 0 ] || return 0
+  local here there why unlooked=0
+  here="$(uncarried_names_shown "$CLAUDE_HOME")" || unlooked=1
+  there=""; if [ -d "$PAYLOAD" ]; then there="$(uncarried_names_shown "$PAYLOAD")" || unlooked=1; fi
+  # Could not look is its own sentence, never a finding and never silence (L11). Every mirror still
+  # leaves such names alone; only the naming of them is missing.
+  if [ "$unlooked" = 1 ]; then
+    UNCARRIED_TOLD=1
+    echo "claude-sync: could not make a scratch file to look for names the sync does not carry, so this run does not say whether any are here. Every mirror still leaves such a name alone." >&2
+  fi
+  [ -n "$here$there" ] || return 0
+  UNCARRIED_TOLD=1
+  why="each name holds a line break or another control character (written here as \\n, \\r or a backslash and three digits), and the sync passes its lists of files between its steps one name to a line, so it cannot carry such a file safely"
+  if [ "${1:-stderr}" = status ]; then
+    echo "--- files the sync does not carry ---"
+    [ -z "$here" ] || echo "  On this Mac, never sent and never removed or replaced by a receive: $here. Rename each so its name holds no such character, and the next send carries it."
+    [ -z "$there" ] || echo "  In this clone's payload, never received onto this Mac: $there. Each was put there by an older version of this tool, and a send that goes out commits and publishes it as it stands, though no Mac receives it. Rename each on the Mac whose config holds it, then remove the old name from the payload with git rm in this clone, commit, and send."
+    echo "  Why: $why."
+    return 0
+  fi
+  [ -z "$here" ] || echo "claude-sync: NOT carried, and left exactly where they are on this Mac: $here. Not one of them is sent, and no receive removes or replaces any of them, because $why. Rename each so its name holds no such character, and the next send carries it." >&2
+  [ -z "$there" ] || echo "claude-sync: NOT received onto this Mac, and left as they are in the payload in $SYNC_REPO, where an older version of this tool put them: $there. They are not carried for the same reason. Rename each on the Mac whose config holds it, then remove the old name from the payload with git rm in this clone, commit, and send." >&2
+  return 0
 }
 
 # Files a send rebuilds from this Mac's config every time, so a pending copy of one is never the only
@@ -10697,18 +10794,18 @@ payload_rebuilt_by_send(){   # $1 = path relative to the payload
 # live file and it holds them, REBUILT were not compared at all (a deletion has no content, and a
 # rebuilt file is written over by the next send), KEPT hold something the live file does not.
 #
-# AND A FOURTH, LEFT: a path whose name holds a line break is NOT set aside (claude-config#3499). It
-# is left in the clone exactly as it was found, which is what happened to it before this list was
-# read by name (git's quoted spelling of it named no file, so nothing was ever done to it), and it
-# stays that way on purpose. Setting a copy aside is safe only because the apply that follows keeps
-# this Mac's own unsent file, and the apply reads its lists a line at a time: measured in the suite
-# on 2026-11-23, with the staged copy of such a file set aside, the apply that followed removed the
-# file from this Mac's config. Left where it is, the apply finds it in the payload and the config
-# keeps it. It is named, with why, by report_set_aside. A name holding a double quote, a backslash or
-# a tab is one line and is set aside like any other.
+# AND A FOURTH, LEFT: a path whose name holds a line break, or any character the sync does not carry,
+# is NOT set aside (claude-config#3499, #3540). It is left in the clone exactly as it was found. Since
+# #3540 the send never stages such a name, so a copy of one in the clone was put there by an older
+# version of this tool, and the apply never removes or replaces this Mac's own copy whatever the
+# clone holds (UNCARRIED_NAME_GLOB). Setting it aside was measured on 2026-11-25 to keep this Mac's
+# file, but where the staged copy held lines this Mac's does not, it is kept as a conflict copy whose
+# name holds the same character, and the lists that report conflict copies are read one name to a
+# line. So it stays left, which loses nothing. It is named, with why, by report_set_aside. A name
+# holding a double quote, a backslash or a tab is one line and is set aside like any other.
 SET_ASIDE_HELD=""; SET_ASIDE_REBUILT=""; SET_ASIDE_KEPT=""; SET_ASIDE_LEFT=""
 set_aside_payload_edits(){   # $@ = paths under payload/, relative to the repo
-  local p rel shown wt live view copy sfx n nl=$'\n'
+  local p rel shown wt live view copy sfx n
   SET_ASIDE_HELD=""; SET_ASIDE_REBUILT=""; SET_ASIDE_KEPT=""; SET_ASIDE_LEFT=""
   sfx="$(conflict_suffix)"
   # First every copy that is needed, made and READ BACK, and only then is anything reverted. A copy
@@ -10716,7 +10813,7 @@ set_aside_payload_edits(){   # $@ = paths under payload/, relative to the repo
   for p in "$@"; do
     rel="${p#payload/}"; wt="$SYNC_REPO/$p"; live="$CLAUDE_HOME/$rel"
     shown="$(name_on_one_line "$rel")"   # the lists are sentences, so a name is one line in them
-    case "$p" in *"$nl"*) SET_ASIDE_LEFT+="$shown "; continue ;; esac
+    case "$p" in *["$UNCARRIED_NAME_CHARS"]*) SET_ASIDE_LEFT+="$shown "; continue ;; esac
     [ -f "$wt" ] || { SET_ASIDE_REBUILT+="$shown "; continue; }   # a deletion: no content of its own
     if payload_rebuilt_by_send "$rel"; then SET_ASIDE_REBUILT+="$shown "; continue; fi
     view="$(scratch_file)" || die "could not make a scratch file to compare $p with this Mac's own copy, so nothing was set aside, nothing was received, and nothing in $SYNC_REPO was changed."
@@ -10739,7 +10836,7 @@ set_aside_payload_edits(){   # $@ = paths under payload/, relative to the repo
 ${copy#"$CLAUDE_HOME"/}"
   done
   for p in "$@"; do
-    case "$p" in *"$nl"*) continue ;; esac   # left where it is, as said above
+    case "$p" in *["$UNCARRIED_NAME_CHARS"]*) continue ;; esac   # left where it is, as said above
     if git -C "$SYNC_REPO" cat-file -e "HEAD:$p" 2>/dev/null; then
       git -C "$SYNC_REPO" checkout -q HEAD -- "$p"
     else
@@ -10802,9 +10899,10 @@ report_set_aside(){   # $1 = why they were set aside, a clause
     echo "claude-sync: ${cause}. $1, so they were set aside rather than be stopped by them: $(printf '%s%s%s' "$SET_ASIDE_HELD" "$SET_ASIDE_REBUILT" "$SET_ASIDE_KEPT" | sed 's/ $//')." >&2
   fi
   if ! is_blank "$SET_ASIDE_LEFT"; then
-    # Said as what it is and with the way out (L11, L111): nothing was done to these, and renaming
-    # the file in the config is what lets a later send carry it and a later receive pass it.
-    echo "claude-sync: ${cause}. These were NOT set aside and are left in $SYNC_REPO as they were, because each name holds a line break (written here as \\n) and the apply that follows reads its lists a line at a time, so it could not keep this Mac's own copy safe once the staged one was gone: ${SET_ASIDE_LEFT% }. Nothing of them is lost. Where the shared repo changes the same file, git refuses to receive over it: rename the file in this Mac's config so its name holds no line break, and the next send stages it under the new name." >&2
+    # Said as what it is and with the way out (L11, L111): nothing was done to these. Moving the
+    # staged copy out of the clone is what lets a later receive pass it, and renaming the file in the
+    # config is what lets a later send carry it (claude-config#3540).
+    echo "claude-sync: ${cause}. These were NOT set aside and are left in $SYNC_REPO as they were, because each name holds a line break or another control character (written here as \\n, \\r or a backslash and three digits), which the sync does not carry, and a copy set aside under such a name could not be reported safely: ${SET_ASIDE_LEFT% }. Nothing of them is lost, and the apply leaves this Mac's own copy of each alone. Where the shared repo changes the same file, git refuses to receive over it, and no receive changes such a staged copy (a send that goes out commits it as it stands): move it out of $SYNC_REPO, keeping anything in it this Mac's own file lacks, and rename the file in this Mac's config so its name holds no line break or control character, and the next send carries it." >&2
   fi
   if ! is_blank "$SET_ASIDE_REBUILT"; then
     echo "claude-sync: these hold nothing of their own to lose, being deletions or files rebuilt from this Mac's own config by every send: ${SET_ASIDE_REBUILT% }" >&2
@@ -10932,7 +11030,8 @@ pull_from_repo_or_die(){
     [ -z "${in_both:-}" ] || rm -f "$in_both"
     if [ "${#clash_list[@]}" -gt 0 ] && [ -z "$outside" ]; then
       set_aside_payload_edits "${clash_list[@]}"
-      # Only when something was: a path whose name holds a line break is left where it is.
+      # Only when something was: a path whose name holds a line break or another character the sync
+      # does not carry is left where it is.
       is_blank "$SET_ASIDE_HELD$SET_ASIDE_REBUILT$SET_ASIDE_KEPT" || set_aside=1
       left_in_way="${SET_ASIDE_LEFT% }"
       report_set_aside "The shared repo has changed the same files, and this pull receives them"
@@ -10949,7 +11048,7 @@ pull_from_repo_or_die(){
       fi
     fi
     if [ -n "${left_in_way:-}" ]; then
-      in_way="$in_way The files in the way include staged copies this pull left where they were, because each name holds a line break, as said above: $left_in_way. Rename each in this Mac's config so its name holds no line break, send, then pull again."
+      in_way="$in_way The files in the way include staged copies this pull left where they were, because each name holds a line break or another control character, which the sync does not carry, as said above: $left_in_way. Each is a copy an older version of this tool staged: no receive changes it, and a send that goes out commits it as it stands. Move each out of $SYNC_REPO, keeping anything in it this Mac's own file lacks, then pull again; rename this Mac's file so its name holds no such character, and the next send carries it."
     fi
     [ "$set_aside" -eq 0 ] || changed="the edits named above were set aside, and nothing else on this Mac was changed"
     die "git refused to fast-forward this Mac onto the shared repo, so NOTHING was received and $changed. The two sides have not diverged ($(commits_in_words "$ahead") here the repo has not seen, $(commits_in_words "$behind") there), so this is git's own refusal: ${err:-<no output>}${in_way}"
@@ -15894,6 +15993,7 @@ payload/$rel
     fi
     echo "$text"
   done <<< "$RECORDS"
+  report_uncarried_names status
   report_user_scope_plugins
   report_managed_settings
   report_settings_extras

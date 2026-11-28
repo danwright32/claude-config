@@ -157,6 +157,11 @@ any other way. The tracker's `--scan` keeps its ignore list in `scan-state.local
 `config.local.json` and kept local the same way, and the copy of the sheet it saves before writing
 in `~/.claude-tracker-snapshots`, outside `~/.claude`, so no copy of the sheet ever travels (#1032).
 
+A file whose name holds a line break or another control character stays on the Mac that holds it
+in the same way: the send never carries it and a pull never deletes or replaces it. Unlike a
+`*.local.json` it is not meant to stay, so every run that meets one names it, and renaming it lets
+the next send carry it (#3540).
+
 The /pennie-dev-update registry is one of these: `skills/pennie-dev-update/repos.local.json`,
 which names the work repositories the manager update covers and the account that reads each one,
 so it stays out of this public repository (#1526). The skill's scripts and the changelog merge gate
@@ -255,14 +260,27 @@ and `claude-sync sync` is the way on. A clone that is not on top of that commit 
 all and says the push was not tried.
 The work names scan, the secret scan's list of files outside the payload and the list of staged
 copies a sync or a pull sets aside read file names NUL separated too (#3499), so a name git would
-quote is scanned and set aside like any other. One kind is left in the clone and said: a staged
-copy whose name holds a line break, because the apply reads its lists a line at a time and, with
-that copy set aside, removed the file from the config (measured 2026-11-23). Where the shared repo
-changes the same file the receive refuses and says to rename it. Measured on 2026-11-22 against a clone of main with
+quote is scanned and set aside like any other. Measured on 2026-11-22 against a clone of main with
 1,446 payload files, at a load average between 104 and 178 on 12 cores, 10 samples a case: the
 check adds 53 to 72 ms to a send with nothing in the payload to read, 85 to 149 ms to a send of one
 edited hook and one new file, and 4.1 to 4.3 seconds to a replay of the 2026-11-22 send, nearly all
 of it the check's own handling of lines a megabyte long (#3479).
+
+A file whose name holds a line break or another control character (a carriage return, a bell; a
+tab is not one) is not carried by the sync at all (#3540). The steps that decide what an apply may
+overwrite or delete pass their lists of files one name to a line, and rsync prints such a name with
+the character escaped, so before this a plain pull deleted this Mac's unsent file of that name
+(measured 2026-11-25, with no refused send before it). Now every mirror leaves such a name alone
+both ways: a send never stages or sends it, a receive never removes or replaces this Mac's copy,
+and a copy the shared repo already holds under such a name is never received. Everything else in
+the run goes on as usual. Each run that meets one says so on its own line ("NOT carried, and left
+exactly where they are on this Mac", or "NOT received onto this Mac"), naming each file with the
+character written as `\n`, `\r` or a backslash and three digits, and `claude-sync status` lists
+them under "files the sync does not carry". Rename the file so its name holds no such character
+and the next send carries it. A staged copy of one that an older version of the tool left in the
+clone is left there and said: no receive changes it, and a send that goes out commits it as it
+stands. Where the shared repo changes the same file the receive refuses and says to move that copy
+out of the clone, which lets the next pull receive.
 
 Text that is never a file is held to the same rule (#1995), because this repository squash merges
 with the commit messages as the body: a name in a message lands in main. The scanner reads labelled
@@ -12585,11 +12603,13 @@ the kernel does not show.
 </tbody>
 </table>
 
-Two things are deliberately not carried:
+Three things are deliberately not carried:
 
 - `.claude-plugin/types/`, which Claude Code writes into every plugin folder on every load,
   describing that Mac's build and MCP tools. It is excluded on both sides of the mirror.
 - A `*.local.json`, which every synced folder keeps to its own Mac (see "What NEVER syncs").
+- A file whose name holds a line break or another control character (#3540), which the sync's
+  lists cannot hold. It is excluded on both sides and named in every run that meets it.
 - Nothing else. A mod's own `tsconfig.json` IS carried: the engine writes one only where none
   exists and leaves an existing one alone (measured on 2.1.288). So every mod ships its own:
   `tools/check-mods.sh` fails a mod without one, because the copy the engine would generate is
