@@ -374,6 +374,20 @@ payload_for "$PUSH" | BR_LIB="$T/lib-fails" BR_LOG="$T/log" bash "$HOOK" > "$T/o
 [ "$RC" = 2 ] && [ "$(cat "$T/err")" = "refused on the alone reading" ] && check "with that reader, a command that asks it nothing is judged as it always was" ok \
   || check "with that reader, a command that asks it nothing is judged as it always was" "exit $RC, said [$(cat "$T/err")]"
 
+# An opener's line whose <, ; or blank is written as a JSON escape of its code point is the same
+# command to the shell, so the look that starts the reader has to see it.
+ESC_LT='\u00''3c'; ESC_SEMI='\u00''3b'; ESC_BLANK='\u00''20'
+run_spelled() { # run_spelled <the command as written inside the JSON string> <what the row is>
+  : > "$T/log"
+  printf '{"tool_name": "Bash", "tool_input": {"command": "%s"}, "cwd": "/w"}' "$1" | BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
+  ERR="$(cat "$T/err")"
+  [ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && [ "$(judged)" = "first second" ] && check "$2" ok \
+    || check "$2" "exit $RC, said [${ERR:0:300}], judged [$(judged)]"
+}
+run_spelled "cat ${ESC_LT}${ESC_LT}EOF; $PUSH\\nbody\\nEOF" "a push after an opener whose < are written as escapes is refused on the second reading"
+run_spelled "cat <<EOF${ESC_SEMI} $PUSH\\nbody\\nEOF" "and so is one whose ; is written as an escape"
+run_spelled "cat <<EOF;${ESC_BLANK}$PUSH\\nbody\\nEOF" "and one whose blank after the ; is written as an escape"
+
 # A hook that runs after the command has nothing left to refuse, and asking for the command again
 # would run it twice. Where the second reading cannot be judged it ends on a notice and exit 0,
 # with the first reading judged as it always was.
