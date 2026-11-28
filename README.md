@@ -510,12 +510,39 @@ every `classic.*`, `prompt.section` and `prompt.context` hook (and, since 2.1.29
 attachment, hook-context and compaction doors, `telemetry.log` and `session.identity`) past the
 user tier our mods load in,
 so those hooks never run and only a debug log line says so (#875). A managed `prependPlugins` list
-that leaves it out moves it to last, where it still loads. Without the file, the mod hooks listed
+that leaves it out takes it out altogether: it does not load at all (see "What the empty list
+costs" below, which corrects the "moves it to last, where it still loads" this paragraph said
+until #3681). Without the file, the mod hooks listed
 in `tools/sec-default-bypassed-hooks.tsv` (scope-modes and manual-steps refusing a turn end, the
 prompt text of ask-before-saving, picker-manners and manual-steps, goal-tracker's permission and
 idle notices, auto-session-name, status-bar resetting its cache clock after a compaction) silently
-do nothing. The cost Dan accepted: any installed plugin
+do nothing. The cost Dan accepted on 2026-10-06: any installed plugin
 can then also sit ahead of the security default's checks.
+
+### What the empty list costs
+
+With an empty `prependPlugins` list the security default is not moved: it is gone. Claude Code's
+page on administering mods says so ("An empty list ... is enough", "You lose the whole guard, not
+only these events"), and Claude Code 2.1.332 agrees: five headless starts on the personal MacBook
+on 2026-11-25 each logged `not seated: managed prependPlugins does not list it`, and the built-in
+modules that loaded did not include it (#3681). The decision of 2026-10-06 was recorded as "the
+security default still loads, last", which is not what this build does.
+
+What is lost with it, by Claude Code's permissions page (read on 2026-11-25, never measured here):
+
+- A mod that approves a tool call can beat some of the refusals a deny rule makes. The page does
+  not say which.
+- A mod's approval can skip the prompt an ask rule would raise.
+- In auto mode, a call a mod approves can run without auto mode's review of it.
+
+Dan's decision on 2026-11-25, by picker, with that in front of him: "Stay off, add a check
+(Recommended)" (#3681). So the guard stays off on both Macs, and what stands in its place is a
+check this repository maintains, `tools/check-mod-approvals.sh` (described under "Mods" below).
+It fails the build when a mod under `payload/mods` answers allow for a
+tool call or a permission prompt, changes the permission rules, or makes a tool call of its own,
+unless Dan has allowed that one statement by name. It reads only this repository's mods, so
+`claude-sync status` also names every installed plugin from elsewhere that carries a mod, since
+nothing has read that code.
 
 Create it:
 
@@ -12691,7 +12718,7 @@ or the prepend and append tiers); a hook on one is reported too, saying "for som
 Seated outermost for a
 Team or Enterprise organization, it routes each of those straight past our mods, so such a hook
 never runs and only a debug log line says so (`bypassed by cc-plugin-sec-default`). Both Macs keep
-it out of first place with the managed settings file in "Setting up a new Mac" above, so these
+it from loading at all with the managed settings file in "Setting up a new Mac" above, so these
 hooks do run there, but only while that file is in place (#876). A check that must run beneath
 every mod's `tool.call` hook and the settings hooks still belongs in `tool.check`. The hooks on
 these events are listed by mod and event in `tools/sec-default-bypassed-hooks.tsv`, each with the
@@ -12874,6 +12901,58 @@ suite run and in the pull request checks, on fixtures for each of those seats an
 with the machine's own settings. The types say the reverse holds (a person's mod's call "runs
 through every hook but the calling one", the organization's included), so the guards could be seated
 higher along with a mod; none has been moved, and moving one is Dan's decision.
+
+No mod approves a tool call, or makes one of its own, without being named (#3681). Claude Code's
+built-in security default is off on both Macs ("Setting up a new Mac" above says what that costs),
+so nothing in Claude Code stops a mod's approval beating a deny rule. `tools/check-mod-approvals.sh`
+stands in for it over `payload/mods`. It reads every source file that is a mod's own code, mod-kit
+and each mod's copy of mod-kit included, and every other file in the mod's folder (a `.json` file,
+a script, a data file) for the quoted words, and fails when one:
+
+- gives `allow`, `approve` or `ask` to `decision`, `permissionDecision` or `behavior`, which is how
+  a `tool.check`, `tool.judge`, `classic.PermissionRequest` or `classic.PreToolUse` hook approves a
+  call or turns a refusal into a question;
+- holds one of those three words as a whole string anywhere else (`ok ? 'approve' : 'deny'`, a
+  variable, a return, an argument, a list's element), since a decision can be computed from it.
+  `allow` fails wherever it stands. `approve` and `ask` have harmless uses, so they pass where the
+  code around the word shows it cannot become a value: as the value of a property that is not one
+  of those three keys (`id: 'ask'`), beside a comparison or a type's `|` or `&`, as the first or
+  last argument of a type (`Pick<Io, 'ask'>`), and after `as` or `case`. The script's header gives
+  each position and why it is safe. One function decides this for all three words, in code and in
+  data files, and the suite reads the decision values out of the pinned mod API types and fails
+  for any that is not held both ways, so a build that adds a value cannot pass unnoticed;
+- uses the name `allow` as a key, a shorthand property or a variable, or assigns to it, unless
+  the key is given `false`, `undefined` or `null`: `{ allow: true }` is how a `classic.PreToolUse`
+  hook approves, and `true` can be computed anywhere, so the name itself is read;
+- changes the permission rules or mode (`updatedPermissions`, `setMode`, `bypassPermissions`, the
+  name `permissionMode` wherever it is not read off something, `$.config.set`), or hooks
+  `settings.read`;
+- calls `tool.call` or `mcp.call` on any object, which runs a tool with no permission rule
+  consulted, or takes `$.tool`, `$.mcp` or `$.config` whole, or a member of `$` by a computed name;
+- imports from a tests folder, or lists a hooks module from one, since tests are not read.
+
+Each finding prints the mod, the file and line, the route and the statement, and every finding is
+printed. `tools/mod-approvals-allowed.tsv` lists the statements allowed by name, one row each with
+the issue that decided it and the reason. A row allows one statement, follows its text and not
+its line number, and fails the run once the statement has gone. Adding a row is Dan's decision.
+The list holds no row yet. The check finds three statements in `payload/mods` (scope-modes
+approving a permission prompt for an overnight worker, job-watcher stopping a background task, and
+scope-modes holding the word approve in a list of verbs), each waiting on Dan's answer in #3681, so
+until a row is added the check itself exits 1 on `payload/mods`, and the suite prints one
+`SUITE-PART-UNMEASURED` line for each and checks the rest against a copy of the list with the rows
+added.
+The check's last line says what it cannot see: a decision built while running from pieces of a
+word or read from outside the mod's folder, a decision word written without quotes in a file of
+the mod that is not its code, the word `approve` or `ask` read back out of a property it was
+given to (`held.id`), a call through a renamed copy of the engine's tool object, a
+hook that passes on the verdict of a different call, what a mod does itself with
+`$.process.run`, `$.fs` or `$.http` (no tool call, and no permission rule covers it), a package
+imported by name, and any plugin that is not under the folder. `tests/test-mod-approvals.sh` runs
+it in every full suite run, on a stand in mod for each route and on `payload/mods`.
+`claude-sync status` covers the last gap from the other side: it names each installed plugin from
+elsewhere that carries a mod (a hooks module in its `hooks/hooks.json` or in what its manifest's
+`hooks` names), as enabled everywhere, off at user scope or unreadable. It reads files only and
+never disables anything (`tests/test-status-plugin-mods.sh`).
 
 Every hook a mod registers at `tool.call` or `tool.check` ends in a catch built by mod-kit's
 `hooks/hold.ts` (#3655). Claude Code cuts a hook at 10 seconds of its own time and skips one that
