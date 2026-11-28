@@ -454,7 +454,7 @@ echo "  each thing a path may hold is judged alone, the write as it is written a
 # its own words. The files held, made here and never by a command:
 printf 'echo ok' > "$S/nonl.sh"
 printf '%s\n' 'echo \' > "$S/bs.sh"
-yes '# a comment line and nothing more, to fill the file up' | head -c 2200000 > "$S/big.sh"
+python3 -c 'import sys; sys.stdout.write("# a comment line and nothing more, to fill the file up\n" * 42000)' > "$S/big.sh"
 mkdir -p "$S/nonldir" "$S/bsdir"
 printf 'echo ok' > "$S/nonldir/run.sh"
 printf '%s\n' 'echo \' > "$S/bsdir/run.sh"
