@@ -351,47 +351,86 @@ echo "slack drafts only: with the sources refusal on, the everyday tools are rea
 # (#3863). So where the gate answers that it ran out of time, and only there, the command is judged
 # again on the step clock, which no machine's speed can end, and the case is that verdict. The run
 # out is printed as an unmeasured part, because on that machine nothing here holds the gate's
-# seconds for that tool.
-everyday_tool() { # everyday_tool <command> <the check's name>: the gate lets the tool through
+# seconds for that tool. What the step clock run holds, on any machine, is the size of the gate's
+# walk of the tool: its budget is the tool's ceiling of steps.
+#
+# everyday_steps <tool>: that ceiling. Each is one and a half times the least budget the gate
+# allowed the tool under when the ceiling was set, rounded up to the next hundred; that least
+# budget, found by halving the budget through run_budget, is beside it. A walk past its ceiling is
+# to be made cheaper to judge, or the ceiling set again from a new measurement.
+everyday_steps() {
+  case "$1" in
+    run-all-tests.sh) echo 6300 ;;            # 4189
+    lib/merge-when-ready.sh) echo 16600 ;;    # 11044
+    lib/issue-spool.sh) echo 1400 ;;          # 924
+    lib/suite-deadline.sh) echo 1800 ;;       # 1160
+    lib/push-scope.sh) echo 3400 ;;           # 2244
+    claude-sync) echo 25400 ;;                # 16903
+    tools/load-window.sh) echo 2300 ;;        # 1506
+    tests/test-claude-sync.sh) echo 61700 ;;  # 41099
+  esac
+}
+everyday_tool() { # everyday_tool <command> <the check's name> <its ceiling of steps>: the gate lets the tool through
+  case "$3" in
+    ""|*[!0-9]*) check "$2" "everyday_steps holds no ceiling of steps for it, so the step clock would have nothing to hold its walk to"; return ;;
+  esac
   run_bash "$1"
   case "$RC $ERR" in
-    "2 "*"ran out of time judging this call"*)
-      printf 'SUITE-PART-UNMEASURED %s\n' "#3863 $2: the gate ran out of its seconds judging it on this machine, so that it is judged inside them was not measured here; it was judged again on the step clock, and the case below is that verdict"
-      run_budget 1000000000 "$1" ;;
+    "2 BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call"*)
+      printf 'SUITE-PART-UNMEASURED %s\n' "#3863 $2: the gate ran out of its seconds judging it on this machine, so that it is judged inside them was not measured here; it was judged again on the step clock, held to $3 steps, and the case below is that verdict"
+      run_budget "$3" "$1"
+      case "$RC $ERR" in
+        "2 BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call"*)
+          check "$2" "the gate's walk of it is past its ceiling of $3 steps (everyday_steps), so make it cheaper to judge or set the ceiling again from a new measurement: ${ERR:0:200}"; return ;;
+      esac ;;
   esac
   allowed "$2"
 }
-for f in run-all-tests.sh lib/merge-when-ready.sh lib/issue-spool.sh lib/suite-deadline.sh lib/push-scope.sh; do
-  everyday_tool "bash $DIR/$f" "#2538 the sources refusal is on, and hooks/$f is allowed"
-done
-if [ -n "$REPO2854" ]; then
-  for f in claude-sync tools/load-window.sh tests/test-claude-sync.sh; do
-    everyday_tool "bash $REPO2854/$f" "#2538 the sources refusal is on, and $f is allowed"
-  done
-else
-  printf 'SUITE-PART-UNMEASURED %s\n' "#2538 claude-sync, load-window and the claude-sync suite: this suite is not in a claude-config checkout"
-fi
 # A machine too slow for the gate's seconds, stood in for by a copy of the gate with no seconds at
-# all: its budget is spent by the first file it reads, on any machine and however often that file
-# has been judged. Its watchdog stays where the gate's is, so the copy has as long as the gate has
-# to say it ran out. Each case is run in a subshell with counts of its own, so what it prints and
-# counts is read here and is no part of this suite's result.
-slow3863="$T/slow-3863"
+# all: its budget is spent at the first step of a walk, on any machine and however often the
+# command has been judged. Its watchdog stays where the gate's is, so the copy has as long as the
+# gate has to say it ran out.
+slow3863="$T/slow-3863"; slow3863_made=""
 mkdir -p "$slow3863" && cp "$HOOK" "$slow3863/" && cp -R "$DIR/lib" "$slow3863/lib" \
   && sed -e 's/^BUDGET_SECONDS = 11$/BUDGET_SECONDS = 0/' -e 's/^HARD_STOP_SECONDS = BUDGET_SECONDS + 2$/HARD_STOP_SECONDS = 13/' \
        "$DIR/slack_drafts_only_gate.py" > "$slow3863/slack_drafts_only_gate.py"
 if [ "$(grep -c -e '^BUDGET_SECONDS = 11$' -e '^HARD_STOP_SECONDS = BUDGET_SECONDS + 2$' "$DIR/slack_drafts_only_gate.py" 2>/dev/null)" = 2 ] \
     && [ "$(grep -c -e '^BUDGET_SECONDS = 0$' -e '^HARD_STOP_SECONDS = 13$' "$slow3863/slack_drafts_only_gate.py" 2>/dev/null)" = 2 ]; then
+  slow3863_made=1
+else
+  check "a copy of the gate with no seconds is made (#3863)" "none was made in $slow3863, so the run out was never seen: either copying the gate there failed, or $DIR/slack_drafts_only_gate.py no longer has the lines 'BUDGET_SECONDS = 11' and 'HARD_STOP_SECONDS = BUDGET_SECONDS + 2' this suite rewrites"
+fi
+# slow_case <command> <name> <ceiling of steps>: what everyday_tool prints and counts for it under
+# that copy, from a subshell with counts of its own, so none of it is part of this suite's result.
+slow_case() { (pass=0; fail=0; HOOK="$slow3863/slack-drafts-only-gate.sh"; everyday_tool "$1" "$2" "$3"; echo "counted $pass $fail"); }
+# within_ceiling <command> <the tool's name> <its ceiling of steps>: the tool under that copy, so
+# its walk is held to its ceiling on every machine and not only on one the gate ran out on.
+within_ceiling() {
+  [ -n "$slow3863_made" ] || return 0
+  local got; got="$(slow_case "$1" "$2 on a slow machine" "$3")"
+  case "${got%%$'\n'*}" in
+    "SUITE-PART-UNMEASURED #3863 $2 on a slow machine: "*"ran out of its seconds"*"held to $3 steps"*)
+      [ "${got#*$'\n'}" = "counted 1 0" ] && got=ok ;;
+  esac
+  check "$2, where the gate runs out of its seconds on it, is judged again within $3 steps, passes on that verdict, and says in one line that the seconds were not measured (#3863)" "${got//$'\n'/ | }"
+}
+for f in run-all-tests.sh lib/merge-when-ready.sh lib/issue-spool.sh lib/suite-deadline.sh lib/push-scope.sh; do
+  everyday_tool "bash $DIR/$f" "#2538 the sources refusal is on, and hooks/$f is allowed" "$(everyday_steps "$f")"
+  within_ceiling "bash $DIR/$f" "hooks/$f" "$(everyday_steps "$f")"
+done
+if [ -n "$REPO2854" ]; then
+  for f in claude-sync tools/load-window.sh tests/test-claude-sync.sh; do
+    everyday_tool "bash $REPO2854/$f" "#2538 the sources refusal is on, and $f is allowed" "$(everyday_steps "$f")"
+    within_ceiling "bash $REPO2854/$f" "$f" "$(everyday_steps "$f")"
+  done
+else
+  printf 'SUITE-PART-UNMEASURED %s\n' "#2538 claude-sync, load-window and the claude-sync suite: this suite is not in a claude-config checkout"
+fi
+if [ -n "$slow3863_made" ]; then
   HOOK="$slow3863/slack-drafts-only-gate.sh" run_bash "bash $DIR/lib/issue-spool.sh"
   refused "the copy of the gate with no seconds refuses an everyday tool (#3863)"
-  says "and that refusal is the gate running out of time, the state the cases below are about (#3863)" "ran out of time judging this call"
-  got="$(pass=0; fail=0; HOOK="$slow3863/slack-drafts-only-gate.sh"; everyday_tool "bash $DIR/lib/issue-spool.sh" "a tool on a slow machine"; echo "counted $pass $fail")"
-  case "$got" in
-    "SUITE-PART-UNMEASURED #3863 a tool on a slow machine: "*"ran out of its seconds"*$'\n'"counted 1 0") got=ok ;;
-  esac
-  check "an everyday tool the gate ran out of its seconds on is judged again on the step clock, passes on that verdict, and says in one line that the seconds were not measured (#3863)" "$got"
-  # The copy runs out on a file however often the gate has judged it, so no case here rests on
-  # being a path's first judgement.
+  says "and that refusal is the gate running out of time, the state the cases here are about (#3863)" "ran out of time judging this call"
+  # No case here rests on being a path's first judgement.
   HOOK="$slow3863/slack-drafts-only-gate.sh" run_bash "bash $T/sv/posts/lib/x.sh"; twice="$RC ${ERR:0:90}"
   HOOK="$slow3863/slack-drafts-only-gate.sh" run_bash "bash $T/sv/posts/lib/x.sh"; twice="$twice | $RC ${ERR:0:90}"
   case "$twice" in
@@ -400,22 +439,47 @@ if [ "$(grep -c -e '^BUDGET_SECONDS = 11$' -e '^HARD_STOP_SECONDS = BUDGET_SECON
   check "the copy of the gate runs out on a script that posts each time it is judged, the second time as the first (#3863)" "$twice"
   # The failure path: running out is no pass. A script that posts is refused on the step clock too,
   # and the case fails on that refusal.
-  got="$(pass=0; fail=0; HOOK="$slow3863/slack-drafts-only-gate.sh"; everyday_tool "bash $T/sv/posts/lib/x.sh" "a script that posts on a slow machine"; echo "counted $pass $fail")"
+  got="$(slow_case "bash $T/sv/posts/lib/x.sh" "a script that posts on a slow machine" 1000)"
   case "$got" in
     "SUITE-PART-UNMEASURED #3863 a script that posts on a slow machine: "*$'\n'"FAIL: a script that posts on a slow machine (exit 2, "*"posts to Slack"*$'\n'"counted 0 1") got=ok ;;
   esac
-  check "a script that posts still fails the case after the gate ran out of its seconds on it, on the step clock's own refusal (#3863)" "$got"
-else
-  check "a copy of the gate with no seconds is made (#3863)" "none was made in $slow3863, so the run out was never seen: either copying the gate there failed, or $DIR/slack_drafts_only_gate.py no longer has the lines 'BUDGET_SECONDS = 11' and 'HARD_STOP_SECONDS = BUDGET_SECONDS + 2' this suite rewrites"
+  check "a script that posts still fails the case after the gate ran out of its seconds on it, on the step clock's own refusal (#3863)" "${got//$'\n'/ | }"
+  # The ceiling is live: a walk past it fails the case, and the failure names the ceiling.
+  got="$(slow_case "bash $DIR/lib/issue-spool.sh" "a tool whose walk has grown" 100)"
+  case "$got" in
+    "SUITE-PART-UNMEASURED #3863 a tool whose walk has grown: "*$'\n'"FAIL: a tool whose walk has grown (the gate's walk of it is past its ceiling of 100 steps"*"its budget of 100 steps"*$'\n'"counted 0 1") got=ok ;;
+  esac
+  check "an everyday tool whose walk is past its ceiling of steps fails the case after the gate ran out of its seconds on it (#3863)" "${got//$'\n'/ | }"
+  got="$(slow_case "bash $DIR/lib/issue-spool.sh" "a tool with no ceiling" "")"
+  case "$got" in
+    "FAIL: a tool with no ceiling (everyday_steps holds no ceiling of steps for it"*$'\n'"counted 0 1") got=ok ;;
+  esac
+  check "an everyday tool with no ceiling of steps fails the case, and nothing is judged without one (#3863)" "${got//$'\n'/ | }"
 fi
-# And a refusal that is not the gate running out is never judged again: with the gate as it is, a
-# script that posts fails the case at once and nothing is called unmeasured.
-got="$(pass=0; fail=0; everyday_tool "bash $T/sv/posts/lib/x.sh" "a script that posts"; echo "counted $pass $fail")"
+# A refusal that only quotes a run out is not one: the wrapper's own, for a reader that printed the
+# words and then failed. It fails the case as it is.
+crash3863="$T/crash-3863"
+mkdir -p "$crash3863" && cp "$HOOK" "$crash3863/" && cp -R "$DIR/lib" "$crash3863/lib" \
+  && printf '%s\n' 'import sys' 'print("outoftime")' 'print("BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call: it stopped after 11 seconds")' 'sys.exit(3)' > "$crash3863/slack_drafts_only_gate.py"
+HOOK="$crash3863/slack-drafts-only-gate.sh" run_bash "bash $DIR/lib/issue-spool.sh"
+refused "a copy of the gate whose reader prints a run out and then fails refuses the call (#3863)"
+case "$ERR" in
+  "BLOCKED: slack-drafts-only-gate.sh could not judge this call"*"ran out of time judging this call"*) check "and refuses it as a call it could not judge, quoting the run out (#3863)" ok ;;
+  *) check "and refuses it as a call it could not judge, quoting the run out (#3863)" "stderr: ${ERR:0:300}" ;;
+esac
+got="$(pass=0; fail=0; HOOK="$crash3863/slack-drafts-only-gate.sh"; everyday_tool "bash $DIR/lib/issue-spool.sh" "a tool the gate could not judge" 1000; echo "counted $pass $fail")"
+case "$got" in
+  *SUITE-PART-UNMEASURED*) ;;
+  "FAIL: a tool the gate could not judge (exit 2, "*"could not judge this call"*$'\n'"counted 0 1") got=ok ;;
+esac
+check "a refusal that only quotes a run out fails the case as it is: it is not judged again and nothing is called unmeasured (#3863)" "${got//$'\n'/ | }"
+# And with the gate as it is, a script that posts fails the case at once.
+got="$(pass=0; fail=0; everyday_tool "bash $T/sv/posts/lib/x.sh" "a script that posts" 1000; echo "counted $pass $fail")"
 case "$got" in
   *SUITE-PART-UNMEASURED*) ;;
   "FAIL: a script that posts (exit 2, "*"posts to Slack"*$'\n'"counted 0 1") got=ok ;;
 esac
-check "a refusal that is not the gate running out fails the case as it is, with nothing called unmeasured (#3863)" "$got"
+check "a refusal that is not the gate running out fails the case as it is, with nothing called unmeasured (#3863)" "${got//$'\n'/ | }"
 
 echo
 echo "slack drafts only: a TypeScript, JavaScript or Python file a shell script is handed is read as what it is, not as commands (claude-config#2792)"
