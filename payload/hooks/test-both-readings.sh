@@ -172,9 +172,10 @@ fi
 echo "both readings: the helper"
 command -v python3 >/dev/null 2>&1 || { check "python3 is here to make the payloads and the second reading" "python3 is not on PATH"; }
 
-# The stand in refuses a text that runs a push, says a note for one that runs `git status`, exits
-# 3 for one that runs `git gc`, and for one that runs `git fsck` sleeps in short steps, far longer
-# than any row gives it, and then passes.
+# The stand in refuses a text that runs a push, says a note for one that runs `git status`, says
+# an object through the notice library for one that runs `git describe`, says a line that only
+# opens like an object for one that runs `git blame`, exits 3 for one that runs `git gc`, and for
+# one that runs `git fsck` sleeps in short steps, far longer than any row gives it, and then passes.
 # Every run writes which reading it was told it is and what it read. Its time limit is BR_LIMIT
 # where a row names one, and the time it has used is read from the file BR_CLOCK names where a
 # row names one, so no row waits out a real limit. BR_LIB is the library it reads, BR_AFTER the
@@ -193,6 +194,8 @@ cmd="\${parsed%%\$'\\x1f'*}"
 printf 'judged|%s|%s|%s\\n' "\${PS__READING:-alone}" "\${PS_READING-unset}" "\$cmd" >> "\$BR_LOG"
 if ps__runs_git_sub "\$cmd" gc; then echo "crashed on the \${PS__READING:-alone} reading" >&2; exit 3; fi
 if ps__runs_git_sub "\$cmd" status; then echo "a note from the \${PS__READING:-alone} reading"; fi
+if ps__runs_git_sub "\$cmd" describe; then hook_notice_json "an object from the \${PS__READING:-alone} reading" PostToolUse; fi
+if ps__runs_git_sub "\$cmd" blame; then echo "{an opening brace from the \${PS__READING:-alone} reading"; fi
 if ps_is_git_push "\$cmd"; then echo "refused on the \${PS__READING:-alone} reading" >&2; exit 2; fi
 if ps__runs_git_sub "\$cmd" fsck; then
   i=0; while [ "\$i" -lt 80 ]; do sleep 0.25; i=\$((i + 1)); done
@@ -412,9 +415,14 @@ ERR="$(cat "$T/err")"
 after_notice "such a hook whose reader fails ends on a notice and exit 0" "failed with exit 1"
 : > "$T/log"
 payload_for "$HIDDEN" | BR_AFTER=after TMPDIR="$T/absent/" BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
-ERR="$(cat "$T/err")"
+OUT="$(cat "$T/out")"; ERR="$(cat "$T/err")"
 after_notice "such a hook with nowhere to keep the two answers says so in a notice" "no working folder could be made"
-[ "$(judged)" = alone ] && check "and goes on by itself with the reading it always had" ok || check "and goes on by itself with the reading it always had" "judged [$(judged)]"
+case "$OUT" in
+  NOTICE*"did nothing else for this command"*) check "and the notice is on standard output, where a hook that exits 0 is heard, saying the hook did nothing else" ok ;;
+  *) check "and the notice is on standard output, where a hook that exits 0 is heard, saying the hook did nothing else" "standard output held [${OUT:0:300}]" ;;
+esac
+[ -z "$(judged)" ] && check "and there it judges nothing, so nothing it says is left unheard beside the notice" ok \
+  || check "and there it judges nothing, so nothing it says is left unheard beside the notice" "judged [$(judged)]"
 run_after 0 600 "$HIDDEN"
 [ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && [ "$(judged)" = "first second" ] \
   && check "with time for both, a hook that runs after the command judges the second reading as any hook does" ok \
@@ -430,6 +438,23 @@ if . "$DIR/lib/hook-notice.sh" 2>/dev/null && declare -F hook_notice_verdict >/d
   why="$(hook_notice_verdict "$OUT" "NOTICE.*has already run.*leaves too little.*The hook itself said: a note from the first reading")"
   [ "$RC" = 0 ] && [ -z "$why" ] && check "with the notice library loaded the notice is one object where Claude Code shows it" ok \
     || check "with the notice library loaded the notice is one object where Claude Code shows it" "exit $RC, $why, said [${OUT:0:300}]"
+  # A first run that said an object of its own: the notice goes into that one object, since a
+  # hook that exits 0 is heard on standard output alone.
+  run_after 599 600 "git describe; cat <<EOF; echo hidden${NL}body${NL}EOF" yes
+  why="$(hook_notice_verdict "$OUT" "NOTICE.*has already run.*leaves too little.*The hook itself said: an object from the first reading")"
+  [ "$RC" = 0 ] && [ -z "$why" ] && check "a first run that said an object of its own has the notice put into that one object" ok \
+    || check "a first run that said an object of its own has the notice put into that one object" "exit $RC, $why, said [${OUT:0:300}]"
+  ctx="$(printf '%s' "$OUT" | python3 -c 'import json, sys
+try: print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])
+except Exception as e: print("unreadable: %s" % e)' 2>&1)"
+  case "$ctx" in
+    NOTICE*"leaves too little"*"an object from the first reading"*) check "and the session is handed the notice with what that object handed it" ok ;;
+    *) check "and the session is handed the notice with what that object handed it" "the context was [${ctx:0:300}]" ;;
+  esac
+  run_after 599 600 "git blame; cat <<EOF; echo hidden${NL}body${NL}EOF" yes
+  why="$(hook_notice_verdict "$OUT" "NOTICE.*has already run.*leaves too little.*The hook itself said: \{an opening brace from the first reading")"
+  [ "$RC" = 0 ] && [ -z "$why" ] && check "a first run whose words only open like an object are carried inside the notice, as any words are" ok \
+    || check "a first run whose words only open like an object are carried inside the notice, as any words are" "exit $RC, $why, said [${OUT:0:300}]"
 else
   check "lib/hook-notice.sh is here to read the notice with" "it could not be loaded, or holds no hook_notice_verdict"
 fi

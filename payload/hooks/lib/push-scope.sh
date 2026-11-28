@@ -400,9 +400,10 @@ sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 # and the process id of the hook that started it, and believes it only from its own parent: the
 # same words in the environment of any other process change nothing, and a hook that finds them
 # there when it has two readings to start refuses, since it cannot tell whether it is already
-# inside one. A command longer than PS__SECOND_MAX that has a second reading is refused unread:
-# what the library does with a command grows with the square of its length, and two runs of a
-# long one end at the hook's time limit, which is a refusal that says nothing.
+# inside one. A command longer than PS__SECOND_MAX that has a second reading is refused unread
+# by a gate that runs before the command, and a hook that runs after it judges the first reading
+# and ends on a notice: what the library does with a command grows with the square of its length,
+# and two runs of a long one end at the hook's time limit, which is a refusal that says nothing.
 #
 # The two runs share the one time limit Claude Code gives the hook, which the hook hands over in
 # seconds as its registration states it (test-both-readings.sh holds the two equal). The second
@@ -478,23 +479,52 @@ ps__say_reading() {   # $1 = first | second  $2 = the working folder
 ps__after_note() {   # $1 = the hook's name  $2 = why the second reading was not judged, as a clause
   printf 'NOTICE: %s: %s This hook runs after the command, so the command has already run and nothing here refuses it. What it hides was not judged by this hook, because %s. Do not run the command again on account of this notice (claude-config#3739).' "$1" "$PS__HIDES" "$2"
 }
-# How a hook that runs after the command ends when the second reading could not be judged: with
-# what its first run said, the notice, and exit 0. The notice goes where Claude Code shows one
-# (lib/hook-notice.sh, where the hook loaded it), carrying what the first run said in plain words.
-# A first run that printed an object of its own is passed on as it is, since a second line would
-# spoil it for whatever reads it, and the notice is then on standard error alone.
-ps__after_end() {   # $1 = the hook's name  $2 = the working folder  $3 = why, as a clause
-  local note first
+# Puts the notice in PS_NOTE into the object on standard input, ahead of what that object says to
+# the person and hands the session, and prints the one object. Exits 1 for text that is no object.
+PS__NOTE_INTO='
+import json, os, sys
+note = os.environb[b"PS_NOTE"].decode("utf-8", "replace")
+n = int(os.environ["PS_NOTE_MAX"])
+d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+if not isinstance(d, dict):
+    sys.exit(1)
+def join(said):
+    m = note + (" The hook itself said: " + said if isinstance(said, str) and said else "")
+    return m if len(m) <= n else m[:n] + " ... (cut short at %d characters)" % n
+said = d.get("systemMessage")
+h = d.get("hookSpecificOutput")
+if not isinstance(h, dict):
+    h = {"hookEventName": "PostToolUse"}
+h["additionalContext"] = join(h.get("additionalContext", said))
+d["systemMessage"] = join(said)
+d["hookSpecificOutput"] = h
+print(json.dumps(d))'
+# The one way a hook that runs after the command ends when the second reading could not be
+# judged: with the notice, and exit 0. Claude Code hears a hook that exits 0 on standard output
+# alone, so the notice is always the one thing printed there: through lib/hook-notice.sh where the
+# hook loaded it, carrying what the first run said, and inside the first run's own object where
+# it said one, since a second object beside it would spoil both. Handed no working folder there
+# was no first run, and the notice says the hook did nothing else.
+ps__after_end() {   # $1 = the hook's name  $2 = the working folder, or nothing where none could be made  $3 = why, as a clause
+  local note first="" merged=""
   note="$(ps__after_note "$1" "$3")"
-  cat "$2/err.first" >&2 2>/dev/null
+  if [ -n "$2" ]; then
+    cat "$2/err.first" >&2 2>/dev/null
+    first="$(cat "$2/out.first" 2>/dev/null)"
+  else
+    note="$note With nowhere to keep the answer of a run, this hook did nothing else for this command either."
+  fi
   printf '%s\n' "$note" >&2
-  first="$(cat "$2/out.first" 2>/dev/null)"
   case "$first" in
-    '{'*) printf '%s\n' "$first" ;;
-    *) [ -z "$first" ] || note="$note The hook itself said: $first"
-       if declare -F hook_notice_json >/dev/null 2>&1; then hook_notice_json "$note" PostToolUse
-       else printf '%s\n' "$note"; fi ;;
+    '{'*) merged="$(printf '%s' "$first" | PS_NOTE="$note" PS_NOTE_MAX="${HN_MAX:-9000}" python3 -c "$PS__NOTE_INTO" 2>/dev/null)" || merged="" ;;
   esac
+  if [ -n "$merged" ]; then
+    printf '%s\n' "$merged"
+    exit 0
+  fi
+  [ -z "$first" ] || note="$note The hook itself said: $first"
+  if declare -F hook_notice_json >/dev/null 2>&1; then hook_notice_json "$note" PostToolUse
+  else printf '%s\n' "$note"; fi
   exit 0
 }
 ps_both_readings() {   # $1 = the payload as the hook read it  $2 = the hook's time limit, in seconds  $3 = after, for a hook that runs after the command
@@ -560,11 +590,9 @@ ps_both_readings() {   # $1 = the payload as the hook read it  $2 = the hook's t
       printf 'BLOCKED: %s: this command has two readings to judge and no working folder could be made under %s to hold them, so what it hides was not judged (claude-config#3739).\n' "$name" "${TMPDIR:-/tmp}" >&2
       exit 2
     }
-    # With nowhere to keep a run's answer the hook goes on by itself, with the reading it always
-    # had, and the notice is on standard error alone.
-    ps__after_note "$name" "${why:-no working folder could be made under ${TMPDIR:-/tmp} to hold the two readings}" >&2
-    printf '\n' >&2
-    return 0
+    # Going on by itself here, the hook could say an object of its own after the notice, and
+    # two things on standard output are heard as neither. So it ends on the notice.
+    ps__after_end "$name" "" "${why:-no working folder could be made under ${TMPDIR:-/tmp} to hold the two readings}"
   }
   # shellcheck disable=SC2064 # the folder is named now, on purpose
   trap "rm -rf '$work'" EXIT
