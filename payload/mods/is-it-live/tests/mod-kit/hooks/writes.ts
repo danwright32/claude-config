@@ -785,6 +785,195 @@ const READ_EXAMPLES = ['cat', 'grep', 'head', 'tail', 'wc', 'diff'].filter(n => 
 // tests/test-read-only-programs.sh fails when a name this file compares against is read as unknown.
 const READ_BY_RULE: ReadonlySet<string> = new Set(['printf', 'npx', ...RUNS_TEXT, ...RUNS_TEXT_LATER])
 
+// #3412: gh's own grammar, so that a word of a gh command is handed on as a file it may write only
+// where that grammar does not prove it is none. gh is on none of the lists above and stays so: it
+// writes files in some forms, so it is NOT on READ_ONLY, and every run of it is still called a
+// program the reader does not know. Before this, each of its words that spelled a path was handed
+// on: `state` in `gh pr view 5 --json state`, in a checkout holding a folder named state, in 598
+// recorded calls on the personal MacBook (35 days, counted 2026-11-21, the issue).
+//
+// A word is read as no path ONLY where gh's grammar proves it: the name of the subcommand, the value
+// of an option whose value is a field list, a jq expression, a template's own text, a state, a
+// number, a date, a repository, a branch, a login, a label, a milestone, a title, a body, a search
+// or the like, and an operand its usage gives as a number, an address, a branch, a run, a tag, a
+// repository, a query or an API path. Everything else is read exactly as before:
+//   - an option whose value names a file gh reads (`--body-file`, `--input`, `--template` and
+//     `--recover` of `pr create`, `--field` with its `@file`) is kept, as is `pr diff --exclude`;
+//   - a subcommand not in the table (every download, clone, checkout, merge, sync, install, upload,
+//     `release`'s and `run`'s `download`, `repo`, `gist`, `extension`, `codespace`, `attestation`,
+//     `alias`, `config`, `auth login`) and any command holding an option the table does not give for
+//     it leave the whole command as it was read before;
+//   - an operand of a command whose usage gives none is kept.
+// So the reading can only take words away from what `scriptArgs` hands on, never add one.
+//
+// The table is gh 2.89.0's manual pages (`gh-pr-view.1` and the rest, read on 2026-11-26): each
+// subcommand's options with what its page says each value is, the options it inherits, its aliases,
+// and its usage line. Per subcommand: `<>` first where every operand its usage gives is no path;
+// then each option by its short letter and long name, bare for one that takes no value, `=` after
+// one whose value is no path, `@` after one whose value is kept. The table holds 33 subcommands
+// that write no file here: the 30 of them that ran on this Mac in 35 days of records, and three of
+// their kind (`pr status`, `issue status`, `workflow list`). No option's meaning was taken from its
+// name.
+//
+// gh splits its options as its flag library does, which mod-kit's gh.ts reads the same way (#834):
+// `--name value` or `--name=value`, a short option's value attached (`-L5`) or as the next word,
+// short options that take none clustered, a value taken whatever it starts with, and `--` ending
+// the options. This is a second reader of gh's words beside gh.ts's ghArgs, which answers another
+// question (which repository and action a command reaches, where an option it does not know is read
+// as taking no value); here an option the table does not give stops the reading (L342).
+//
+// Where a word may be something the reader cannot see (a variable it could not read, a command's
+// output, a pattern the shell matches against files, a set variable's value holding a blank), the
+// words after it cannot be followed one by one. A command with an option whose value is kept, or
+// whose operands are kept, is then read as before. A command where nothing is a path (`<>` and no
+// `@`) is still read as handing on nothing, provided every word that starts with a dash spells an
+// option the table gives for it: whichever way such a line splits, no word of it names a file.
+const GH_OUT = 'q,jq= json= t,template='
+const GH_REPO = 'R,repo='
+const GH_FILTERS = 'app= a,assignee= A,author= l,label= L,limit= S,search= s,state='
+const GH_EDITS = 'add-assignee= add-label= add-project= b,body= F,body-file@ m,milestone= remove-assignee= remove-label= remove-milestone remove-project= t,title='
+const GH_COMMENT = `<> b,body= F,body-file@ create-if-none delete-last edit-last e,editor w,web yes ${GH_REPO}`
+const GH_SEARCH = `<> app= archived assignee= author= closed= commenter= comments= created= interactions= involves= ${GH_OUT} label= language= L,limit= locked match= mentions= milestone= no-assignee no-label no-milestone no-project order= owner= project= reactions= R,repo= sort= state= team-mentions= updated= visibility= w,web`
+const GH: Readonly<Record<string, string>> = {
+  api: '<> cache= F,field@ H,header= hostname= i,include input@ q,jq= X,method= paginate p,preview= f,raw-field= silent slurp t,template= verbose',
+  'auth status': `a,active h,hostname= jq= json= t,show-token template=`,
+  'auth token': 'h,hostname= u,user=',
+  'issue close': `<> c,comment= duplicate-of= r,reason= ${GH_REPO}`,
+  'issue comment': GH_COMMENT,
+  'issue create': `a,assignee= b,body= F,body-file@ e,editor l,label= m,milestone= p,project= recover@ T,template= t,title= w,web ${GH_REPO}`,
+  'issue edit': `<> ${GH_EDITS} ${GH_REPO}`,
+  'issue list': `${GH_FILTERS} ${GH_OUT} mention= m,milestone= w,web ${GH_REPO}`,
+  'issue reopen': `<> c,comment= ${GH_REPO}`,
+  'issue status': `${GH_OUT} ${GH_REPO}`,
+  'issue view': `<> c,comments ${GH_OUT} w,web ${GH_REPO}`,
+  'label list': `${GH_OUT} L,limit= order= S,search= sort= w,web ${GH_REPO}`,
+  'pr checks': `<> fail-fast i,interval= q,jq= json= required t,template= watch w,web ${GH_REPO}`,
+  'pr comment': GH_COMMENT,
+  'pr create': `a,assignee= B,base= b,body= F,body-file@ d,draft dry-run e,editor f,fill fill-first fill-verbose H,head= l,label= m,milestone= no-maintainer-edit p,project= recover@ r,reviewer= T,template@ t,title= w,web ${GH_REPO}`,
+  'pr diff': `<> color= e,exclude@ name-only patch w,web ${GH_REPO}`,
+  'pr edit': `<> ${GH_EDITS} add-reviewer= B,base= remove-reviewer= ${GH_REPO}`,
+  'pr list': `${GH_FILTERS} B,base= d,draft H,head= ${GH_OUT} w,web ${GH_REPO}`,
+  'pr ready': `<> undo ${GH_REPO}`,
+  'pr reopen': `<> c,comment= ${GH_REPO}`,
+  'pr status': `c,conflict-status ${GH_OUT} ${GH_REPO}`,
+  'pr view': `<> c,comments ${GH_OUT} w,web ${GH_REPO}`,
+  'release list': `exclude-drafts exclude-pre-releases ${GH_OUT} L,limit= O,order= ${GH_REPO}`,
+  'release view': `<> ${GH_OUT} w,web ${GH_REPO}`,
+  'repo view': `<> b,branch= ${GH_OUT} w,web`,
+  'run cancel': `<> force ${GH_REPO}`,
+  'run list': `a,all b,branch= c,commit= created= e,event= ${GH_OUT} L,limit= s,status= u,user= w,workflow= ${GH_REPO}`,
+  'run rerun': `<> d,debug failed j,job= ${GH_REPO}`,
+  'run view': `<> a,attempt= exit-status j,job= ${GH_OUT} log log-failed v,verbose w,web ${GH_REPO}`,
+  'run watch': `<> compact exit-status i,interval= ${GH_REPO}`,
+  'search issues': `${GH_SEARCH} include-prs`,
+  'search prs': `${GH_SEARCH} B,base= checks= draft H,head= merged merged-at= review= review-requested= reviewed-by=`,
+  'workflow list': `a,all ${GH_OUT} L,limit= ${GH_REPO}`,
+}
+// Each alias its subcommand's manual page gives.
+const GH_ALIASES: Readonly<Record<string, string>> = { 'issue ls': 'issue list', 'issue new': 'issue create', 'label ls': 'label list', 'pr ls': 'pr list', 'pr new': 'pr create', 'release ls': 'release list', 'run ls': 'run list', 'workflow ls': 'workflow list' }
+// A subcommand's options as gh takes them, each under `--name` and `-x`: `none` take no value,
+// `text` take one that is no path, `kept` take one read as before. `operands` says its operands are
+// no path. Read from the table the first time a command names the subcommand.
+type GhCommand = { none: Set<string>; text: Set<string>; kept: Set<string>; operands: boolean }
+const GH_READ = new Map<string, GhCommand>()
+const ghCommand = (spec: string): GhCommand => {
+  const had = GH_READ.get(spec)
+  if (had) return had
+  const g: GhCommand = { none: new Set(), text: new Set(), kept: new Set(), operands: false }
+  for (const part of spec.split(' ')) {
+    if (part === '<>') {
+      g.operands = true
+      continue
+    }
+    const into = part.endsWith('=') ? g.text : part.endsWith('@') ? g.kept : g.none
+    const names = (into === g.none ? part : part.slice(0, -1)).split(',')
+    for (const n of names) into.add(n.length === 1 ? `-${n}` : `--${n}`)
+  }
+  GH_READ.set(spec, g)
+  return g
+}
+// Whether a word that starts with a dash spells only options the subcommand has: a long one by its
+// name, a cluster of short ones up to the first that takes a value.
+const ghOption = (g: GhCommand, w: string): boolean => {
+  if (w.startsWith('--')) {
+    const eq = w.indexOf('=')
+    const name = eq > 0 ? w.slice(0, eq) : w
+    return g.none.has(name) || g.text.has(name) || g.kept.has(name)
+  }
+  for (let j = 1; j < w.length; j++) {
+    const name = `-${w[j] as string}`
+    if (g.text.has(name) || g.kept.has(name)) return true
+    if (!g.none.has(name)) return false
+  }
+  return true
+}
+// #3412: how many words of gh commands the reading has looked at, for its tests to hold its cost to
+// a count rather than a time (L290), as `compared` does for #3626. A line with no gh command in it
+// adds none.
+let ghSteps = 0
+export const ghWordsSoFar = (): number => ghSteps
+/**
+ * The words of a gh command (those after `gh`) that gh's own grammar does not prove are no path,
+ * each as written, for `scriptArgs` to read as it reads any program's; undefined where the reading
+ * does not cover the command, which is then read whole as before. `unseen` says a word may be
+ * something other than it spells (see above).
+ */
+const ghWords = (rest: readonly string[], unseen: (w: string) => boolean): string[] | undefined => {
+  ghSteps++
+  const first = rest[0]
+  const second = rest[1]
+  if (first === undefined) return undefined
+  const two = second === undefined ? undefined : `${first} ${second}`
+  const named = two === undefined ? undefined : (own(GH, two) ?? own(GH, own(GH_ALIASES, two) ?? ''))
+  const spec = named ?? own(GH, first)
+  if (spec === undefined) return undefined
+  const g = ghCommand(spec)
+  const words = rest.slice(named === undefined ? 1 : 2)
+  ghSteps += words.length
+  if (words.some(unseen)) {
+    if (!g.operands || g.kept.size) return undefined
+    return words.every(w => !w.startsWith('-') || w === '-' || w === '--' || ghOption(g, w)) ? [] : undefined
+  }
+  const out: string[] = []
+  // An option whose value is kept is handed on as written, with the word after it where that is its
+  // value, so `scriptArgs` reads both as it did before.
+  const keep = (w: string, i: number, apart: boolean): number => {
+    out.push(w)
+    if (apart && i + 1 < words.length) out.push(words[i + 1] as string)
+    return apart ? i + 1 : i
+  }
+  for (let i = 0; i < words.length; i++) {
+    ghSteps++
+    const w = words[i] as string
+    if (w === '--') {
+      if (!g.operands) out.push(...words.slice(i + 1))
+      break
+    }
+    if (w.startsWith('--')) {
+      const eq = w.indexOf('=')
+      const name = eq > 0 ? w.slice(0, eq) : w
+      // An option that takes no value, written with one, is not followed.
+      if (g.none.has(name) && eq < 0) continue
+      if (g.text.has(name)) {
+        if (eq < 0) i++
+      } else if (g.kept.has(name)) i = keep(w, i, eq < 0)
+      else return undefined
+    } else if (w.startsWith('-') && w !== '-') {
+      for (let j = 1; j < w.length; j++) {
+        const name = `-${w[j] as string}`
+        if (g.none.has(name)) continue
+        const apart = j === w.length - 1
+        if (g.text.has(name)) {
+          if (apart) i++
+        } else if (g.kept.has(name)) i = keep(w, i, apart)
+        else return undefined
+        break
+      }
+    } else if (!g.operands) out.push(w)
+  }
+  return out
+}
+
 // #3323 (Dan, 2026-11-21, picker answer "Yes, in the same change (Recommended)"): unpacking an
 // archive is a write into the folder it unpacks into, and a member named on the command line is a
 // write of that file. Read for tar (bsdtar and gtar too) extracting, unzip unpacking and cpio -i;
@@ -1909,7 +2098,19 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       const reader = own(READ_ONLY, name)
       const writing = reader?.writes?.find(w => w.when(rest))
       if (!reader || writing) {
-        const handed = handedOf(scriptArgs(rest)).filter(a => a.path !== undefined)
+        // #3412: gh is read by its own grammar (ghWords), which takes away the words that grammar
+        // proves are no path and leaves gh the program the reader does not know that it was. A word
+        // may be something other than it spells where the shell fills it in (a `$` or a backtick it
+        // expands), matches it against files (a pattern character not quoted), or it is a set
+        // variable's value holding a blank, which a shell the reader does not know may split.
+        const unseen = (w: string) => (/[$`]/.test(w) && !textOnly(w)) || (PATTERN.test(w) && !quotedOnly(w)) || (asWritten.has(w) && /\s/.test(w))
+        const read = name === 'gh' ? ghWords(rest, unseen) : undefined
+        const handed = handedOf(scriptArgs(read ?? rest)).filter(a => a.path !== undefined)
+        // A move on the same line is settled as it was while gh was handed every word (settleMoves,
+        // which says where a moved file went only on a line that runs no program it does not know):
+        // the reading takes words away from what gh is handed and changes nothing else. Counted
+        // before this line was written: 2 of 79,301 recorded calls gained that mark.
+        if (read !== undefined && !handed.length && handedOf(scriptArgs(rest)).some(a => a.path !== undefined)) unsure = true
         const program = asWritten.get(args[0] as string) ?? (args[0] as string)
         // What a guard says of it after its own words (L111), kept here so every guard says the same:
         // why it was read as a writer, and what a person can do about it.

@@ -2923,7 +2923,7 @@ known. A member renamed on the way out is not read.
 - Ask before saving asks before a lasting memory file is handed to such a program.
 - The collision guard judges what such a program is handed against other sessions' edits, the
   question naming the program. It does not note the file as this session's edit: most words such a
-  program is handed name no file (`gh pr view 5` hands pr, view and 5), a session's edits are capped
+  program is handed name no file (`gh pr checkout 5` hands pr, checkout and 5), a session's edits are capped
   at twenty, and each one noted is a file another session would then be asked about.
 - Scope modes: overnight refuses such a program handed LESSONS.md, and winding down counts a file
   handed to one as this session's while it is uncommitted, as it has counted a file handed to a
@@ -2946,13 +2946,89 @@ known. A member renamed on the way out is not read.
   command ran (`state` in `--json state`, 598 times), and claude's are `claude plugin test <a mod's
   folder>`. The area check holds a folder for the files under it, and whole when more of them could
   be held than it judges one by one, so those commands would be held for nothing they write. gh
-  needs a reading of its own first (#3412), and then the area check joins. Until then a
+  has had a reading of its own since 2026-11-26 (below). The area check joining the rule, and a
+  reading for `claude plugin test <folder>`, are still Dan's to decide on #3412. Until then a
   writer nobody has listed, typed as a command and handed a file the area check holds, passes it
   unjudged, as before #3323. It does judge an unpack, with the rules it already had: as a write whose
   files cannot be named, as a download a server names already was, in the checkout of the folder
   unpacked into. `tests/test-area-check-shell-reader.sh` holds the leaving out to the real reader,
   and over the 51,765 recorded calls the area check's reading is the same as main's in all but 76,
   each an unpack.
+
+**gh is read by its own grammar (#3412), built 2026-11-26.** gh is on none of the reader's lists,
+so every word of a gh command that spelled a path was handed on as a file it may write: `pr`, `view`,
+`5` and `state` in `gh pr view 5 --json state`. Where the checkout holds a folder named state, that
+is a folder handed to a program the reader does not know. gh now has a reading of its own (`GH` and
+`ghWords` in `writes.ts`). It is not an entry on the list above and gh is not on that list: gh
+writes files in some forms, and every run of it is still called a program the reader does not know,
+with the same two sentences.
+
+The rule, which is the safe one of the two the issue asked about: a word is read as no path only
+where gh's own grammar proves it is none. That is the subcommand's name, the value of an option
+whose value is a field list, a jq expression, a template's text, a state, a number, a date, a
+repository, a branch, a login, a label, a milestone, a title, a body or a search, and an operand
+its usage gives as a number, an address, a branch, a run, a tag, a repository, a query or an API
+path. Everything else is read exactly as before:
+
+- A word gh reads or writes a file by is still handed on: the value of `--body-file`, of `--input`
+  and `--field` of `gh api`, of `--template` and `--recover` of `gh pr create`, of `--recover` of
+  `gh issue create`, and of `--exclude` of `gh pr diff`. So `gh pr create --title T --body-file
+  notes/pr.md` hands on notes/pr.md alone.
+- A subcommand the table does not hold leaves the whole command as it was read: every download,
+  clone, checkout, merge, close, sync, install and upload (`gh release download --dir`, `gh run
+  download -D`, `gh repo clone`, `gh gist clone`, `gh pr checkout`, `gh pr merge`, `gh extension
+  install`), and everything under `repo` but `view`, under `workflow` but `list`, under `auth` but
+  `status` and `token`, and under `gist`, `extension`, `codespace`, `attestation`, `alias` and
+  `config`.
+- So does any command holding an option the table does not give for its subcommand (`gh pr view 5
+  --json state --output state` hands on every word), an option that takes no value written with
+  one, and a subcommand's name that is not the first word after gh.
+- An operand of a subcommand whose usage gives none (`gh pr list state`) is handed on.
+- A redirect is the shell's write and was never gh's: `gh pr view 5 --json state > state` writes
+  state.
+
+Where a word may be something other than it spells (a variable the reader could not read, a
+command's output, a pattern not quoted, a set variable's value holding a blank), the words after it
+cannot be followed one by one. A command with an option whose value is kept, or whose operands are
+kept, is then read as before (`gh pr create --title "$T" --body-file notes.md` hands on pr, create
+and notes.md). A command in which nothing is a path is still read as handing on nothing, provided
+every word that starts with a dash spells an option the table gives it (`gh pr view "$PR" --json
+state`): whichever way that line splits, no word of it names a file.
+
+The table is gh 2.89.0's own manual pages as installed on the personal MacBook, read on 2026-11-26:
+for each subcommand its options with what its page says each value is, the options it inherits, its
+aliases and its usage line. No option's meaning was taken from its name. It holds 33 subcommands
+that write no file on this Mac, the 30 of them that ran here in 35 days of records and three of
+their kind (`pr status`, `issue status`, `workflow list`): `api`; `auth
+status` and `token`; `issue close`, `comment`, `create`, `edit`, `list`, `reopen`, `status` and
+`view`; `label list`; `pr checks`, `comment`, `create`, `diff`, `edit`, `list`, `ready`, `reopen`,
+`status` and `view`; `release list` and `view`; `repo view`; `run cancel`, `list`, `rerun`, `view`
+and `watch`; `search issues` and `prs`; `workflow list`; and the aliases `ls` and `new` their
+pages give. gh splits its options as mod-kit's `gh.ts` already reads them (#834). That reader
+answers another question, which repository and action a command reaches, and reads an option it
+does not know as taking no value; here such an option stops the reading (L342), so the two are
+kept apart.
+
+The reading only takes words away from what gh is handed. A move on the same line is settled as
+it was while gh was handed every word (a `mv` beside `gh pr view` is still not said to be movable
+back), and the reading's cost is held by a count of the words it looks at (`ghWordsSoFar`), which
+a line with no gh command in it never moves.
+
+Counted on the personal MacBook on 2026-11-26 with the built reader, over 35 days of session
+records (79,358 shell calls from Oct 26 to Nov 26, 8,841 of them holding the word gh): 7,929 calls
+are read differently, every one by gh being handed fewer words, and none in any other way. In 556
+of them a word no longer handed on names a file or folder that is on disk today: the value of
+`--json` of `gh issue view` 381 times and of `gh pr view` 62, and a label of `gh issue create` 121
+times. In the other direction, 46 forms of gh that write a file or folder, planted, each read as
+before, and in the 28 recorded calls holding one (`pr close` 12, `pr merge` 8, `repo create` 3, `run
+download` 2, `config` 2, `gist create` 1) that command lost no word. The same count on the work
+MacBook is on #3412.
+
+What it cannot see, said so it is never claimed (L460): an alias a person has set over one of
+these subcommands' names (gh's manual says an extension cannot take a core command's name and says
+nothing of an alias), a later gh giving one of these subcommands an option that writes a file while
+that option is hidden in a variable, and gh's own splitting of options, which is taken from its
+flag library's documented behaviour and from `gh.ts`, and was not measured against gh itself.
 
 **Inside a script's own text (#3416), built 2026-11-21 for the design round guard.** The rule first
 covered only a command as typed. Two guards read the text of a script a command runs, the design
