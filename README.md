@@ -11491,8 +11491,37 @@ merged. One answer is kept per PR, so a later one replaces it, and none settles 
 PR whose work merged in another PR is never settled without his answer, since GitHub records no link
 from it to the PR that carried its work and a squash merge leaves its commits out of the base
 branch's history; a closing comment naming that PR is what lets him be asked. Any other answer
-withdraws an earlier one, a picker Claude asks itself is never read as his choice, and nothing is
-asked while he is asleep. A branch is the session's own only once it or one of its agents created
+withdraws an earlier one, a picker Claude asks itself is never read as his choice to leave a PR
+open or closed, and nothing is asked while he is asleep. One answer in a session's own picker is
+read (#3779, after Dan chose on 2026-11-26 to close a PR unmerged and winding down sent it back to
+be reopened an hour later, so he was asked twice): his pick of an answer to close a PR unmerged.
+It counts only as the dialog hands it back to the mod, which no session can write: an answer the
+picker offered and he picked alone, in the session's own picker and in words he could read whole,
+whose whole wording closes the pull request and says it is not merged ("Close it unmerged", "Close
+PR 31 without merging"), where the words he read name exactly one pull request as a
+pull request ("pull request 3749", "PR #31", "PR 31 in owner/name", its link), the answer if it
+names one and otherwise the question. An answer with any other word in it (it closes something
+else, or closes the pull request only on a condition) is no decision, and he is asked. A closing
+comment, words passed as `dan_said`, an answer the call carries itself, a
+subagent's picker and words he typed never count. It is recorded as the same left closed answer,
+so the PR is listed as left closed by his choice, quoting his answer, `leave_pr_open` asks nothing
+more about it, and reopened it is outstanding until merged. Where the question also names another
+number with a #, his answer counts once GitHub has said that number is no pull request; until then
+the PR is neither settled nor sent back to be reopened, and where it is a pull request his answer
+is not kept as his choice, since which one he meant is not on record, and the turn end that sends
+the PR back says so each time. A pull request named by number alone is placed by the pull requests
+the session opened: one under that number says which repository, two record nothing. Named in
+words and by its link as well ("pull request 7 (its link)"), it is one pull request where the link
+is to the repository its number alone is placed in; a link to another repository's pull request of
+the same number is a second pull request, so nothing is recorded and he is asked. His pick is
+said to the session and in the transcript the moment it is recorded, withdrawn or cannot be
+recorded, and every turn end of a session holding one names the pull request and quotes his
+answer, winding down or not: in the transcript, unless that turn end's own refusal already lists
+it as left closed. A later answer of his in a picker naming that pull request while it is still
+open, other than to close it unmerged, withdraws it; once it is closed his pick has been carried
+out, and reopening it is what makes it outstanding again. The rules are in
+`hooks/closedecision.ts`. A
+branch is the session's own only once it or one of its agents created
 it, committed to it or pushed it (#1074); a branch the checkout merely sat on (a shared primary
 checkout, say) has no PR or cleanup of the session's to finish, and only its uncommitted work
 counts, as on the default branch. The `leave_branch` tool asks Dan "Leave the branch X in owner/name
