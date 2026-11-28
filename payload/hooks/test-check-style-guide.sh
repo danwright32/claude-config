@@ -414,6 +414,19 @@ many=""; n=0
 while [ "$n" -lt 100 ]; do many="${many}cat <<E; true${NL}x${NL}E${NL}"; n=$((n + 1)); done
 run_style_hook "$E2E" "cd $W${NL}${many}cat <<EOF; git push${NL}body${NL}EOF"
 want_style_code 2 "#3739 a forbidden character blocks a push after the opener on the hundred and first such line"
+# A backslash that ends the text escapes whatever is written after it, so the old text goes
+# last and nothing is: written first, its last command took the separator and the rewritten
+# command's first words for its own, the two were no longer the commands of each, and the old
+# text was handed over alone with the push unread.
+shape=0
+for c in "cd $W && cat <<EOF; git push${NL}body${NL}EOF${NL}true \\" "cd $W && bash -c 'git ${PAIR}push'${NL}true \\" \
+         "cd $W && x=\`git ${PAIR}push\`${NL}cat <<E\\"; do
+  shape=$((shape + 1))
+  run_style_hook "$E2E" "$c"
+  want_style_code 2 "#3739 a forbidden character blocks a push in a text that ends in a backslash (shape $shape of 3: after an opener on its line; across the pair in a wrapper's string; inside backquotes, the text ending in an opener and the backslash)"
+done
+run_style_hook "$E2E" "cd $W && cat <<EOF; git status${NL}body${NL}EOF${NL}true \\"
+want_style_code 0 "#3739 control: a status after the opener in a text that ends in a backslash is no push"
 # The look for an opener's line is a pattern bash asks of the raw payload, and under a UTF-8
 # locale bash's =~ stops at a byte that is not UTF-8 (claude-config#1885): with one in front of
 # the opener the reader was never started, and the push was the body's first line again. The

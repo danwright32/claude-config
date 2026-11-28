@@ -155,7 +155,7 @@ def one_line_at_a_time(s):
 
 # ---- the family ----------------------------------------------------------------------------
 FRONTS = ["", "cd a; ", PUSH + " origin main; ", "echo 'q" + J + "r'; "]
-BACKS = ["", "\nls", "; SKIP_X=1", "\nSKIP_X=1 true", " # note", "\ncd b; " + PUSH]
+BACKS = ["", "\nls", "; SKIP_X=1", "\nSKIP_X=1 true", " # note", "\ncd b; " + PUSH, "\ntrue \\", "\ncat <<E\\"]
 SHAPES = [
     "cat <<EOF; %s\nbody\nEOF",
     "cat <<'EOF'; %s\nbody\nEOF",
@@ -238,7 +238,7 @@ shows("an add of everything after such a comment is still named", "bash -c 'true
 shows("a push after a quoted heredoc's body that holds the pair is still named",
       "bash -c 'cat <<\\E\nx" + J + "E\n" + PUSH + " origin main\ncat <<\\E\nE\ngi" + J + "t push origin feature'", ("", "git", "push", "origin main"))
 text_is("a pair that ends a comment in a wrapper's string stays in the rewritten command",
-        "bash -c 'true # c" + J + PUSH + "; l" + J + "s'", "bash -c 'true # c\\; " + PUSH + "; l\\; s'; bash -c 'true # c\\; " + PUSH + "; ls'")
+        "bash -c 'true # c" + J + PUSH + "; l" + J + "s'", "bash -c 'true # c\\; " + PUSH + "; ls' ; bash -c 'true # c\\; " + PUSH + "; l\\; s'")
 shows("a push whose refspec stands across the pair in a wrapper's string is named with that refspec",
       "bash -c '" + PUSH + " origin " + J + "main'", ("", "git", "push", "origin main"))
 # No skip word is put together, and a string no shell reads is left as typed.
@@ -246,22 +246,22 @@ unchanged("a commit message holding the pair, with nothing else to rewrite, is h
 unchanged("an argument of echo holding the pair is handed over as it always was", "echo 'gi" + J + "t push'")
 unchanged("a string ssh hands another machine is handed over as it always was", "ssh host 'gi" + J + "t push'")
 text_is("an argument of echo is left as typed beside a wrapper's string that is rewritten",
-        "echo 'x SKIP_X" + J + "=1 y'; bash -c 'l" + J + "s'", "echo 'x SKIP_X\\; =1 y'; bash -c 'l\\; s'; echo 'x SKIP_X\\; =1 y'; bash -c 'ls'")
+        "echo 'x SKIP_X" + J + "=1 y'; bash -c 'l" + J + "s'", "echo 'x SKIP_X\\; =1 y'; bash -c 'ls' ; echo 'x SKIP_X\\; =1 y'; bash -c 'l\\; s'")
 text_is("an argument of echo holding the very text a wrapper beside it is handed is left as typed too",
-        "echo 'l" + J + "s'; bash -c 'l" + J + "s'", "echo 'l\\; s'; bash -c 'l\\; s'; echo 'l\\; s'; bash -c 'ls'")
+        "echo 'l" + J + "s'; bash -c 'l" + J + "s'", "echo 'l\\; s'; bash -c 'ls' ; echo 'l\\; s'; bash -c 'l\\; s'")
 text_is("and so is one after the wrapper, and one in a substitution among the wrapper's own words",
         "bash -c 'l" + J + "s' $(echo 'l" + J + "s'); echo 'l" + J + "s'",
-        "bash -c 'l\\; s' $(echo 'l\\; s'); echo 'l\\; s'; bash -c 'ls' $(echo 'l\\; s'); echo 'l\\; s'")
+        "bash -c 'ls' $(echo 'l\\; s'); echo 'l\\; s' ; bash -c 'l\\; s' $(echo 'l\\; s'); echo 'l\\; s'")
 for cmd in ("a; b && c | d\ne || f", "bash -c 'l" + J + "s'; echo \"q", "x=$(a; b) ; `c; d`", ""):
     pieces = sw._crude_pieces(cmd)
     row("the crude cut's pieces with where they stand are the pieces the crude cut gives: %r" % cmd,
         "" if sorted(t for _, _, _, cut in pieces for _, t in cut) == sorted(t for _, t in sw.crude_commands(cmd))
         and all(cmd[a:b] == cut[0][1] for a, b, _, cut in pieces) else "got %r, and the crude cut gives %r" % (pieces, sw.crude_commands(cmd)))
 text_is("where a join in a wrapper's string would put a skip word together the pair is written after the word",
-        "bash -c 'true; SKIP_" + J + "X=1 " + PUSH + "'", "bash -c 'true; SKIP_\\; X=1 " + PUSH + "'; bash -c 'true; SKIP_X=1\\;  " + PUSH + "'")
+        "bash -c 'true; SKIP_" + J + "X=1 " + PUSH + "'", "bash -c 'true; SKIP_X=1\\;  " + PUSH + "' ; bash -c 'true; SKIP_\\; X=1 " + PUSH + "'")
 shows("and the push behind that word is named", "bash -c 'true; SKIP_" + J + "X=1 " + PUSH + "'", ("", "git", "push", ""))
-text_is("the same inside backquotes", "x=`true; SKIP_" + J + "X=1 " + PUSH + "`", "x=`true; SKIP_\\; X=1 " + PUSH + "`; x=`true; SKIP_X=1\\;  " + PUSH + "`")
-text_is("a NAME=1 word a moved body would leave where the text ends is followed by the old text instead",
+text_is("the same inside backquotes", "x=`true; SKIP_" + J + "X=1 " + PUSH + "`", "x=`true; SKIP_X=1\\;  " + PUSH + "` ; x=`true; SKIP_\\; X=1 " + PUSH + "`")
+text_is("a NAME=1 word a moved body leaves at the end of the rewritten command has no blank written after it, which would make a skip word of it",
         PUSH + "; cat <<EOF; ls; SKIP_X=1\nbody\nEOF", PUSH + "; cat <<EOF; body; EOF; ls; SKIP_X=1; " + PUSH + "; cat <<EOF; ls; SKIP_X=1; body; EOF")
 skip = SKIPS[0].findall(sw.flattened("cat <<EOF; SKIP_X=1 " + PUSH + "\nbody\nEOF"))
 row("control: a skip word typed whole in front of a push after an opener is one, as it was before", "" if "SKIP_X" in skip else "it is none in the text handed over")
@@ -275,23 +275,30 @@ for n, joins in ((1, True), (2, True), (3, True), (4, False), (5, False), (6, Fa
 hides("after three backslashes a separator that starts the next line is escaped in the rewritten command",
       "x=`echo a \\\\" + J + "; true`", "git", "push")
 text_is("three backslashes and a line break leave one backslash, which escapes the next line's first letter",
-        "x=`git \\\\" + J + "push`", "x=`git \\\\\\; push`; x=`git \\push`")
+        "x=`git \\\\" + J + "push`", "x=`git \\push` ; x=`git \\\\\\; push`")
 # Behind a relative cd.
 shows("a push after an opener, behind a relative cd and a cd on the opener's line, is named in the folder it runs in",
       "cd a; cat <<EOF; cd b; " + PUSH + " origin main\nbody\nEOF\nls", ("a/b", "git", "push", "origin main"))
-text_is("there the rewritten command goes first inside a subshell, and the old text follows from the folder it always started in",
-        "cd a; cat <<EOF; cd b; " + PUSH + "\nbody\nEOF\nls", "( cd a; cat <<EOF; body; EOF; cd b; " + PUSH + "; ls; ); cd a; cat <<EOF; cd b; " + PUSH + "; body; EOF; ls")
+text_is("there the rewritten command stands inside a subshell, and the old text follows from the folder it always started in",
+        "cd a; cat <<EOF; cd b; " + PUSH + "\nbody\nEOF\nls", "( cd a; cat <<EOF; body; EOF; cd b; " + PUSH + "; ls ; ); cd a; cat <<EOF; cd b; " + PUSH + "; body; EOF; ls")
 shows("a push on a line after the heredoc is named in the folder a cd on the opener's line moves to",
       "cd a; cat <<EOF; cd b\nbody\nEOF\n" + PUSH, ("a/b", "git", "push", ""))
 shows("and in the folder the old text read it in, which is kept", "cd a; cat <<EOF; cd b\nbody\nEOF\n" + PUSH, ("a", "git", "push", ""))
 shows("a push split across the pair in a wrapper's string behind a relative cd is named in its folder",
       "cd a; bash -c 'cd b; gi" + J + "t push'", ("a/b", "git", "push", ""))
-# The issue's own shapes, old text first.
-text_is("the old text comes first and the command with its body moved up follows",
-        "cat <<EOF; " + PUSH + "\nbody\nEOF", "cat <<EOF; " + PUSH + "; body; EOF; cat <<EOF; body; EOF; " + PUSH)
+# The issue's own shapes, the old text last.
+text_is("the command with its body moved up comes first, then a blank, and the old text last and whole",
+        "cat <<EOF; " + PUSH + "\nbody\nEOF", "cat <<EOF; body; EOF; " + PUSH + " ; cat <<EOF; " + PUSH + "; body; EOF")
 text_is("a heredoc on a command of one line is written again as the here string it amounts to",
-        "cat <<EOF; " + PUSH + "; EOF", "cat <<EOF; " + PUSH + "; EOF; cat <<<EOF; " + PUSH + "; EOF")
-text_is("a push across the pair in a wrapper's string follows the old text", "bash -c 'git " + J + "push'", "bash -c 'git \\; push'; bash -c 'git push'")
+        "cat <<EOF; " + PUSH + "; EOF", "cat <<<EOF; " + PUSH + "; EOF ; cat <<EOF; " + PUSH + "; EOF")
+text_is("a push across the pair in a wrapper's string stands before the old text", "bash -c 'git " + J + "push'", "bash -c 'git push' ; bash -c 'git \\; push'")
+# A backslash that ends the text: written after the old text, the rewritten command would start
+# behind an escaped separator, and the old text's last command would be read as one it never was.
+text_is("a backslash that ends the text ends the old text here too, and the blank keeps the one that ends the rewritten command off the separator",
+        "cat <<EOF; " + PUSH + "\nbody\nEOF\ntrue \\", "cat <<EOF; body; EOF; " + PUSH + "; true \\ ; cat <<EOF; " + PUSH + "; body; EOF; true \\")
+shows("the push after an opener in a text that ends in a backslash is named", "cat <<EOF; " + PUSH + "\nbody\nEOF\ntrue \\", ("", "git", "push", ""))
+shows("and so is one across the pair in a wrapper's string in such a text", "bash -c 'git " + J + "push'\ntrue \\", ("", "git", "push", ""))
+shows("and one inside backquotes in a text that ends in an opener and a backslash", "x=`git " + J + "push`\n; cat <<E\\", ("", "git", "push", ""))
 shows("a push across the pair in a string eval reads is named", "eval 'git " + J + "push'", ("", "git", "push", ""))
 shows("a push across the pair in a string bash -c reads under sudo is named", "sudo -u dan bash -c 'cd /r && gi" + J + "t push'", ("/r", "git", "push", ""))
 shows("a push across the pair in a wrapper's string inside a substitution is named", "x=$(bash -c 'gi" + J + "t push')", ("", "git", "push", ""))

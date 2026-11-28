@@ -306,8 +306,8 @@ sys.exit(1 if v is None or isinstance(v, str) else 0)' 2>/dev/null
 # inside a string a wrapper hands a shell, or inside backquotes, is removed by the shell that
 # reads those and by no other, so the text is left as it was and the command is written again
 # beside it with those read as that shell reads them (claude-config#3739): what was handed over
-# before is still handed over, whole, with the rewritten command after it, or before it where
-# only that order reads every command of both. That needs python3 and the reader's file; with
+# before is still handed over, whole and last, with the rewritten command before it, so that
+# nothing follows the old text for its end to escape. That needs python3 and the reader's file; with
 # either missing, or a command that reader cannot vouch for, the text is flattened as it always
 # was. The pair is found in the raw payload first, by every way JSON can spell it, so a command
 # holding none starts nothing more.

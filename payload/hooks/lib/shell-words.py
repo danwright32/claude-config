@@ -3240,7 +3240,7 @@ def flattened(s):
     WHAT THAT TEXT STILL HID IS ADDED AFTER IT, AND NOTHING IS TAKEN AWAY (claude-config#3739).
     The text so far is every command a hook was handed before, and it is handed over whole,
     whatever else is found. Two more readings of the command as typed may stand beside it
-    (after it, or before it where only that order reads every command of both, _added):
+    (before it, so that nothing follows the old text for its end to take as its own, _added):
       * after a heredoc's opener, on its line. Written as "; " the line break that starts a
         body cannot be told from a ; after the opener: `cat <<EOF; git push`, the body and its
         closing line ran the push in bash and zsh, and the push was the body's first line to
@@ -3307,27 +3307,42 @@ def _added(flat, other):
     The hook gets flat whole or flat and other together, never other in flat's place, so
     whatever a hook refused on in flat it is still handed. The two are given together only
     where the reading of the whole is exactly the commands of each, in the folder each one
-    runs in: flat first, so a reader of the text's first command finds what it always found;
-    else other first; else other first inside a subshell, which puts back a folder a relative
-    cd in it leaves (`cd a; cat <<EOF; cd b; git push`, a body and `ls`: the second copy's
-    `cd a` started from where the first ended in either order). And only where the whole holds
-    no NAME=1 word flat lacks: one stands a gate down by being anywhere in the text, and a body
-    moved up can leave one that was followed by a ; standing where the text ends.
+    runs in, and the first of these that is so:
+      * other, a blank, and flat after it. Nothing is ever written after the old text where
+        that can be helped: what ends it can take what follows for its own, a backslash the
+        separator and a heredoc still waiting for its body the lines, and the old text then
+        reads as it never did. The blank is for other's own last character, which may be
+        that backslash;
+      * the same with other inside a subshell, which puts back a folder a relative cd in it
+        leaves (`cd a; cat <<EOF; cd b; git push`, a body and `ls`: the second copy's `cd a`
+        starts from where the first ended);
+      * each of those two without the blank, for an other that ends in a NAME=1 word: the
+        blank would make a skip word of one a ; follows;
+      * flat first, for an other whose end takes the old text for its own.
+    And only where the whole holds no NAME=1 word flat lacks: one stands a gate down by being
+    anywhere in the text, and a body moved up can leave one that was followed by a ;
+    standing where the text ends.
 
     Nothing is added to a text only the crude cut reads, as nothing was before, nor where
     other holds no command flat lacks."""
     was, crude = _held(flat)
     if crude:
         return None
-    now, _ = _held(other)
-    if not _named_more(now, was):
+    if not _named_more(_held(other)[0], was):
         return None
-    want = {k: was.get(k, 0) + now.get(k, 0) for k in set(was) | set(now)}
     allowed = [set(p.findall(flat)) for p in OVERRIDE_WORDS]
-    for both in (flat + FLAT_BREAK + other, other + FLAT_BREAK + flat,
-                 "( " + other + FLAT_BREAK + ")" + FLAT_BREAK + flat):
+    spaced = other + " "
+    for part, both in ((spaced, spaced + FLAT_BREAK + flat),
+                       (spaced, "( " + spaced + FLAT_BREAK + ")" + FLAT_BREAK + flat),
+                       (other, other + FLAT_BREAK + flat),
+                       (other, "( " + other + FLAT_BREAK + ")" + FLAT_BREAK + flat),
+                       (other, flat + FLAT_BREAK + other)):
         if any(set(p.findall(both)) - names for p, names in zip(OVERRIDE_WORDS, allowed)):
             continue
+        # What is asked of the whole: flat's commands and the commands of other as it is
+        # written here, the blank after its last word and all.
+        now = _held(part)[0]
+        want = {k: was.get(k, 0) + now.get(k, 0) for k in set(was) | set(now)}
         if _held(both) == (want, False):
             return both
     return None
