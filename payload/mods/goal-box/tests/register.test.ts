@@ -3249,6 +3249,21 @@ test('the later ask stands in for the other prompts of the request it is sent in
   expect(submitted.filter(s => s.text.startsWith(ASKS_OWED))).toHaveLength(2)
 })
 
+// Nothing the later ask marks stops a met /goal's prompt, so only its place in the turn end does.
+test("the later ask stands in for a met /goal's prompt at the turn end it is sent at: one prompt goes out there, and the goal's own follows at the next turn end (#3843)", withKit, async ($, on) => {
+  const { w, submitted } = world(on)
+  const of = (start: string) => submitted.filter(s => s.text.startsWith(start))
+  await start($)
+  await heldAndUnanswered(w, $)
+  await says($, 'thanks')
+  w.goal = MET
+  await turnEnds($)
+  expect([of(ASKS_OWED).length, of(GOAL_PROMPT).length]).toEqual([1, 0])
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect([of(ASKS_OWED).length, of(GOAL_PROMPT).length]).toEqual([1, 1])
+})
+
 test('a box shown since the hold is asked for by nothing after his next message (#3843)', withKit, async ($, on) => {
   const { w, submitted } = world(on)
   await start($)
