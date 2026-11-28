@@ -373,6 +373,10 @@ for c in "cd $W && git push; echo 'x SKIP_STYLE_${PAIR}CHECK=1 y'; bash -c 'l${P
   run_style_hook "$E2E" "$c"
   want_style_code 2 "#3739 a skip word only the rewritten text holds stands the gate down for nothing (shape $shape of 4: put together across the pair in an argument of echo; inside backquotes; in a wrapper's string; typed whole after an opener and left where the text ends)"
 done
+# Where the join would make the skip word, the pair is written after the word instead, so the
+# push behind it is still read, and read without the skip word the typed command never held.
+run_style_hook "$E2E" "cd $W && bash -c 'true; SKIP_STYLE_${PAIR}CHECK=1 git push'"
+want_style_code 2 "#3739 a forbidden character blocks a push behind a skip word written across the pair in a wrapper's string: the push is read, and the word stands no gate down"
 run_style_hook "$E2E" "cd $W && cat <<EOF; SKIP_STYLE_CHECK=1 git push${NL}body${NL}EOF"
 want_style_code 0 "#3739 control: a skip word typed whole in front of the push after an opener counts, as it did before"
 run_style_hook "$E2E" "cd $CLEAN && git push; echo 'x SKIP_STYLE_${PAIR}CHECK=1 y'; bash -c 'l${PAIR}s'"
