@@ -947,7 +947,8 @@ function gatheredAnnouncement(args) {
 }
 
 // Is a gathered announcement already in the channel? `--read` is a file holding what
-// slack_read_channel returned, word for word, once per page read (SKILL.md section 11). The
+// slack_read_channel returned, word for word, once per page read (SKILL.md section 11): its JSON
+// answer as it came, or the read as plain text, which the comparison tells apart. The
 // announcement comes from the gathered file, never retyped, and the comparison is
 // hooks/lib/announce-compare.js's, of words only. Not found says only that: whether the read
 // reached every message since the merge is the session's to say, and a read that failed or was
@@ -961,15 +962,17 @@ function cmdPosted(args) {
   const ann = one.ann;
   const n = one.n;
   if (!ann.text) refuse('#' + n + ' has no announcement text that could be read (' + (ann.why || 'no reason given') + '), so it cannot be looked for.');
-  const text = args.read.split(',').map(function (file) {
+  // Each file is handed on as its own page, so the comparison can decode each answer the tool gave
+  // (claude-config#3845): joined first, two JSON answers would no longer parse as either.
+  const pages = args.read.split(',').map(function (file) {
     let t;
     try { t = fs.readFileSync(file, 'utf8'); }
     catch (e) { refuse('The channel read is not at ' + file + ' (' + e.code + '), so nothing was compared.'); }
     if (!t.trim()) refuse('The channel read at ' + file + ' is empty. An empty read is not a read that found nothing; read the channel again.');
     return t;
-  }).join('\n');
+  });
   let got;
-  try { got = require(COMPARE_PATH).foundPosted(ann.text, text); }
+  try { got = require(COMPARE_PATH).foundPosted(ann.text, pages); }
   catch (e) { refuse('#' + n + ' could not be compared: ' + e.message + '.'); }
   const said = got.found
     ? 'found posted: every word of #' + n + '\'s announcement is in the channel read, in order. The read just before it: ' + JSON.stringify(got.before)

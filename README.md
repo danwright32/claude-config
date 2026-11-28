@@ -19,7 +19,13 @@ back.
   A pull never leaves a line naming a script that is not on disk, even for the seconds it takes: it
   takes out the lines the shared copy dropped before the scripts move, and puts the new ones in
   after. A line whose script is still missing is left out, said once, and logged; the shared config
-  keeps it, and the first pull that finds the script registers it (#1913)
+  keeps it, and the first pull that finds the script registers it (#1913). Any other top level key
+  somebody puts in this file is applied on neither Mac: the pull says so, naming it, in its output
+  and the log and once in a notification per set of keys, and the send writes the hooks block into
+  the file it read, so the key stays in the repository rather than being deleted (#3741). The send
+  writes the whole file afresh, so in such a key this Mac's home path becomes `__CLAUDE_HOME__`, as
+  in the hooks block, and its spacing follows jq's layout. A setting both Macs share goes in
+  `settings.shared.json` instead
 - `payload/settings.shared.json`: the few other `settings.json` settings both Macs share, today
   `ultracode` (off since 2026-10-06), the effort level per model, as
   `modelSettings.<full model name>.effortLevel` (`high` for `claude-opus-5-5`, and for
@@ -2007,7 +2013,9 @@ commit either, and this refusal only arrives at the push.
 
 A pull request labelled `changelog/announce` carries the post for agents under `## Announcement`,
 and Dan's words for the label were "it should ask me before applying the label". So the session
-writes the post to a file, runs `/no-ai-tells` on it, opens it in BBEdit with the front window flag,
+writes the post to a file, runs `/no-ai-tells` on it, runs
+`node ~/.claude/hooks/lib/changelog-entry.js announcement-refusal <file>` and changes the wording
+until that refuses nothing (#3846, below), opens it in BBEdit with the front window flag,
 and asks ONE picker of one question (`Approve the wording` or `Not yet`) naming the pull request or
 feature and the channel and ending `Save the file before you answer.`, with this metadata:
 
@@ -2051,7 +2059,72 @@ when all of these hold, each failure said in its own words:
   leave no more than two in a row, then open the file and ask him again. Blank lines after the last
   line of wording hide nothing and pass. The run is counted by `hooks/lib/changelog-entry.js`
   (`blankRunBeforeWording`, in the answer of its `announcement-hash` command), by the same reading
-  of a blank line the hash drops them by, and an answer without the count approves nothing.
+  of a blank line the hash drops them by, and an answer without the count approves nothing;
+- the merge would not refuse the wording for what it holds (#3846). On 2026-11-27 he approved, by
+  picker, wording whose first line was the mention followed by a sentence. Only the merge gate read
+  the rules for what a post may hold (the mention alone on its first line, only the markdown that
+  was measured to arrive in Slack, no dash as punctuation, no HTML comment), so the approval
+  counted, the label went on, the merge was refused for the opener, and he was asked a second
+  time. An Approve of wording the merge would refuse now approves nothing, and the refusal carries
+  the gate's code and its own words. Two rules came with the review of that change. Wording that
+  holds a carriage return inside a line is refused by the gate and so by the approval
+  (`ANNOUNCEMENT_CARRIAGE_RETURN`): the hash reads that character as a line's end and the rules
+  did not, so a block quote or a table behind it was judged by nothing. And a wording file in
+  which any line is a heading is refused (`WORDING_FILE_HEADING`): a pull request's block ends at
+  the next heading, so the block could never be that file whole. There is one judge and no copy of the rules:
+  `hooks/lib/changelog-entry.js`'s `blockRefusal` is what the merge gate judges a pull request's
+  block with, and its command line `announcement-refusal [--body] <file | ->` puts the same
+  function to a wording file (read as the block it becomes), printing `{refused, code, reason}`
+  and exiting 0 for wording the gate takes, 1 for wording it refuses and 3 for a file it cannot
+  read. It changes nothing. Of a file it also refuses a run of more than two blank lines above
+  wording (`WORDING_FILE_BLANK_RUN`), which the approval refuses a file for (#3703, above): the
+  count is the same `blankRunBeforeWording`, and `hooks/test-announce-approval.sh` holds the two
+  limits equal. So the command judges everything the approval refuses about what the file holds;
+  the file's size and its name are not content, and only the approval refuses those. Two of the
+  gate's sentences are about a pull request and are not true of a file, so the file form gives
+  words of its own under the gate's code: a file that holds no post (`EMPTY_ANNOUNCEMENT`), and
+  a file that begins with a byte order mark (`ANNOUNCEMENT_NO_OPENER`, naming the mark, since a
+  first line quoted with it reads as the mention alone). The library
+  hands that command the same bytes it hashed, and an answer
+  from it that cannot be read approves nothing. How to ask him, which the label hook and the merge
+  gate print, names the command as the step before the file is opened, so a session that follows
+  it never puts wording the merge would refuse in front of him.
+
+What is written to the record did not change with that rule. A note of wording the merge would
+refuse still holds the wording's hash, so his `Not yet` about it takes back what it always did, and
+its `why` says what an Approve of it is stopped by. An approval the record already held still
+counts wherever its wording passes. One of wording that does not pass could never merge, and
+`announce-label-ask.sh` refuses the label for it: before it looks for any approval, it puts the
+Announcement block the command would leave to the same judge and refuses wording the merge would
+refuse, with the gate's code and words. The hash and that judging share the library's one five
+second bound, so the hook's longest wait is what it was.
+
+Wording nobody could judge is not wording that was refused (the review of #3846). The hash and the
+judging are each one bounded question to `changelog-entry.js`, and either can run out of time on a
+loaded Mac. With no note that refuses the one call that met it. In a note it used to be permanent:
+when the review ran it on 2026-11-27,
+the note of good wording carried "did not judge the wording in 1.7 seconds" as its `why`, and a note
+that carries a `why` approves nothing for good. So a note whose reason is that the wording could not
+be judged now also says `"unjudged": true`, and the call that reads it judges the file again, only
+while the file's change time is still the one noted. What each state of a note reads as:
+
+| The note holds | An Approve read with it |
+|---|---|
+| its ids alone, or another repository or file than the picker names | is judged by the file as it stands, as with no note |
+| a hash, no `why` | counts, by the hash noted, when the change time noted is before his answer |
+| a `why`, no `unjudged` | approves nothing, for good, in the words of the `why` |
+| a `why` and `"unjudged": true`, the file unchanged since the note | has the file judged now (the three outcomes are below) |
+| a `why` and `"unjudged": true`, the file changed since or unreadable | approves nothing, and the refusal says to open the file and ask him again |
+| no change time, or one at or after his answer | approves nothing |
+
+A `why` with no `unjudged` is refused wording, a file that could not be read when noted, held no
+wording, was too large, held a long run of blank lines or changed while it was hashed, and any note
+written before the field. A file judged now and taken counts. One judged now and refused approves
+nothing, in the gate's words. One still not judged approves nothing for that call, and the next
+call judges again.
+
+The fourth row is the only way a note that carries a `why` ends in an approval, and it does so
+only by the file being judged and taken by the merge gate's own judge.
 
 What is hashed is the FILE as it stands, never a hash the session supplies, by
 `hooks/lib/changelog-entry.js`'s `announcementHash`: the sha256 of the one normalised form (line
@@ -2209,7 +2282,8 @@ the wording, and sleep mode can answer one with Dan asleep.
   `gh pr create --label`, `gh pr edit --add-label`, `gh issue edit --add-label` and a `gh api`
   write to a pull request's labels are refused unless the wording the command would leave is
   approved, read from its `--body`, from the file its `--body-file` names, or from GitHub for an
-  edit that gives neither. It asks for the pull request the command names by number or link (or
+  edit that gives neither. Wording the merge would refuse for what it holds is refused first,
+  approved or not, by the merge gate's own judge and in its words (#3846, above). It asks for the pull request the command names by number or link (or
   GitHub's answer names) and records nothing: the pull request that used an approval keeps it, and
   any other, or a command naming none (a create), goes through only while an approval of that
   wording is unused. A form the wording cannot be read from (`--fill`, a template, a body on
@@ -2294,9 +2368,15 @@ settled:
   in violet, one line saying where the draft stands, then Copy, Mark sent and Not announcing; the
   row never draws the wording, and Copy copies nothing for wording that failed the claimed check,
   saying why. Mark sent and Not announcing settle it for every session, and only a press of the
-  row's own button does. `/live` lists it. Every session started in that project says it in one
-  line, to Dan and with the session's first prompt. And the turn end of the session whose card found
-  it live is refused once per chain of turn ends.
+  row's own button does. Mark sent settles on one press, since it records that he posted it.
+  Not announcing settles only on a second press (#3847): on 2026-11-27 one press, made by a slip,
+  ended an announcement Dan had approved, for good. The first press records nothing, changes the
+  button's label to `Confirm: not announcing #<number>` and says so; a press within 10 seconds
+  settles it, and left alone the label goes back. A press of Copy or Mark sent disarms it. Armed
+  is that session's own state, never the store, decided by the clock and not by a timer, and a
+  session start forgets it. A settled announcement stays final. `/live` lists it. Every session
+  started in that project says it in one line, to Dan and with the session's first prompt. And the
+  turn end of the session whose card found it live is refused once per chain of turn ends.
 - The merge gate's allow for an announce merge (`require-changelog-tag.sh`) always carries one line
   of context: the merge owes agents a draft, and a session whose card says nothing about it is
   running an old copy of the mod and should run `/reload-plugins`. Nothing the gate decides changes.
@@ -3483,10 +3563,14 @@ it took 174 to 273 ms (3 runs).
 
 What it does not cover:
 
-- A process that left its shell's group (`setsid`, a job control shell, a runner that puts what it
-  starts in a group of its own) is not tied. The time limit runner of claude-config#3578 is to
-  record the group it makes the same way: an empty file named for the group's id in the folder
-  `python3 hooks/lib/agent-leftovers.py dir "$CLAUDE_CODE_SESSION_ID"` prints.
+- A process that left its shell's group (`setsid`, a job control shell) is not tied. The time
+  limit runner (`hooks/lib/run-with-limit.sh`, the next section) puts what it starts in a group of
+  its own and records that group the same way: an empty file named for the group's id in the folder
+  `python3 hooks/lib/agent-leftovers.py dir "$CLAUDE_CODE_SESSION_ID"` prints. The runner takes
+  that file away again once the group holds nothing, so the file stays only for a group the runner
+  could not end or did not live to end. A group is listed only once its leader has gone, so a
+  command that runs on after its runner was killed outright is not listed until it ends and leaves
+  something behind.
 - A group whose oldest process started after the agent's command ended (each generation started
   the next and ended) is said as one that could not be told, never as the agent's.
 - The hand back is where an agent can still act, so an agent that ends by plain text is not asked
@@ -3497,6 +3581,173 @@ What it does not cover:
 
 Tests: `hooks/test-agent-leftovers.sh`, with stand in process tables (a suite never leaves a real
 stray process); the marker line alone is run for real, in bash and in zsh.
+
+### A time limit that ends the whole process group (#3578)
+
+Every agent brief says a loop, a harness or a generated command runs under a time limit that ends
+its whole process group (L1040). Until 2026-11-27 nothing an agent could run did that: the one
+shared limit, `lib/bounded-run.sh`, is a function a script has to load, and macOS ships no
+`timeout`. So each agent wrote its own in perl or python, the gates could not read it, and a suite
+went unrun where it most needed a limit (four sightings on claude-config#3578).
+
+    bash ~/.claude/hooks/lib/run-with-limit.sh <seconds> <command> [its words]
+
+The command runs as the leader of a process group of its own, on the caller's own input and output
+(nothing is captured). The limit is a whole number of seconds from 1 to 86400.
+
+**It is for commands that do not read a terminal.** An agent and a gate have none. Typed at a
+prompt, the command is in a background group of the terminal, and a command that reads or sets
+the terminal there (`git commit` opening an editor, `sudo`, `ssh`, anything that asks) is
+suspended by the system until the limit ends it. The runner hands the terminal to nobody; the
+usage says so, and what it says with 124 tells when the command was suspended and not running.
+The runner sees that the command was suspended and never why (it may have stopped itself, or
+been sent STOP), so that sentence names the terminal as the likely cause and no more.
+
+| Comes back as | What happened |
+| --- | --- |
+| the command's own code | It ended in time and left nothing running. Nothing is said. |
+| 124 | It reached the limit. The whole group was sent TERM, then KILL 2 seconds later (a setting, not measured) if anything was still there. |
+| 123 | It ended in time and left a process running in its group, which was stopped the same way. |
+| 125 | Nothing was run: a bad limit, no command, no usable python3, or a system it cannot keep its rule on. Also a fault inside the runner once the command's process exists: its group is sent KILL. |
+| ended by the signal | The runner was sent a signal it can catch, and ended the group before it went. A shell reports that as 128 plus the signal's number. |
+
+A command a signal ended comes back as 128 plus that signal's number, and one that could not be
+started as 127 or 126, as a shell reports them. An executable file with no interpreter line is
+handed to `sh`, as a shell hands it. When something was stopped the runner says so in one line on
+standard error, naming the group's id, whether TERM or KILL ended it, and the command. A command
+can itself exit with 123, 124 or 125 (another runner inside this one does), and only that line
+tells the runner's code from the command's. One 125 of the runner's has no line on standard
+error: the words `--prove <anything>` given as a run are the launcher's own question to the
+program, and the answer is one line on standard output.
+
+- **A process left running fails the run.** A suite that passes and leaves a process behind is
+  what cost 40 GB on 2026-11-24, so the run comes back as 123 whatever the command's own code
+  was, and the line names that code. What a command leaves is first given one second to end by
+  itself: a shell does not wait for a process substitution, so `exec > >(tee log)` ends with
+  `tee` a moment behind it, and ending `tee` at once would cut the log short and fail a passing
+  run by a race. The 123 is Dan's to reverse (stop the process and keep the command's code).
+- **The command is never started with no limit, and a run with nothing run is not a pass, with
+  the one exception below.** With python3 missing, the program behind the launcher missing, or a
+  system where the runner cannot see a process group or keep its own children, nothing runs and
+  125 comes back. The launcher asks the program one question before it hands a command over and
+  goes on only at the program's own answer, so a `python3` that starts and is not Python (a
+  version manager's shim with no python chosen) is 125 too, where its exit code 0 used to read
+  as a pass. The exception: a `python3` built to give that answer and then exit 0 is a pass with
+  nothing run, since this is a time limit and no security boundary. A fault inside the runner
+  once the command's process exists sends the group KILL, and a fault before that is 125 in
+  words. The command starts only once the runner is watching it: a runner that dies first, or
+  is told to stop first, leaves a child that ends without becoming the command. What can take
+  the limit away AFTER the start (the runner ended by KILL, for one) is under "What it does not
+  cover".
+- **It signals a number only while its own child pins it.** A child that has not been collected
+  keeps its process id, running or ended, and the group it leads has that number. So the runner
+  learns that the command ended without collecting it (a kqueue process event on macOS, `waitid`
+  with `WNOWAIT` on Linux), ends whatever the group still holds, and collects the command last.
+  After the collect it signals nothing: the number can by then belong to any new process. One
+  class in `lib/run-with-limit.py` holds the calls that signal the command or its group and the
+  call that collects it. It refuses a signal after the collect, and after either of its own
+  looks at the command (the one before a fault's KILL, the one for a suspended command) was
+  told the command is no longer the runner's child.
+- **It keeps its own children whatever its caller set.** A caller that ignores SIGCHLD hands
+  that down, and on Linux a process with it has its children collected by the system the moment
+  they end, which would leave the number pinned by nothing (found by review, claude-config#3833).
+  The runner puts SIGCHLD back to its default before it starts anything, proves with a child of
+  its own that an ended child stays until the runner collects it, and runs nothing (125) where
+  that fails. The command still starts with SIGCHLD as its caller had it. Before the KILL it
+  sends on a fault, the runner asks the system whether the command is still its own child.
+- **A signal that would end the runner ends the command's group first.** TERM, INT, HUP, QUIT,
+  USR1, USR2, ALRM, VTALRM, PROF and XCPU are carried over (on Linux also IO, PWR, STKFLT and
+  the real time signals python can set, from its SIGRTMIN up, which is 34 with glibc), unless
+  the caller had the signal ignored. The runner then ends by that signal itself, so a shell loop
+  around it stops at Ctrl C. A stop the runner has noted by its last look before it lets the
+  command go starts nothing. Both hold from the moment the runner's handlers are in, which is
+  after the command's process exists and before it is let go. Three spans are outside that,
+  each read from the code and none measured:
+  - Before the handlers are in, TERM and the others end the runner at once and the command
+    never starts. An INT there is turned by python into an error, so the run comes back 125
+    with nothing run, where an end by INT was meant, and a shell loop around it goes on. Inside
+    a session that span includes the reader that names the marker folder.
+  - A stop that lands in the few steps between the runner's last look for one and its letting
+    the command go starts the command and stops it at once.
+  - While the launcher waits for the answer to its question, an INT sent to the launcher's
+    process alone can be dropped by bash (its rule for a child it waits on), and the command
+    then starts and runs to its limit. The limit is kept; the sender's stop is lost. Ctrl C at
+    a terminal goes to the whole group and is not affected.
+- **A signal that would stop the runner does not stop it,** since a stopped runner keeps no
+  limit. TSTP (Ctrl Z) is caught and not acted on. TTIN and TTOU are ignored while a command
+  runs: ignored and not caught, because a write that raised a caught TTOU fails and is tried
+  again for ever. The command does not inherit that. It starts with TTIN and TTOU as its caller
+  had them.
+- **It reads no `ps`,** which cannot start under `hooks/no-network-run.sh` (macOS refuses a
+  setuid program in a sandbox). On macOS it asks with signal 0: measured on 2026-11-27 on the
+  personal MacBook (macOS 26.6.2) with a probe's own children, a group holding only its ended,
+  uncollected leader answers EPERM, a group with one more member answers success, and 15 ms after
+  that member ended it answers EPERM again. On Linux signal 0 succeeds for a group holding only
+  its ended leader, so the members are read from `/proc`. Either way the runner first asks about
+  its own group, where the answer is known, and runs nothing where that fails. Under the no
+  network wrapper the order is the wrapper first, then the runner.
+- **Its group is recorded for the leftover process check** above, before the command starts, when
+  the run is inside a session whose shells are recorded. A session with no marker folder is left
+  alone, since the folder's being there is what tells the reader the shells are recorded. A record
+  that should have been made and could not be is said in one line, and the limit is kept. The
+  runner takes its own file away once the group holds nothing, just before it collects the
+  command, while the command still pins the number the file is named for. Process ids came round
+  again within minutes on this Mac (2026-11-27, one sample), and a file left for every run would
+  tie each number to the session for as long as the folder lives. The file stays when the runner
+  could not end the group, after a fault, and when the runner did not live to take it away;
+  nothing else removes it, and macOS empties the folder of what nobody has touched for about
+  three and a half days (`bash-shell-mark.sh`). While a file is there, the check's count of
+  "other commands of this session" in the same span is one too high for it.
+- **A command that left its own group is ended by its own process id, late.** It keeps that id
+  for as long as the runner has not collected it, so the same pin covers it. At the limit its
+  group reads empty at once, and the runner then watches for the command's end for up to 10
+  seconds (a setting, not a measurement) before it sends TERM to that id, with KILL after the
+  same wait a group gets. So such a command runs up to that long past its limit. The watch is
+  not cut short, because on macOS a leader that is ending reads for a moment exactly as one
+  that left its group: it stops counting as a member at the start of its exit, and the event
+  the runner waits for comes near the end of it (Apple's published kernel source, read on
+  2026-11-27, not measured). A TERM by id sent in that moment would have the runner say a
+  command had left a group it never left. What the command started outside the group is not
+  reached.
+
+What it does not cover:
+
+- **A process can outlive the limit by the wait between TERM and KILL** (2 seconds, a setting,
+  not a measurement) when it ignores TERM, and a command that left its own group by the watch
+  described just above.
+- A process the command starts outside the group (`setsid`, a job control shell) is not stopped
+  and not seen.
+- A process this user may not signal (a setuid program) reads as nothing left, and when the
+  runner has taken its record away the leftover process check no longer ties it either.
+- A runner ended by KILL stops nothing, and a runner stopped by STOP keeps no limit while it is
+  stopped and applies it late when it goes on. Nothing can catch either. A real fault in the
+  runner's own process cannot be answered either, since a python handler cannot return from
+  one, so the signals a fault raises (ABRT, BUS, FPE, ILL, SEGV, SYS, TRAP, and EMT on macOS)
+  are left at their default. That leaves the same signals sent from outside unanswered too, by
+  choice: ABRT, TRAP, SYS and EMT could be carried over when something else sends them, and are
+  not. On Linux signals 32 and 33 belong to the C library, and python cannot set them. In each
+  case the command runs on with no limit, and the leftover process check lists its group only
+  once its leader has gone.
+- A command that reads the terminal, as said above. With a python3 that has no `os.waitid` (the
+  developer tools' 3.9.6, read on 2026-11-27) what it says with 124 cannot tell that.
+- A `python3` that never answers the launcher's question holds the launcher for as long, with
+  nothing run. A `python3` built to answer the question and then do something else is not
+  caught: this is a time limit and no security boundary.
+- The gates do not read through it yet. The Slack drafts gate, the payload write gate and the
+  area check judge a command behind it as they judge any program they do not know. Reading through
+  lets commands run that are refused today, so it waits for Dan's sign off (claude-config#3578).
+- `lib/bounded-run.sh`'s eight callers and the three private perl copies of it
+  (`lib/sleep-queue.sh`, `subagent-issue-harvest.sh`, `tools/lib/pinned-compiler.sh`) are not
+  moved onto it. By its code, `bounded_run` signals its group from an alarm that can arrive just
+  after the command was collected (read on 2026-11-27, not reproduced), which is the fault this
+  runner's order exists to rule out.
+
+Tests: `hooks/test-run-with-limit.sh`. The fixtures are real processes, and every case ends by
+checking none is left. The rule about signals is held by running the program with stand ins for
+the calls that start, signal and collect. A stand in sends a signal only to a child it saw the
+program start and has not seen collected; any other signal asked for is recorded and never sent.
+No changed copy of the runner is ever run: a case stands in for what is around the program (the
+system's answers, the clock, the record step) and never takes a protection out of it.
 
 ### An agent getting past the checks, and a report that says it did not
 
@@ -5185,7 +5436,24 @@ command's own exit code comes through unchanged. The gate passes a call that is 
 and its command and nothing else, without reading what runs under it. The refusal of a file whose
 imports reach code
 that posts names the route and the path to write, in full, and `skills/orchestrate/agent-rules.md`
-lets an agent run a refused command again that way when the refusal says so.
+lets an agent run a refused command again that way when the refusal says so. Since #3476 one more
+refusal names it: that of a shell script the gate judged by a name in it and did not read as
+commands. The gate reads the commands of three scripts in a chain, and a shell script behind those
+three is refused where it names a send call, whatever it does. That refused a plain run of
+`test-slack-drafts-gate-qos.sh`, which starts itself again under `taskpolicy` and so reaches the
+gate's own script, which names the call it guards, behind three. A shell script binary from its
+first line and run by bash is judged the same way at any depth, alone or behind one script, since
+bash runs no such file, and its refusal names the route too. The verdict is as it was in every
+case; only the refusal's last sentence is new. A script that does post, reached that deep, gets the
+same sentence, since the gate cannot tell the two apart, and under the wrapper it has no network,
+with the one exception above, `ps`. The route reads the name the command wrote for the file, while
+the gate decides what is a shell script from the file's real path. So a Python or JavaScript file
+run by a link whose name has a shell ending (`python3 link.sh`) gets the sentence as well, though
+it is never read as commands, and a shell script written by a name with another ending or none gets
+no route, even behind three (both found by review on 2026-11-27; the route's suite holds the first
+as it stands, so a change to it is seen). The refusals that suite holds to name no route: a script
+whose commands the gate read, a request, and a file that names the call under a written name with
+no shell ending (JavaScript, Python).
 
 The gate does not read what runs under the wrapper, so the rule is no wider than this: the shell of
 the call starts the installed wrapper, by its real path, and everything the call runs is under it.
@@ -6466,6 +6734,117 @@ refusal that day, at 2:32 PM ET, was not a helper grown past the gate. No load f
 for that minute, so the likely cause (a Mac too busy to give the gate a quarter of a core for 11
 seconds) is inferred, not measured.
 
+## Slack drafts are compared with what Dan sent
+
+Sessions save each Slack message as a draft and Dan edits it before he sends it. A measurement on
+the work MacBook on 2026-11-24 paired 106 drafts with what he sent: 22 went out as drafted and 29
+were heavily rewritten, and the commonest edit was cutting figures and shortening (#3554). Three
+pieces turn the edits he keeps making into written rules, each one his to accept.
+
+- **The reader**, `hooks/lib/draft-edit-diff.py`. It reads this Mac's session records, pairs each
+  draft Slack saved with the next post by `--author` in the same thread, as a later session read it
+  back, and prints counts by kind of edit: sent as drafted, heavily rewritten, figures cut, length
+  cut, the ask reworded, the opening changed. A draft is used once, by the first post after it; a
+  post with no draft before it is left out, and so is one more than an hour after its draft (a
+  setting, chosen from the work MacBook's pairs of 2026-11-27, where 173 of 184 posts came within
+  the hour). Both are compared with Slack's formatting set aside. A heavily rewritten pair is in
+  none of the four kinds a rule is offered for, since a post that far from its draft may not be an
+  edit of it; what that costs is that a draft cut to under about half its length is in no kind. A
+  read made in the concise layout shows no time for a post, so it is counted as its own kind and
+  nothing is paired from it. It only prints. It imports
+  nothing that can send a request or write a file and opens files only to read, because the records
+  name Slack's posting address and the Slack drafts gate refuses a program that reads them and
+  could write. Message text is printed only with `--examples`: one pair for each recurring kind. A
+  kind is recurring at 10 pairs in 3 threads, a setting chosen on 2026-11-27 so that one long thread
+  cannot make an edit look like a habit; under it the kind is reported as too thin and no rule is
+  offered. A read result it finds no message in is counted and said. Only the `messages` field of
+  a read result is read for messages: text in any other field, `pagination_info` included, is no
+  part of a message, and a result with no such field is counted as one it cannot read. A run exits
+  4 when none could be read, or when most messages have their text somewhere it does not look
+  (none under the Message TS line, or an unknown line above it). A pair whose post begins or ends
+  in a line shaped like one of the connector's own (a word or three and a colon) is set aside and
+  counted, unless the draft holds a line with the same label at that end, which makes it his; a
+  run in which most pairs were set aside that way exits 4 too. That is judged over the pairs and
+  not the messages, so a channel of alerts that all begin "Alert:" does not stop a run. That exit
+  cannot tell a line of the connector's from one Dan adds by hand to most drafts ("Update: " in
+  front of 7 of 12 stops the run, on a layout that is as measured), so its words name both
+  readings and blame neither, and the note the skill files says only that nothing was measured.
+  `--shapes` prints what the results are made of: counts, and a field or label name only when it
+  is in a fixed list in the script, never a key or a line it does not know. `--differences`
+  counts, for the pairs changed but not heavily, how many would be the same with one more thing
+  set aside (a name inside angle brackets, how a link is written, punctuation, emoji, a trailing
+  edited mark, a last or first line), and the same for each kind a rule can be offered for. Each
+  counts the pairs one of those seven listed differences would explain, and is a limit in neither
+  direction: a pair it explains can still be his edit, since he also changes punctuation and adds
+  and cuts lines, and a pair it does not explain can still be no edit of his, when a read writes a
+  message another way that is not listed (twelve drafts posted word for word, with a phone number
+  read back as a link, read as twelve changed openings with 0 of 12 explained). `--likeness` counts the pairs in each band of likeness (the
+  same, 0.98 and over, 0.95, 0.90, 0.80, 0.70, under 0.70), once by words and once by characters,
+  and how many posts were the last message of the read their text came from. The two differ
+  widely on a small change: one changed letter in a message of ten words is 0.90 by words and
+  about 0.99 by characters. The run prints, in fixed words, what the two counts can and cannot
+  show.
+- **The offer**, the `draft-edit-review` skill. It runs the reader with `--differences` and
+  `--likeness`, tells Dan the counts and, before any rule, the doubt set out in the last paragraph
+  of this section, and asks one question for each recurring kind: the proposed rule in one
+  sentence, the pairs it rests on, how many of them one of the listed read differences would
+  explain and that the rest are his edit or a read difference nobody has listed, one example pair,
+  and Accept, Not now or Never offer this again. The sentence is run
+  through `/no-ai-tells` before that question, so the sentence he accepts is the sentence written,
+  word for word. On Accept a second question asks where the rule goes (the no-ai-tells skill, the Slack
+  section of the global `CLAUDE.md`, or the project's own file), and the session makes that edit
+  itself. What checks the save depends on the place. The ask before saving mod asks him before a
+  save to a `CLAUDE.md`, an `AGENTS.md` or a memory file. It does not ask about a skill file, so
+  for the no-ai-tells skill the skill asks one more question of its own, showing the final sentence
+  and the file's name, before the edit. `skills/draft-edit-review/decisions.py` keeps each answer,
+  and the reader reads that file itself, so a kind he accepted or declined for good is left out
+  whether or not the session passes anything. Where a rule went is kept as one of three labels and
+  a project's folder name, never as text somebody typed. `decisions.py forget` takes an answer back.
+- **The weekly notice**, `hooks/draft-edit-review-notice.sh`, at session start. It says the review
+  is due, in one line, when a week has passed since it last said so and a draft has been saved on
+  this Mac since the last review finished. The line goes into the session, which is asked to tell
+  Dan; nothing checks that it did, and the week is recorded when the line is printed. It reads no
+  record, runs nothing and asks nothing. The same script runs after the Slack draft tool and
+  records the second, and nothing about the draft, unless the tool's answer says Slack saved
+  nothing. State it cannot read is said by name, at every session start until it is put right, and
+  the review is not offered.
+
+What the pairing cannot see: a thread no later session read back, or read back only in the concise
+layout; a draft Dan deleted (a post he then wrote in that thread within the hour reads as heavily
+rewritten); a draft he sent more than an hour after it was saved; a message he wrote with no
+draft; a post a session sent as him; an edit he made after sending; a read result that was cut
+short; and the other Mac's sessions. Three things it reads wrongly, each on purpose or for want of
+a measurement. A line of his own shaped like a label ("Update: ...") that opens or ends what he
+sent, and that the draft did not hold there, is set aside with the lines that may be the
+connector's, so that pair is in no count; when most of his pairs are so, the run stops and no kind
+is counted on that Mac, which is a decision still open with Dan (pull request 3848). A line of the connector's that is not shaped like a
+label, and is not the Reactions line, is read as his words. And "@Name" typed in a draft and made
+a real mention by hand reads as an edit, which it is.
+
+State is in `~/.claude/state/draft-edit-review/` on each Mac and is never synced: `draft-saved`,
+`last-offered` and `last-review` (one time each), `author` (Dan's Slack member id) and
+`decisions.json`. It is per Mac on purpose. This repository is public, the counts come from one
+Mac's own records, and where a rule went can name a private project. The cost is that a kind
+declined on one Mac can be offered once on the other.
+
+The layout inside a thread or channel read could not be measured on the personal MacBook, which on
+2026-11-27 held no draft call and no read that succeeded in 8,628 record files. It was measured on
+the work MacBook the same day, over 1,765 read results, by counts, field names and the punctuation
+of headings only (pull request 3848), and the reader was fitted to it: the concise layout, a channel
+heading with no name, the section heading over a thread's replies, a `Reactions:` line under a
+message, and the name a read adds inside a mention. The fixtures hold invented text in that layout.
+A channel, a group and a here mention with a name added are set aside the same way, and were not
+measured. One thing that run left unexplained: 6 of its 184 pairs read as sent as drafted, against
+22 of 106 in the issue's measurement of 2026-11-24. One likely cause is that the two counts meant
+different things by it: the issue reported four bands, and this reader wants the two texts the
+same. `--likeness` prints bands of its own, by words and by characters, and cannot settle that:
+the issue did not record whether it compared words or characters, or where it drew its lines, so
+about a fifth of the pairs at 0.90 and over would fit that cause and fit small edits of his
+equally, and far fewer would make it less likely without ruling it out. Neither count had been
+run on the work MacBook when this was written on 2026-11-27. For as long as the reader's own
+account lists that share as not explained, the skill tells Dan the doubt at every review, with the
+run's own numbers, before it puts any rule to him.
+
 ## Read only queries are approved without asking
 
 Auto mode's classifier refused a plain select against a production database on 2026-11-05 ("[Production
@@ -6742,10 +7121,21 @@ answer to a question about the part that was read lets the rest run with it. The
 line, in a sentence true of the mark the reader named it with (`UNSURE` in
 `lib/db-write-calls.py`), and how to write the command so that it can be read. A refusal is printed
 whatever state `lib/hook-notice.sh` is in beside the hook, since a hook that prints nothing passes
-the command: when the library is missing, is a copy with no `_hn_decision_json` (the private builder
-a refusal is made with), or that builder prints anything but one whole refusal, the hook writes the
-refusal itself, without the characters that need escaping, and says which of the three it found.
-A refusal written that way is the decision alone: a notice the library would have put beside it
+the command: when the library is missing, is a copy with no `hook_deny_json` (the library's name for
+a refusal, added for #3618 and used here since #3793), or that function prints anything other than
+exactly one JSON object holding a PreToolUse refusal (its event, its decision and at most a reason,
+all texts) with at most the library's notice, a text, beside it, the hook writes the refusal
+itself, without the characters that need escaping, and says which it found. So a refusal cut
+short, two objects, a raw line break in the reason, an ask holding a deny elsewhere, a refusal for
+another event, and a whole refusal beside any other key (`continue`, `suppressOutput` or a top
+level `decision` written as a text, which Claude Code's validation refuses, letting the call go
+ahead) are all replaced. The hook reads the object with Python's JSON reader and never learns the
+name of a key beside the refusal, since only the library may write the notice field's name
+(#1906): for a refusal with one key beside it, it asks the library's `hook_decision_verdict`, and
+passes the refusal on only when that function is there, returned 0 and said nothing. Beside a
+library with no such function, the hook writes the refusal itself and says so. What is still
+trusted is that function's own answer, which `test-hook-notice.sh` holds to each wrong text.
+A refusal written by the hook is the decision alone: a notice the library would have put beside it
 (the one about pre-allowed Salesforce writes) is said inside the refusal's reason, since only the
 library builds a notice (#1906).
 `read-only-query-allow.sh` approves no such command either. A reader that cannot be asked at all is
@@ -9370,6 +9760,23 @@ Each `claude` question is stopped after `SYNC_CLAUDE_CHECK_TIMEOUT` seconds (30 
 answered in under half a second when measured), because the check runs under the sync lock and a hung
 `claude` would otherwise hold every sync behind it.
 
+A validation stopped that way says nothing about the mod, only that `claude` was too slow, so it is
+said as "could not check mod <name>", never as a mod that is not loading (#3759). A mod Claude Code
+does not list, or that validation refuses, still notifies at once ("a mod is not loading on this
+Mac"). A run of time outs notifies once the same mod's check has timed out on
+`SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` syncs in a row (5 by default; the longest real run measured in
+this Mac's sync log was 4, under load), and once per run of them, so a check that can never finish is
+still heard. The count goes up once per sync, however many times that sync checks the mods (a send
+that changes the mod names checks them, and the apply its reconcile runs checks them again). One sync
+posts at most one notification about time outs, naming every mod it covers. `claude-sync status`
+lists every mod the last syncs could not check, with how many in a row and since when. The count is
+kept in `.mod-check-timeouts` in the clone. A record that cannot be read is said so by the pull and
+by status, and never counted as none. Two more notifications come from that: when the pull can set
+the record aside, a time out it meets in that same sync notifies, since nothing can say it is the
+first; when it cannot (an earlier `.mod-check-timeouts.unreadable` is still there), it notifies once,
+and not again until a sync has read the record again. While it stays that way nothing is counted, so
+no later time out notifies; status says so on every run.
+
 Deleting a mod deletes it on the other Mac. Deleting the whole `~/.claude/mods` folder does not: a
 Mac with no mods folder cannot be told apart from one that never had mods yet, and reading that as a
 deletion would wipe the other Mac's mods the first time a fresh Mac sends. Delete the mods inside it.
@@ -10179,12 +10586,13 @@ cleared, as before.
 A merge labelled `changelog/announce` also owes agents a Slack draft of the wording Dan approved
 (#3667). The mod keeps it in its store outside the cards, the live card asks for the draft, and a
 band row with Copy, Mark sent and Not announcing, `/live`, each session start in that project and
-one refused turn end say it until it is drafted on the claimed wording or Dan settles it. The rules
+one refused turn end say it until it is drafted on the claimed wording or Dan settles it. Not
+announcing settles only on a second press within 10 seconds of the first (#3847). The rules
 are in "An approved announcement is owed as a Slack draft until it is settled (#3667)" above.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849, #3667
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849, #3667, #3847
 
 </td></tr>
 <tr><td>
@@ -12857,6 +13265,53 @@ removed, so the refusal is never published as a deletion; and the apply, to say 
 absent means no line is being left out for want of its script, which is the normal state. Losing it
 while a line is refused costs one repeated message, and lets the next send read that line as removed
 here
+
+</td></tr>
+<tr><td>
+
+`.hooks-file-keys-told`
+
+</td><td>
+
+every apply that read `settings.hooks.json` and found a top level key other than `hooks` in it, once
+the notification naming those keys was posted; removed when the file holds no such key (#3741)
+
+</td><td>
+
+the apply, to post that notification once per set of keys rather than on every pull. Its output and
+the log say it on every pull regardless
+
+</td><td>
+
+absent or unreadable means the next pull that meets such a key notifies again, which is the loud
+side. Losing it costs one repeated notification
+
+</td></tr>
+<tr><td>
+
+`.mod-check-timeouts`
+
+</td><td>
+
+every mod check that gave every mod an outcome: one line per mod whose `claude plugin validate` did
+not answer in time, with how many syncs in a row, since when, whether that was notified, and which
+sync last counted it (so one sync that checks twice counts once); removed when every check finished
+(#3759)
+
+</td><td>
+
+the same check, to notify only at `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` time outs in a row and once per
+run of them; and `claude-sync status`, which lists each mod it names
+
+</td><td>
+
+absent means every mod's last check finished. Unreadable is never read as none: the pull and status
+say so, the pull keeps it as `.mod-check-timeouts.unreadable` and starts a new one from that sync,
+and a time out it meets notifies, since nothing can say it is the first. When an earlier
+`.unreadable` is already there, the pull cannot set it aside: it leaves both, counts nothing, says so
+on every sync, and notifies once (`.mod-check-timeouts.stuck-told` records that, and the first sync
+that reads the record again removes it). Lost, a run of time outs starts counting again, so a check
+that never finishes is heard that many syncs later
 
 </td></tr>
 <tr><td>
