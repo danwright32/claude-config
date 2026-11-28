@@ -129,7 +129,8 @@ done
 # The limit a hook hands over is the one its registration gives it, so the second run is given
 # what is left of the time Claude Code really allows. limit_fault <hook file> <settings file>
 # prints why it is not, or nothing. A hook whose registration sets no limit runs under Claude
-# Code's own, and says UNSET_LIMIT, which is no more than that one. A hook registered to run
+# Code's own, and says UNSET_LIMIT, which is that limit as recalled from Claude Code's
+# documentation and is measured nowhere here. A hook registered to run
 # after the command, and only such a hook, says after: told that, the helper never says the
 # command was refused or asks for it again, and told it wrongly a gate would stop refusing.
 UNSET_LIMIT=60
@@ -362,8 +363,8 @@ payload_for "$PUSH; cat <<EOF; echo hidden${NL}body${NL}EOF" | PS__READING=secon
 long="$(python3 -c 'import sys; sys.stdout.write("x" * 17000)')"
 run_hook "cat <<EOF; echo done${NL}${long}${NL}EOF"
 case "$RC:$ERR" in
-  2:BLOCKED*"longer than the 16384"*) check "a command longer than the library reads twice within a hook's time limit, that has a second reading, is refused saying so" ok ;;
-  *) check "a command longer than the library reads twice within a hook's time limit, that has a second reading, is refused saying so" "exit $RC, said [${ERR:0:200}]" ;;
+  2:BLOCKED*"longer than the 16384 set as the most"*"or outside the quoted string"*) check "a command longer than the limit set for a second reading, that has one, is refused, saying the limit is a set one and where to write the hidden command" ok ;;
+  *) check "a command longer than the limit set for a second reading, that has one, is refused, saying the limit is a set one and where to write the hidden command" "exit $RC, said [${ERR:0:600}]" ;;
 esac
 [ "$(starts)" = 1 ] && [ -z "$(judged)" ] && check "and it starts no run to say so" ok || check "and it starts no run to say so" "starts $(starts), judged [$(judged)]"
 run_hook "cat <<EOF${NL}${long}${NL}EOF${NL}echo done"

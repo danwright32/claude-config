@@ -3258,12 +3258,11 @@ def second_reading(s):
         of their own: `bash -c 'git`, the pair and `push'` ran the push, and so did the same
         inside backquotes. So those are written as that shell reads them (inner_typed).
 
-    THE TWO TEXTS ARE NEVER WRITTEN INTO ONE. Joined, each changed how a hook read the other: a
-    cd or a push the rewritten text held chose the folder a gate read for the push the old text
-    named, a commit it held moved where a gate's range starts, a second repository stood a gate
-    aside, and a backslash that ended one took the separator. So flattened() is what it was
-    before this reading existed, a hook judges it alone, and this text is judged by a second run
-    of the same hook that can only refuse (lib/push-scope.sh, ps_both_readings).
+    THE TWO TEXTS ARE NEVER WRITTEN INTO ONE, because a gate reads the folder, the range and the
+    repository of a push from the whole text it is handed, so a command either text holds would
+    change how the gate reads the other's. flattened() holds nothing of this reading, a hook
+    judges it alone, and this text is judged by a second run of the same hook that can only
+    refuse (lib/push-scope.sh, ps_both_readings).
 
     The first of the rewritings (_reread) that names a command flattened(s) does not. Either
     text may be one only the crude cut reads: a quoted word that runs over the lines after an
@@ -3505,7 +3504,7 @@ def opener_lines(s):
         always been read right in;
       * a heredoc still waiting for its body where the text ends (a command of one line, or an
         opener on the last line): no shell gives it one, and every command after it on the line
-        runs (bash 3.2 and zsh, measured 2026-11-23 and 2026-11-26), where the flattened form
+        runs (bash 3.2 and zsh), where the flattened form
         took those commands for the body up to a word that is the marker. Its << or <<- is
         written <<<, a here string of the marker word, which opens nothing;
       * a line one of whose heredocs never closes on a line of its own: the shell feeds it the

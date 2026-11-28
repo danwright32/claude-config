@@ -66,8 +66,9 @@ SRW_LOADED=0
 
 payload="$(ps_read_payload)"
 # What the segmented form hides is judged in a run of its own, in what is left of this hook's
-# time limit. Its registration sets none, so the number here is 60, which is no more than the
-# limit Claude Code gives a hook that names none (claude-config#3739).
+# time limit. Its registration sets none, so the number here is 60, recalled from Claude Code's
+# documentation as the limit it gives a hook that names none, and not measured. Were the real
+# limit shorter, Claude Code would end a slow second run with nothing said (claude-config#3739).
 ps_both_readings "$payload" 60
 # A payload a reader is present for and still cannot parse names its add only in its raw text, so it
 # is judged by that, as a missing library is above (claude-config#1922). With no reader at all the

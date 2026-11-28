@@ -309,7 +309,7 @@ sys.exit(1 if v is None or isinstance(v, str) else 0)' 2>/dev/null
 #
 # WHAT THAT TEXT STILL HIDES IS A SECOND READING, NEVER PART OF THIS ONE (claude-config#3739). See
 # ps_both_readings below. In the second run it starts, PS__READING is "second" and the segmented
-# form is the second reading alone; everywhere else it is the text above, as it always was.
+# form is the second reading alone; everywhere else it is the text above.
 ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
   local payload mode="${2:-segmented}" sep out
   case "$mode" in
@@ -375,13 +375,12 @@ sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 # other, so `bash -c 'git`, the pair and `push'` named no push. lib/shell-words.py's second mode
 # writes the command as those shells read it.
 #
-# That text is never written into the first one. Joined into one text, each changed how a hook
-# read the other: a cd or a push the second held chose the folder a gate read for the push the
-# first named, a commit it held moved where a gate's range starts, a second repository stood a
-# gate aside, a backslash that ended one took the separator. So the two are judged apart:
-#   1. the hook is run on the payload with the first reading, which is ps_parse_payload exactly
-#      as it was before any of this, alone, with nothing before or after it. What that run says
-#      is this hook's answer whenever it is not a pass, so every refusal made before is made;
+# That text is never written into the first one, because a gate reads the folder, the range and
+# the repository of a push from the whole text it is handed, so a command either text holds
+# would change how the gate reads the other's. So the two are judged apart:
+#   1. the hook is run on the payload with the first reading alone, the text ps_parse_payload
+#      gives for a command that hides nothing, with nothing before or after it. What that run
+#      says is this hook's answer whenever it is not a pass, so no refusal of that text is lost;
 #   2. only once that run has passed and finished, the hook is run again with the second
 #      reading in the first's place. It can turn the pass into a refusal and nothing else.
 # The first run is over before the second starts, so nothing the second writes (a record, a
@@ -389,10 +388,12 @@ sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 #
 # A hook calls this once, at its top level, before its first `ps_parse_payload ... segmented`,
 # with the payload as it read it; test-both-readings.sh fails for a hook that reads the segmented
-# form without it. It returns at once, having started nothing, for a command with no second
-# reading, which is nearly every one: the look is three patterns over the raw payload (a pair
-# beside a quote, a backquote or a <; a ; and a blank after a << before that line ends; a <, a ;
-# or a blank spelled as an escape of its code point) and only then the reader. Under a UTF-8
+# form without it. It returns at once, having started nothing, for a payload none of three
+# patterns match, which is nearly every one (a pair beside a quote, a backquote or a <; a ; and
+# a blank after a << before that line ends; a <, a ; or a blank spelled as an escape of its code
+# point). Where one matches, the reader is started once to say whether there is a second
+# reading, so a command continued over lines that also holds a quote, a backquote or a < costs
+# one start of python3 at each hook though it hides nothing. Under a UTF-8
 # locale bash's =~ stops at a byte that is not UTF-8 (claude-config#1885), so the opener's pattern
 # is asked again under the C locale, which reads every byte as a character.
 #
@@ -403,6 +404,7 @@ sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 # does not judge the second. Nor is the second reading judged of a command longer than
 # PS__SECOND_MAX: what the library does with a command grows with the square of its length, and
 # two runs of a long one end at the hook's time limit, which is a refusal that says nothing.
+# That number is a chosen limit, not a measured edge.
 #
 # The two runs share the one time limit Claude Code gives the hook, which the hook hands over in
 # seconds as its registration states it (test-both-readings.sh holds the two equal). The second
@@ -412,6 +414,12 @@ sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 # that does not finish in what it was given, was not judged. Only the shell of that run is
 # signalled, so what it started is left to finish, a review a gate detached on purpose among it.
 # Where both readings reach what a gate acts on, the gate does that work in each run.
+#
+# A hook that starts itself again part way through (scanners-before-push.sh runs the rest of
+# itself as a second process) is not told there which reading it is judging, since PS_READING is
+# believed only from the hook that ps_both_readings started and is taken out of the environment
+# once read. That second process judges both readings again, sharing out the whole limit afresh
+# though part of it is spent. What bounds it is that hook's own stop over the process it starts.
 #
 # A second reading that was not judged, for any of the reasons above or below, is never a pass
 # and never a run left out with nothing said. A gate that runs before the command refuses it,
@@ -536,7 +544,7 @@ ps_both_readings() {   # $1 = the payload as the hook read it  $2 = the hook's t
   # A gate that runs before the command refuses where the second reading cannot be judged, and
   # says how to write the command. A hook that runs after it has nothing left to refuse and must
   # not ask for the command again, which would run it twice: there the reason is kept in why,
-  # the first reading is judged as it always was, and the hook ends on a notice.
+  # the first reading is judged alone, and the hook ends on a notice.
   [ "$after" = after ] || after=""
   if [ -n "$over" ]; then
     [ -n "$after" ] || {
@@ -565,11 +573,11 @@ ps_both_readings() {   # $1 = the payload as the hook read it  $2 = the hook's t
   fi
   if [ -z "$why" ] && [ "${#clean}" -gt "$PS__SECOND_MAX" ]; then
     [ -n "$after" ] || {
-      printf 'BLOCKED: %s: this command runs something a plain reading of it hides (a command after a heredoc opener on the same line, or one written across a backslash and line break inside a string handed to a shell or inside backquotes), and its payload, at %s characters, is longer than the %s a gate reads a second time within its time limit, so what it hides was not judged. Write that command on a line of its own, after the heredoc closing line, or send the long text in a command of its own (claude-config#3739).\n' \
+      printf 'BLOCKED: %s: this command runs something a plain reading of it hides (a command after a heredoc opener on the same line, or one written across a backslash and line break inside a string handed to a shell or inside backquotes), and its payload, at %s characters, is longer than the %s set as the most a gate reads a second time, so what it hides was not judged. Write that command on a line of its own, after the heredoc closing line or outside the quoted string, or send the long text in a command of its own (claude-config#3739).\n' \
         "$name" "${#clean}" "$PS__SECOND_MAX" >&2
       exit 2
     }
-    why="its payload, at ${#clean} characters, is longer than the $PS__SECOND_MAX a hook reads a second time within its time limit"
+    why="its payload, at ${#clean} characters, is longer than the $PS__SECOND_MAX set as the most a hook reads a second time"
   fi
   if [ -z "$why" ] && [ -n "${PS_READING-}" ]; then
     [ -n "$after" ] || {
