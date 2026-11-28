@@ -329,8 +329,11 @@ says "#3837 route 7: and that refusal still names the no network wrapper" "no ne
 # lines of 100 bytes each, up to 20000 bytes short of the limit or 20000 bytes past it.
 DEEP_MAX="$(python3 -c '
 import re, sys
-found = re.search(r"^DEEP_FILE_MAX = ([0-9 *]+)$", open(sys.argv[1]).read(), re.M)
-print(eval(found.group(1)) if found else "")' "$DIR/slack_drafts_only_gate.py" 2>/dev/null)"
+found = re.search(r"^DEEP_FILE_MAX = ([0-9]+(?: \* [0-9]+)*)$", open(sys.argv[1]).read(), re.M)
+size = 1
+for part in found.group(1).split("*") if found else ():
+    size *= int(part)
+print(size if found else "")' "$DIR/slack_drafts_only_gate.py" 2>/dev/null)"
 pad() { python3 -c 'import sys; sys.stdout.write(("# " + "x" * 97 + "\n") * int(sys.argv[1]))' "$1" >> "$2"; }
 case "$DEEP_MAX" in
   ''|*[!0-9]*)
