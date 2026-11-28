@@ -288,11 +288,25 @@ export const emptiedOf = (value: unknown): Emptied | null | { why: string } => {
 }
 
 /**
+ * How many steps on manual steps' card are not finished, as its state holds the card, or why that
+ * cannot be told. Absent or null is no card pinned, which is none open. Every step counts, whoever
+ * pinned it: this is what makes askCardText's first sentence true when it is sent.
+ */
+export const openStepsOf = (card: unknown): number | { why: string } => {
+  if (card === undefined || card === null) return 0
+  const steps = typeof card === 'object' ? (card as { steps?: unknown }).steps : undefined
+  if (!Array.isArray(steps)) return { why: 'it is not a card' }
+  return steps.filter(s => !(typeof s === 'object' && s !== null && (s as { finished?: unknown }).finished)).length
+}
+
+/**
  * What the session is told, with no /goal, once it has recorded the last open step of a steps card
  * and no box was shown for the request (#3864). The end of turn review asks for the box while the
  * card's steps are still open, so the turn a card empties on is often the one the work finishes on,
- * after that review has run. "Before anything else in this turn": a command or an edit first makes
- * it a turn with a review of its own to come, and the call would wait for that.
+ * after that review has run. Sent only while no step is open on the card (openStepsOf), since a
+ * card pinned after the record would make its first sentence untrue. "Before anything else in this
+ * turn": a command or an edit first makes it a turn with a review of its own to come, and the call
+ * would wait for that.
  */
 export const askCardText = (): string =>
   `GOAL ACCOMPLISHED? Every step on the manual steps card has now been recorded, and no Goal accomplished box was shown for what Dan last asked for. If ${YOURS_DONE}, call ${TOOL} now, before anything else in this turn, with goal set to what he asked for and shipped listing what shipped, one short line each. ${heldTail()}`

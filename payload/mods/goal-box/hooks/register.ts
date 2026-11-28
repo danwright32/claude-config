@@ -3,7 +3,7 @@ import { cutCall, cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import { pickerCame } from './request.ts'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
-import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askCardText, askDoneText, askText, boxText, cardOf, cardedSince, decide, emptiedOf, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Emptied, type Holds, type Linked } from './box.ts'
+import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askCardText, askDoneText, askText, boxText, cardOf, cardedSince, decide, emptiedOf, linkedIn, mergeFactsOf, mergeHolds, openStepsOf, readInput, waitKey, type Confirmed, type Emptied, type Holds, type Linked } from './box.ts'
 import { WORK_TEST_MS, alreadyShownText, answered, workRead, workTestArgv, type WorkRead } from './request.ts'
 import { REVIEWS_OFF_SUFFIX, REVIEW_STATE_MS, answeredCommand, answersMainReview, askAgainText, canBeTurnWork, notMainReviewText, promptedUnreadText, reviewRead, reviewStateArgv, reviewWait, shownUnreadText, type ReviewRead, type ReviewWait } from './review.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
@@ -433,7 +433,8 @@ const spendCardNow = async ($: EngineInterface): Promise<void> => {
  * Passed over for good, with nothing sent: a card none of whose steps was done in this session (all
  * taken off undone, or all another session's), since nothing was finished by it; one that emptied
  * before Dan asked this session for anything; and one whose request already has its box.
- * Left for a later turn end: a card that emptied while something the box refuses for is in flight.
+ * Left for a later turn end: a card that emptied while something the box refuses for is in flight,
+ * and one followed by a card that has a step open now or cannot be read.
  * The end of turn review's record is asked last, through `record` (endRecord): a review handed over
  * this turn that Dan has not answered spends the record unsent, as it spends the turn end's other
  * question. Claimed before it is sent, so two turn ends at once ask once, and released when the
@@ -457,6 +458,11 @@ const askAfterCard = async ($: EngineInterface, record: () => Promise<EndRecord>
     if (await spendCard($, emptied)) debug($, `${passed}, so the session is not asked about the Goal accomplished box`)
     return
   }
+  // The prompt says every step on the card has been recorded, so the card is read as it is now.
+  // Before what is in flight, which asks GitHub: a record waiting on an open step costs one read.
+  const open = openStepsOf((await $.state.get(stepsCardRef as never)).value as unknown)
+  if (typeof open !== 'number') return debug($, `the manual steps card could not be read (${open.why}), so whether a step on it is still open is not known and the session is not asked about the Goal accomplished box`)
+  if (open > 0) return
   if ((await boxHolds($)).length) return
   const end = await record()
   if (!(await $.state.set(cardAskedRef, emptied.at, { ifVersion: asked.version })).isSet) return

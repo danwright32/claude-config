@@ -3338,3 +3338,39 @@ test("the box's own refusals stand after the card empties: an agent running, a m
   expect((await box($, ASKED)).deny).toMatch(/the end of turn review was handed to you this turn and is not on record as answered/)
   expect(await cards()).toEqual([])
 })
+
+// The prompt says every step on the card has been recorded, so the card is read when it is sent.
+const OPEN_CARD = { heading: 'Next', steps: [{ title: 'Paste the token', url: 'https://a.example' }] }
+
+test('a card with an open step pinned since the last one emptied: nothing is asked while a step is open, and it is asked once none is (#3864)', withAll, async ($, on) => {
+  const { w, submitted, runs } = world(on, { stepsEmptied: EMPTIED, stepsCard: OPEN_CARD, links: [link('danwright32/claude-config', 1700)] })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  // An open step is read before what is in flight, so a record that waits on one asks GitHub nothing.
+  expect(runs().filter(a => a[0] === 'gh')).toEqual([])
+  // A step finished and others still open is still a card with an open step.
+  w.stepsCard = { heading: 'Next', steps: [{ title: 'Add the key', url: 'https://b.example', finished: 'checked' }, ...OPEN_CARD.steps] }
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  w.stepsCard = { heading: 'Next', steps: [{ title: 'Add the key', url: 'https://b.example', finished: 'checked' }, { ...OPEN_CARD.steps[0], finished: 'withdrawn' }] }
+  await turnEnds($)
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+})
+
+test('a steps card that cannot be read: nothing is asked and the debug log says why, and it is asked once the card reads as gone (#3864)', withAll, async ($, on) => {
+  const { w, submitted, logs } = world(on, { stepsEmptied: EMPTIED, stepsCard: { steps: 'x' } })
+  await start($)
+  await says($, 'Run the one off test and tell the team')
+  await turnEnds($)
+  w.stepsCard = 'a card'
+  await turnEnds($)
+  expect(cardAsks(submitted)).toEqual([])
+  expect(logs.filter(l => /the manual steps card could not be read \(it is not a card\), so whether a step on it is still open is not known and the session is not asked about the Goal accomplished box/.test(l))).toHaveLength(2)
+  w.stepsCard = null
+  await turnEnds($)
+  expect(cardAsks(submitted)).toHaveLength(1)
+})
