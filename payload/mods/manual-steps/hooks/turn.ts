@@ -297,7 +297,7 @@ export const turnIn = (out: string): TurnRead => {
       const o: unknown = JSON.parse(line)
       if (o && typeof o === 'object') recs.push(o as Rec)
     } catch {
-      // The window's first line is cut short, and is no record.
+      // A line that does not parse is no record. The reader prints whole lines only.
     }
   }
   let promptId: string | null = null

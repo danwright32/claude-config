@@ -30,7 +30,7 @@ describe('turnIn', () => {
   })
 
   test('a turn whose prompt lies before the window is read from the window\'s start', () => {
-    // The first line is cut by the byte window and is not a record.
+    // A first line that does not parse is not a record.
     const out = ['cut":"short"}', said('early in the turn'), user('p9'), said('later')].join('\n')
     expect(turnIn(out).texts).toEqual(['early in the turn', 'later'])
   })
