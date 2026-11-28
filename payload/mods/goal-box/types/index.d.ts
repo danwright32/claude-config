@@ -75,10 +75,21 @@ declare module 'claude-code' {
       reviewOwing: number | null
       /**
        * #3843: the earlier request whose held box was never shown when a message Dan typed began
-       * another, to be asked for once at a later turn's end. `blocked` once a turn's end since has
-       * found a review handed over and not answered: nothing is sent then until he types again.
+       * another, to be asked for once at a later turn's end.
        */
-      reviewOwed: { request: number; blocked: boolean } | null
+      reviewOwed: { request: number } | null
+      /**
+       * #3843: a review found handed over and not answered at a turn's end of the main conversation
+       * since Dan last typed a message. `now`: found at the latest end of the turn still current.
+       * `earlier`: found at the end of a turn that has since passed. Null when neither, and once
+       * he types.
+       */
+      reviewOpen: { earlier: boolean; now: boolean } | null
+      /**
+       * #3843: why the review's record could not be read at a turn's end of the main conversation
+       * since Dan last typed a message; null when every reading since came back, and once he types.
+       */
+      reviewUnsure: string | null
       /** #3843: the request in which Dan was last told, in a line he sees, that the box waits on the review. */
       reviewTold: number
       /** #3843: the request whose box was shown over a reading of the review that failed, and what was said of it. */

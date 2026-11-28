@@ -283,6 +283,8 @@ type World = {
    * `state`); absent answers that no review was handed over this turn.
    */
   review?: Gh
+  /** #3843: a read of the record started while this is set answers, with what it read, only once it settles. */
+  reviewOut?: Promise<void>
   /**
    * #3843: the run of the end of turn review's own test answers only once `releaseWorkTest` is
    * called; and each tool call that reached the bottom, where the tool itself starts, by its
@@ -357,7 +359,8 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (e.argv[0] === 'python3' && e.argv.includes(REVIEW_FILE)) {
       reviewAsks.push([...e.argv])
       const said = w.review ?? reviewSays('none')
-      return ok(said.stdout, said.exitCode, said.stderr ?? '')
+      const read = ok(said.stdout, said.exitCode, said.stderr ?? '')
+      return w.reviewOut ? (w.reviewOut.then(() => read) as never) : read
     }
     if (e.argv[0] === '__modkit') {
       if (e.argv[1] === 'card') {
@@ -2833,13 +2836,13 @@ test("the record cannot be read at the turn's end: the prompt for a met /goal is
   expect(logs.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
 })
 
-test("a turn end that sends no prompt does not ask the record at all (#3843)", withLive, async ($, on) => {
+test("a turn end that sends no prompt still asks the record, once: a prompt can fall due after it (#3843)", withLive, async ($, on) => {
   const { w, reviewAsks } = world(on)
   await start($)
   await says($, 'Is the monthly sync done?')
   await edits(w, $)
   await turnEnds($)
-  expect(reviewAsks).toEqual([])
+  expect(reviewAsks).toHaveLength(1)
 })
 
 // ---- A hold and its message belong to one request; what counts as the turn's work after a failed
@@ -3039,7 +3042,7 @@ test("a subagent's command that nowhere holds the record's file name is never pu
   expect(read).toBe(0)
 })
 
-test('a met /goal whose box was held for the review: the one message stands in for its prompt at that turn end, and once its box is shown its own prompt is never sent, nor the record asked for it (#3843)', withKit, async ($, on) => {
+test('a met /goal whose box was held for the review: the one message stands in for its prompt at that turn end, and once its box is shown its own prompt is never sent, the record asked once at each turn end (#3843)', withKit, async ($, on) => {
   const { w, submitted, cards, reviewAsks } = world(on, { goal: MET })
   const of = (start: string) => submitted.filter(s => s.text.startsWith(start))
   await start($)
@@ -3055,7 +3058,7 @@ test('a met /goal whose box was held for the review: the one message stands in f
   await turnEnds($)
   await turnEnds($)
   expect([of(ASKS_AGAIN).length, of(GOAL_PROMPT).length]).toEqual([1, 0])
-  expect(reviewAsks.length).toBe(asks)
+  expect(reviewAsks.length).toBe(asks + 2)
 })
 
 test('a met /goal whose box was held and then not called for: its own prompt is sent at the next turn end, so its box is not lost (#3843)', withKit, async ($, on) => {
@@ -3515,18 +3518,16 @@ for (const [how, end] of NOT_ANSWERS) {
   })
 }
 
-test('a turn that ended aborted reads the record only where a prompt is waiting, and where no review was handed over it says nothing and sends nothing (#3843)', withKit, async ($, on) => {
+test('a turn that ended aborted reads the record whether or not a prompt is waiting, and where no review was handed over it says nothing and sends nothing (#3843)', withKit, async ($, on) => {
   const { w, submitted, seen, reviewAsks } = world(on)
   await start($)
-  // Nothing held: no prompt is waiting, so the record is not asked.
+  // Nothing held: no prompt is waiting, and the record is asked all the same.
   await says($, 'Run the monthly sync')
   await edits(w, $)
-  w.review = reviewSays('handed')
   await turnEnds($, ABORTED)
-  expect(reviewAsks).toEqual([])
+  expect(reviewAsks).toHaveLength(1)
   // A call refused, and no review handed over when the turn is interrupted: read once, nothing
   // spent, nothing said, nothing sent there.
-  w.review = reviewSays('none')
   expect((await box($, ASKED)).deny).toMatch(/still to come/)
   const asks = reviewAsks.length
   await turnEnds($, ABORTED)
@@ -3570,7 +3571,7 @@ test("the request's one message reads the record before it weighs what is in fli
   expect(fromMod(submitted).map(s => s.text.startsWith(ASKS_OWED))).toEqual([true])
 })
 
-test('the question about shipped work reads the record before it weighs what is in flight or a /goal: an unanswered review found while an agent runs, or while the /goal cannot be read, spends it (#3843, #2523)', withLive, async ($, on) => {
+test('an unanswered review found while the question about shipped work could not be sent still stops it: found while an agent runs, and found while the /goal cannot be read (#3843, #2523)', withLive, async ($, on) => {
   const { w, submitted, seen } = world(on, { verdicts: CARDED })
   const told = () => seen.filter(l => l === WAITING_LINE)
   await start($)
@@ -3592,6 +3593,7 @@ test('the question about shipped work reads the record before it weighs what is 
   w.goal = { state: 'unreadable', why: 'grep failed' }
   w.review = reviewSays('handed')
   await turnEnds($)
+  // The line here is for the later ask of the request before, which this review holds.
   expect(told()).toHaveLength(2)
   w.goal = { state: 'none' }
   w.review = reviewSays('none')
@@ -3688,7 +3690,7 @@ test('the later ask waits while the /goal cannot be read, and is sent at the fir
   expect(owed()).toHaveLength(1)
 })
 
-test("the record is asked once at a turn's end however many prompts ask it, and not at all for a met /goal already asked about (#3843)", withLive, async ($, on) => {
+test("the record is asked once at a turn's end however many prompts ask it, and once where a met /goal was already asked about (#3843)", withLive, async ($, on) => {
   const { w, reviewAsks } = world(on, { verdicts: CARDED })
   await start($)
   await says($, 'Merge PR 1700')
@@ -3699,7 +3701,7 @@ test("the record is asked once at a turn's end however many prompts ask it, and 
   w.review = reviewSays('handed')
   await turnEnds($)
   expect(reviewAsks).toHaveLength(2)
-  // A met /goal: its prompt is sent at one turn end, and later turn ends ask the record nothing.
+  // A met /goal: its prompt is sent at one turn end, and a later turn end asks the record once more.
   w.review = reviewSays('none')
   w.goal = MET
   await turnStarts($, 't2')
@@ -3707,7 +3709,7 @@ test("the record is asked once at a turn's end however many prompts ask it, and 
   expect(reviewAsks).toHaveLength(3)
   await turnStarts($, 't3')
   await turnEnds($)
-  expect(reviewAsks).toHaveLength(3)
+  expect(reviewAsks).toHaveLength(4)
 })
 
 test('the tool says in its description that it waits for the review (#3843)', withKit, async ($, on) => {
@@ -3733,4 +3735,327 @@ test("the review's last step is one command whatever the transcript's path holds
   expect(reviewRead({ exitCode: 1, stdout: '', stderr: '' })).toEqual({ unread: "the read of the review's record exited 1" })
   const odd = reviewRead({ exitCode: 0, stdout: 'null', stderr: '' })
   expect('unread' in odd ? odd.unread : 'read as a state').toMatch(/names no state/)
+})
+
+// ---- What a turn end finds of the review is kept until Dan types (#3843) ----
+// The record ends with its turn, and a prompt about the box can fall due in a later turn nobody
+// typed to start: a card made there, a call refused there. So every turn end of the main
+// conversation reads the record, and a review found unanswered holds every prompt for a request's
+// box until a message Dan types. `sentKinds` is each prompt this mod sent, by which one it is.
+const sentKinds = (submitted: { text: string; origin: unknown }[]) =>
+  fromMod(submitted).map(s => (s.text.startsWith(ASKS_OWED) ? 'OWED' : s.text.startsWith(ASKS_AGAIN) ? 'AGAIN' : s.text.startsWith(ASKS_DONE) ? 'DONE' : s.text.startsWith(GOAL_PROMPT) ? 'MET' : 'OTHER'))
+
+for (const [how, end] of [['with an answer', {}], ...NOT_ANSWERS] as [string, Record<string, unknown>][]) {
+  test(`a review left unanswered in a turn that ended ${how}, with no prompt yet waiting, is read and kept: the question about shipped work that falls due in a turn somebody else starts is not sent, Dan is told there, and the box is asked for once after his next message (#3843, #2523)`, withLive, async ($, on) => {
+    const { w, submitted, seen } = world(on)
+    await start($)
+    await says($, 'Merge PR 1700')
+    await edits(w, $)
+    w.review = reviewSays('handed')
+    await turnEnds($, end)
+    // No box is held yet, so no line promises one.
+    expect(seen).toEqual([])
+    w.review = reviewSays('none')
+    w.verdicts = CARDED
+    await says($, 'A notice', NOTICE)
+    await turnStarts($, 't2')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual([])
+    expect(seen).toEqual([WAITING_LINE])
+    await turnStarts($, 't3')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual([])
+    await says($, 'thanks')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual(['OWED'])
+    expect(seen).toEqual([WAITING_LINE])
+  })
+}
+
+test('the same with an agent running when the review is left unanswered and the card made once the agent has finished: the question is not sent, and Dan is told (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.agents = RUNNING
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([])
+  w.agents = []
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  expect(seen).toEqual([WAITING_LINE])
+})
+
+test("a review left unanswered with nothing waiting, then a call refused in a turn somebody else starts: the refusal promises no message, none is sent at that turn's end, Dan is told, and the box is asked for once after his next message (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([])
+  w.review = reviewSays('none')
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await edits(w, $, 'e2')
+  const refused = (await box($, ASKED, 'b2')).deny
+  expect(refused).toMatch(/still to come/)
+  expect(refused).toMatch(/or is asked for once after Dan's next message\.$/)
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  expect(seen).toEqual([WAITING_LINE])
+  await says($, 'thanks')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['OWED'])
+})
+
+test('a message Dan types ends what was kept: the question about shipped work for his next request is sent as usual (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Tidy the notes')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE'])
+  expect(seen).toEqual([])
+})
+
+test('a review answered later in the same turn ends what that turn end kept, and one answered in a later turn does not answer the earlier one (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  // The same turn ends twice with nothing begun between: handed over, then on record as answered.
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.review = reviewSays('answered')
+  w.verdicts = CARDED
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE'])
+  expect(seen).toEqual([])
+  // A turn has begun since (a turn start, or a prompt that is not his): a review answered there
+  // is another review, and the one left unanswered still holds the prompt.
+  for (const [n, begins] of [[1, () => turnStarts($, 'tb')], [2, () => says($, 'A notice', NOTICE)]] as [number, () => Promise<unknown>][]) {
+    w.verdicts = {}
+    await says($, `And merge PR 170${n}`)
+    await edits(w, $, `later${n}`)
+    w.review = reviewSays('handed')
+    await turnEnds($)
+    await begins()
+    w.review = reviewSays('answered')
+    w.verdicts = { [`danwright32/claude-config#170${n}`]: { state: 'live', at: NOW + n } }
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual(['DONE'])
+    expect(seen).toHaveLength(n)
+  }
+  expect(seen).toEqual([WAITING_LINE, WAITING_LINE])
+})
+
+test("a reading of the record that comes back after a message Dan typed is dropped: it is of a turn before his message, which ends what such a turn left (#3843, #2523)", withLive, async ($, on) => {
+  const { w, submitted, seen, clock } = world(on)
+  await start($)
+  await says($, 'Tidy the notes')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  let comesBack = () => {}
+  w.reviewOut = new Promise<void>(open => (comesBack = open))
+  const ended = turnEnds($)
+  // He types while the record is still being read, a second later by the clock.
+  await clock.advance(1000)
+  await says($, 'Merge PR 1700')
+  w.reviewOut = undefined
+  comesBack()
+  await ended
+  w.review = reviewSays('none')
+  w.verdicts = { 'danwright32/claude-config#1700': { state: 'live', at: NOW + 1000 } }
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE'])
+  expect(seen).toEqual([])
+})
+
+// ---- A met /goal, and a /goal still set (#3843) ----
+// The prompt for a met /goal is held only by the review of the turn now ending, and says so in the
+// goal's own line. Under a /goal that is set or cannot be read no prompt for a request's box is
+// waiting, so nothing is spent there and no line is said.
+test("a met /goal and a card, the review left unanswered in a turn that ended aborted: Dan is told in the goal's own line, never the request's, and the goal's prompt is sent at the next turn end (#3843)", withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { goal: MET, verdicts: CARDED })
+  await start($)
+  await says($, 'Finish issue 1563')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($, ABORTED)
+  expect(seen).toEqual([WAITING_GOAL_LINE])
+  expect(sentKinds(submitted)).toEqual([])
+  w.review = reviewSays('none')
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  expect(seen).toEqual([WAITING_GOAL_LINE])
+})
+
+test('a /goal still set, a card made, the review left unanswered: nothing is spent and no line is said, and once the goal is met after his next message its own prompt is the only one sent (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { goal: { state: 'set', condition: 'complete issue 1563' }, verdicts: CARDED })
+  await start($)
+  await says($, 'Finish issue 1563')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(seen).toEqual([])
+  expect(sentKinds(submitted)).toEqual([])
+  w.review = reviewSays('none')
+  await says($, 'keep going')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  w.goal = MET
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  await turnStarts($, 't3')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  expect(seen).toEqual([])
+})
+
+for (const [how, goal] of [['set', { state: 'set', condition: 'complete issue 1563' }], ['unreadable', { state: 'unreadable', why: 'grep failed' }]] as [string, Goal][]) {
+  test(`a review left unanswered under a /goal that is ${how}, the /goal then cleared in a turn somebody else starts: the question about shipped work is not sent there, and Dan is told there (#3843, #2523)`, withLive, async ($, on) => {
+    const { w, submitted, seen } = world(on, { goal, verdicts: CARDED })
+    await start($)
+    await says($, 'Merge PR 1700')
+    await edits(w, $)
+    w.review = reviewSays('handed')
+    await turnEnds($)
+    expect(seen).toEqual([])
+    w.goal = { state: 'none' }
+    w.review = reviewSays('none')
+    await says($, 'A notice', NOTICE)
+    await turnStarts($, 't2')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual([])
+    expect(seen).toEqual([WAITING_LINE])
+    await says($, 'thanks')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual(['OWED'])
+  })
+}
+
+test('a /goal that cannot be read, a card made, no review handed over: the question about shipped work is not sent (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on, { verdicts: CARDED, goal: { state: 'unreadable', why: 'grep failed' } })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  expect(seen).toEqual([])
+})
+
+test("an unanswered review of an earlier turn does not hold a met /goal's prompt: it is sent at the first turn end whose own review is not left unanswered (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Finish issue 1563')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.goal = MET
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['MET'])
+  expect(seen).toEqual([])
+})
+
+// ---- A record that cannot be read at a turn end that sends nothing (#3843) ----
+test("the record cannot be read at a turn that ended aborted: nothing is sent there, and the request's one message at the next turn end is said to have been sent without knowing (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.review = UNREAD_AT_END
+  await turnEnds($, ABORTED)
+  expect(seen).toEqual([])
+  expect(sentKinds(submitted)).toEqual([])
+  w.review = reviewSays('none')
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['AGAIN'])
+  expect(seen.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+  expect(seen).toHaveLength(1)
+})
+
+test('the record cannot be read at a turn end with nothing waiting: a prompt that falls due before Dan types says it was sent without knowing, and one after his next message does not (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.review = UNREAD_AT_END
+  await turnEnds($)
+  expect(seen).toEqual([])
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  await says($, 'A notice', NOTICE)
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE'])
+  expect(seen.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+  // His next message ends it: a prompt sent in the request it begins says nothing of the kind.
+  w.review = UNREAD_AT_END
+  await turnStarts($, 't3')
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.verdicts = { 'danwright32/claude-config#1701': { state: 'live', at: NOW + 1 } }
+  await says($, 'And merge PR 1701')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['DONE', 'DONE'])
+  expect(seen.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+})
+
+// ---- Rules of the round before that no test held (#3843) ----
+test("a call refused after the request's one message was used, its review left unanswered in a turn that ended aborted: Dan is told there too (#3843)", withKit, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['AGAIN'])
+  await turnStarts($, 't2')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED, 'b2')).deny).toMatch(/or is asked for once after Dan's next message\.$/)
+  w.review = reviewSays('handed')
+  await turnEnds($, ABORTED)
+  expect(seen).toEqual([WAITING_LINE])
+})
+
+test('the record is read once at every turn end of the main conversation, whatever is waiting and however the turn ended (#3843)', withLive, async ($, on) => {
+  const { w, reviewAsks } = world(on)
+  await start($)
+  // Nothing waiting, a turn that ended with an answer.
+  await says($, 'Is the monthly sync done?')
+  await turnEnds($)
+  expect(reviewAsks).toHaveLength(1)
+  // The one message and the question about shipped work both waiting, a turn that ended aborted.
+  w.verdicts = CARDED
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  const asks = reviewAsks.length
+  await turnEnds($, ABORTED)
+  expect(reviewAsks.length).toBe(asks + 1)
+  // The same two waiting at a turn that ended with an answer, the review left unanswered.
+  w.review = reviewSays('handed')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(reviewAsks.length).toBe(asks + 2)
 })

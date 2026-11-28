@@ -12505,25 +12505,34 @@ call it reads, never ahead of it, so no tool waits on it to start, and the box's
 read for it. A box refused this way and
 not shown by the turn's end is asked for once more, once per request, by a message the mod sends
 in place of the turn end's other question, because the hooks do not hand a review over at every
-such turn's end. The mod asks the record again before it sends that message, or any other prompt
-about the box at a turn's end: none is sent over a review that was handed over that turn and
-that Dan has not answered, since each starts a new turn, where the record reads none and the box
-would show behind the unanswered review. The message and the question about shipped work are
-then spent for the request, the prompt
-for a met /goal waits for a later turn end, and Dan is told in one line he sees, once per request,
-that the box is waiting on the review (his choice of 2026-11-27: "One line, then one later ask").
-The record ends with the turn, so the mod asks it at every turn end of the main conversation where
-a prompt about the box is waiting, whether or not that turn end could send it: a turn Dan
-interrupted or that ended on a refusal or an error, where nothing is sent, and a turn end with
-something in flight or a /goal set or unreadable. A
-review found unanswered there spends or blocks what was waiting, and the line is said. A call
+such turn's end. That message, every other prompt of the mod that asks for the box, and the box
+itself go out through one function (`leave` in `hooks/register.ts`;
+`tests/test-goal-box-one-way-out.sh` fails when a send or a showing is written anywhere else),
+which weighs the review first: no prompt for a request's box is sent over a review that was
+handed over and that Dan has not answered, since each starts a new turn, where the record reads
+none and the box would show behind the unanswered review. The record ends with its turn, and a
+prompt can fall due in a later turn nobody typed to start (a card made there, a call refused
+there), so the mod reads the record once at every turn end of the main conversation, whatever is
+waiting and however the turn ended (a turn Dan interrupted, a refusal, an error), and keeps a
+review found unanswered until he next types. While it is kept, the message and the question about
+shipped work are spent for the request where they fall due, whether or not that turn end could
+have sent them, the later ask below stays owed, a refusal promises no message, and Dan is told in
+one line he sees, once per request, that the box is waiting on the review (his choice of
+2026-11-27: "One line, then one later ask"). A review found answered at a later end of the same
+turn ends what that turn end kept; one answered in a later turn does not. The prompt for a
+met /goal is held only at the end of the turn whose own review is unanswered, says so in a line
+of its own, and is sent at the first later turn end. Under a /goal that is set or cannot be read
+no prompt for a request's box waits, so nothing is spent there. A record that cannot be read at
+a turn's end is kept the same way, and a prompt sent before he next types says it went out
+without knowing. A call
 refused after the request's message was used has no prompt left in that request, so its review
 left unanswered is said in the same line, and its box is asked for after his next message.
 The record reads the same when he left a picker unanswered, when the session did the review and
 skipped its last step, and when the hand over never reached the session, and the mod cannot tell
 them apart (a question asked in prose leaves no picker either), so it guesses at none. A message
 Dan types drops a hold left from the request before, so the message is never sent under a later
-request, and the held box is not forgotten: it is asked for once, in words for an earlier
+request, and ends what the turn ends before it found of the review. The held box is not
+forgotten: it is asked for once, in words for an earlier
 request, at the end of the first turn after his message that has no unanswered review, nothing
 in flight and no /goal still set, in place of the mod's other prompts there. A review found
 unanswered at any turn's end of the main conversation in between, however that turn ended, stops
