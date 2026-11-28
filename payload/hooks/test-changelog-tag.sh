@@ -1057,6 +1057,73 @@ out=$(run_hook "$dir" "$MERGE 7 --squash")
 if denied "$out" && says "$out" "does not open with @here"; then pass; else fail "#3665 a post that does not open with @here merged: $out"; fi
 rm -rf "$dir"
 
+# The judge a session asks BEFORE Dan is shown the wording gives this gate's own verdict
+# (claude-config#3846). On 2026-11-27 he approved, by picker, wording whose first line was the mention
+# followed by a sentence, and only this gate read the rules, so he was asked a second time. The
+# command line `changelog-entry.js announcement-refusal <file>` is what a session now runs on the
+# wording file first, and what an approval is held to. Each rule is fed to BOTH here: the same
+# wording as a file to the command, and as the Announcement block of a pull request to this gate,
+# run as it runs at a merge. They must refuse the same wording, in the same words, and take the same.
+# wording_pr <wording>: the pull request carrying that wording as its post.
+wording_pr() {
+  jq -nc --arg post "$1" '{number: 7, url: "https://github.com/acme/widget/pull/7", author: {login: "dwright-pennie"},
+    labels: [{name: "changelog/announce"}],
+    body: ("prose\n\n## Changelog\nAgents can now hand a call back to the queue.\n\n## Announcement\n" + $post + "\n\n## Testing\nran it")}'
+}
+rule_n=0
+both_judge() {  # $1 = what the wording is, $2 = the code expected, or TAKEN, $3 = the wording
+  # $4, when given: words of the gate's own sentence, for wording whose gate sentence is about a
+  # pull request and so is not true of a file (the review of #3846, E). The command then gives the
+  # file words of its own under the same code, and the two are held to the code, the gate to $4,
+  # and the command to a sentence that says nothing of a pull request or its label.
+  local file answer said_refused said_code said_reason dir out gate_reason
+  rule_n=$((rule_n + 1))
+  file="$GATE_WORK/wording-$rule_n.md"
+  printf '%s\n' "$3" > "$file"
+  answer=$(node "$HOOK_DIR/lib/changelog-entry.js" announcement-refusal "$file" 2>/dev/null)
+  said_refused=$(printf '%s' "$answer" | jq -r 'if .refused == true then "yes" elif .refused == false then "no" else "" end' 2>/dev/null)
+  said_code=$(printf '%s' "$answer" | jq -r '.code // ""' 2>/dev/null)
+  said_reason=$(printf '%s' "$answer" | jq -r '.reason // ""' 2>/dev/null)
+  dir=$(make_repo acme/widget "$(wording_pr "$3")" "$REGISTRY_ANNOUNCES")
+  # Approved, so that wording the gate takes merges and a refusal is for what the wording holds.
+  approved_on_record "$dir"
+  out=$(run_hook "$dir" "$MERGE 7 --squash")
+  gate_reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
+  if [ "$2" = TAKEN ]; then
+    if ! denied "$out" && [ "$said_refused" = no ] && [ -z "$said_code$said_reason" ]; then pass
+    else fail "#3846 $1: the merge gate and the command line do not both take it. The command said: $answer. The gate said: $out"; fi
+  elif [ -n "${4:-}" ]; then
+    if denied "$out" && [ "$said_refused" = yes ] && [ "$said_code" = "$2" ] && [ -n "$said_reason" ] && [[ "$gate_reason" == *"$4"* ]] \
+      && [[ "$gate_reason" != *"$said_reason"* && "$said_reason" != *"in this pull request"* && "$said_reason" != *"relabel"* ]]; then pass
+    else fail "#3846 $1: the merge gate and the command line do not refuse it alike as $2, the gate saying \"$4\" and the command in words true of a file. The command said: $answer. The gate said: $out"; fi
+  else
+    if denied "$out" && [ "$said_refused" = yes ] && [ "$said_code" = "$2" ] && [ -n "$said_reason" ] && [[ "$gate_reason" == *"$said_reason"* ]]; then pass
+    else fail "#3846 $1: the merge gate and the command line do not refuse it alike, as $2 and in the same words. The command said: $answer. The gate said: $out"; fi
+  fi
+  rm -rf "$dir"
+}
+both_judge "wording that passes" TAKEN $'@here\n**Handing a call back**\n\nYou can now hand a call back to the queue.\n\n- Press Hand back\n- Pick a reason'
+both_judge "the mention sharing its line with a sentence" ANNOUNCEMENT_NO_OPENER $'@here Calls can now be handed back to the queue.\n\n- Press Hand back\n- Pick a reason'
+both_judge "an HTML comment" ANNOUNCEMENT_HTML_COMMENT $'@here\n<!-- say what agents do differently -->\nYou can now hand a call back.'
+both_judge "a dash as punctuation" ANNOUNCEMENT_DASHES $'@here\nHand back - then pick a reason.'
+both_judge "no post at all" EMPTY_ANNOUNCEMENT $' \n' "has no post under it"
+both_judge "a code span" ANNOUNCEMENT_MARKDOWN $'@here\nRun `the thing` now.'
+both_judge "a block quote" ANNOUNCEMENT_MARKDOWN $'@here\n> quoted'
+both_judge "a table" ANNOUNCEMENT_MARKDOWN $'@here\n| a | b |\n| 1 | 2 |'
+both_judge "a picture" ANNOUNCEMENT_MARKDOWN $'@here\n![shot](https://example.com/a.png)'
+both_judge "struck through text" ANNOUNCEMENT_MARKDOWN $'@here\nThis is ~~gone~~ now.'
+both_judge "a task box" ANNOUNCEMENT_MARKDOWN $'@here\n- [ ] do it'
+both_judge "a nested list" ANNOUNCEMENT_MARKDOWN $'@here\n- one\n  - inside'
+both_judge "a rule line" ANNOUNCEMENT_MARKDOWN $'@here\nAbove\n\n***\n\nBelow'
+# A bare carriage return is a line's end to the hash and was none to the rules, so a block quote
+# behind one merged and was approved (the review of this change, A).
+both_judge "a block quote hidden behind a bare carriage return" ANNOUNCEMENT_CARRIAGE_RETURN $'@here\nSomething changed.\r> a quoted line'
+# The cases above the last are every markdown rule the gate holds, counted from the library's own list, so a
+# rule added there with no case here fails this line and is not passed over (L96).
+markdown_rules=$(node -e 'process.stdout.write(String((require(process.argv[1]).UNMEASURED_MARKDOWN_NAMES || []).length))' "$HOOK_DIR/lib/changelog-entry.js" 2>/dev/null)
+if [ "$markdown_rules" = 8 ]; then pass
+else fail "#3846 the library lists ${markdown_rules:-no} markdown rules and eight are fed to the merge gate and the command line above: add a both_judge case for the new one, then change this count"; fi
+
 # Another label over an Announcement block: a post written and never drafted.
 dir=$(make_repo acme/widget "$VISIBLE_WITH_POST" "$REGISTRY_ANNOUNCES")
 out=$(run_hook "$dir" "$MERGE 7 --squash")

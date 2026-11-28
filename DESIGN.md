@@ -3698,8 +3698,102 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   the second of the record alone, which would forget the sessions the first left unread and let
   a decline clear where the first would not have.
 
+- **Wording the merge would refuse is never approved, and the rules have one reader (#3846).** On
+  2026-11-27 Dan approved, by picker, wording whose first line was the mention followed by a
+  sentence. The label hook let the label on, the merge gate refused that wording for its opener,
+  and he was asked a second time: the rules for what a post may hold were read by the merge gate
+  and by nothing that runs before it. They now have one judge, `blockRefusal` in
+  `changelog-entry.js`, which the gate calls for the pull request and which a command line,
+  `announcement-refusal`, puts to a wording file or a description. Three things ask that command:
+  a session, as the step of "how to ask him" before the file is opened; the approval library,
+  which counts no Approve of wording it refuses; and the label hook, which refuses the label on
+  such wording before it looks for an approval. The choices are the builder's, each on the
+  stricter side.
+  - The library asks the command and keeps no rule. Ruled out: the rules restated in python,
+    which is a second reader that drifts from the first on the next rule added (L370).
+  - A wording file is judged as the block it becomes, read by the block's own reader
+    (`extractAnnouncement`), so line endings, spaces at the ends of lines and blank lines round
+    the wording count for what they count for at the merge. Every rule of the BLOCK reads one
+    line at a time and no blank line breaks one, so for lines ended as a file or GitHub ends
+    them the block's verdict depends only on the normalised wording the hash is of. The rules
+    about a FILE alone, below, are the other kind on purpose: a long run of blank lines, a
+    heading and a byte order mark each refuse a file for something the hash of its wording
+    cannot show. A bare carriage return was the
+    exception (the review of this change, M1): the hash reads it as a line's end and the block's
+    reader does not, so a line start it hid (a block quote, a table, a nested list) was judged by
+    nothing, while the record held one hash for that wording and for the same lines ended
+    properly, which are refused. Wording that holds a carriage return inside a line is now
+    refused by a rule of its own, `ANNOUNCEMENT_CARRIAGE_RETURN`, first in `announcementRefusal`,
+    so the gate and the command both give it. Ruled out: making the block's reader split lines
+    as the hash does, because that reader is also how merged history is read (`parseEntry`), and
+    refusing is the stricter of the two.
+  - The command exits 1 for wording it refuses and prints its answer either way, where the file's
+    other commands exit 0 for every answer. A session that reads only the status must not be told
+    refused wording passed (L184), and the library holds the status and the answer to each other,
+    so a mismatch is an answer that cannot be read. An answer that cannot be read approves
+    nothing and lets no label on (L98).
+  - The record's lines did not change, so approvals it already held still count where their
+    wording passes. A note of refused wording keeps the wording's hash and says in `why` what
+    stops an Approve of it. Ruled out: a note with no hash, as a padded file gets, because his
+    `Not yet` about that wording would then take back by file name where it took back by hash.
+  - An approval of refused wording that the record held before the rule is a hash and no wording,
+    so the library cannot judge it. The label hook can, since it holds the block, and it judges
+    the block before any approval is looked for. Ruled out: judging after the approval is found,
+    which needs a second time bound on a hook whose bounds already add up to most of the time
+    it is registered with (above); judged first, the hash and the judging share one bound. The cost is that a call refused for
+    its wording reads no picker into the record, which the merge gate has always done the same way.
+  - Wording nobody could judge is kept apart from wording that was refused (the review of this
+    change, M3). The hash and the judging share the note hook's bound, so a judge out of time put
+    its reason in the note's `why`, a note with a `why` approves nothing, and nothing judged the
+    file again: good wording was refused for good. Such a note now also says `"unjudged": true`,
+    and the call that reads it judges the file again while the file's change time still equals
+    the one noted (`_judged_again`). The builder's choices, each the stricter of two: the note
+    keeps its `why` and its hash and gains one field, so the library as it was, reading a new
+    note, still refuses, and his `Not yet` is still recorded by the hash (ruled out: the review's
+    sketch of a null `why`, which an older reader takes as an approval wherever the note holds a
+    hash); the file must be unchanged since the note, read either side of the judging, and where
+    the note holds a hash the file must still hash to it; a file that changed while it was being
+    hashed, or could not be read, is not unjudged and stays refused; a note written before the
+    field keeps its meaning, so an old note whose `why` was a judge out of time still refuses and
+    he is asked once more. The library's bound on one question can be shortened for the suites
+    through `ANNOUNCE_APPROVAL_HASH_SECONDS`, and never lengthened.
+  - The command refuses everything the approval refuses about what a FILE holds (the review's
+    L1). The approval refused a file with more than two blank lines in a row above wording
+    (#3703) and the command a session runs first did not, so "refuses nothing" was not yet "his
+    Approve will count". The file form now refuses it as `WORDING_FILE_BLANK_RUN`, by the count
+    the approval reads. The limit is a number in each file, held equal by a suite check. Ruled
+    out: the approval reading the limit from the command's answer, which makes an older
+    `changelog-entry.js` that does not send it a reason to refuse every file. A file's size and
+    its name are not content, so the command does not judge them and how to ask him says it
+    judges what the file holds.
+  - A refusal of a file is worded for a file (the review's L2). An empty wording file was told
+    "The heading in this pull request has no post under it ... or relabel this", and a file that
+    begins with a byte order mark was refused for its opener in a sentence quoting a first line
+    that reads exactly as the mention alone. Both refusals stay, under the gate's codes
+    (`EMPTY_ANNOUNCEMENT`, `ANNOUNCEMENT_NO_OPENER`), since the merge would refuse the block such
+    a file becomes under those codes; only the file form's words changed. So the command and the
+    gate agree on the code for every rule and on the words for every rule but these two, which
+    the suites hold to the code and to a sentence that names no pull request. A file that begins
+    with its own Announcement heading is told to leave it out by the heading rule.
+  - A wording file in which any line is a heading is refused, as `WORDING_FILE_HEADING` (the
+    review of this change, M2; round 1 left it unbuilt). A pull request's block ends at the next
+    heading, so such a file can never be the block whole: the lines below the heading were
+    judged by nothing, his Approve counted, and the label hook then asked for a block equal to
+    the file, which cannot be made. It is a rule about a file and not about a block, so it sits
+    in `wordingRefusal` and the gate has no such rule: in a description the heading really does
+    end the block, and the `--body` form is unchanged.
+  - Not covered, and left for a later change (the review's L3, L4, L6 and L7). A note written by
+    the hook as it was before this change holds a hash and no `why`, was never judged, and is
+    still approved by its hash; the label hook and the merge gate judge the block, so the cost
+    is one more "ask again". A line separator (U+2028) or a vertical tab inside a line hides a
+    line start from the rules; the hash and the judge agree there, so it is the gate's own
+    reading. At the label hook the hash and the judging share the five seconds the hash had
+    alone, so a loaded Mac is told to run the command again more often. And the docstring's
+    "a note that holds no hash is judged as one with no note" is not what `_note_for` does: it
+    returns any note naming the same repository and file, and that note's `why` then refuses.
+
 `hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh`,
-`hooks/test-announce-answer-note.sh`, the #3666 and #3669 sections of `hooks/test-changelog-tag.sh`
+`hooks/test-announce-answer-note.sh`, the #3666, #3669 and #3846 sections of `hooks/test-changelog-tag.sh`
 and `skills/milestone/test-create-milestone.sh` hold it.
 
 ## Things known to be wrong and left that way
