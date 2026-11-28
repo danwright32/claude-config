@@ -126,7 +126,7 @@ printf '%s\n' 'echo ok' > "$P/locked.sh"
 chmod 000 "$P/locked.sh"
 run_here '. ./locked.sh; cat calm.sh > run.sh; bash run.sh'
 if [ -r "$P/locked.sh" ]; then
-  check "#3837 route 1: a sourced file the gate cannot open leaves cat doubted (not measured: this user reads any file)" ok
+  echo "SUITE-PART-UNMEASURED #3837 route 1: a sourced file the gate cannot open leaves cat doubted: this user can read a file with no permissions, so the case cannot be made here"
 else
   refused "#3837 route 1: a sourced file the gate cannot open leaves cat doubted"
 fi
