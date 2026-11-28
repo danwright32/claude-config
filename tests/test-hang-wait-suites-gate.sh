@@ -72,24 +72,98 @@ print(json.dumps({"session_id": "f6017250-8f33-47ac-bbb2-b82a7c319d0d", "transcr
                   "cwd": sys.argv[1], "permission_mode": "auto", "hook_event_name": "PreToolUse", "tool_name": "Bash",
                   "tool_input": {"command": "bash " + sys.argv[2], "description": "d"}, "tool_use_id": "toolu_01X"}))
 ' "$1" "$2" | SLACK_GATE_CACHE_DIR="$c" bash "$GATE" 2>&1)"; rc=$?
-  printf '%s\t%s\t%s\n' "$rc" "$2" "$(printf '%s' "$words" | tr '\n' ' ')" > "$3"
+  # Written whole and then moved into place, so a judge ended part way leaves no line rather than
+  # half of one, which would count as judged and read as the gate failing (#3656).
+  printf '%s\t%s\t%s\n' "$rc" "$2" "$(printf '%s' "$words" | tr '\n' ' ')" > "$3.part" && mv -f "$3.part" "$3"
 }
-# judge <cwd> <list file> <out file>: each path in the list judged, HW_WIDTH at a time (the suite's
-# share, read above), the lines gathered in the list's order.
+# why_ended <wait status>: what a judge's own exit status says about how it ended.
+why_ended(){
+  case "$1" in
+    ''|*[!0-9]*) printf 'left no exit status (%s)' "${1:-none}" ;;
+    127) printf 'was not a child of this suite when waited for (status 127)' ;;
+    *) if [ "$1" -gt 128 ] && [ "$1" -ne 255 ]; then printf 'was ended by signal %s' "$(( $1 - 128 ))"; else printf 'exited %s' "$1"; fi ;;
+  esac
+}
+# ended_outside <wait status> <what it printed>: whether a judge was ended by something outside it,
+# a signal or a fork the system refused, rather than by a fault of this suite (a write that failed,
+# a status lost, a clean exit with no line).
+ended_outside(){
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$1" -gt 128 ] && [ "$1" -ne 255 ] && return 0
+  case "$2" in *"fork: "*|*"Resource temporarily unavailable"*) return 0 ;; esac
+  return 1
+}
+# judge <cwd> <list file> <out file> [<judge function>]: each path in the list judged, HW_WIDTH at a
+# time (the suite's share, read above), the lines gathered in the list's order. The judge function is
+# judge_one; the controls below hand it a stand in that is ended before it writes.
+#
+# A judge's line is gathered once its own process has been waited for, one wait per judge, so the
+# gathering turns on each judge's completion and never on a time (L290). A judge that ended without
+# writing its line is judged again once, and one that ends without a line twice is written to
+# <out file>.lost (`<status>\t<path>\t<what it printed>`), for the checks to name. On 2026-11-25, at a
+# load average of 263 inside the push gate, one line in 49 went missing and the check said only
+# "48 of 49" (#3656): nothing said which script, or how its judge ended.
 judge(){
-  local i=0 p live pids=()
-  : > "$3"
+  local i=0 p live pids=() idx=() j fn="${4:-judge_one}"
+  : > "$3"; : > "$3.lost"; : > "$3.retried"
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     i=$((i + 1))
-    judge_one "$1" "$p" "$W/one.$i" &
-    pids+=("$!")
+    printf '%s\n' "$p" > "$W/path.$i"
+    rm -f "$W/one.$i"
+    "$fn" "$1" "$p" "$W/one.$i" 2> "$W/err.$i" &
+    pids+=("$!"); idx+=("$i")
     live="$(live_now "${pids[@]}")"; [ "$live" -le "$HW_MOST" ] || HW_MOST="$live"
-    if [ "${#pids[@]}" -ge "$HW_WIDTH" ]; then wait "${pids[@]}"; pids=(); fi
+    if [ "${#pids[@]}" -ge "$HW_WIDTH" ]; then
+      j=0; while [ "$j" -lt "${#pids[@]}" ]; do wait "${pids[$j]}" 2>/dev/null; printf '%s' "$?" > "$W/st.${idx[$j]}"; j=$((j + 1)); done
+      pids=(); idx=()
+    fi
   done < "$2"
-  [ "${#pids[@]}" -eq 0 ] || wait "${pids[@]}"
-  local k=1
-  while [ "$k" -le "$i" ]; do cat "$W/one.$k" >> "$3"; rm -f "$W/one.$k"; k=$((k + 1)); done
+  j=0; while [ "$j" -lt "${#pids[@]}" ]; do wait "${pids[$j]}" 2>/dev/null; printf '%s' "$?" > "$W/st.${idx[$j]}"; j=$((j + 1)); done
+  local k=1 st
+  while [ "$k" -le "$i" ]; do
+    p="$(cat "$W/path.$k")"
+    if [ ! -s "$W/one.$k" ]; then
+      st="$(cat "$W/st.$k" 2>/dev/null)"
+      printf '%s\t%s\t%s\n' "${st:-unknown}" "$p" "$(tr '\n' ' ' < "$W/err.$k" | cut -c1-300)" >> "$3.retried"
+      "$fn" "$1" "$p" "$W/one.$k" 2> "$W/err.$k" &
+      wait "$!" 2>/dev/null; printf '%s' "$?" > "$W/st.$k"
+    fi
+    if [ -s "$W/one.$k" ]; then cat "$W/one.$k" >> "$3"; else
+      st="$(cat "$W/st.$k" 2>/dev/null)"
+      printf '%s\t%s\t%s\n' "${st:-unknown}" "$p" "$(tr '\n' ' ' < "$W/err.$k" | cut -c1-300)" >> "$3.lost"
+    fi
+    rm -f "$W/one.$k" "$W/one.$k.part" "$W/path.$k" "$W/st.$k" "$W/err.$k"
+    k=$((k + 1))
+  done
+}
+# account <list file> <out file>: whether every path listed was judged, as one line on stdout.
+# `judged <n>` when all were. `unmeasured <sentence>` when the only ones missing are judges ended
+# from outside on both tries (ended_outside: a signal, or a fork refused): the gate was never asked,
+# so nothing about the gate is measured, and the runner reads that as a part unmeasured (L411).
+# `missing <sentence>` for anything else (a judge that exited 0, or 1 on a failed write, with no
+# line, or whose status was lost), which is a fault of this suite and fails.
+account(){
+  local n judged lost st path said clean="" ended=""
+  n="$(grep -c . "$1")"; judged="$(grep -c . "$2")"; lost="$(grep -c . "$2.lost")"
+  if [ "$judged" -eq "$n" ] && [ "$lost" -eq 0 ]; then printf 'judged %s\n' "$judged"; return 0; fi
+  while IFS=$'\t' read -r st path said; do
+    if ended_outside "$st" "$said"; then ended="$ended $path (its judge $(why_ended "$st") before writing its line, on both tries: ${said:-it printed nothing});"
+    else clean="$clean $path (its judge $(why_ended "$st") without writing a line: ${said:-it printed nothing});"; fi
+  done < "$2.lost"
+  if [ -z "$clean" ] && [ "$lost" -gt 0 ] && [ $((judged + lost)) -eq "$n" ]; then
+    printf 'unmeasured of the %s scripts listed, %s not judged, so whether the gate places what it reaches past lib/hang-wait.sh was not measured:%s\n' "$n" "$([ "$lost" -eq 1 ] && echo "1 was" || echo "$lost were")" "$ended"
+  else
+    local unseen="" q seen
+    # Read into a variable and matched with case, never cut piped into grep -q: under pipefail the
+    # pipeline can fail on a match when grep stops reading first.
+    seen="$(cut -f2 "$2" "$2.lost")"
+    while IFS= read -r q; do
+      [ -n "$q" ] || continue
+      case $'\n'"$seen"$'\n' in *$'\n'"$q"$'\n'*) ;; *) unseen="$unseen $q (no line, and no record of its judge);" ;; esac
+    done < "$1"
+    printf 'missing %s of %s judged;%s%s%s\n' "$judged" "$n" "$clean" "$ended" "$unseen"
+  fi
 }
 # placed_nowhere <gate words>: whether a refusal is this class, a module or file the gate could not place.
 placed_nowhere(){ case "$1" in *"a module the gate cannot find"*|*"a path the gate cannot work out"*) return 0 ;; esac; return 1; }
@@ -106,13 +180,60 @@ printf '%s\n' '#!/bin/bash' "$top" ". \"$HOOKS/lib/hang-wait.sh\"" 'f="$1"' "han
 printf '%s\n' '#!/bin/bash' "$top" ". \"$HOOKS/lib/hang-wait.sh\"" 'f="$1"' "hang_wait '[ -e \"\$f\" ]'" "$py" > "$W/ctl/tests/written.sh"
 printf '%s\n' tests/built.sh tests/written.sh > "$W/ctl.list"
 judge "$W/ctl" "$W/ctl.list" "$W/ctl.out"
-built="$(grep -F "	tests/built.sh	" "$W/ctl.out")"
-written="$(grep -F "	tests/written.sh	" "$W/ctl.out")"
-case "$built" in 2*) placed_nowhere "$built" && check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" ok \
-  || check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" "refused for another reason: ${built:0:400}" ;;
-  *) check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" "not refused: ${built:0:400}" ;; esac
-case "$written" in "0	tests/written.sh	") check "the control: the same with the condition written out is allowed" ok ;;
-  *) check "the control: the same with the condition written out is allowed" "${written:0:400}" ;; esac
+# The control's own lines are accounted for as the real ones are, so a judge of either ended from
+# outside on both tries is named and unmeasured, never read as the gate not refusing (#3656).
+got="$(account "$W/ctl.list" "$W/ctl.out")"
+case "$got" in
+  "judged "*)
+    built="$(grep -F "	tests/built.sh	" "$W/ctl.out")"
+    written="$(grep -F "	tests/written.sh	" "$W/ctl.out")"
+    case "$built" in 2*) placed_nowhere "$built" && check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" ok \
+      || check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" "refused for another reason: ${built:0:400}" ;;
+      *) check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" "not refused: ${built:0:400}" ;; esac
+    case "$written" in "0	tests/written.sh	") check "the control: the same with the condition written out is allowed" ok ;;
+      *) check "the control: the same with the condition written out is allowed" "${written:0:400}" ;; esac
+    ;;
+  "unmeasured "*) echo "SUITE-PART-UNMEASURED the control, so what the gate prints for a module placed nowhere: ${got#unmeasured }" ;;
+  *) check "the control's two scripts were judged" "${got#missing }" ;;
+esac
+
+# The controls for gathering (#3656, L1): a stand in judge, in place of judge_one, for three listed
+# paths, whose judge of the middle one is ended by SIGKILL before it writes (the loss seen at a load
+# of 263), ended only the first time, finishes cleanly with no line, or exits 1 with no line.
+# Staged, never left to load.
+# stand_in <cwd> <path> <out file>: writes a line as judge_one does, except for $SI_PATH (SI_MODE).
+stand_in(){
+  if [ "$2" = "$SI_PATH" ]; then
+    case "$SI_MODE" in
+      ended) sh -c 'kill -KILL "$PPID"' ;;
+      ended_once) [ -e "$W/si.once" ] || { : > "$W/si.once"; sh -c 'kill -KILL "$PPID"'; } ;;
+      clean) return 0 ;;
+      failed) exit 1 ;;
+    esac
+  fi
+  printf '0\t%s\t\n' "$2" > "$3.part" && mv -f "$3.part" "$3"
+}
+# Each run is in a subshell of its own whose stderr is kept aside, so the shell's own notice of a job
+# it saw killed ("Killed: 9") is not printed among this suite's results as though something broke.
+printf '%s\n' tests/a.sh tests/b.sh tests/c.sh > "$W/si.list"
+SI_PATH=tests/b.sh
+SI_MODE=ended_once; ( judge "$W" "$W/si.list" "$W/si.out" stand_in ) 2>> "$W/si.noise"; got="$(account "$W/si.list" "$W/si.out")"
+case "$got|$(cat "$W/si.out.retried")" in "judged 3|137	tests/b.sh	"*) check "the control: a judge ended before writing is judged again, and the line it then writes is counted" ok ;;
+  *) check "the control: a judge ended before writing is judged again, and the line it then writes is counted" "account said '$got', the retried record '$(cat "$W/si.out.retried")'" ;; esac
+SI_MODE=ended; ( judge "$W" "$W/si.list" "$W/si.out" stand_in ) 2>> "$W/si.noise"; got="$(account "$W/si.list" "$W/si.out")"
+case "$got" in "unmeasured of the 3 scripts listed, 1 was not judged,"*" tests/b.sh (its judge was ended by signal 9 before writing its line, on both tries"*) check "the control: a judge ended before writing on both tries is named, and is unmeasured rather than failed" ok ;;
+  *) check "the control: a judge ended before writing on both tries is named, and is unmeasured rather than failed" "account said '$got'" ;; esac
+SI_MODE=clean; ( judge "$W" "$W/si.list" "$W/si.out" stand_in ) 2>> "$W/si.noise"; got="$(account "$W/si.list" "$W/si.out")"
+case "$got" in "missing 2 of 3 judged; tests/b.sh (its judge exited 0 without writing a line"*) check "the control: a judge that finished cleanly without a line is named, and fails" ok ;;
+  *) check "the control: a judge that finished cleanly without a line is named, and fails" "account said '$got'" ;; esac
+# And account read alone, on records no judge would write: a script with neither a line nor a record.
+printf '0\ttests/a.sh\t\n' > "$W/acct.out"; printf '137\ttests/b.sh\t\n' > "$W/acct.out.lost"
+got="$(account "$W/si.list" "$W/acct.out")"
+case "$got" in "missing 1 of 3 judged;"*" tests/c.sh (no line, and no record of its judge);") check "the control: a script with neither a line nor a record of its judge is named, and fails" ok ;;
+  *) check "the control: a script with neither a line nor a record of its judge is named, and fails" "account said '$got'" ;; esac
+SI_MODE=failed; ( judge "$W" "$W/si.list" "$W/si.out" stand_in ) 2>> "$W/si.noise"; got="$(account "$W/si.list" "$W/si.out")"
+case "$got" in "missing 2 of 3 judged; tests/b.sh (its judge exited 1 without writing a line"*) check "the control: a judge that failed by itself (as a write that fails does) without a line is named, and fails rather than being unmeasured" ok ;;
+  *) check "the control: a judge that failed by itself (as a write that fails does) without a line is named, and fails rather than being unmeasured" "account said '$got'" ;; esac
 
 # The real scripts: every shell file the repository ships whose code sources lib/hang-wait.sh.
 bash "$HOOKS/lib/repo-files.sh" "$ROOT" > "$W/files" 2>"$W/files.err" || { check "the repository's files were listed" "$(cat "$W/files.err")"; }
@@ -130,8 +251,15 @@ grep -q -x -F payload/hooks/test-context-size-notice.sh "$W/suites" && grep -q -
   && check "the scripts sourcing lib/hang-wait.sh were listed ($n), the two #2668 changed among them" ok \
   || check "the scripts sourcing lib/hang-wait.sh were listed ($n), the two #2668 changed among them" "list: $(tr '\n' ' ' < "$W/suites")"
 judge "$ROOT" "$W/suites" "$W/real.out"
-judged="$(grep -c . "$W/real.out")"
-[ "$judged" -eq "$n" ] && check "every one listed was judged ($judged)" ok || check "every one listed was judged" "$judged of $n"
+while IFS=$'\t' read -r st path said; do
+  echo "NOTE: $path was judged again: its first judge $(why_ended "$st") before writing its line (${said:-it printed nothing})"
+done < "$W/real.out.retried"
+got="$(account "$W/suites" "$W/real.out")"
+case "$got" in
+  "judged "*) check "every one listed was judged (${got#judged })" ok ;;
+  "unmeasured "*) echo "SUITE-PART-UNMEASURED ${got#unmeasured }" ;;
+  *) check "every one listed was judged" "${got#missing }" ;;
+esac
 while IFS=$'\t' read -r rc path words; do
   [ "$rc" = 0 ] && continue
   # Only exit 2 is a refusal; any other code is the gate failing to judge, never a note (L11).
