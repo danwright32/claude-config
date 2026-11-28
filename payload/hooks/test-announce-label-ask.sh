@@ -40,7 +40,12 @@ fi
 WORK="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 REAL_STORE="${CLAUDE_HOME:-$HOME/.claude}/state/announce-approvals"
-real_before="$(ls -la "$REAL_STORE" 2>/dev/null | cksum)"
+# This Mac's real record as it stood before any case ran, and what a line of this suite's names: a
+# path under its temporary folder, or one of its two repositories. The last check holds the suite
+# to it: aaf_record_untouched, in lib/announce-approval-fixture.sh, which says what that check can
+# and cannot see, and whose own cases are in test-announce-approval.sh (#3669).
+OWN_MARKS=("path:$WORK" "repo:acme/" "repo:other/repo")
+real_before="$(aaf_record_mark "$REAL_STORE")"
 # Named as the real one is, so a shell command naming the record names it here too.
 STORE="$WORK/state/announce-approvals"
 REPO="$WORK/repo"
@@ -86,11 +91,13 @@ H="$(hash_text "$POST")"
 approve() { mkdir -p "$STORE"; printf '{"kind": "approved", "repo": "%s", "hash": "%s"}\n' "${1:-acme/widget}" "$H" >> "$STORE/record.jsonl"; }
 forget() { rm -rf "$STORE"; }
 # call <tool> <tool input json> [cwd]: the hook's answer, as "<decision> rc=<exit>|<reason>|<notice>".
-# TALK names a session transcript to carry (session s1); AGENT=1 makes the call a subagent's.
+# TALK names a session transcript to carry (session s1, or the one SESSION names); AGENT=1 makes the
+# call a subagent's.
 call() {
   local body rc
   body="$(python3 -c 'import json, os, sys
-d = {"hook_event_name": "PreToolUse", "tool_name": sys.argv[1], "tool_input": json.loads(sys.argv[2]), "cwd": sys.argv[3], "session_id": "s1",
+d = {"hook_event_name": "PreToolUse", "tool_name": sys.argv[1], "tool_input": json.loads(sys.argv[2]), "cwd": sys.argv[3],
+     "session_id": os.environ.get("SESSION") or "s1",
      "transcript_path": os.environ.get("TALK") or (sys.argv[3] + "/no-transcript.jsonl")}
 if os.environ.get("AGENT") == "1":
     d["agent_id"] = "a9bba4c0ffee"
@@ -238,6 +245,166 @@ check "R10 still possible: the command goes through on his picker in this sessio
 check "and his approval is written to the record" "$(grep -q "\"hash\": \"$H\"" "$STORE/record.jsonl" 2>/dev/null && echo ok || echo "no line")"
 r="$(run "$EDIT")"
 check "so a later session's command goes through on the record" "$(passed "$r" && echo ok || echo "$r")"
+forget
+# The picker's question must tell him to save the file (#3742 item 7): an edit he left unsaved in
+# the window is not in the wording that is hashed, so his Approve in a picker that does not say so
+# puts the label on nothing.
+F="$(aaf_shown "$WORK/nosave" "$WORK/nosave.jsonl" "$POST")"
+aaf_talk "$WORK/nosave.jsonl" ask acme/widget "$F" "" nosave
+r="$(TALK="$WORK/nosave.jsonl" run "$EDIT")"
+check "R10 his Approve in a picker whose question does not tell him to save the file puts no label on" "$(asks_dan "$r" && [[ "$r" == *"did not tell him to save the file"* ]] && echo ok || echo "$r")"
+check "and nothing is written to the record for it" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+aaf_talk "$WORK/nosave.jsonl" bash "$AAF_BBEDIT --front-window $F"
+aaf_talk "$WORK/nosave.jsonl" ask acme/widget "$F"
+r="$(TALK="$WORK/nosave.jsonl" run "$EDIT")"
+check "R10 still possible: asked again with the sentence, the command goes through" "$(passed "$r" && echo ok || echo "$r")"
+forget
+# An Approve with words typed beside it approves nothing (#3742 low 20; Dan, 2026-11-26): what he
+# typed is a change he wants, so the label goes on nothing and the refusal gives his words.
+F="$(aaf_shown "$WORK/typed" "$WORK/typed.jsonl" "$POST")"
+aaf_talk "$WORK/typed.jsonl" ask acme/widget "$F" "" "typed:approve, but fix line 2"
+r="$(TALK="$WORK/typed.jsonl" run "$EDIT")"
+check "R10 his Approve with words typed beside it puts no label on, and the refusal gives his words" "$(asks_dan "$r" && [[ "$r" == *"approve, but fix line 2"* && "$r" == *"approves nothing"* ]] && echo ok || echo "$r")"
+check "and no approval is written to the record for it" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+aaf_talk "$WORK/typed.jsonl" bash "$AAF_BBEDIT --front-window $F"
+aaf_talk "$WORK/typed.jsonl" ask acme/widget "$F"
+r="$(TALK="$WORK/typed.jsonl" run "$EDIT")"
+check "R10 still possible: asked again and approved with nothing typed, the command goes through" "$(passed "$r" && echo ok || echo "$r")"
+forget
+# Every picker is noted by its ids alone when he answers it (#3789), and this hook judges each noted
+# picker from its session's transcript. The command here is another session's (s2), which holds no
+# picker. An ordinary picker he answered with the approving words puts no label on and is settled;
+# his Approve in a picker the hook could not tell the source of, because the transcript did not
+# hold its line yet, puts the label on once the transcript holds it.
+noted() { ANNOUNCE_APPROVALS_DIR="$STORE" bash "$DIR/announce-answer-note.sh" 2>&1; }
+# on_record <kind> <picker> [needle]: whether the record holds a line of that kind for that picker,
+# holding the needle. Read into a variable and matched there, never piped into a quiet grep.
+on_record() {
+  local line
+  line="$(grep "\"kind\": \"$1\"" "$STORE/record.jsonl" 2>/dev/null | grep "\"picker\": \"$2\"")"
+  [[ -n "$line" && "$line" == *"${3:-}"* ]]
+}
+F="$(aaf_shown "$WORK/elsewhere" "$WORK/elsewhere.jsonl" "$POST")"
+PL="$(aaf_talk "$WORK/elsewhere.jsonl" put acme/widget "$F" plain)"
+said="$(aaf_talk "$WORK/elsewhere.jsonl" payload "$PL" acme/widget "$F" "" plain | noted)"
+aaf_talk "$WORK/elsewhere.jsonl" answer "$PL" acme/widget "$F" "Approve the wording" plain
+check "#3789 the hook that notes a picker says nothing after an ordinary one, and notes it" "$([ -z "$said" ] && on_record answered "$PL" && echo ok || echo "$said $(cat "$STORE/record.jsonl" 2>&1)")"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 #3789 an ordinary picker noted in another session, answered with the approving words, puts no label on" "$(asks_dan "$r" && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
+check "#3789 and this hook settled it, so it is read once" "$(on_record settled "$PL" && echo ok || cat "$STORE/record.jsonl" 2>&1)"
+aaf_talk "$WORK/elsewhere.jsonl" bash "$AAF_BBEDIT --front-window $F"
+said="$(AAF_PAYLOAD_FORM="answers nometadata" aaf_talk "$WORK/elsewhere.jsonl" payload toolu_elsewhere1 acme/widget "$F" | noted)"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 #3789 a note of a picker the transcript does not hold puts no label on, and the hook that noted it said nothing" "$([ -z "$said" ] && asks_dan "$r" && echo ok || echo "$said $r")"
+aaf_talk "$WORK/elsewhere.jsonl" late toolu_elsewhere1 acme/widget "$F"
+aaf_talk "$WORK/elsewhere.jsonl" answer toolu_elsewhere1 acme/widget "$F"
+r="$(SESSION=s2 AGENT=1 run "$EDIT")"
+check "#3789 a subagent's command counts his Approve in that session for the call, and writes nothing" "$(passed "$r" && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 still possible #3789: his Approve in another session, in a picker noted by its ids alone, lets the label on" "$(passed "$r" && echo ok || echo "$r")"
+check "#3789 and his approval is written to the record as the picker it came from" "$(on_record approved toolu_elsewhere1 "\"hash\": \"$H\"" && echo ok || cat "$STORE/record.jsonl" 2>&1)"
+forget
+# The same, with the file written after he answered: no hash was noted, so his Approve does not count.
+F="$(aaf_shown "$WORK/elsewhere-changed" "$WORK/elsewhere-changed.jsonl" "$POST")"
+AAF_PAYLOAD_FORM="answers nometadata" aaf_talk "$WORK/elsewhere-changed.jsonl" payload toolu_elsewhere2 acme/widget "$F" | noted >/dev/null
+aaf_talk "$WORK/elsewhere-changed.jsonl" late toolu_elsewhere2 acme/widget "$F"
+aaf_talk "$WORK/elsewhere-changed.jsonl" answer toolu_elsewhere2 acme/widget "$F"
+printf '%s\n' "$POST" > "$F"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 #3789 a file written after his answer, with no hash noted, puts no label on, and the refusal says to ask him again" "$(asks_dan "$r" && [[ "$r" == *"has changed since he answered"* && "$r" == *"ask him again"* ]] && ! grep -q '"kind": "approved"' "$STORE/record.jsonl" && echo ok || echo "$r")"
+forget
+
+echo "the label never goes on wording the merge would refuse, approved or not (#3846)"
+# On 2026-11-27 Dan approved, by picker, wording whose first line was the mention followed by a
+# sentence. This hook let the label on, on that approval, and the merge gate then refused the same
+# wording for its opener, so he was asked a second time. The rules for what a post may hold are the
+# merge gate's, and this hook and the approval now ask the gate's own judge: the label is refused
+# with the gate's code and words, and his Approve of such wording approves nothing.
+SHARED_LINE='@here Calls can now be handed back to the queue.
+
+- Press Hand back
+- Pick a reason'
+# body_with <wording>: a description carrying that wording as its Announcement block.
+body_with() { printf 'Why.\n\n## Changelog\nAgents can now hand a call back to the queue.\n\n## Announcement\n%s\n\n## Testing\nran it\n' "$1"; }
+# gate_says <file> <field>: the merge gate's judge on a wording file, asked directly.
+gate_says() { node "$ENTRY" announcement-refusal "$1" | python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]], end="")' "$2"; }
+F="$(aaf_shown "$WORK/sharedline" "$WORK/sharedline.jsonl" "$SHARED_LINE")"
+aaf_talk "$WORK/sharedline.jsonl" ask acme/widget "$F"
+body_with "$SHARED_LINE" > "$WORK/sharedline-body.md"
+WORDS="$(gate_says "$F" reason)"
+check "the merge gate's judge refuses that day's wording for its opener, which the cases below depend on" "$([ "$(gate_says "$F" code)" = ANNOUNCEMENT_NO_OPENER ] && [[ "$WORDS" == *"on a line of its own"* ]] && echo ok || echo "$(gate_says "$F" code): $WORDS")"
+r="$(TALK="$WORK/sharedline.jsonl" FAKE_BODY="$WORK/sharedline-body.md" run "$EDIT")"
+check "R10 #3846 his Approve of wording whose first line is the mention followed by a sentence puts no label on" "$(refused "$r" && echo ok || echo "$r")"
+check "#3846 the refusal holds the merge gate's code and its own words about the opener, whole" "$([ -n "$WORDS" ] && [[ "$r" == *"ANNOUNCEMENT_NO_OPENER"*"$WORDS"* ]] && echo ok || echo "$r")"
+check "#3846 and says how to ask him, naming the command that judges the file before it is opened" "$(asks_dan "$r" && [[ "$r" == *"/no-ai-tells"*"changelog-entry.js announcement-refusal <file>"*"--front-window"* ]] && echo ok || echo "$r")"
+check "R10 #3846 and no approval of it is written to the record" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+forget
+# An approval of such wording that this Mac's record already held, from before the rule, puts no
+# label on either: the merge would refuse the wording whatever was approved.
+mkdir -p "$STORE"; printf '{"kind": "approved", "repo": "acme/widget", "hash": "%s"}\n' "$(hash_text "$SHARED_LINE")" >> "$STORE/record.jsonl"
+r="$(FAKE_BODY="$WORK/sharedline-body.md" run "$EDIT")"
+check "R10 #3846 an approval of such wording the record already held puts no label on, in the gate's own words" "$(asks_dan "$r" && [[ "$r" == *"ANNOUNCEMENT_NO_OPENER"*"$WORDS"* ]] && echo ok || echo "$r")"
+forget
+# The same for a description the command gives itself, and for a rule of the markdown nobody measured.
+CODE_SPAN='@here
+Run `the thing` now.'
+F="$(aaf_shown "$WORK/codespan" "$WORK/codespan.jsonl" "$CODE_SPAN")"
+aaf_talk "$WORK/codespan.jsonl" ask acme/widget "$F"
+body_with "$CODE_SPAN" > "$REPO/codespan-body.md"
+WORDS="$(gate_says "$F" reason)"
+r="$(TALK="$WORK/codespan.jsonl" run "gh pr create --title T --label $LABEL --body-file codespan-body.md")"
+check "R10 #3846 his Approve of wording holding markdown nobody measured puts no label on, in the gate's own words" "$(asks_dan "$r" && [ -n "$WORDS" ] && [[ "$r" == *"ANNOUNCEMENT_MARKDOWN"*"$WORDS"* && "$WORDS" == *"never measured to arrive in Slack: code (a backtick)"* ]] && echo ok || echo "$r")"
+check "R10 #3846 and no approval of it is written to the record" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+forget
+# The approval itself, through this hook: the pull request holds wording that passes, and the file
+# he approved holds wording the merge would refuse. The refusal says his Approve does not count and
+# why, in the gate's words, where it used to say only that the two wordings differ.
+F="$(aaf_shown "$WORK/sharedline-file" "$WORK/sharedline-file.jsonl" "$SHARED_LINE")"
+aaf_talk "$WORK/sharedline-file.jsonl" ask acme/widget "$F"
+WORDS="$(gate_says "$F" reason)"
+r="$(TALK="$WORK/sharedline-file.jsonl" run "$EDIT")"
+check "R10 #3846 his Approve of a file the merge would refuse approves nothing, and the refusal says why in the gate's words" "$(asks_dan "$r" && [ -n "$WORDS" ] && [[ "$r" == *"his Approve for $F does not count"*"ANNOUNCEMENT_NO_OPENER"*"$WORDS"* ]] && echo ok || echo "$r")"
+check "R10 #3846 and no approval of it is written to the record" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+forget
+# Still possible: the same post with the mention alone on its first line.
+OWN_LINE='@here
+Calls can now be handed back to the queue.
+
+- Press Hand back
+- Pick a reason'
+F="$(aaf_shown "$WORK/ownline" "$WORK/ownline.jsonl" "$OWN_LINE")"
+aaf_talk "$WORK/ownline.jsonl" ask acme/widget "$F"
+body_with "$OWN_LINE" > "$WORK/ownline-body.md"
+r="$(TALK="$WORK/ownline.jsonl" FAKE_BODY="$WORK/ownline-body.md" run "$EDIT")"
+check "R10 #3846 still possible: the same post with the mention alone on its first line, approved, lets the label on" "$(passed "$r" && echo ok || echo "$r")"
+check "#3846 and his approval of it is written to the record" "$(grep -q "\"hash\": \"$(hash_text "$OWN_LINE")\"" "$STORE/record.jsonl" 2>/dev/null && echo ok || echo "no line")"
+forget
+# An answer of the judge that cannot be read lets no label on (L98): a node in front of the real one
+# that answers that one command as a broken or older lib/changelog-entry.js would.
+NOVERDICT="$WORK/node-without-the-verdict"; mkdir -p "$NOVERDICT"
+REAL_NODE="$(command -v node)"
+cat > "$NOVERDICT/node" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" announcement-refusal "*)
+    cat >/dev/null
+    case "${FAKE_VERDICT:-}" in
+      usage) echo "Usage: changelog-entry.js required-labels <owner/name>" >&2; exit 2 ;;
+      empty) printf '{}\n'; exit 0 ;;
+      refuses-and-exits-0) printf '{"refused": true, "code": "ANNOUNCEMENT_NO_OPENER", "reason": "words"}\n'; exit 0 ;;
+      *) echo "the fake node was given no FAKE_VERDICT" >&2; exit 9 ;;
+    esac ;;
+  *) exec "$REAL_NODE" "$@" ;;
+esac
+SH
+chmod +x "$NOVERDICT/node"
+approve
+for verdict in usage empty refuses-and-exits-0; do
+  r="$(FAKE_VERDICT="$verdict" REAL_NODE="$REAL_NODE" PATH="$NOVERDICT:$PATH" run "$EDIT")"
+  check "R10 #3846 an answer of the judge that cannot be read ($verdict) lets no label on, approved wording or not, and says so" "$(refused "$r" && [[ "$r" == *"did not say whether the merge would refuse"* ]] && echo ok || echo "$r")"
+done
+r="$(run "$EDIT")"
+check "#3846 and the same command goes through once the judge answers, so it was the unread answer that refused it" "$(passed "$r" && echo ok || echo "$r")"
 forget
 
 echo "one approval covers one pull request (Dan, 2026-11-25: \"One approval, one pull request\")"
@@ -403,6 +570,7 @@ forget
 for cmd in "$FORGED | python3 $LIBRARY check --repo acme/widget --hash $H --pr 7 --claim" \
            "$FORGED | python3 -B ~/.claude/hooks/lib/announce-approval.py check --claim --repo acme/widget --hash $H" \
            "python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "printf '{}' | python3 $LIBRARY answered" \
            "cd $DIR && /usr/bin/python3 -B -I lib/announce-approval.py used --repo acme/widget --hash $H --pr 7 --unread x" \
            "env ANNOUNCE_APPROVALS_DIR=/tmp/other python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
            "$FORGED | xargs -0 python3 $LIBRARY check --claim" \
@@ -464,8 +632,64 @@ check "a command naming neither the label nor the record passes" "$(passed "$r" 
 r="$(call Write "$(python3 -c 'import json, sys; print(json.dumps({"file_path": sys.argv[1], "content": "x"}))' "$WORK/plain.md")")"
 check "a Write naming neither passes" "$(passed "$r" && echo ok || echo "$r")"
 
+echo "his answer about announcing a feature is read into the record before the milestone helper runs (#3669)"
+# The helper reads the record only, so the hook that sees the call running it reads his picker in.
+HELPER_CALL="bash ~/.claude/skills/milestone/create-milestone.sh acme/widget /tmp/plan.json"
+decided_lines() { local n; n="$(grep -c '"kind": "decided"' "$STORE/record.jsonl" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+forget
+D="$WORK/deciding.jsonl"; aaf_new "$D"
+aaf_talk "$D" decide acme/widget "Hand back"
+r="$(TALK="$D" run "ls -la")"
+check "a call that does not run the helper reads nothing in" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
+r="$(TALK="$D" AGENT=1 run "$HELPER_CALL")"
+check "a subagent's call running the helper passes and writes nothing" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
+r="$(TALK="$D" run "$HELPER_CALL")"
+check "a call running the helper passes, with nothing said" "$(passed "$r" && echo ok || echo "$r")"
+check "and his answer in this session's picker is on the record before it runs" "$([ "$(decided_lines)" = 1 ] && grep -q '"answer": "yes"' "$STORE/record.jsonl" && echo ok || cat "$STORE/record.jsonl" 2>/dev/null)"
+r="$(TALK="$D" run "$HELPER_CALL")"
+check "run again, it writes no second line" "$(passed "$r" && [ "$(decided_lines)" = 1 ] && echo ok || echo "$r $(decided_lines) lines")"
+# What stands between his answer and the record is said beside the call, which still runs.
+aaf_talk "$D" decide acme/widget "Hand over" "Not announcing" prefilled
+r="$(TALK="$D" run "$HELPER_CALL")"
+check "a picker that was never put to him is said beside the call, to Dan and the session" "$([[ "$r" == "none rc=0||"*"Hand over"*"already filled in"* ]] && echo ok || echo "$r")"
+# His answer in ANOTHER session, in a picker the real hook noted by its ids alone (#3789: the
+# transcript did not hold its line yet and the hook's copy carried no metadata). The call running
+# the helper is session s2's, which holds no picker, so the note is all that leads to his answer.
+forget
+E="$WORK/deciding-elsewhere.jsonl"; aaf_new "$E"
+# Session s2's own transcript, which holds no picker at all.
+S2="$WORK/deciding-s2.jsonl"; aaf_new "$S2"
+said="$(AAF_PAYLOAD_FORM=nometadata aaf_talk "$E" decide-payload toolu_decelse1 acme/widget "Hand back" "Not announcing" | noted)"
+check "#3669 the hook that notes a picker says nothing after a discovery picker, and notes it" "$([ -z "$said" ] && on_record answered toolu_decelse1 && echo ok || echo "$said $(cat "$STORE/record.jsonl" 2>&1)")"
+r="$(TALK="$S2" SESSION=s2 run "$HELPER_CALL")"
+check "R9 #3669 a note of a discovery picker the transcript does not hold reads no answer in, and is not settled" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && ! on_record settled toolu_decelse1 && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+aaf_talk "$E" decide-late toolu_decelse1 acme/widget "Hand back"
+aaf_talk "$E" decide-answer toolu_decelse1 acme/widget "Hand back" "Not announcing"
+r="$(TALK="$S2" SESSION=s2 AGENT=1 run "$HELPER_CALL")"
+check "#3669 a subagent's call running the helper writes nothing of that picker" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
+r="$(TALK="$S2" SESSION=s2 run "$HELPER_CALL")"
+check "R9 still possible #3669: his Not announcing in another session, in a picker noted by its ids alone, is on the record before the helper runs" "$(passed "$r" && on_record decided toolu_decelse1 '"answer": "no"' && [ "$(decided_lines)" = 1 ] && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+# An approval picker noted in that same session is none of this job's: the call that runs the helper
+# gives it no line, and the label command still finds his Approve afterwards.
+forget
+F2="$(aaf_shown "$WORK/both-kinds" "$WORK/both-kinds.jsonl" "$POST")"
+AAF_PAYLOAD_FORM=nometadata aaf_talk "$WORK/both-kinds.jsonl" payload toolu_bothapprove acme/widget "$F2" | noted >/dev/null
+aaf_talk "$WORK/both-kinds.jsonl" late toolu_bothapprove acme/widget "$F2"
+aaf_talk "$WORK/both-kinds.jsonl" answer toolu_bothapprove acme/widget "$F2"
+r="$(TALK="$S2" SESSION=s2 run "$HELPER_CALL")"
+check "#3669 a call running the helper gives a noted approval picker no line: it is neither settled nor approved there" "$(passed "$r" && ! on_record settled toolu_bothapprove && ! on_record approved toolu_bothapprove && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 still possible #3669: and the label command then finds his Approve, in that picker noted by its ids alone" "$(passed "$r" && on_record approved toolu_bothapprove && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+# One job per call: a call that also names the label is judged for the label alone, inside the time
+# the hook is registered with, and reads no answer in.
+forget
+r="$(TALK="$D" run "$HELPER_CALL; echo $LABEL")"
+check "a call running the helper that also names the label reads nothing in" "$([ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
+r="$(broken "$HELPER_CALL")"
+check "with its rule file gone, a call running the helper is refused, saying the hook did not run" "$([[ "$r" == *"announce-label-ask.sh failed"*" rc=2" ]] && echo ok || echo "$r")"
+
 echo "the record is this suite's own"
-check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
+check "no case wrote to this Mac's real record" "$(aaf_record_untouched "$REAL_STORE" "$real_before" "${OWN_MARKS[@]}")"
 
 echo "  $pass passed, $fail failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

@@ -9,7 +9,8 @@ import { ACTION } from './page.ts'
 
 // Where a sentence, or a numbered or bulleted line, begins, so an imperative is one said to Dan
 // ("Click **Deploy**", "2. Choose **Carnegie Hall**"), not the word inside a sentence about code.
-const LEAD = String.raw`(?<=^|[.!?]["')\]*_]*\s+|^\s*(?:\d+[.)]\s*|[-*]\s+)?(?:\*\*)?)`
+// Shared with typed.ts (#3652), which asks the same of a slash command.
+export const LEAD = String.raw`(?<=^|[.!?]["')\]*_]*\s+|^\s*(?:\d+[.)]\s*|[-*]\s+)?(?:\*\*)?)`
 
 // #1613: read over whole turns, "waiting on you" was said of a decision, a question, a card, a kind
 // of thing ("replies waiting on you") or this check itself as often as of a step: of the 43 turns of
@@ -39,7 +40,7 @@ const REACH = 500
 // Inside a quotation opened earlier on its line: quoted, not said to Dan ("a sentence like "it's
 // waiting on you" never fires"). The quote right before the phrase is QUOTED's, below. #1613 for
 // "waiting on you", #1680 for #863's other four.
-const quotedOnLine = (before: string): boolean => {
+export const quotedOnLine = (before: string): boolean => {
   const line = before.slice(before.lastIndexOf('\n') + 1)
   const count = (rx: RegExp) => (line.match(rx) ?? []).length
   return count(/"/g) % 2 === 1 || count(/“/g) > count(/”/g)
@@ -96,6 +97,28 @@ const NEEDS_YOU_TO = /\bneeds? you to (?:run|paste|apply|click|approve|enter|sig
 const YOUR_STEP = /\byour (?:manual )?step\b/gi
 const notQuoted = (plain: string, at: number): boolean => !quotedOnLine(plain.slice(0, at))
 
+// #3842: on 2026-11-27 the permission check refused a call and the session handed Dan the step in
+// five wordings no phrase read. A phrase stays only while the turns it catches hold steps for Dan,
+// so each was counted by itself with this file's own matcher (tools/steps-phrase-count.ts) over the
+// personal MacBook's 10,501 turns of 30 days, on 2026-11-27, and the two that caught steps are read
+// (the counts: docs/mods-design.md "Manual steps"). Not read, having been said in no turn there:
+// "Still yours:" (as first written it was said once, of two open questions), "needs you to set"
+// and a thing left "because my update was refused by the permission check". The turn a call is
+// refused in is held for the refusal itself, whatever its words (hooks/turn.ts).
+// "One step left for you.", "The one step left for you": a step counted or singled out. The bare
+// words "step left for you" were also said of none ("no manual step left for you") and of an
+// issue's title ("a step left for you after a refusal"), so neither is it. A count in figures
+// begins with a digit other than 0, so "0 steps left for you" is the none it says (review of pull
+// request 3854).
+const STEP_LEFT_FOR_YOU = /\b(?:one|two|three|four|five|[1-9]\d*|the (?:one|last|only)) (?:(?:more|manual|small|last) )?steps? left for you\b/gi
+// "the one only you can do", naming one thing; never "something only you can do", said of a rule.
+const ONLY_YOU_CAN_DO = /\b(?:the|that|this|one) (?:(?:one|last|only|remaining) )?(?:one|step|thing|part) only you can do\b/gi
+/** #3842's wordings the check reads, each by the name the count prints for it. */
+export const AFTER_REFUSAL: ReadonlyMap<string, RegExp> = new Map([
+  ['step left for you', STEP_LEFT_FOR_YOU],
+  ['the one only you can do', ONLY_YOU_CAN_DO],
+])
+
 // #1811: numbered steps handed to Dan, a numbered line that begins with something a person does at a
 // screen, counted only where the message holds two or more. Measured on 2026-10-27 over the 19,420
 // messages Claude wrote in this Mac's transcripts: 20 held two or more such lines, and every one of
@@ -120,17 +143,17 @@ const SAVE_FILE = new RegExp(`${LEAD}save (?:the|this|that|your) (?:file|sheet|d
 const CMD_S = /(?:\b[Pp]ress(?:ing)?\s+|\b[Ww]ith\s+|\()(?:\*\*)?(?:(?:Cmd|Command|CMD)\s*[+-]\s*|⌘\s*)S\b/g
 // Said of what Claude, or something else, will do or did ("The watcher will wait, then tell me",
 // "I saved it with Cmd+S"), or of a later, conditional press ("when you press Cmd+S"): no step now.
-const NOT_DANS = /(?:\b(?:I|I've|I'd|I'm|We|we|We've|we've)\b|(?<!\byou )\b(?:will|would|should)\b|(?<!\byou)'ll\b)/
-const LATER = /\b(?:before|when|whenever|if|until|after|once|in case)\s+(?:you\s+)?$/i
+export const NOT_DANS = /(?:\b(?:I|I've|I'd|I'm|We|we|We've|we've)\b|(?<!\byou )\b(?:will|would|should)\b|(?<!\byou)'ll\b)/
+export const LATER = /\b(?:before|when|whenever|if|until|after|once|in case)\s+(?:you\s+)?$/i
 // A sentence ends at a full stop, question or exclamation mark followed by white space, or at a line
 // break: never at the dot inside "config.json" or "v2.1", which cut "I saved config.json with Cmd+S"
 // down to "json with Cmd+S" and lost the "I" (lessons review of #1965 at 60730eb).
-const sentenceStart = (before: string): number => {
+export const sentenceStart = (before: string): number => {
   let start = 0
   for (const m of before.matchAll(/[.!?](?=\s)|\n/g)) start = m.index + 1
   return start
 }
-const dansNow = (plain: string, at: number): boolean => {
+export const dansNow = (plain: string, at: number): boolean => {
   const before = plain.slice(0, at)
   const sentence = before.slice(sentenceStart(before))
   return !quotedOnLine(before) && !NOT_DANS.test(sentence) && !LATER.test(sentence)
@@ -146,6 +169,7 @@ const ALSO: ReadonlyMap<RegExp, (plain: string, at: number, end: number) => bool
   [NUMBERED, numberedTwice],
   [THEN_TELL_ME, dansNow],
   [CMD_S, dansNow],
+  ...[...AFTER_REFUSAL.values()].map(rx => [rx, notQuoted] as const),
 ])
 
 // Each says a step is Dan's to do. "waiting on you" never matches "waiting on your", and a step is
@@ -184,6 +208,8 @@ export const PHRASES: readonly RegExp[] = [
   THEN_TELL_ME,
   SAVE_FILE,
   CMD_S,
+  // #3842: the wordings that handed Dan a step after a refused call and caught steps when counted.
+  ...AFTER_REFUSAL.values(),
 ]
 
 // #1811: Claude saying plainly that none of the steps it handed over are Dan's to do now, which
@@ -193,12 +219,25 @@ export const PHRASES: readonly RegExp[] = [
 // now" led by "none of" or "nothing", so a sentence that hands a step over never reads as one.
 const NONE_NOW = /\b(?:none of (?:these|those|the|its|them|this page's|the page's)(?: (?:steps?|edits?|changes?|items?|checks?))?(?: on (?:the|this|that) page)?|nothing(?: here| on (?:the|this|that) page)?) (?:is|are) (?:still )?yours to do now\b/gi
 
-/** Whether any of `texts`, Claude's messages of the turn, says none of the steps are Dan's to do now. */
-export const saysNoneNow = (texts: readonly string[]): boolean =>
+/** Whether any of `texts` holds `sentence` said, not quoted. */
+const saysPlainly = (texts: readonly string[], sentence: RegExp): boolean =>
   texts.some(text => {
     const plain = text.replace(/’/g, "'")
-    return [...plain.matchAll(NONE_NOW)].some(m => !quotedOnLine(plain.slice(0, m.index ?? 0)))
+    return [...plain.matchAll(sentence)].some(m => !quotedOnLine(plain.slice(0, m.index ?? 0)))
   })
+
+/** Whether any of `texts`, Claude's messages of the turn, says none of the steps are Dan's to do now. */
+export const saysNoneNow = (texts: readonly string[]): boolean => saysPlainly(texts, NONE_NOW)
+
+// #3842: the one line that answers the hold for a call the permission check refused, when nothing
+// from it is left for Dan. The hold gives the sentence, "Nothing from the refusal is yours to do.";
+// said of "that refusal", "the refusals" or "the refused call" it counts too, and quoted it does
+// not. It must begin "nothing from" and name a refusal, so no sentence about other work is read as
+// it by accident, and saying a call was refused is not saying this.
+const NOTHING_FROM_REFUSAL = /\bnothing from (?:the|that|this|those|these) (?:refusals?|refused (?:calls?|actions?|commands?)) is yours to do\b/gi
+
+/** Whether any of `texts` says nothing from a refused call is Dan's to do (#3842). */
+export const saysNothingFromRefusal = (texts: readonly string[]): boolean => saysPlainly(texts, NOTHING_FROM_REFUSAL)
 
 // The phrase said the other way round: "nothing else is waiting on you", "this is no longer
 // waiting on you". Only a negation attached to the phrase counts, in the same clause and within
