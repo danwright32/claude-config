@@ -1162,14 +1162,45 @@ suite_note() { notes_n=$((notes_n + 1)); printf 'SUITE-NOTE %s\n' "$1"; }
 # passes on the fastest runner model and up to about 55 percent on the slowest; 36 already let 21
 # percent through on the slowest and caught about 1 percent on the fastest. The counted work and the
 # slow reader check below (1.25 times the run's own one lesson reading) are unaffected.
+#
+# SUITE-COLD OFF macOS: THE LIMIT FOLLOWS THE RUNNER'S SPEED (#3863, Dan's choice of 2026-11-27:
+# "Limit follows machine speed (Recommended)"). It is written line:<headroom>:<seconds>:<units>:
+# <fastest unit>, and cost.py holds each reading to the headroom times (<units> + <seconds> over the
+# runner's unit), the unit being the whole run's median yardstick sample (cost_unit). With these
+# numbers that is 63.0 units plus 2.65 s over the unit: 95.3 units on a runner at 0.0822 s a unit,
+# 83.2 at 0.1314 s and 79.9 at 0.1574 s.
+# Why not one number: on the same gate work the reading moves with the processor the job lands on.
+# Measured from 34 pull request run attempts of 2026-11-27, the first reading had a middle of 80.5
+# units on fast runners (a unit under 0.100 s), 73.3 on middle ones and 66.2 on slow ones (0.140 s
+# and over), so one limit of 83.2 sat 3 percent over a fast runner's ordinary reading, which one
+# runner's readings cross between runs, and 26 percent over a slow one's.
+# The numbers: 2.25 s and 53.5 units are the least squares line through those 34 first readings,
+# seconds against the unit the case had then. 1.178 is the headroom 83.2 had over the median
+# reading of all runners (70.6). The line reads 70.6 at 0.1314 s a unit, so there the limit is 83.2;
+# a slower runner gets a lower limit and a faster one a higher. 0.0768 s is the fastest runner the
+# line was fitted on: a faster one is held to that runner's 97.5 units, because the line was not
+# measured past it and would only raise the limit there.
+# What it gives up: a rise under about 18 percent on a fast runner passes, where 83.2 caught 3 to 5
+# percent. The line is two measured numbers, so when the gate's work for this command or GitHub's
+# processors change a lot, fit it again from the notes a passing run prints (L316). macOS keeps 67
+# by the least sample: nothing was read on a Mac.
 cost_limit() {
   local platform="${2:-$(uname -s)}"
   case "$1" in
     one-lesson) case "$platform" in Darwin) echo 36 ;; *) echo 46 ;; esac ;;
     short-budget) cost_limit one-lesson "$platform" ;;
-    suite-cold) case "$platform" in Darwin) echo 67 ;; *) echo 83.2 ;; esac ;;
+    suite-cold) case "$platform" in Darwin) echo 67 ;; *) echo line:1.178:2.25:53.5:0.0768 ;; esac ;;
     own-suite) case "$platform" in Darwin) echo 17 ;; *) echo 18 ;; esac ;;
     *) echo "no cost limit is set for $1" >&2; return 1 ;;
+  esac
+}
+# A limit as a check's name says it: a number of units of the sample it is in, or, for a limit that
+# follows the runner's speed (#3863), its headroom and the line it is read from. Worded from the
+# limit itself, so a name cannot say one limit while the case is held to another.
+limit_words() {  # <a limit, as cost_limit gives it> <the yardstick sample, as cost_unit gives it>
+  case "$1" in
+    line:*) awk -F: -v s="$2" '{ printf "%.1f percent of the line by the runner\047s speed, %s s and %s units of the yardstick\047s %s sample,", ($2 - 1) * 100, $3, $4, s }' <<< "$1" ;;
+    *) printf "%s units of the yardstick's %s sample" "$1" "$2" ;;
   esac
 }
 # The yardstick sample each cost case's readings are divided by, for a platform, the one place it
@@ -1182,9 +1213,10 @@ cost_limit() {
 # samples, recorded on issue #3406: by the least sample 16 of them read past 91 on the same gate
 # work, every one with a first judgement that ran out of the gate's seconds; the least sample
 # catches the runner's fastest moment, while a judgement of 7 to 15 s spans its slow and fast
-# spells alike. The limit, 83.2, keeps the headroom 91 had: 91 over the median green first
+# spells alike. The limit set with it, 83.2, kept the headroom 91 had: 91 over the median green first
 # reading by the least sample (77.2) is 1.178, times the median green first reading by the median
-# sample of the whole run (70.6). The median is the WHOLE run's (Dan's choice of 2026-11-26, picker
+# sample of the whole run (70.6). That headroom is now held over a line by the runner's speed
+# (#3863, cost_limit above), read at this same median. The median is the WHOLE run's (Dan's choice of 2026-11-26, picker
 # 3.71: "3.71.1 Whole run median (Recommended)"), the rule 83.2 was measured with: cost.py divides
 # every reading by the median of every sample the case took. Judged that way, all 139 of those run
 # attempts give 137 green, none red, and 2 that cannot be told (runs 45752799634 and 45825401342,
@@ -1226,7 +1258,9 @@ limit_default() {
 check "one claude-sync lesson is held to 36 units on macOS and 46 on Linux (#3170)" "$(limit_is one-lesson 36/46)"
 check "where the gate's seconds run out it is held to the one lesson limit on each platform (#3170)" \
   "$(limit_tied short-budget one-lesson)"
-check "bash tests/test-claude-sync.sh is held to 67 units on macOS and 83.2 on Linux (#3406)" "$(limit_is suite-cold 67/83.2)"
+check "bash tests/test-claude-sync.sh is held to 67 units on macOS and, on Linux, to 17.8 percent over the line of 2.25 s and 53.5 units, read no faster than 0.0768 s a unit (#3406, #3863)" "$(limit_is suite-cold 67/line:1.178:2.25:53.5:0.0768)"
+check "a limit is worded for a check's name as its units, or as the line it follows (#3863)" \
+  "$(got="$(limit_words 67 least) | $(limit_words line:1.178:2.25:53.5:0.0768 median)"; want="67 units of the yardstick's least sample | 17.8 percent of the line by the runner's speed, 2.25 s and 53.5 units of the yardstick's median sample,"; [ "$got" = "$want" ] && echo ok || echo "it worded them '$got'")"
 # The yardstick sample each case's readings are divided by, asked for by platform name as the
 # limits are, so a Mac run holds the Linux choice too (#3406).
 unit_pair() { printf '%s/%s' "$(cost_unit "$1" Darwin 2>&1)" "$(cost_unit "$1" Linux 2>&1)"; }
@@ -1342,8 +1376,33 @@ PY
   check "claude-sync is read once in a run, and sh_binds answers as it did (#2784)" "$work"
 
   cat > "$T/cost.py" <<'PY'
-import json, os, re, resource, statistics, subprocess, sys, tempfile, time
-hook, cs, ceiling = sys.argv[1], sys.argv[2], float(sys.argv[3])
+import json, math, os, re, resource, statistics, subprocess, sys, tempfile, time
+hook, cs = sys.argv[1], sys.argv[2]
+# The limit is a number of units, or a line by the runner's speed (#3863), written
+# line:<headroom>:<seconds>:<units>:<fastest unit>: a judgement on a runner whose unit is u may take
+# the headroom times (<seconds> + <units> x u), which in units is the headroom times (<units> +
+# <seconds> / u). The reading of some runners sits higher than others on the same gate work, the
+# faster the higher, and one number of units holds the fastest to a few percent and the slowest to
+# a quarter; the line holds each to the same share over what a runner of its speed takes. A unit
+# faster than <fastest unit>, the fastest runner the line was fitted on, is read as that unit, so
+# the limit in units never passes that runner's: the line was not measured there and would only
+# rise. Anything else is refused, never read as a number or given a default.
+LINE = None
+if sys.argv[3].startswith("line:"):
+    try:
+        LINE = tuple(float(x) for x in sys.argv[3].split(":")[1:])
+    except ValueError:
+        LINE = ()
+    if len(LINE) != 4 or not all(x > 0 and math.isfinite(x) for x in LINE) or LINE[0] < 1:
+        print("the limit %s is not one this check reads: a line is line:<headroom>:<seconds>:<units>:<fastest unit>, four numbers above zero with a headroom of 1 or more, so no limit could be placed (#3863)" % sys.argv[3]); sys.exit()
+else:
+    fixed_ceiling = float(sys.argv[3])
+def ceiling_at(unit):
+    """The limit in units for a runner whose yardstick unit takes this many seconds."""
+    if LINE is None:
+        return fixed_ceiling
+    headroom, seconds, units, fastest = LINE
+    return headroom * (units + seconds / max(unit, fastest))
 # --line <command line> judges that line instead of claude-sync lessons (#2918).
 line = sys.argv[5] if sys.argv[4] == "--line" else " ; ".join("%s lesson %s" % (cs, l) for l in sys.argv[4:])
 # The yardstick is a fixed workload sharing no code and no input with the gate (#2918, Dan's decision
@@ -1415,8 +1474,17 @@ if os.environ.get("SLACK_GATE_COST_REPLAY"):
 UNIT_KIND = os.environ.get("SLACK_GATE_COST_UNIT", "least")
 if UNIT_KIND not in ("least", "median"):
     print("SLACK_GATE_COST_UNIT is %r, and the unit is the least or the median yardstick sample" % UNIT_KIND); sys.exit()
+if LINE is not None and UNIT_KIND != "median":
+    # The line was fitted against the median sample, and by the least each reading has a unit of
+    # its own, so no one limit could be named for the case.
+    print("a limit that follows the runner's speed is read at the median yardstick sample, and SLACK_GATE_COST_UNIT is %r (#3863)" % UNIT_KIND); sys.exit()
 def unit_of(samples):
-    return statistics.median(samples) if UNIT_KIND == "median" else min(samples)
+    unit = statistics.median(samples) if UNIT_KIND == "median" else min(samples)
+    # A unit that is no time at all cannot place a reading or a limit. The case fails on it in
+    # words: it must never pass, and never answer unmeasured, which counts as no failure (#3863).
+    if not (unit > 0 and math.isfinite(unit)):
+        print("the runner's speed could not be measured: the %s yardstick sample read %r s, which is no time a unit of work can take, so no reading can be held to a limit and this case fails (#3863)" % (UNIT_KIND, unit)); sys.exit()
+    return unit
 samples = [yard() for _ in range(5)]
 payload = json.dumps({"session_id": "s", "transcript_path": "/tmp/t.jsonl", "cwd": "/", "permission_mode": "auto",
                       "hook_event_name": "PreToolUse", "tool_name": "Bash",
@@ -1552,9 +1620,15 @@ for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3
     elif (cold and not afresh) or (warm and "hit" not in said):
         # Its figure is worded at the end, from the final readings (#3406).
         unfit.append((len(ratios) - 1, " | ".join(s[:80] for s in said) or "nothing"))
-    if len(ratios) >= need and min(ratios)[0] <= ceiling:
+    # A line's limit is read at the unit every reading so far was just divided by, the whole run's
+    # median so far, so the reading and its limit always come from the same samples (#3863).
+    if len(ratios) >= need and min(ratios)[0] <= ceiling_at(unit):
         break
 ratio, spent, unit = min(ratios)
+# The limit the verdict reads: a number of units as given, or the line's at the final unit, which
+# the case stopped on. Printed to one place as the readings are, and judged unrounded.
+ceiling = ceiling_at(unit)
+ceiling_text = "%s" % ceiling if LINE is None else "%.1f" % ceiling
 # The side texts, worded now that the readings are final: a judgement that ran out with the unit
 # it was read at, which by the whole run's median is the final unit (#3406, picker 3.71) and by the
 # least is the least of the samples taken by then, as ever; a sample the cache misread, and the
@@ -1582,7 +1656,7 @@ log = os.environ.get("SLACK_GATE_COST_LOG")
 if log:
     with open(log, "a") as f:
         f.write("%s %s: %.1f (%.2f s of processor time, unit %.3f s, ceiling %s, samples %s%s%s; %s)\n"
-                % (os.environ.get("SLACK_GATE_COST_LABEL", "?"), line[-40:], ratio, spent, unit, ceiling,
+                % (os.environ.get("SLACK_GATE_COST_LABEL", "?"), line[-40:], ratio, spent, unit, ceiling_text,
                    ", ".join("%.1f" % r[0] for r in ratios),
                    "; the gate's 11 s ran out on this machine, after %s, so those were read on the step clock"
                    % " and ".join(ran_out_text) if ran_out else "",
@@ -1594,7 +1668,10 @@ if log:
                    % (", ".join("%.3f" % r[1] for r in ratios),
                       ", ".join(("%.4f median of %d" if UNIT_KIND == "median" else "%.4f from %d") % (r[2], n) for r, n in zip(ratios, taken)),
                       len(samples), ", ".join("%.4f" % y for y in samples),
-                      min(samples), statistics.median(samples), max(samples))))
+                      min(samples), statistics.median(samples), max(samples))
+                   # How a limit that follows the runner's speed was reached, so the record alone
+                   # says why its ceiling is that figure. No bar, bracket or colon, as above.
+                   + ("; ceiling by the runner's speed, %s times %s units and %s s over the unit, the unit read as no faster than %s s" % (LINE[0], LINE[2], LINE[1], LINE[3]) if LINE is not None else "")))
 if unfit:
     print("%d of the %d samples of this measurement from %s, so the least of them (%s) is not the cost this limit is for: %s"
           % (len(unfit), len(ratios),
@@ -1623,10 +1700,11 @@ if filled_here and ratio <= ceiling:
 if (ratio > ceiling and ran_out and len(ran_out) == len(ratios)
         and os.environ.get("SLACK_GATE_COST_RAN_OUT_UNMEASURED") == "1"):
     print("unmeasured: every judgement of this case ran out of the gate's seconds on this machine, after %s, so each was read on the step clock instead, at %s units against the limit of %s, and a reading taken only on the step clock is not held to the limit, while a sample that finishes inside the seconds is held to it as ever (#3406)"
-          % (" and ".join(ran_out_text), ", ".join("%.1f" % r[0] for r in ratios), ceiling))
+          % (" and ".join(ran_out_text), ", ".join("%.1f" % r[0] for r in ratios), ceiling_text))
     sys.exit()
 print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processor time, %.1f units of the fixed yardstick (%.3f s each), past %s, in each of %d samples (%s)"
-      % (spent, ratio, unit, ceiling, len(ratios), ", ".join("%.1f" % r[0] for r in ratios)))
+      % (spent, ratio, unit, ceiling_text, len(ratios), ", ".join("%.1f" % r[0] for r in ratios))
+      + (", the limit for a runner of this speed being %s times %s units and %s s over its unit (#3863)" % (LINE[0], LINE[2], LINE[1]) if LINE is not None and ratio > ceiling else ""))
 PY
   export SLACK_GATE_COST_LOG="$T/cost.log"
   several="one-lesson"
@@ -1684,9 +1762,11 @@ fi
 # unit inside the budget. Measured on 2026-11-13 in readings of claude-sync: about 22 before #2918
 # (21.5 to 24 under load), about 15 after; on 2026-11-15 in units: 44.8 to 45.7 at a load of 11.
 #
-# THE LIMIT IS 67 ON macOS, BY THE LEAST YARDSTICK SAMPLE, AND 83.2 OFF IT, BY THE MEDIAN (#3406,
-# Dan's choice of 2026-11-26, "3.65.1 Median, limit 83.2, Linux only (Recommended)"; the
-# measurement is at cost_unit above). Until then Linux was 91 by the least sample, set as follows.
+# THE LIMIT IS 67 ON macOS, BY THE LEAST YARDSTICK SAMPLE, AND OFF IT A LINE BY THE RUNNER'S SPEED,
+# BY THE MEDIAN (#3863; the line and its measurement are at cost_limit above). From 2026-11-26
+# until then Linux was 83.2 by the median (#3406, Dan's choice of 2026-11-26, "3.65.1 Median, limit
+# 83.2, Linux only (Recommended)"; the measurement is at cost_unit above), and before that 91 by
+# the least sample, set as follows.
 #
 # 67 ON macOS AND 91 OFF IT, BOTH BY THE LEAST SAMPLE (#3406, Dan's choice of 2026-11-23: "Top reading plus 15%
 # (Recommended)"). Each is the highest reading that platform gave with the gate as it has been
@@ -1730,6 +1810,8 @@ fi
 cold_ceiling="$(cost_limit suite-cold)"
 # And the yardstick sample that limit is in, the median off macOS since 2026-11-26 (cost_unit).
 cold_unit="$(cost_unit suite-cold)"
+# The limit in words, for the names of the checks held to it (#3863).
+cold_within="$(limit_words "$cold_ceiling" "$cold_unit")"
 # A cost case's answer from cost.py, counted: ok or a failure as every check is, and where cost.py
 # answered unmeasured, a part this machine could not measure, in the one shape run-all-tests reads
 # for that (L411, #3170, #3406, Dan's decisions of 2026-11-21, "Build it", and 2026-11-26). The line
@@ -1746,7 +1828,7 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_COST_UNIT="$cold_unit" SLACK_GATE_COST_RAN_OUT_UNMEASURED=1 SLACK_GATE_PHASE_LOG="$T/phases.log" SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$cold_ceiling" --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
   # tools/ci-cold-cost-streak.sh finds this case's unmeasured line by its start, "#3406: bash
   # tests/test-claude-sync.sh is judged within", and its suite holds the two equal.
-  cost_case "bash tests/test-claude-sync.sh is judged within $cold_ceiling units of the yardstick's $cold_unit sample on $(uname -s) (#2918, #3167)" "$cost" "#3406"
+  cost_case "bash tests/test-claude-sync.sh is judged within $cold_within on $(uname -s) (#2918, #3167)" "$cost" "#3406"
   # The reading, on a passing run too (#3167). run-all-tests prints a suite's output only when it
   # fails, so until 2026-11-17 CI's log held this measurement only for runs past the ceiling, and the
   # runner's own distribution, the premise of the ceiling (L316), could not be read from any log. A
@@ -1789,12 +1871,12 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     cost="$(SLACK_GATE_COST_LABEL=suite-slowed SLACK_GATE_COST_UNIT="$cold_unit" SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET=1000000000 python3 -B "$T/cost.py" "$T/slow-gate/slack-drafts-only-gate.sh" "$CS" "$cold_ceiling" --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
     case "$cost" in
       "judging it took"*) cost=ok ;;
-      ok) cost="the slowed gate read within $cold_ceiling, so this limit passes a gate that slow: $(grep '^suite-slowed' "$T/cost.log")" ;;
+      ok) cost="the slowed gate read within $cold_within so this limit passes a gate that slow: $(grep '^suite-slowed' "$T/cost.log")" ;;
     esac
-    check "a gate whose reader is eleven times as slow is past the $cold_ceiling unit limit for bash tests/test-claude-sync.sh on $(uname -s) (#3167)" "$cost"
+    check "a gate whose reader is eleven times as slow is past the limit of $cold_within for bash tests/test-claude-sync.sh on $(uname -s) (#3167)" "$cost"
   else
     # With a claude-sync to judge the copy is always made above, so its absence is a fault, not a skip.
-    check "a gate whose reader is eleven times as slow is past the $cold_ceiling unit limit for bash tests/test-claude-sync.sh on $(uname -s) (#3167)" "the slowed copy of the gate was not made at $T/slow-gate, so this limit was not seen to fail"
+    check "a gate whose reader is eleven times as slow is past the limit of $cold_within for bash tests/test-claude-sync.sh on $(uname -s) (#3167)" "the slowed copy of the gate was not made at $T/slow-gate, so this limit was not seen to fail"
   fi
   # A cached case's answer goes through cost_case above: where the cache it was handed was never
   # filled, it is unmeasured.
@@ -1911,12 +1993,114 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     "$(replay_cold 0 "[$(rc_out 7.3), $(rc_in 106.2), $(rc_out 11.5), $(rc_in 93.4), $(rc_out 11.6), $(rc_in 91.4)]")"
   # cost_case turns that answer into the suite's unmeasured line, under #3406 and with the start
   # tools/ci-cold-cost-streak.sh finds it by, and never into a pass or a failure.
-  cold_line="$(pass=0; fail=0; cost_case "bash tests/test-claude-sync.sh is judged within 83.2 units of the yardstick's median sample on Linux (#2918, #3167)" "unmeasured: every judgement of this case ran out" "#3406"; echo "counted $pass $fail")"
+  cold_line="$(pass=0; fail=0; cost_case "bash tests/test-claude-sync.sh is judged within $(limit_words "$(cost_limit suite-cold Linux)" "$(cost_unit suite-cold Linux)") on Linux (#2918, #3167)" "unmeasured: every judgement of this case ran out" "#3406"; echo "counted $pass $fail")"
   case "$cold_line" in
-    "SUITE-PART-UNMEASURED #3406: bash tests/test-claude-sync.sh is judged within 83.2 units of the yardstick's median sample on Linux (#2918, #3167): every judgement of this case ran out"$'\n'"counted 0 0") cold_line=ok ;;
+    "SUITE-PART-UNMEASURED #3406: bash tests/test-claude-sync.sh is judged within 17.8 percent of the line by the runner's speed, 2.25 s and 53.5 units of the yardstick's median sample, on Linux (#2918, #3167): every judgement of this case ran out"$'\n'"counted 0 0") cold_line=ok ;;
     *) cold_line="cost_case printed: $cold_line" ;;
   esac
   check "an unmeasured cold answer is printed as one SUITE-PART-UNMEASURED #3406 line and counted as neither a pass nor a failure (#3406)" "$cold_line"
+  # THE LIMIT THAT FOLLOWS THE RUNNER'S SPEED (#3863, Dan's choice of 2026-11-27: "Limit follows
+  # machine speed (Recommended)"), on planted records through cost.py's own loop, at Linux's unit
+  # and limit as the cold case is run (L1). A planted record is a runner whose every yardstick
+  # sample is one figure, so that figure is its unit, with judgements of made up seconds. The
+  # seconds are written out here and never worked out from the limit under test, so a limit that
+  # moves is seen to move. The line is 2.25 s and 53.5 units: 6.648 s on a fast runner (0.0822 s a
+  # unit, the middle of the fast runs of 2026-11-27, 80.9 units), 9.280 s on an ordinary one
+  # (0.1314 s, where the line reads the 70.6 units that 83.2 was set from, so the two limits meet
+  # there) and 10.671 s on a slow one (0.1574 s, 67.8 units). The limit is 1.178 times the line:
+  # 95.3, 83.2 and 79.9 units.
+  speed_limit="$(cost_limit suite-cold Linux)"
+  planted() {  # <the unit, s> <each judgement's seconds, out:<s> for one that ran out...>: a record on a runner that steady
+    local u="$1" j="" s
+    shift
+    for s in "$@"; do
+      case "$s" in
+        out:*) j="$j${j:+, }{\"exit\": 2, \"stderr\": \"BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call: it stopped after 11 seconds\", \"seconds\": ${s#out:}, \"said\": [\"qos: not raised: not macOS\", \"miss: no signing key\"]}" ;;
+        *) j="$j${j:+, }{\"seconds\": $s, \"said\": [\"qos: not raised: not macOS\", \"miss: no signing key\", \"stored\"]}" ;;
+      esac
+    done
+    printf '{"yard": [%s], "judgements": [%s]}' "$u, $u, $u, $u, $u, $u, $u, $u, $u, $u, $u, $u, $u, $u, $u, $u, $u" "$j"
+  }
+  replay_at() {  # <the limit> <the unit: least or median> <a record>: cost.py's answer and its log line
+    local d
+    d="$(mktemp -d "$T/replay.XXXXXX")" && mkdir "$d/cache" || { echo "no folder to replay in"; return; }
+    printf '%s\n' "$3" > "$d/record.json"
+    env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING -u SLACK_GATE_COST_SAMPLES -u SLACK_GATE_COST_ATTEMPTS \
+      SLACK_GATE_COST_UNIT="$2" SLACK_GATE_COST_RAN_OUT_UNMEASURED=1 SLACK_GATE_COST_LABEL=replay-speed SLACK_GATE_COST_LOG="$d/cost.log" \
+      SLACK_GATE_COST_REPLAY="$d/record.json" SLACK_GATE_CACHE_DIR="$d/cache" \
+      python3 -B "$T/cost.py" "$HOOK" "$CS" "$1" --line "bash tests/test-claude-sync.sh" 2>&1
+    sed 's/^/logged: /' "$d/cost.log" 2>/dev/null
+  }
+  replayed "an ordinary reading on a fast runner, 6.648 s at 0.0822 s a unit, passes under that runner's limit of 95.3 units (#3863)" \
+    "ok*logged: replay-speed *: 80.9 (*ceiling 95.3, samples 80.9;*" "$(replay_at "$speed_limit" median "$(planted 0.0822 6.648)")"
+  replayed "an ordinary reading on an ordinary runner, 9.280 s at 0.1314 s a unit, passes under 83.2 units, the limit it had (#3863)" \
+    "ok*logged: replay-speed *: 70.6 (*ceiling 83.2, samples 70.6;*" "$(replay_at "$speed_limit" median "$(planted 0.1314 9.280)")"
+  replayed "an ordinary reading on a slow runner, 10.671 s at 0.1574 s a unit, passes under that runner's limit of 79.9 units (#3863)" \
+    "ok*logged: replay-speed *: 67.8 (*ceiling 79.9, samples 67.8;*" "$(replay_at "$speed_limit" median "$(planted 0.1574 10.671)")"
+  # A real rise, each judgement 20 percent over the line, fails at every speed. On the slow runner
+  # that is 81.4 units, which 83.2 let through.
+  replayed "a gate 20 percent dearer fails on a fast runner, 97.0 units past 95.3 (#3863)" \
+    "judging it took at least*past 95.3, in each of 3 samples (97.0, 97.0, 97.0)*" "$(replay_at "$speed_limit" median "$(planted 0.0822 7.977 7.977 7.977)")"
+  replayed "a gate 20 percent dearer fails on an ordinary runner, 84.7 units past 83.2 (#3863)" \
+    "judging it took at least*past 83.2, in each of 3 samples (84.7, 84.7, 84.7)*" "$(replay_at "$speed_limit" median "$(planted 0.1314 11.136 11.136 11.136)")"
+  replayed "a gate 20 percent dearer fails on a slow runner, 81.4 units past 79.9 (#3863)" \
+    "judging it took at least*past 79.9, in each of 3 samples (81.4, 81.4, 81.4)*" "$(replay_at "$speed_limit" median "$(planted 0.1574 12.805 12.805 12.805)")"
+  replayed "that slow runner's 81.4 units passed the one limit of 83.2, so the slow runner is held tighter than it was (#3863)" \
+    "ok*ceiling 83.2, samples 81.4;*" "$(replay_at 83.2 median "$(planted 0.1574 12.805 12.805 12.805)")"
+  # The headroom is 17.8 percent at each speed: 17 percent over the line passes, 18.5 fails.
+  replayed "17 percent over the line passes on a fast runner, 94.6 units under 95.3 (#3863)" \
+    "ok*samples 94.6;*" "$(replay_at "$speed_limit" median "$(planted 0.0822 7.778)")"
+  replayed "18.5 percent over the line fails on a fast runner, 95.8 units past 95.3 (#3863)" \
+    "judging it took at least*past 95.3, in each of 3 samples (95.8, 95.8, 95.8)*" "$(replay_at "$speed_limit" median "$(planted 0.0822 7.878 7.878 7.878)")"
+  replayed "17 percent over the line passes on a slow runner, 79.3 units under 79.9 (#3863)" \
+    "ok*samples 79.3;*" "$(replay_at "$speed_limit" median "$(planted 0.1574 12.485)")"
+  replayed "18.5 percent over the line fails on a slow runner, 80.3 units past 79.9 (#3863)" \
+    "judging it took at least*past 79.9, in each of 3 samples (80.3, 80.3, 80.3)*" "$(replay_at "$speed_limit" median "$(planted 0.1574 12.645 12.645 12.645)")"
+  # Never looser than 83.2 on a runner of ordinary speed or slower: a reading of 83.3 units, just
+  # past the limit it replaces, still fails at 0.1314 s a unit and at every slower speed.
+  replayed "83.3 units still fails on an ordinary runner, where the limit is the 83.2 it was (#3863)" \
+    "judging it took at least*past 83.2, in each of 3 samples (83.3, 83.3, 83.3)*" "$(replay_at "$speed_limit" median "$(planted 0.1314 10.946 10.946 10.946)")"
+  replayed "83.3 units still fails on a slow runner, where the limit is 79.9 (#3863)" \
+    "judging it took at least*past 79.9, in each of 3 samples (83.3, 83.3, 83.3)*" "$(replay_at "$speed_limit" median "$(planted 0.1574 13.111 13.111 13.111)")"
+  replayed "83.3 units still fails on a runner slower than any the line was fitted on, where the limit is 73.6 (#3863)" \
+    "judging it took at least*past 73.6, in each of 3 samples (83.3, 83.3, 83.3)*" "$(replay_at "$speed_limit" median "$(planted 0.2500 20.825 20.825 20.825)")"
+  # What the choice changes: on a fast runner a reading between 83.2 and that runner's own limit
+  # now passes. 84.1 units at 0.0822 s is the first reading of run 46080507399 attempt 2.
+  replayed "84.1 units on a fast runner, which 83.2 failed, passes under that runner's limit of 95.3 (#3863)" \
+    "ok*ceiling 95.3, samples 84.1;*" "$(replay_at "$speed_limit" median "$(planted 0.0822 6.913 6.913 6.913)")"
+  replayed "the same record fails by the one limit of 83.2, so the replay shows the change and not a record that always passed (#3863)" \
+    "judging it took at least*past 83.2, in each of 3 samples (84.1, 84.1, 84.1)*" "$(replay_at 83.2 median "$(planted 0.0822 6.913 6.913 6.913)")"
+  # The line is not followed past the fastest runner it was fitted on (0.0768 s a unit, 97.5
+  # units): carried on, it would give a runner at 0.0500 s a unit 116 units.
+  replayed "a runner faster than any the line was fitted on is held to the fastest fitted runner's 97.5 units, and 100.0 fails (#3863)" \
+    "judging it took at least*past 97.5, in each of 3 samples (100.0, 100.0, 100.0)*" "$(replay_at "$speed_limit" median "$(planted 0.0500 5.000 5.000 5.000)")"
+  replayed "on that runner 97.0 units passes under 97.5 (#3863)" \
+    "ok*ceiling 97.5, samples 97.0;*" "$(replay_at "$speed_limit" median "$(planted 0.0500 4.850)")"
+  # A runner whose speed cannot be measured fails in words. It is never a pass, and never the
+  # unmeasured answer, which counts as neither a pass nor a failure.
+  replayed "a yardstick that read no time at all fails the case, saying the runner's speed could not be measured (#3863)" \
+    "the runner's speed could not be measured*" "$(replay_at "$speed_limit" median "$(planted 0 6.648)")"
+  replayed "a yardstick that read no number fails the case the same way (#3863)" \
+    "the runner's speed could not be measured*" "$(replay_at "$speed_limit" median "$(planted NaN 6.648)")"
+  replayed "a case held to a number of units by the least sample fails the same way on a yardstick that read no time (#3863)" \
+    "the runner's speed could not be measured*" "$(replay_at 91 least "$(planted 0 6.648)")"
+  check "that answer is counted as a failure by cost_case, never as a part this machine could not measure (#3863)" \
+    "$(got="$(pass=0; fail=0; cost_case "a planted cold case" "$(replay_at "$speed_limit" median "$(planted 0 6.648)")" "#3406" > /dev/null; echo "$pass $fail")"; [ "$got" = "0 1" ] && echo ok || echo "cost_case counted $got passes and failures")"
+  # A limit cost.py cannot read is refused, never read as a number or given a default.
+  replayed "a line with a number missing is refused (#3863)" \
+    "the limit line:1.178:2.25:53.5 is not one this check reads*" "$(replay_at line:1.178:2.25:53.5 median "$(planted 0.0822 6.648)")"
+  replayed "a line whose headroom is under 1, which would hold a runner below its own ordinary reading, is refused (#3863)" \
+    "the limit line:0.9:2.25:53.5:0.0768 is not one this check reads*" "$(replay_at line:0.9:2.25:53.5:0.0768 median "$(planted 0.0822 6.648)")"
+  replayed "a limit that follows the runner's speed is refused with the least sample, since it is read at the whole run's median (#3863)" \
+    "a limit that follows the runner's speed is read at the median yardstick sample*" "$(replay_at "$speed_limit" least "$(planted 0.0822 6.648)")"
+  # Where every judgement ran out of the gate's seconds the case is unmeasured as before (#3406),
+  # and says the limit this runner had; one judgement that finished past it still fails.
+  replayed "on a slow runner, every judgement run out and 81.4 units on the step clock is unmeasured, against that runner's 79.9 (#3863)" \
+    "unmeasured: every judgement of this case ran out of the gate's seconds on this machine, after 11.2 s at 0.157 s a unit and 11.2 s at 0.157 s a unit and 11.2 s at 0.157 s a unit, so each was read on the step clock instead, at 81.4, 81.4, 81.4 units against the limit of 79.9*" \
+    "$(replay_at "$speed_limit" median "$(planted 0.1574 out:11.2 12.805 out:11.2 12.805 out:11.2 12.805)")"
+  replayed "on a slow runner, one judgement that finished inside the seconds past 79.9 still fails (#3863)" \
+    "judging it took at least*past 79.9, in each of 3 samples (81.4, 81.4, 81.4)*" \
+    "$(replay_at "$speed_limit" median "$(planted 0.1574 out:11.2 12.805 12.805 out:11.2 12.805)")"
   # The Linux unit and limit on CI's own records (#3406, L48): slack-drafts-cost-fixtures holds
   # pull request runs of 2026-11-25 and 2026-11-26, each with its yardstick samples in the order
   # taken and its seconds as the log printed them, replayed through cost.py's own loop at Linux's
@@ -1931,6 +2115,15 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # median it reads 89.4, 85.4 and 84.7, and must fail. Each record is replayed by the
   # least sample and 91 too, the rule CI judged it by, and must give CI's own verdict and readings,
   # so the replay is seen to be the run it stands for.
+  # Since #3863 Linux's limit is the line by the runner's speed, so that first replay is by the
+  # line: each record holds the readings the line stops on and the limit its runner gets
+  # (line_readings, line_limit), and the made up record, on a runner of ordinary speed (0.13 s a
+  # unit, a limit of 82.8), must still fail. Each record is replayed by the median and 83.2 as
+  # well, with the verdict and readings it had under that limit (median_readings). The two records
+  # added then are run 46080507399's two attempts of 2026-11-27, fast runners (0.089 and 0.082 s a
+  # unit) that 83.2 failed on work no different from the runs beside them: they must fail by 83.2
+  # with the readings CI printed (83.9 for the 83.8 it printed first, the samples here being the
+  # four places its note holds), and pass by the line on their first reading.
   ci_records="$DIR/slack-drafts-cost-fixtures/ci-cold-records.jsonl"
   # shellcheck disable=SC2016
   ci_replayed="$(python3 -B - "$ci_records" "$T/cost.py" "$HOOK" "$CS" "$T" "$(cost_unit suite-cold Linux)" "$(cost_limit suite-cold Linux)" "${REPO:+$REPO/tools/gate-cost-rows.py}" 2>&1 <<'PY'
@@ -1957,24 +2150,33 @@ for line in open(records):
     rec = json.loads(line)
     kinds[rec["kind"]] += 1
     name = "run %s %s" % (rec["run"], rec["attempt"]) if rec["run"] != "constructed" else "the made up record"
+    def judged(said, logged, want_fail, readings, past):
+        readings = ", ".join(readings)
+        if want_fail:
+            good = said.startswith("judging it took") and ("past %s, in each of 3 samples (%s)" % (past, readings)) in said
+        else:
+            good = said == "ok" and " median of " in logged and " from " not in logged.split("yardstick per reading", 1)[-1].split(";", 1)[0]
+        # The record holds the final figures, each reading over the median of every sample taken, and
+        # tools/gate-cost-rows.py reproduces each from the printed seconds and unit.
+        good = good and ", ceiling %s, samples %s;" % (past, readings) in logged and logged.endswith("\nrows check: ok")
+        # A judgement that ran out is noted with the unit it was read at, and by the median of the whole
+        # run that is the final unit, the one the record names, never the median of the samples so far
+        # (#3406). No apostrophe anywhere in this program: macOS bash 3.2 pairs quotes inside a heredoc
+        # held in a command substitution, so one apostrophe breaks the suite.
+        final = re.search(r"unit ([0-9.]+) s,", logged)
+        good = good and bool(final) and all(u == final.group(1) for u in re.findall(r" s at ([0-9.]+) s a unit", logged))
+        return "ok" if good else "cost.py answered %r, logged %r" % (said[:300], logged[-300:])
+    # By the limit the cold case is held to now, the line by the speed of the runner (#3863): the
+    # record holds the readings that rule stops on (line_readings) and the limit that runner gets
+    # (line_limit), both worked out apart from cost.py, from the rule as the issue words it.
     said, logged = run(rec, unit, limit)
-    want_fail = rec["kind"] == "constructed-20-percent-dearer"
-    readings = ", ".join(rec["median_readings"])
-    if want_fail:
-        good = said.startswith("judging it took") and ("past %s, in each of 3 samples (%s)" % (float(limit), readings)) in said
-    else:
-        good = said == "ok" and " median of " in logged and " from " not in logged.split("yardstick per reading", 1)[-1].split(";", 1)[0]
-    # The record holds the final figures, each reading over the median of every sample taken, and
-    # tools/gate-cost-rows.py reproduces each from the printed seconds and unit.
-    good = good and ", samples %s;" % readings in logged and logged.endswith("\nrows check: ok")
-    # A judgement that ran out is noted with the unit it was read at, and by the median of the whole
-    # run that is the final unit, the one the record names, never the median of the samples so far
-    # (#3406). No apostrophe anywhere in this program: macOS bash 3.2 pairs quotes inside a heredoc
-    # held in a command substitution, so one apostrophe breaks the suite.
-    final = re.search(r"unit ([0-9.]+) s,", logged)
-    good = good and bool(final) and all(u == final.group(1) for u in re.findall(r" s at ([0-9.]+) s a unit", logged))
-    print("%s\t%s\t%s" % (rec["kind"], name, "ok" if good else "cost.py answered %r, logged %r" % (said[:300], logged[-300:])))
-    if rec["run"] != "constructed":
+    print("%s\t%s\t%s" % (rec["kind"], name, judged(said, logged, rec["kind"] == "constructed-20-percent-dearer", rec["line_readings"], rec["line_limit"])))
+    # And by the one limit of 83.2, which the cold case was held to from 2026-11-26 until #3863, with
+    # the verdict and the readings it gave then: the two fast runners it failed on unchanged work
+    # fail here, so each is seen to be the run it stands for.
+    said, logged = run(rec, unit, "83.2")
+    print("at-83.2\t%s\t%s" % (name, judged(said, logged, rec["kind"] in ("constructed-20-percent-dearer", "fast-red-at-83.2-now-green"), rec["median_readings"], "83.2")))
+    if "least_readings" in rec:
         said, logged = run(rec, "least", "91")
         least = ", ".join(rec["least_readings"])
         # A run where every sample ran out answers unmeasured since #3763, with the same readings.
@@ -2006,7 +2208,7 @@ for line in open(records):
         wrote = open(p).read().strip() if os.path.exists(p) else ""
         good = wrote.endswith("7.3 s at 0.158 s a unit, provisional: the median of the 7 yardstick samples taken by then")
         print("side-unfilled\tthe ran out note run %s %s leaves for the cached case\t%s" % (rec["run"], rec["attempt"], "ok" if good else "it wrote %r" % wrote[:300]))
-short = [k for k, n in (("red-now-green", 7), ("green-stays-green", 5), ("constructed-20-percent-dearer", 1)) if kinds[k] < n]
+short = [k for k, n in (("red-now-green", 7), ("green-stays-green", 5), ("constructed-20-percent-dearer", 1), ("fast-red-at-83.2-now-green", 2)) if kinds[k] < n]
 print("count\tthe records\t%s" % ("ok" if not short else "too few records of %s in %s: %s" % (", ".join(short), records, dict(kinds))))
 PY
 )"
@@ -2015,9 +2217,11 @@ PY
     [ -n "$kind" ] || continue
     ci_seen=$((ci_seen + 1))
     case "$kind" in
-      red-now-green) check "$name, red by the least sample and 91, passes by the whole run's median sample and $(cost_limit suite-cold Linux) (#3406)" "$verdict" ;;
-      green-stays-green) check "$name, green by the least sample and 91, stays green by the whole run's median sample and $(cost_limit suite-cold Linux) (#3406)" "$verdict" ;;
-      constructed-20-percent-dearer) check "$name, a gate 20 percent dearer than the median green reading, fails by the whole run's median sample and $(cost_limit suite-cold Linux) (#3406)" "$verdict" ;;
+      red-now-green) check "$name, red by the least sample and 91, passes by the whole run's median sample and the limit by the runner's speed (#3406, #3863)" "$verdict" ;;
+      green-stays-green) check "$name, green by the least sample and 91, stays green by the whole run's median sample and the limit by the runner's speed (#3406, #3863)" "$verdict" ;;
+      constructed-20-percent-dearer) check "$name, a gate 20 percent dearer than the median green reading on a runner of ordinary speed, fails by the whole run's median sample and the limit by the runner's speed (#3406, #3863)" "$verdict" ;;
+      fast-red-at-83.2-now-green) check "$name, a fast runner red at 83.2 on unchanged work, passes by the limit by the runner's speed (#3863)" "$verdict" ;;
+      at-83.2) check "$name replayed by the whole run's median sample and 83.2, the limit until #3863, gives the verdict and readings it gave then (#3406)" "$verdict" ;;
       control) check "$name replayed by the least sample and 91 gives CI's own verdict and readings (#3406)" "$verdict" ;;
       count) check "the CI records replayed for the Linux unit hold enough of each kind (#3406)" "$verdict" ;;
       side-unfit) check "$name names that sample by its final figure, by the whole run's median (#3406)" "$verdict" ;;
@@ -2025,7 +2229,7 @@ PY
       *) check "a CI record replayed for the Linux unit says what it is (#3406)" "$kind $name $verdict" ;;
     esac
   done <<< "$ci_replayed"
-  [ "$ci_seen" -ge 28 ] && ci_seen=ok || ci_seen="only $ci_seen answers came back from replaying $ci_records: $ci_replayed"
+  [ "$ci_seen" -ge 45 ] && ci_seen=ok || ci_seen="only $ci_seen answers came back from replaying $ci_records: $ci_replayed"
   check "every CI record for the Linux unit was replayed (#3406)" "$ci_seen"
   # A machine too slow for the gate's budget, stood in for by a copy of the gate whose budget is a
   # fifth of a second, judging the one lesson line (#3170, L411): the seconds run out, cost.py reads
