@@ -2550,6 +2550,95 @@ of about 35 ms either way in the cases where both arms run the same code. The le
 asking from inside the two readers that already run would add no process, at the price of the
 same code in two inline scripts or a library the gate must refuse without.
 
+**A command string an inline script hands to a shell, a pattern, and a script file's links
+(#3689).** Three routes were let through, each staged on stand in files first. The words of
+`os.system('cp x payload/y')` sit in a quoted string with spaces in it, which the match for a
+quoted payload path never read; #3537 read such a string for `ln` alone. `rm pay*/hooks/x.sh`
+names no payload folder and the shell writes it out as one. And `bash mk.sh` or `python3 mk.py`
+made a link that nothing read, since only an inline script was.
+
+The string is read by the readers a typed command already has and no third. It is found after a
+call that runs a command (the names #3537 chose, plus php's and AppleScript's), cut into commands
+by `lib/shell-words.py`, and each is judged by the gate's own loop over segments, which grows as
+strings are found, so a `cd` inside the string, a shell it runs and a string inside a string are
+all read as typed. The shared reader could not do the first step alone: it reads shell, and which
+quoted text a python or perl call hands to a shell is not shell. Nothing read before is skipped,
+so no verdict can turn from refused to allowed, and the two suites that existed pass with the same
+counts. A value the script fills in (an f string, a `+`, a `%`) is read as a shell variable would
+be, so a path holding one is judged as a typed path holding `$X` is. Where the program itself is a
+value, nothing can be told, and that is refused in words that say so, narrowed as an unreadable
+call always was: only when the call names a `payload/` path or runs inside a payload folder, so a
+script in another project that runs a value is not refused for a config it never touches.
+
+A pattern is written out in the real path step, as the files it matches at that moment and each
+word of a list in braces, and each is judged as that file typed directly is, a file with more
+than one name included. At most 512 are read. More than that, or a `**`, is refused as untold
+only where the pattern's fixed part is in a checkout at risk, since a refusal for every large
+pattern anywhere on the disk would be one nobody keeps.
+
+A script file is read as it is on disk when the gate runs, which was the open question: read it,
+or refuse what was not read. Both, on the safe side. A shell script is read by the reading
+`lib/shell-words.py` already has for the other gates (#2301), one it runs included; one too large
+for that reader, up to 4 MB, is searched for its link commands as text; a python, perl, ruby,
+node, php, deno or bun script is searched for the calls that make a link. Only a link, and only one whose
+path can be placed: this repository's suites make links in temporary folders named by a variable,
+in at least eleven files, and judging each as the payload write it may be would refuse running
+them from a session with no hold. A script file that cannot be read (not there, named by a value,
+too large) is refused in its own words when the call names a `payload/` path besides the script,
+and only for a script the command itself runs. One the command writes from its own heredoc is
+read from that text.
+
+Two faults in these readings were found in review on 2026-11-27 and closed before the change
+merged (#3775). The segments of a command string filled the set of paths that the read of the
+whole command leaves out, so an `open(` call written over two lines was let through when a string
+in the same script named the same path after a cd the gate follows and the shell does not (one in
+brackets, or a `pushd` and a `popd`): a write to the checkout the command runs in, which main
+refused. That read now asks only what the segments of the command itself placed. And the payload
+path named besides a script that could not be read was looked for with every occurrence of every
+script path the command runs taken out as plain text, so a script named `a` hid `payload/`, and a
+script run by its payload path hid the same path given as a word to the unread script. Only the
+word where a script is run is taken out now, once for each time the command runs it. The old
+search is still asked beside the new one, and a command either refuses is refused: taking every
+occurrence out could also make the word `payload/` appear where a script name sat against it
+inside a longer word (a script named `x` beside `xpayload/hooks`), and whether that accidental
+refusal goes is a choice left to Dan in the pull request. Over the 99
+made up commands of that review, none that main refuses is let through after the first fix (four
+before it); that is a measurement over those commands and no proof for every command.
+
+The reading of script files is held to 8 files the gate opens itself (a python, perl, ruby, node,
+php, deno or bun script, a file run by its path whose first line names no shell, and a shell
+script too large for the shared reader); a shell script that reader takes is not counted. What
+counts toward the 8 is a file the gate goes on to open (#3775). As first shipped the count went up for every occurrence of a script being run,
+before anything was known about the file, and the loop stopped at the ninth. A test suite runs
+its hook by a name holding a value (`bash "$HOOK"`) dozens of times, and the gate opens none of
+those, so the stop refused the run for want of reading files it would never have read. Measured
+on 2026-11-26 on the personal MacBook by asking the installed gate about each suite's plain run
+command, one ask each: 85 of 411 refused (84 of the 410 suites, and `run-all-tests.sh`), 1,937
+occurrences counted in them, 1,935 of those a name holding a value, and no file the loop would
+have opened had it gone on. It went live at 12:43 PM ET and was reverted the same afternoon
+(pull request 3776). Three things let it through, and each is now closed. The one test of the
+count typed 9 different files that exist, directly in the command, so the limit fired on the
+shape chosen for it (L48, L147): the suite now holds a name with a value, the same file again, a
+file that is not there, and files run from inside a script file. The count over a month of
+recorded commands ran with the reading of script files switched off, so the loop under test
+never ran in it. And the suites were run under the gate installed at the time, which was the old
+one: `tests/test-suite-runs-pass-write-gate.sh` now asks the gate in the checkout about every
+suite's run command, so a change that refuses one fails before it merges.
+
+Counting only what is opened leaves the limit at 8 and the refusal past it in the same words. A
+file is counted once for each directory it is run in, never once in all: a relative path in it
+lands somewhere else when it is run from somewhere else, so it is read again there. Carrying the
+loop on past the names it cannot open also reads the link commands written after them, which the
+stop had left unread and, in a call naming no payload path, let through with nothing said: a
+script that ran nine scripts and then linked a payload folder was allowed.
+
+Measured 2026-11-26 on the personal MacBook at a load of about 8 to 10, two rounds of 15 samples
+an arm: a command with no interpreter went from a median of 127 to 128 ms to 133 to 134 ms; a
+copy typed directly from 197 to about 210 ms (the real path step now loads two more modules); an
+inline script running a copy from about 130 ms to 208 to 237 ms, because its string now has
+destinations and so pays for the real path step as the typed copy always did; a command running a
+script file was the same within noise.
+
 The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
 `LESSONS.md` and its index, which carry the other Mac's real additions.

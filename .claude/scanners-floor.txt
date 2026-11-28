@@ -49,6 +49,7 @@ tests/test-hang-wait-suites-gate.sh
 tests/test-moved-to-local.sh
 tests/test-payload-secret-scan.sh
 tests/test-stat-order.sh
+tests/test-suite-runs-pass-write-gate.sh
 tests/test-undated-measurements.sh
 tests/test-work-names-tree.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-bad-byte-locale.sh

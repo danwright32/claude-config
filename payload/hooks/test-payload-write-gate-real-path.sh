@@ -61,7 +61,10 @@ ln "$FIX/elsewhere/twice.txt" "$FIX/links/twice-again.txt"
 
 HOLD="$FIX/hold"
 PIDF="$FIX/watch.pid"
-( bash -c 'exec -a "'"$FIX"'/src/claude-sync watch" sleep 300' </dev/null >/dev/null 2>&1 &
+# It sleeps longer than the suite may run (SUITE_WALL_DEFAULT is 1200 seconds): at 300 a run slowed
+# past five minutes by a loaded Mac lost its watcher partway, and every refusal expected after that
+# came back allowed (seen in the sibling suite on 2026-11-26, #3775).
+( bash -c 'exec -a "'"$FIX"'/src/claude-sync watch" sleep 1500' </dev/null >/dev/null 2>&1 &
   printf '%s\n' "$!" > "$PIDF" ) </dev/null >/dev/null 2>&1
 WPID="$(cat "$PIDF" 2>/dev/null)"
 for _ in $(seq 1 200); do

@@ -879,6 +879,47 @@ busy Mac on 2026-11-25. `hooks/test-payload-write-gate-real-path.sh` holds the c
 files; its numbered path and letter case cases report themselves unmeasured on a system that has
 neither.
 
+Three more routes are read (#3689), each only ever adding a refusal. A command string an inline
+script hands to a shell (`os.system`, `subprocess` given one string or a list of words, perl, ruby,
+php and awk `system`, node `execSync`, a command in backquotes) is read the way that command typed
+directly is: cut into commands by `lib/shell-words.py` and judged by the same loop, in the
+directory the script runs in. A list of words is put together as the command it is and read the
+same way, by the same loop, so `git checkout`, an in place `sed` or a remove after `sudo` is
+refused from a list as it is typed (#3775: the list route had patterns of its own, and 19 forms
+the typed reading refuses went through from a list). A word of the list that is a value the
+script fills in is read as one only the shell knows. Only a list that writes is read on, and it
+counts toward the 256. A destination written as a pattern (`rm pay*/hooks/x.sh`, a list in
+braces) is judged as each file it matches at that moment. And each script file the command runs
+is read from disk for the links it makes, a shell script by `lib/shell-words.py` and a python,
+perl, ruby, node, php, deno or bun script by the calls that make a link. What the gate cannot tell is refused
+in its own words, which say to run the command directly: a command string whose program is a value
+(`os.system(cmd)`), a command string that goes on past what the gate reads, and
+a script file it could not read, each only when the call names a `payload/` path besides or runs
+inside a payload folder, and a pattern with more than 512 files or a `**` in a checkout at risk.
+From a script file only a link is read, and only one whose path can be placed. Each loop is held to
+a count, a limit set in the gate and not a measurement (256 command strings, 4,000 characters of
+one string, 512 files of a pattern, 8 script files, 256 quoted paths of one script file that makes
+a link).
+`hooks/test-payload-write-gate-script-string.sh` holds the cases, on stand in files.
+
+What counts toward the limit of 8 script files is a file the gate goes on to open, once for each
+directory it is run in (#3775). The gate opens a python, perl, ruby, node, php, deno or bun script,
+a file run by its path whose first line names no shell, and a shell script too large for
+`lib/shell-words.py`; a shell script that reader takes is read by it and is not counted. A name holding a value (`bash "$HOOK"`), which the gate never
+opens, a file that is not there and the same file run again in the same directory do not count
+and do not stop the reading. As first shipped the count went up for every occurrence, so a plain
+run of a test suite was refused at its ninth: measured on 2026-11-26 on the personal MacBook, 84
+of the 410 suites here and `run-all-tests.sh` itself, with no file opened for any of them.
+`tests/test-suite-runs-pass-write-gate.sh` now asks the gate about the plain run command of every
+suite found on disk, from a stand in primary checkout a watcher could overwrite and from a stand
+in worktree of a builder, and fails on a refusal. It runs the gate and never a suite. It holds a
+list of two runs it expects to be refused from a primary checkout, the write gate's own
+`test-payload-write-gate-real-path.sh` and `test-payload-write-gate-script-string.sh`, whose test
+text holds link commands beside a quoted payload path that the gate places against that
+checkout. Dan allowed that list on 2026-11-26; it is in the check only, never in the gate. The
+check prints the two with their reason on every run, and fails when any other suite is refused
+or when a listed one is let through, refused in other words, or gone.
+
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in
 `~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
 command's words could not show (#647). The note goes when the call ends, however it ends (#3253):
