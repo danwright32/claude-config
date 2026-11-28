@@ -375,6 +375,191 @@ class GuideTests(unittest.TestCase):
         self.refused(GUIDE.replace("[C3]", "[C2]"), "guide-duplicate-check")
         self.refused(GUIDE.replace("- [C3] A draft", "- A draft"), "guide-bad-check-line")
 
+    def test_a_by_hand_guide_says_its_kind(self):
+        self.assertEqual(v.parse_guide(GUIDE)["kind"], "by-hand")
+
+
+MODEL_GUIDE = """# Sync retries model check guide
+
+## Rules
+- [R1] An update sent to the billing system is applied there once, however slow its reply.
+  - Good outcome: An update sent to the billing system is applied there.
+  - Approved by Dan: 2026-11-22
+- [R2] A retry never sends an update the billing system has already refused.
+  - Good outcome: A refused update is reported to the person who sent it.
+  - Approved by Dan: 2026-11-22
+
+## Not covered
+Two people editing one record at once, and the billing system losing an update it accepted.
+
+## Model
+models/SyncRetry.tla, written from src/sync/send.ts (sendUpdate, retryLater) and src/sync/queue.ts (drain).
+
+## Last checked
+- Commit: 0123456789abcdef0123456789abcdef01234567
+- Result: both rules held over 4,210 states; the defect of 2026-11-20 fails R1 in 13 steps.
+
+## Checks
+- [C1] Each rule holds in the model of the code at this commit.
+- [C2] Each rule's good outcome can happen in the model.
+- [C3] Every step of the model names the code it was written from.
+
+## Known traps
+The model sends at most three retries; the code's limit is read from config.
+"""
+
+
+class ModelCheckGuideTests(unittest.TestCase):
+    """A model check is one kind of guide (claude-config#3471), told apart by its sections the way a
+    screen is told apart as web or native by its keys, and never both."""
+
+    def refused(self, text, kind):
+        with self.assertRaises(v.VerificationError) as cm:
+            v.parse_guide(text)
+        self.assertIn(kind, kinds_of(cm.exception), cm.exception.problems)
+
+    def test_the_model_check_shape_parses(self):
+        g = v.parse_guide(MODEL_GUIDE)
+        self.assertEqual(g["kind"], "model-check")
+        self.assertEqual([c["id"] for c in g["checks"]], ["C1", "C2", "C3"])
+        self.assertEqual([r["id"] for r in g["rules"]], ["R1", "R2"])
+        self.assertEqual(g["rules"][0]["approved"], "2026-11-22")
+        self.assertTrue(g["rules"][1]["good_outcome"].startswith("A refused update"))
+        self.assertEqual(g["last_checked"]["commit"], SHA)
+
+    def test_the_shipped_model_check_template_holds_every_section(self):
+        with open(os.path.join(HERE, "..", "model-check-template.md")) as f:
+            tmpl = f.read()
+        for heading in v.MODEL_GUIDE_SECTIONS:
+            self.assertIn("## " + heading, tmpl)
+        # It must not spell the plan list's own line, which has one home (#3457).
+        self.assertNotIn("Still possible:", tmpl)
+
+    def test_mixed_sections_are_refused(self):
+        self.refused(MODEL_GUIDE.replace("## Known traps", "## Roles\nAn owner.\n\n## Known traps"),
+                     "guide-mixed-kinds")
+
+    def test_each_model_section_is_required(self):
+        for s in ("Not covered", "Model", "Last checked", "Checks", "Known traps"):
+            self.refused(MODEL_GUIDE.replace("## " + s + "\n", "## Other\n"), "guide-missing-section")
+
+    def test_a_rule_without_dans_approval_is_refused(self):
+        self.refused(MODEL_GUIDE.replace("  - Approved by Dan: 2026-11-22\n- [R2]", "- [R2]"),
+                     "guide-rule-not-approved")
+        self.refused(MODEL_GUIDE.replace("Approved by Dan: 2026-11-22\n- [R2]", "Approved by Dan: soon\n- [R2]"),
+                     "guide-rule-not-approved")
+
+    def test_a_rule_without_its_good_outcome_is_refused(self):
+        self.refused(MODEL_GUIDE.replace("  - Good outcome: An update sent to the billing system is applied there.\n", ""),
+                     "guide-rule-no-good-outcome")
+
+    def test_rule_lines_are_numbered_once(self):
+        self.refused(MODEL_GUIDE.replace("[R2]", "[R1]"), "guide-duplicate-rule")
+        self.refused(MODEL_GUIDE.replace("- [R2] A retry", "- A retry"), "guide-bad-rule-line")
+        no_rules = MODEL_GUIDE.split("## Rules\n")[0] + "## Rules\n\n## Not covered" + MODEL_GUIDE.split("## Not covered", 1)[1]
+        self.refused(no_rules, "guide-no-rules")
+
+    def test_empty_context_sections_are_refused(self):
+        self.refused(MODEL_GUIDE.replace("Two people editing one record at once, and the billing system losing an update it accepted.\n", ""),
+                     "guide-empty-section")
+
+    def test_last_checked_needs_a_commit_or_never_and_a_result(self):
+        self.refused(MODEL_GUIDE.replace("- Commit: " + SHA, "- Commit: abc123"), "guide-bad-last-checked")
+        self.refused(MODEL_GUIDE.replace("- Result: both rules", "- Outcome: both rules"), "guide-bad-last-checked")
+        never = v.parse_guide(MODEL_GUIDE.replace("- Commit: " + SHA, "- Commit: never"))
+        self.assertIsNone(never["last_checked"]["commit"])
+
+
+class GuideStaleTests(unittest.TestCase):
+    """`guide stale` reads the commit a model check guide was last checked against and says whether
+    any file its area owns has changed since, so a change to those files reruns it (#3471)."""
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", self.repo] + list(args), check=True, capture_output=True,
+                       env=dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                                GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid"))
+
+    def write(self, rel, text):
+        path = os.path.join(self.repo, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+
+    def head(self):
+        return subprocess.run(["git", "-C", self.repo, "rev-parse", "HEAD"], check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = self.tmp.name
+        self.git("init", "-q")
+        doc = areas_doc()
+        doc["areas"].append({"name": "sync-retries", "guide": ".claude/verification/guides/sync-retries.md",
+                             "owns": ["src/sync/**"]})
+        self.write(".claude/verification/areas.json", json.dumps(doc))
+        self.write("src/sync/send.ts", "export const a = 1\n")
+        self.write("README.md", "x\n")
+        self.write(".claude/verification/guides/sync-retries.md", MODEL_GUIDE)
+        self.write(".claude/verification/guides/invoices.md", GUIDE)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "one")
+        self.checked = self.head()
+        self.write(".claude/verification/guides/sync-retries.md", MODEL_GUIDE.replace(SHA, self.checked))
+        self.git("commit", "-q", "-a", "-m", "record the check")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def stale(self, area="sync-retries"):
+        return subprocess.run([sys.executable, os.path.join(HERE, "verification.py"), "guide", "stale",
+                               os.path.join(self.repo, ".claude/verification/areas.json"), area,
+                               "--repo", self.repo], capture_output=True, text=True)
+
+    def test_up_to_date_when_no_owned_file_changed(self):
+        self.write("README.md", "y\n")
+        self.git("commit", "-q", "-a", "-m", "not owned")
+        r = self.stale()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["changed"], [])
+
+    def test_a_change_to_an_owned_file_makes_it_stale(self):
+        self.write("src/sync/send.ts", "export const a = 2\n")
+        self.git("commit", "-q", "-a", "-m", "owned")
+        r = self.stale()
+        self.assertEqual(r.returncode, 9, r.stderr)
+        self.assertIn("verification: guide-stale:", r.stderr)
+        self.assertIn("src/sync/send.ts", r.stderr)
+        self.assertEqual(json.loads(r.stdout)["changed"], ["src/sync/send.ts"])
+
+    def test_a_file_moved_out_of_the_area_makes_it_stale(self):
+        """git reads a move as a rename by default and names only the new path, which the area does
+        not own; the old path, which it does, must still be listed (lessons review of 3806771)."""
+        os.makedirs(os.path.join(self.repo, "lib"), exist_ok=True)
+        self.git("mv", "src/sync/send.ts", "lib/send.ts")
+        self.git("commit", "-q", "-m", "moved out")
+        r = self.stale()
+        self.assertEqual(r.returncode, 9, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["changed"], ["src/sync/send.ts"])
+
+    def test_never_checked_is_stale(self):
+        self.write(".claude/verification/guides/sync-retries.md", MODEL_GUIDE.replace(SHA, "never"))
+        self.git("commit", "-q", "-a", "-m", "reset")
+        r = self.stale()
+        self.assertEqual(r.returncode, 9, r.stderr)
+        self.assertIn("never been checked", r.stderr)
+
+    def test_a_commit_the_repository_lacks_is_named(self):
+        self.write(".claude/verification/guides/sync-retries.md", MODEL_GUIDE.replace(SHA, OTHER_SHA))
+        self.git("commit", "-q", "-a", "-m", "unknown")
+        r = self.stale()
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn("verification: commit-missing:", r.stderr)
+
+    def test_a_by_hand_guide_is_refused_by_name(self):
+        r = self.stale("invoices")
+        self.assertEqual(r.returncode, 4, r.stderr)
+        self.assertIn("verification: guide-not-model-check:", r.stderr)
+
 
 class DoneWhenTests(unittest.TestCase):
     def test_items_are_numbered_in_order(self):
@@ -744,6 +929,15 @@ class RenderTests(unittest.TestCase):
         d["areas"][0]["guide_edits"] = []
         self.refused(d, "render-checks-mismatch")
 
+    def test_a_model_check_area_gets_no_run_record(self):
+        """A served run never checked a model, so a record for a model check area would read as a
+        checked one: render refuses it, and the merge check cannot be passed that way (#3471)."""
+        stopped_receipt(self.home)
+        write(os.path.join(self.home, "receipts", RECEIPT_ID, "guides", "invoices.md"), MODEL_GUIDE)
+        self.refused(self.draft(guide_edits=[], checks=[
+            {"id": "C1", "result": "pass", "note": "x"}, {"id": "C2", "result": "pass", "note": "x"},
+            {"id": "C3", "result": "pass", "note": "x"}]), "render-model-check")
+
     def test_done_when_must_match_the_pr(self):
         stopped_receipt(self.home)
         self.refused(self.draft(done_when=[]), "render-done-when-mismatch")
@@ -927,6 +1121,36 @@ class SkillDocTests(unittest.TestCase):
     def test_maintain_names_who_decides(self):
         self.assertIn("the runner, not the builder", self.text)
         self.assertIn("old check, the new check and why", self.text)
+
+    def model_section(self):
+        start = self.text.index("## Model check guides")
+        nxt = self.text.find("\n## ", start + 1)
+        return " ".join(self.text[start:nxt if nxt != -1 else len(self.text)].split())
+
+    def test_the_model_check_steps_the_agent_is_held_to(self):
+        """Each step #3471 lists, said in the skill where a session doing a model check reads it."""
+        sec = self.model_section()
+        for phrase in ("approved by Dan, one sentence at a time, before anything is modelled",
+                       "what the rules leave out",
+                       "written from the code",
+                       "not to pass emptily",
+                       "must fail first",
+                       "broken on purpose",
+                       "No rule is loosened",
+                       "shortest failing path",
+                       "plain words",
+                       "model_tools.py check",
+                       "could not run",
+                       "AskUserQuestion",
+                       "never picks for him",
+                       "guide stale",
+                       "Offered",
+                       "MIT licence"):
+            self.assertIn(phrase, sec)
+
+    def test_the_model_check_section_does_not_spell_the_plan_list(self):
+        self.assertNotIn("Still possible:", self.text)
+        self.assertNotIn("Kept true by:", self.text)
 
 
 if __name__ == "__main__":

@@ -74,7 +74,11 @@ each and the touched areas out, exit 7 on any unowned or ambiguous file.
 
 A guide, `.claude/verification/guides/<area>.md`, follows [guide-template.md](guide-template.md):
 the sections Roles, Reach, State setup, Checks and Known traps, with three to six checks written
-`- [C1] <one sentence>`. `verification.py guide check <guide>` refuses any other shape.
+`- [C1] <one sentence>`. That is a by hand guide. A model check guide, for a rule about the order
+things happen in, follows [model-check-template.md](model-check-template.md) instead (Model check
+guides, below). A guide is one kind or the other by its sections, the way a screen is web or native
+by its keys: a guide with sections of both is refused as `guide-mixed-kinds`.
+`verification.py guide check <guide>` refuses any other shape and prints the guide's `kind`.
 
 The run record is one fenced block per area in the run's PR comment, under a table a person reads.
 It is rendered by `verification.py record render`, never typed. Render also keeps a fingerprint of
@@ -325,6 +329,87 @@ If the runner ends without stopping, `run_session.py stop <receipt id>` from the
 stops serve, runs the project's stop command and removes the worktree; the run's deadline does the
 same unattended.
 
+## Model check guides
+
+A by hand guide checks what a person sees. Some rules are about the order things happen in: a
+retry after a slow reply, a timeout that fires while the reply is on its way, two requests for one
+record at once. No screen shows those, and a test covers only the orders somebody thought to write.
+A model check writes the code's steps down as a small TLA+ model and has the TLC checker try every
+order they can happen in, against rules Dan approved. A rule about every input to a calculation is
+not this kind: that is a property test (claude-config#3450).
+
+What one cost, measured once on 2026-11-22 in a work repository (#3471): one agent, about 376,000
+tokens and 35 minutes, 61 checker runs, on one defect where an update to an outside system could be
+delivered twice after a slow reply. It reproduced that defect, ruled out two of three proposed
+fixes and found a gap a code read had missed. One sample: say the cost when proposing one, since
+the agent is paid.
+
+The guide is the guide of an area like any other: areas.json lists it, the area's `owns` patterns
+are the files the model was written from, and `bucket` finds it touched as it finds any area. Its
+`## Last checked` section records the commit it was last checked against and the result.
+`verification.py guide stale <areas.json> <area> [--repo <checkout>]` lists the owned files changed
+since that commit and exits 9 (`guide-stale`) when there are any or the guide says `never`, so a
+change to those files means running it again; 3 (`commit-missing`) when the checkout lacks the
+commit. A model check area is never served or driven: leave it out of the runner's `--areas`, and
+run it by the steps below instead.
+
+When a plan's `Must always be true` list ([../milestone/MUST-ALWAYS-BE-TRUE.md](../milestone/MUST-ALWAYS-BE-TRUE.md),
+claude-config#3457) holds a rule about order that nothing keeps true yet, the session offers a model
+check for it by AskUserQuestion picker. Offered, never required: whether a plan must name one is
+Dan's open question on #3471. The guide keeps the plan's rule numbers, and once it exists the plan's
+rule names it as a `model check`, by the guide's path.
+
+### The tools
+
+A model check needs a Java runtime and the TLA+ tools jar (`tla2tools.jar`). Before anything else:
+
+    python3 ~/.claude/skills/verification-guides/scripts/model_tools.py check
+
+Exit 0 with `"ready": true` means java starts and the jar's SHA-256 equals the published checksum
+recorded beside it (`<jar>.sha256`). Any other exit means the model check could not run, with one
+`verification: model-tools-<kind>:` line per reason: never report that as a pass, and never fall
+back to reasoning about orders by hand and calling it checked. On first use the tools are absent.
+Installing them downloads and installs software on Dan's Mac, so ask him by AskUserQuestion picker
+first, naming what goes where: a Java runtime, and the jar from the TLA+ project's own release page
+into `~/.claude-verification/tools/` (outside `~/.claude`, so the sync never carries it), with the
+checksum published beside that release copied into `tla2tools.jar.sha256`. Then run the check again.
+
+### The steps, in order
+
+The agent doing a model check is held to each step, and says in its report which it did.
+
+1. **Rules first.** Write each rule as one sentence in the words a user of the feature would use,
+   with its good outcome (what must still be able to happen beside it), and one line on what the
+   rules leave out. Take them from the plan's list when there is one. Each rule is approved by Dan,
+   one sentence at a time, before anything is modelled: ask with AskUserQuestion, show him what the
+   rules leave out in the same question, and wait for his answer. If Dan is asleep or away (sleep
+   mode is on), the session holds the question for his return, writes nothing modelled, and goes
+   on with other work: it never picks for him, and silence is never approval. His approval date
+   goes on each rule's `Approved by Dan:` line.
+2. **The model is written from the code**, read at the commit being checked, never from an issue,
+   a plan or a memory of how it works. Each step in the model names the file and function it stands
+   for in `## Model`, and every bound the model sets is written beside what the code allows.
+3. **Each rule is shown not to pass emptily.** For every rule, check that its good outcome can
+   happen in the model (state its opposite as a rule and see the checker break it). A rule that
+   holds in a model where nothing happens proves nothing; fix the model.
+4. **A known defect must fail first.** Where a defect is known, the model of today's code must
+   fail the rule it breaks before any fix is modelled. A model of broken code that passes is a
+   wrong model: fix the model, never the rule.
+5. **Each proposed fix is checked**, one model per fix. Each fix that passes is then broken on
+   purpose (take out the part that is meant to matter) and the check must fail; a fix that passes
+   both ways is not proved.
+6. **No rule is loosened to get a pass**: not its sentence, not a bound made smaller than the code
+   allows, not a step left out. A rule that needs changing goes back to Dan as step 1.
+7. **The shortest failing path is reported in plain words**: numbered steps of what happens (the
+   update is sent, the reply is slow, the retry fires), never a dump of the checker's states.
+8. **Record it.** Write the commit and the result under `## Last checked` in the same pull request,
+   and run `verification.py guide check` on the guide.
+
+### Where it came from
+
+The steps above are adapted, in our own words, from the `create-formal-verification-skill` skill in
+the pstack plugin (MIT licence), first tried on 2026-11-22 (#3471). No text of it is copied here.
+
 ## The merge check
 
 `hooks/require-verification-run.sh` (claude-config#1529) judges every merge in a repository whose
@@ -367,3 +452,6 @@ These are what the merge check expects that nothing here can supply yet, said ra
   (shoot_web.mjs for a route, shoot_native.py for a native screen).
 - **The native app's frame list.** The camera ships here (native/VerificationShot.swift); each
   native app's test supplies its frames.
+- **A model check's record.** The merge check reads no model check guide's `## Last checked`, and a
+  model check area has no run record, so a pull request touching one is reported as unverified in
+  `warn` and cannot merge in `block` (#3471).
