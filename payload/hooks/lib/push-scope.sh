@@ -443,10 +443,17 @@ ps_both_readings() {   # $1 = the payload as the hook read it
   clean="$(ps_clean_payload "$payload")"
   ps__may_hide "$clean" || return 0
   command -v python3 >/dev/null 2>&1 && [ -f "${PS_SHELL_WORDS:-}" ] || return 0
-  printf '%s' "$clean" | python3 "$PS_SHELL_WORDS" second >/dev/null 2>&1 || return 0
   name="${hook##*/}"
+  # Exit 4 is the reader saying there is no second reading. Any other failure is the reader
+  # not saying, which is not a command with nothing hidden.
+  printf '%s' "$clean" | python3 "$PS_SHELL_WORDS" second >/dev/null 2>&1; rc=$?
+  [ "$rc" -ne 4 ] || return 0
+  if [ "$rc" -ne 0 ]; then
+    printf 'BLOCKED: %s: the reader that says whether this command hides another (lib/shell-words.py second) failed with exit %s, so whether it hides one was not judged. Write the command more simply, with nothing after a heredoc opener on its line and no line continued inside a quoted string or backquotes, and send it again (claude-config#3739).\n' "$name" "$rc" >&2
+    exit 2
+  fi
   if [ "${#clean}" -gt "$PS__SECOND_MAX" ]; then
-    printf 'BLOCKED: %s: this command runs something a plain reading of it hides (a command after a heredoc opener on the same line, or one written across a backslash and line break inside a string handed to a shell or inside backquotes), and at %s characters it is longer than the %s a gate reads a second time within its time limit, so what it hides was not judged. Write that command on a line of its own, after the heredoc closing line, or send the long text in a command of its own (claude-config#3739).\n' \
+    printf 'BLOCKED: %s: this command runs something a plain reading of it hides (a command after a heredoc opener on the same line, or one written across a backslash and line break inside a string handed to a shell or inside backquotes), and its payload, at %s characters, is longer than the %s a gate reads a second time within its time limit, so what it hides was not judged. Write that command on a line of its own, after the heredoc closing line, or send the long text in a command of its own (claude-config#3739).\n' \
       "$name" "${#clean}" "$PS__SECOND_MAX" >&2
     exit 2
   fi
