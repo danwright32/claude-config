@@ -87,7 +87,8 @@ declare module 'claude-code' {
       reviewOpen: { earlier: boolean; now: boolean } | null
       /**
        * #3843: why the review's record could not be read at a turn's end of the main conversation
-       * since Dan last typed a message; null when every reading since came back, and once he types.
+       * since Dan last typed a message; null when every reading since came back, once a prompt
+       * sent since has said so, and once he types.
        */
       reviewUnsure: string | null
       /** #3843: the request in which Dan was last told, in a line he sees, that the box waits on the review. */

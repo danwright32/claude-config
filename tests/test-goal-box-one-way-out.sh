@@ -144,7 +144,6 @@ check('every send of a prompt and every showing of the box goes through leave', 
 check('leave itself holds the send and the showing, so the scan had something to place', None if inside['send'] >= 1 and inside['show'] >= 4 else 'found %d sends and %d showings inside leave' % (inside['send'], inside['show']))
 
 # ---- The scan is seen to fail: one site planted at a time, in memory ----
-real = files[REGISTER]
 other = next(rel for rel in sorted(files) if rel != REGISTER)
 
 

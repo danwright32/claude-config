@@ -372,7 +372,7 @@ const UNANSWERED_EARLIER = 'an end of turn review handed over in an earlier turn
  * turn now ending, as its own line says. Sent, the reload of goal-box is held back until the
  * prompt has entered (#2132: it waits until the session is idle, and a reload in that time would
  * drop it), for at most mod-kit's hour, and a record that could not be read at a turn's end since
- * he last typed is said where Dan sees it.
+ * he last typed is said where Dan sees it, once.
  */
 async function leave($: EngineInterface, q: BoxPrompt): Promise<PromptLeft>
 async function leave($: EngineInterface, q: BoxCall): Promise<BoxLeft>
@@ -416,7 +416,7 @@ async function leave($: EngineInterface, q: BoxPrompt | BoxCall): Promise<Prompt
   const open = (await $.state.get(reviewOpenRef)).value
   if (q.kind === 'goal' ? open?.now === true : open?.now === true || open?.earlier === true) {
     await q.held?.(open?.now === true ? UNANSWERED : UNANSWERED_EARLIER)
-    await tellWaiting($, q.kind)
+    await tellWaiting($)
     return 'held'
   }
   if (!q.sends) return 'waits'
@@ -439,8 +439,12 @@ async function leave($: EngineInterface, q: BoxPrompt | BoxCall): Promise<Prompt
     failed = msg(err)
   }
   if (failed !== undefined) return { failed }
+  // Said once for a reading that failed: the next prompt sent would only repeat it.
   const unsure = (await $.state.get(reviewUnsureRef)).value
-  if (unsure) $.ui.log(promptedUnreadText(unsure))
+  if (unsure) {
+    $.ui.log(promptedUnreadText(unsure))
+    await $.state.set(reviewUnsureRef, null)
+  }
   return 'sent'
 }
 
@@ -715,8 +719,8 @@ const reviewNow = async ($: EngineInterface, prompts: number): Promise<ReviewWai
  * another turn has begun (reviewTurnPassed) or the record reads none, after which nothing on
  * record can answer it. No review can be handed over where the reviews are switched off or have
  * stood down (recordNow gives null), which is read as none. A record that cannot be read changes
- * nothing kept, since a box that never shows is the worse fault, and is itself kept, so a prompt
- * sent before he next types is said to have gone out without knowing (leave).
+ * nothing kept, since a box that never shows is the worse fault, and is itself kept, so the first
+ * prompt sent before he next types is said to have gone out without knowing (leave).
  *
  * A reading that comes back after a message he typed is dropped: his message ends what a turn
  * before it left, and the reading is of such a turn.
@@ -782,11 +786,27 @@ const noteOwing = async ($: EngineInterface, prompts: number | null): Promise<vo
   }
 }
 
-/** Tells Dan, once per request, that a prompt about the box was held back over an unanswered review. */
-const tellWaiting = async ($: EngineInterface, kind: 'request' | 'goal'): Promise<void> => {
+/**
+ * The met /goal whose box the session has neither been asked for nor shown (markAsked's own two
+ * tests), if there is one: its own prompt is still to come.
+ */
+const metWaiting = async ($: EngineInterface, goal: ModKitGoal): Promise<{ id: string; condition: string } | undefined> => {
+  if (goal.state !== 'none' || !goal.met) return undefined
+  const id = goal.met.id
+  if (((await $.state.get(askedRef)).value ?? []).includes(id) || ((await $.state.get(shownRef)).value ?? []).some(s => s.key === `goal:${id}`)) return undefined
+  return goal.met
+}
+
+/**
+ * Tells Dan, once per request, that a prompt about the box was held back over an unanswered review.
+ * In the goal's words wherever a met /goal's own prompt is still to come, whichever prompt was
+ * held: that one is sent at a later turn's end, so "after your next message" would be wrong there.
+ */
+const tellWaiting = async ($: EngineInterface): Promise<void> => {
   const prompts = (await $.state.get(promptsRef)).value ?? 0
   const told = await $.state.get(reviewToldRef)
   if (told.value !== undefined && told.value >= prompts) return
+  const kind = (await metWaiting($, await goalNow($))) ? 'goal' : 'request'
   if (!(await $.state.set(reviewToldRef, prompts, { ifVersion: told.version })).isSet) return
   $.ui.log(waitingText(kind))
 }
@@ -876,7 +896,7 @@ const askAfterReview = async ($: EngineInterface, end: object, sends: boolean): 
   if (asked.value !== undefined && asked.value >= held) {
     if (typeof (await $.state.get(reviewOwingRef)).value !== 'number') return false
     await readAtEnd($, end)
-    if ((await $.state.get(reviewOpenRef)).value?.now === true) await tellWaiting($, 'request')
+    if ((await $.state.get(reviewOpenRef)).value?.now === true) await tellWaiting($)
     return false
   }
   const prompts = (await $.state.get(promptsRef)).value ?? 0
@@ -915,16 +935,17 @@ const askAfterReview = async ($: EngineInterface, end: object, sends: boolean): 
 
 /**
  * At a turn's end: the session's /goal was judged met, and it has neither been asked for that
- * goal's box nor shown it (markAsked's own two tests). Once per met goal: claimed before it is
- * sent, so two turn ends at once send one, and released when it did not enter, so a passing
- * failure never loses the box (L368).
+ * goal's box nor shown it (metWaiting). Once per met goal: claimed before it is sent, so two turn
+ * ends at once send one, and released when it did not enter, so a passing failure never loses the
+ * box (L368).
  *
  * An unanswered review spends a request's prompts and does not spend a met goal's: its box is the
  * one Dan set a /goal for, so it is held only at the end of the turn whose own review is left
  * unanswered, where he is told in the goal's own line, and sent at the first later turn end.
  */
-const askMet = async ($: EngineInterface, end: object, sends: boolean, met: { id: string; condition: string }): Promise<void> => {
-  if (((await $.state.get(askedRef)).value ?? []).includes(met.id) || ((await $.state.get(shownRef)).value ?? []).some(s => s.key === `goal:${met.id}`)) return
+const askMet = async ($: EngineInterface, end: object, sends: boolean, goal: ModKitGoal): Promise<void> => {
+  const met = await metWaiting($, goal)
+  if (!met) return
   const left = await leave($, {
     end,
     sends,
@@ -1336,7 +1357,7 @@ export const register: Register = on => {
     const goal = await goalNow($)
     // With a /goal set or unreadable the box is the goal's, so no prompt for a request's box waits.
     if (goal.state !== 'none') return r
-    if (goal.met) await askMet($, e, sends, goal.met)
+    if (goal.met) await askMet($, e, sends, goal)
     else await askIfDone($, e, sends)
     return r
   })

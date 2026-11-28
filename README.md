@@ -12514,17 +12514,17 @@ none and the box would show behind the unanswered review. The record ends with i
 prompt can fall due in a later turn nobody typed to start (a card made there, a call refused
 there), so the mod reads the record once at every turn end of the main conversation, whatever is
 waiting and however the turn ended (a turn Dan interrupted, a refusal, an error), and keeps a
-review found unanswered until he next types. While it is kept, the message and the question about
-shipped work are spent for the request where they fall due, whether or not that turn end could
-have sent them, the later ask below stays owed, a refusal promises no message, and Dan is told in
-one line he sees, once per request, that the box is waiting on the review (his choice of
-2026-11-27: "One line, then one later ask"). A review found answered at a later end of the same
+review found unanswered until he next types. While it is kept, a prompt for the box of the
+request under way is given up for that request where it falls due, whether or not that turn end
+could have sent it, a refusal promises no message, and Dan is told in one line he sees, once per
+request, that the box is waiting on the review (his choice of 2026-11-27: "One line, then one
+later ask"). A review found answered at a later end of the same
 turn ends what that turn end kept; one answered in a later turn does not. The prompt for a
 met /goal is held only at the end of the turn whose own review is unanswered, says so in a line
 of its own, and is sent at the first later turn end. Under a /goal that is set or cannot be read
 no prompt for a request's box waits, so nothing is spent there. A record that cannot be read at
-a turn's end is kept the same way, and a prompt sent before he next types says it went out
-without knowing. A call
+a turn's end is kept the same way, and the first prompt sent before he next types says it went
+out without knowing. A call
 refused after the request's message was used has no prompt left in that request, so its review
 left unanswered is said in the same line, and its box is asked for after his next message.
 The record reads the same when he left a picker unanswered, when the session did the review and

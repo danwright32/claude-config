@@ -3814,6 +3814,20 @@ test("a review left unanswered with nothing waiting, then a call refused in a tu
   expect(sentKinds(submitted)).toEqual(['OWED'])
 })
 
+test('a reading of none keeps what the last turn end found: with no turn start and no prompt seen between, the question about shipped work is still not sent (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted, seen } = world(on)
+  await start($)
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  w.review = reviewSays('none')
+  w.verdicts = CARDED
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual([])
+  expect(seen).toEqual([WAITING_LINE])
+})
+
 test('a message Dan types ends what was kept: the question about shipped work for his next request is sent as usual (#3843, #2523)', withLive, async ($, on) => {
   const { w, submitted, seen } = world(on)
   await start($)
@@ -3903,6 +3917,26 @@ test("a met /goal and a card, the review left unanswered in a turn that ended ab
   expect(seen).toEqual([WAITING_GOAL_LINE])
 })
 
+for (const [how, end] of [['with an answer', {}], ['aborted', ABORTED]] as [string, Record<string, unknown>][]) {
+  test(`a met /goal whose box was refused until the review was answered, the review then left unanswered in a turn that ended ${how}: Dan is told in the goal's own line, since the goal's prompt is sent at the next turn end (#3843)`, withKit, async ($, on) => {
+    const { w, submitted, seen } = world(on, { goal: MET })
+    await start($)
+    await says($, 'Finish issue 1563')
+    await edits(w, $)
+    expect((await box($, ASKED)).deny).toMatch(/still to come/)
+    w.review = reviewSays('handed')
+    await turnEnds($, end)
+    expect(seen).toEqual([WAITING_GOAL_LINE])
+    expect(sentKinds(submitted)).toEqual([])
+    w.review = reviewSays('none')
+    await says($, 'A notice', NOTICE)
+    await turnStarts($, 't2')
+    await turnEnds($)
+    expect(sentKinds(submitted)).toEqual(['MET'])
+    expect(seen).toEqual([WAITING_GOAL_LINE])
+  })
+}
+
 test('a /goal still set, a card made, the review left unanswered: nothing is spent and no line is said, and once the goal is met after his next message its own prompt is the only one sent (#3843, #2523)', withLive, async ($, on) => {
   const { w, submitted, seen } = world(on, { goal: { state: 'set', condition: 'complete issue 1563' }, verdicts: CARDED })
   await start($)
@@ -3991,6 +4025,12 @@ test("the record cannot be read at a turn that ended aborted: nothing is sent th
   await turnEnds($)
   expect(sentKinds(submitted)).toEqual(['AGAIN'])
   expect(seen.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+  expect(seen).toHaveLength(1)
+  // Said once: the next prompt sent before he types does not repeat it.
+  w.goal = MET
+  await turnStarts($, 't3')
+  await turnEnds($)
+  expect(sentKinds(submitted)).toEqual(['AGAIN', 'MET'])
   expect(seen).toHaveLength(1)
 })
 

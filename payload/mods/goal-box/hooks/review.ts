@@ -3,16 +3,17 @@ import { TOOL } from './box.ts'
 // The box waits for the end of turn review (claude-config#3843, second half). Pure, so every rule
 // is tested without a session.
 //
-// On 2026-11-27 a session showed the box, and then the end of turn review's picker, where Dan picked
-// three follow ups: the box had been called before the turn's remaining pickers were asked. His
-// answer on the issue, the same day: hold the box "until the review is answered". And of how the box
-// is to know (two ways were put to him): "The review says so itself". So the review keeps a record:
+// A box shown before the turn's end of turn review says the work is finished while the review can
+// still add to it: Dan picks follow ups in its picker. So the box is held "until the review is
+// answered" (his answer on the issue), and it knows by the review's own word ("The review says so
+// itself", his choice of the two ways put to him). The review keeps a record:
 // lib/review-reason.py, which both review hooks build their payload through, writes that the review
 // was handed to the session, and the review's last step writes that he answered it (or that it
 // asked him nothing). hooks/lib/review-record.py owns that record, beside the session's transcript,
 // and is the only thing that reads or writes it: the mod runs its `state` command and is told none,
-// handed or answered for this turn. A record of an earlier turn is none, so a review nobody answered
-// never holds a later turn's box.
+// handed or answered for this turn. A record of an earlier turn is none, so at a call a review
+// nobody answered never holds a later turn's box. What such a review holds across turns is this
+// mod's own prompts for the box, by what register.ts keeps of each turn's end (readAtEnd).
 //
 // The record cannot say a review is still to COME, and at a call made before the turn's end it has
 // not been handed over yet. So a turn that has changed something, by the review hooks' own test

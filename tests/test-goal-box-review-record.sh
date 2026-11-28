@@ -142,8 +142,10 @@ with tempfile.TemporaryDirectory() as d:
     check('a transcript that is not there is an error too', None if code != 0 and err and not out else 'it exited %d, printed %r, said %r' % (code, out, err))
 
     # Asking writes nothing beside the files it loads (L322: where the writes land).
-    os.remove(t + '.review-handed.json')
-    os.remove(t + '.review-answered.json')
+    # A step above that failed may have left one of these unwritten, which its own check has said.
+    for record in ('.review-handed.json', '.review-answered.json'):
+        if os.path.exists(t + record):
+            os.remove(t + record)
     hooks = os.path.join(home, '.claude', 'hooks')
     r = subprocess.run([sys.executable, *OPTIONS, os.path.join(lib, 'review-record.py'), 'state', '--transcript', t], capture_output=True, text=True, timeout=30)
     left = sorted(os.listdir(hooks)) + sorted(os.listdir(lib)) + sorted(os.listdir(project))
