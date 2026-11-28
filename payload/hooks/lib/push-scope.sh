@@ -399,21 +399,25 @@ sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 # The run that does the judging is told which reading it is by PS_READING, "first" or "second"
 # and the process id of the hook that started it, and believes it only from its own parent: the
 # same words in the environment of any other process change nothing, and a hook that finds them
-# there when it has two readings to start refuses, since it cannot tell whether it is already
-# inside one. A command longer than PS__SECOND_MAX that has a second reading is refused unread
-# by a gate that runs before the command, and a hook that runs after it judges the first reading
-# and ends on a notice: what the library does with a command grows with the square of its length,
-# and two runs of a long one end at the hook's time limit, which is a refusal that says nothing.
+# there when it has two readings to start cannot tell whether it is already inside one, so it
+# does not judge the second. Nor is the second reading judged of a command longer than
+# PS__SECOND_MAX: what the library does with a command grows with the square of its length, and
+# two runs of a long one end at the hook's time limit, which is a refusal that says nothing.
 #
 # The two runs share the one time limit Claude Code gives the hook, which the hook hands over in
 # seconds as its registration states it (test-both-readings.sh holds the two equal). The second
 # run is given what the first left of it, less PS__READING_RESERVE, and is stopped there: a gate
 # with a long wait of its own budgets that wait against the whole limit, and started late it
 # would be ended by Claude Code with nothing said. A second run there is no time to start, or
-# that does not finish in what it was given, is a refusal that says so and says how to write the
-# command, never a pass and never a run left out. Only the shell of that run is signalled, so
-# what it started is left to finish, a review a gate detached on purpose among it. Where both
-# readings reach what a gate acts on, the gate does that work in each run.
+# that does not finish in what it was given, was not judged. Only the shell of that run is
+# signalled, so what it started is left to finish, a review a gate detached on purpose among it.
+# Where both readings reach what a gate acts on, the gate does that work in each run.
+#
+# A second reading that was not judged, for any of the reasons above or below, is never a pass
+# and never a run left out with nothing said. A gate that runs before the command refuses it,
+# saying why and how to write the command. A hook that runs after the command has nothing left to
+# refuse, so it ends on a notice that says the same (ps__after_end), having judged the first
+# reading wherever it had somewhere to keep that run's answer.
 #
 #   ps_both_readings <payload> <limit> [after]   returns 0 to carry on with one reading; otherwise
 #                                                 it exits with the answer of the two runs and
