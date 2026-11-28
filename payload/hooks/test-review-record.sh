@@ -255,6 +255,21 @@ got = state(t4)
 check('an answer file that cannot be read is "cannot be read", never answered and never handed', None if got.startswith('exit 3: ') and 'review-answered.json' in got else got)
 code, out, err = record('answered', '--transcript', t4)
 check('the last step writes over an answer file that could not be read', None if code == 0 and state(t4) == 'answered' else 'exit %d, err %r, state %r' % (code, err, state(t4)))
+# A byte that is not UTF-8. Every record is written as ASCII, so such a byte is damage: the file is
+# "cannot be read" in one line, never a traceback, and never read around the byte, which would make
+# a hand over of a damaged id that no answer could ever name.
+t4b = transcript('badbyte', WORKED('p1'))
+with open(HANDED(t4b), 'wb') as f:
+    f.write(b'{"v": 1, "turn": "p1", "id": "h1\xff", "at": 1800000000.0, "label": ""}\n')
+code, out, err = record('state', '--transcript', t4b)
+check('a hand over file holding a byte that is not UTF-8 is "cannot be read" in one line, with no traceback, never read around the byte', None if code == 3 and not out and len(err.splitlines()) == 1 and 'Traceback' not in err and 'review-handed.json' in err else 'exit %d, out %r, err %r' % (code, out, err))
+code, out, err = record('answered', '--transcript', t4b)
+check('and the last step for it is one line of error, with no traceback and no answer written', None if code == 2 and len(err.splitlines()) == 1 and 'Traceback' not in err and not os.path.exists(ANSWERED(t4b)) else 'exit %d, out %r, err %r, answer file there: %r' % (code, out, err, os.path.exists(ANSWERED(t4b))))
+record('handed', '--transcript', t4b)
+with open(ANSWERED(t4b), 'wb') as f:
+    f.write(b'{"v": 1, "turn": "p1", "handed": "\xc3\x28", "at": 1800000000.0}\n')
+code, out, err = record('state', '--transcript', t4b)
+check('an answer file holding a byte that is not UTF-8 is "cannot be read" in one line, with no traceback', None if code == 3 and not out and len(err.splitlines()) == 1 and 'Traceback' not in err and 'review-answered.json' in err else 'exit %d, out %r, err %r' % (code, out, err))
 got = state(os.path.join(work, 'nowhere', 'gone.jsonl'))
 check('a transcript that is not there is "cannot be read", never none', None if got.startswith('exit 3: ') else got)
 code, out, err = record('handed', '--transcript', os.path.join(work, 'nowhere', 'gone.jsonl'))
@@ -434,6 +449,11 @@ kept += ['dir.jsonl.review-handed.json', 'link.jsonl.review-handed.json', 'benea
 os.symlink(os.path.join(folder, 'nowhere.jsonl'), os.path.join(folder, 'dangling.jsonl'))
 put('dangling.jsonl.review-handed.json', A_RECORD, age=2 * HOUR)
 kept += ['dangling.jsonl', 'dangling.jsonl.review-handed.json']
+# Named as a record of a transcript that is gone, and holding a byte that is not UTF-8: it is never
+# read around the byte, so it is not known to be a record, and it stays.
+with open(os.path.join(folder, 'bytes.jsonl.review-handed.json'), 'wb') as f:
+    f.write(b'{"v": 1, "turn": "p1", "id": "h1", "at": 1800000000.0, "label": "\xff"}')
+kept += ['bytes.jsonl.review-handed.json']
 before = sorted(os.listdir(folder))
 check('the tidy up test starts with every file it means to plant', None if before == sorted(kept + removed) else 'the folder holds %r' % before)
 code, out, err = record('handed', '--transcript', t9)

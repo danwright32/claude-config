@@ -122,9 +122,11 @@ def turn_of(transcript):
 
 
 def read_record(path):
-    """A record file as a dict, None when it is not there; anything else is Unreadable."""
+    """A record file as a dict, None when it is not there; anything else is Unreadable. A byte that
+    is not UTF-8 is refused, never read around: every record is written as ASCII, so the byte is
+    damage, and a damaged id read around it is one no answer could name."""
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8", errors="strict") as f:
             text = f.read()
     except FileNotFoundError:
         return None
@@ -143,7 +145,8 @@ def write_record(path, obj):
     """The whole record under another name, then moved into place."""
     temp = "%s.tmp.%d.%s" % (path, os.getpid(), uuid.uuid4().hex[:8])
     try:
-        with open(temp, "w", encoding="utf-8") as f:
+        # json.dumps writes ASCII only, so there is nothing here an encoder could refuse.
+        with open(temp, "w", encoding="utf-8", errors="strict") as f:
             f.write(json.dumps(obj) + "\n")
             f.flush()
             os.fsync(f.fileno())
@@ -161,11 +164,12 @@ def write_record(path, obj):
 
 def _holds_a_record(path, size):
     """Whether a file holds a record this file wrote: small, one JSON object, of the version written
-    here. A file that has gone raises FileNotFoundError, which the tidy up passes over."""
+    here. A file that has gone raises FileNotFoundError, which the tidy up passes over. A byte that
+    is not UTF-8 is refused, so such a file is not known to be a record and stays."""
     if size > RECORD_MAX_BYTES:
         return False
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8", errors="strict") as f:
             obj = json.loads(f.read())
     except FileNotFoundError:
         raise

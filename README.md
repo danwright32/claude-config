@@ -12459,8 +12459,8 @@ such turn's end. The mod asks the record again before it sends that message, or 
 older prompts at a turn's end (the question about shipped work, the prompt for a met /goal): none
 is sent over a review that was handed over that turn and that Dan has not answered, since each
 starts a new turn, where the record reads none and the box would show behind the unanswered
-review. The message and the question are then spent for the request, and the prompt for a met
-/goal waits for a later turn end. A message Dan types drops a hold left from the request before,
+review. The message and the question are then spent for the request, and the prompt for a met /goal
+waits for a later turn end. A message Dan types drops a hold left from the request before,
 so the message is never sent under a later request. A subagent's Bash call that would record the
 main conversation's review as answered is refused, because its calls carry the main session's id.
 A record that cannot be read never holds the box: the box shows, with a line in
