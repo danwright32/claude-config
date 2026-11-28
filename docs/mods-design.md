@@ -2574,9 +2574,11 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   you should run"); "is yours:" followed by a choice that describes the commands; an imperative
   after a label saying the session will do the work, whatever the label says of Dan ("After you
   approve the plan I will do two things:"); a command for a time Dan is away ("for the morning",
-  "when you are back", "when you wake", "tomorrow"); one offered beside another way ("or start a
-  fresh session"); and one that the sentence right after it puts off or gives another way for,
-  where that sentence speaks of the command or opens with "or" ("so it can wait until morning",
+  "when you are back", "when you wake", "tomorrow"), read only where it says when to type it (a
+  label before the hand over, the words that hand it over, or after the command and before its
+  reason), so "to load the guard I merged in the morning" is no such time; one offered beside
+  another way ("or start a fresh session"); and one that the sentence right after it puts off or gives another way for,
+  where that sentence speaks of the command or opens with "or" ("and it can wait for the morning",
   "Or start a fresh session"). Now counted: an imperative after ", then" where the words before
   it are not the session's own; "go ahead and run"; "you'll have to run"; "use" after "your next
   step is to", with a closed list of system folders (`/tmp`, `/usr`) never a command; "before
@@ -2602,8 +2604,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   earlier counts held those turns only because a count reads the record; the count sets them
   apart now.
   Counted on 2026-11-28 over the personal MacBook's 134 interactive sessions of the 30 days
-  before (3,127 turns; the 45 ending in Claude Code's own notice set apart, neither check holding
-  any of them; 3,082 judged): 33 held by both the check as it was and the check as it is, none
+  before (3,129 turns; the 45 ending in Claude Code's own notice set apart, neither check holding
+  any of them; 3,084 judged): 33 held by both the check as it was and the check as it is, none
   newly held, 6 newly passed. Read one by one, 4 of the 6 hand the command over for the morning
   or for when Dan is back and 2 offer it beside starting a new session. Of the 33 still held, 5
   carry a loose time. Each moved turn is laid to the rule that moved it by running the new check

@@ -264,18 +264,27 @@ describe('typedCommands, the misreads of #3865', () => {
     expect(typedCommands('Type `/reload-plugins` tomorrow.')).toEqual([])
     expect(typedCommands('For the morning, paste this:\n\n```\n/plan-council Plan the import\n```')).toEqual([])
   })
+  test('a time said in the reason for the command, or in telling what happened, is not when to type it', () => {
+    expect(typedCommands('Run `/reload-plugins` to load the guard I merged in the morning.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('The guard I merged in the morning needs you to type `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/reload-plugins` so the next session loads the guard.')).toEqual(['/reload-plugins'])
+    expect(typedCommands("Type `/compact` before tomorrow's run.")).toEqual(['/compact'])
+    // A colon inside a time of day ends no label.
+    expect(typedCommands('The compact I queued in the morning at 3:52 never ran, so type `/compact` now.')).toEqual(['/compact'])
+  })
   test('a command the label or the next sentence puts off to the morning passes', () => {
-    expect(typedCommands('One thing to expect when you wake: this session runs the old guard until you run `/reload-plugins`.')).toEqual([])
-    expect(typedCommands('Loading the new guard needs you to type `/reload-plugins`. Nothing tonight depends on it, so it can wait until morning.')).toEqual([])
-    expect(typedCommands('This session keeps the old copy until you run `/reload-plugins`. That is on the list for when you wake.')).toEqual([])
+    expect(typedCommands('A note for the morning: the old guard stays loaded until you run `/reload-plugins`.')).toEqual([])
+    expect(typedCommands('Run `/reload-plugins` when you wake.')).toEqual([])
+    expect(typedCommands('Loading the new guard needs you to type `/reload-plugins`. Nothing tonight depends on it, and it can wait for the morning.')).toEqual([])
+    expect(typedCommands('The old copy stays loaded until you run `/reload-plugins`. I have put that down for the morning.')).toEqual([])
   })
   test('a next sentence that puts something else off, or says more of the command, leaves it held', () => {
-    expect(typedCommands('Type `/compact` now. The merge queue can wait until morning.')).toEqual(['/compact'])
+    expect(typedCommands('Type `/compact` now. The merge queue can wait for the morning.')).toEqual(['/compact'])
     expect(typedCommands('Type `/compact` now. It is the only way to shrink this session.')).toEqual(['/compact'])
     expect(typedCommands('Type `/compact` now.\n\nThat list is for the morning.')).toEqual(['/compact'])
   })
   test('another way offered in the next sentence makes the command an offer, and a consequence there does not', () => {
-    expect(typedCommands('To shrink it now, type `/compact` yourself. Or start a fresh session from the note.')).toEqual([])
+    expect(typedCommands('To free some room, type `/compact`. Or open a new session and carry on from the note.')).toEqual([])
     expect(typedCommands('Type `/compact` now. Or the next request will fail.')).toEqual(['/compact'])
   })
   test('a command handed over for a moment that is Dan\'s to choose today is held', () => {

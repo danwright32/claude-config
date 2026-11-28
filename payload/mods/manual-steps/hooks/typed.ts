@@ -42,7 +42,8 @@ const OBJECT = String.raw`\s+(?:the\s+)?(?:command\s+)?${MARK}(${NAME})${ENDS}`
 // run ...", "Close the other tab, then type ...").
 const START = String.raw`(?:${LEAD}|(?<=:(?:\*\*)?[ \t]+)|(?<=[,;][ \t]+)(?=(?:so|then|and then)\s))`
 // Words that may come before the imperative without making it anything else: a filler, a moment
-// that is Dan's to choose, or the steps before it ("After those two, start `/plan-council`").
+// that is Dan's to choose, or the steps before it ("After those two, start `/plan-council`"). "When
+// you are back" is matched here so that one rule, AWAY, decides it.
 const WHEN_YOU = String.raw`when you(?: can| get a moment| have a moment| are ready|'re ready| are back|'re back| are done|'re done)`
 const AFTER_THOSE = String.raw`after (?:that|this|those|these|both)(?: (?:two|three|four|steps?))?|once (?:that|this|those|these|both) (?:is|are) done`
 const PREAMBLE = String.raw`(?:(?:please|so|and|now|next|then|first|finally|also|just|go ahead and|when convenient|${WHEN_YOU}|${AFTER_THOSE}),?\s+)*`
@@ -79,15 +80,19 @@ const OFFER = /\b(?:if|unless|in case|whenever|could|might|would you|want me|sha
 // Handed over for a time Dan is away from the keyboard, so no step he can take now: "for the
 // morning", "when you are back", "when you wake", "tomorrow". Never a moment that is his to choose
 // today ("when you are ready", "when you get a moment", "at your convenience").
-const AWAY_WORDS = String.raw`(?:\b(?:for|in|until|till|by) (?:the )?morning\b|\btomorrow\b|\b(?:when|once|after) you(?:'re| are| get| come) back\b|\bwhen you (?:return|wake)\b|\bnext (?:session|time|week)\b)`
+const AWAY_WORDS = String.raw`(?:\b(?:for|in|until|till|by) (?:the )?morning\b|\btomorrow\b(?!')|\b(?:when|once|after) you(?:'re| are| get| come) back\b|\bwhen you (?:return|wake)\b)`
 const AWAY = new RegExp(AWAY_WORDS, 'i')
+// Where the words after a command turn to why it is typed, which is not when: "to load the guard I
+// merged in the morning", "so the next session loads it".
+const REASON = /\s(?:to|so|since|because|which|that)\s/i
 // Offered beside another way to the same end: "Run `/compact`, or start a fresh session". Never
 // "or" with what happens otherwise ("or the new guard stays unloaded").
 const ANOTHER = String.raw`or,?\s+(?:else\s+|just\s+|simply\s+)?(?:start|open|begin|use|carry on|continue|keep|leave|skip|wait)\b`
 const OTHER_WAY = new RegExp(String.raw`,?\s+${ANOTHER}`, 'i')
-const offered = (s: string): boolean => OFFER.test(s) || AWAY.test(s) || OTHER_WAY.test(s)
-// The sentence right after, on the same line, doing either: "Or start a fresh session.", "so it can
-// wait until morning", "That is on the list for when you wake". Unless it opens with "or" it must
+// `when` is the part of `clause` that can say when to type it, where that is not all of it.
+const offered = (clause: string, when: string = clause): boolean => OFFER.test(clause) || AWAY.test(when) || OTHER_WAY.test(clause)
+// The sentence right after, on the same line, doing either: "Or open a new session.", "and it can
+// wait for the morning", "I have put that down for the morning". Unless it opens with "or" it must
 // speak of the command ("it", "that", "this"): one that puts something else off says nothing of it.
 const PUT_OFF_NEXT = new RegExp(String.raw`^[ \t]+(?:${ANOTHER}|[^.!?\n]*?\b(?:it|that|this)\b[^.!?\n]{0,40}?(?:\bcan wait\b|${AWAY_WORDS}))`, 'i')
 // A standing rule, not a step now: "Run `/no-ai-tells` on anything other people will read". Never
@@ -185,8 +190,16 @@ const handedOver = (plain: string, at: number, end: number, blocks: readonly [nu
   // Judged on the command's own clause: an aside in brackets and what follows "then" are other things.
   const after = plain.slice(end, to).replace(/\([^)\n]*\)/g, ' ')
   const goesOn = after.search(GOES_ON)
-  const clause = plain.slice(from, end) + (goesOn < 0 ? after : after.slice(0, goesOn))
-  return !offered(clause) && !STANDING.test(clause) && !WEB.test(clause)
+  const rest = goesOn < 0 ? after : after.slice(0, goesOn)
+  const clause = plain.slice(from, end) + rest
+  // When to type it is said in a label before the words that hand it over, in those words, or after
+  // the command before its reason. A time in the telling around them is when something else happened
+  // ("The guard I merged in the morning needs you to type ...").
+  const led = plain.slice(from, at)
+  const label = led.slice(0, ([...led.matchAll(/:(?:\*\*)?(?=\s)/g)].at(-1)?.index ?? -1) + 1)
+  const reason = rest.search(REASON)
+  const when = label + plain.slice(at, end) + (reason < 0 ? rest : rest.slice(0, reason))
+  return !offered(clause, when) && !STANDING.test(clause) && !WEB.test(clause)
 }
 
 // What comes before `at` in its sentence: a label, or the clause before "so".
