@@ -11444,7 +11444,13 @@ marked "an earlier session" by the session that carries it in. Another mod adds
 a step through `$.manualSteps.add`, takes it off as done with `finish` and as withdrawn with
 `withdraw` (#3770: drawn "taken off, not done", the card going when nothing is left); a step it adds
 with `sessionOnly` is never kept for the next session, and one with `noDone` is drawn with no Done
-and leaves the heading without "waiting on you" (the goal box's close this session card). While
+and leaves the heading without "waiting on you" (the goal box's close this session card). When
+Claude's `steps_done` verdict finishes the last open step of a card, the mod keeps in its state
+(`emptied`, #3864) when that was and how many of the card's steps were done in this session and
+were this session's own: checked or taken on Dan's word, never one taken off undone, found done
+when pinned, added by another mod, or pinned by another session (a step that names no session is
+counted). The goal box reads it to ask the session about its box. A step finished or taken off
+through the noun writes none. While
 Dan is
 away, a new card goes to the scope modes mod's held card (`$.scopeModes.hold`) instead of the Mac. A
 card pinned with a step Dan can do now also sends him a macOS notification through the goal
@@ -11994,7 +12000,17 @@ the session is sent one prompt of the mod's own once the turn has ended, asking 
 once per met goal. It reads the transcript from the session's own session registry record. With
 no `/goal` set, the session calls the tool when it
 judges the work Dan asked for finished, reminded by the SESSION REFLECTION's last line after every
-turn that changed something (#1749). Refused, naming what, while a `/goal` is still set or cannot be
+turn that changed something (#1749). What is left for Dan alone is not work still open (#3864).
+The tool's description and that line name what does not hold the box: a step only he can take (a
+draft he sends, a command he types, a setting he changes), a check `/check-later` has put on the
+To Do list, and work he declined in a picker. A step of his on the steps card holds the box only
+while the session has work of its own waiting behind it. The tool refuses for none of these,
+since only the session can tell whose a step is. A session that holds the box back for work of
+its own says in one line what the box waits on, on the turn it first holds it and again only when
+that changes, so Dan can tell a box held on purpose from one forgotten (`NOT_HELD` and `HELD_SAY`
+in `hooks/box.ts`, which the description and the mod's prompts for the box are built from;
+`tests/test-goal-box-wording.sh` holds the two end of turn review instructions to the same rule).
+Refused, naming what, while a `/goal` is still set or cannot be
 read, an agent the session started is still running, is it live's record shows a merge owed its card
 or a deploy deploying or unconfirmed, or a pull request the session touched (Claude Code's `pr-link`
 transcript records) is still open on GitHub, asked as each account, or cannot be asked. A merge the
@@ -12051,8 +12067,23 @@ such turn's end. The mod asks the record again before it sends that message, or 
 older prompts at a turn's end (the question about shipped work, the prompt for a met /goal): none
 is sent over a review that was handed over that turn and that Dan has not answered, since each
 starts a new turn, where the record reads none and the box would show behind the unanswered
-review. The message and the question are then spent for the request, and the prompt for a met
-/goal waits for a later turn end. A message Dan types drops a hold left from the request before,
+review. The message and the question are then spent for the request, and the prompt for a
+met /goal waits for a later turn end. One more prompt at a turn's end asks about a steps card
+the session has worked through (#3864), because the end of turn review asks for the box while
+the card's steps are still open, and the turn a card empties on is often the one the work
+finishes on. Manual steps keeps,
+in its state (`emptied`), when the session's `steps_done` verdict last finished the last open step
+of a card, and how many of that card's steps were done in this session and were the session's
+own. With no `/goal` set (none, or a met one whose box has been shown) the mod asks the session
+once for each such record whether the work is finished (`askAfterCard` in `hooks/register.ts`).
+It sends nothing, for that record for good, when no step was done in this session, when the card
+emptied before Dan had asked the session for anything, when a box was already shown for the
+request, when a `/goal` is still set, when the message or the question was sent at that turn end
+in its place, or over a review handed over that turn that Dan has not answered. It waits for a
+later turn end while something the box refuses for is in flight, or the `/goal` cannot be read. A
+record the mod cannot read asks nothing and is said in the debug log. A step another mod finishes
+or takes off through manual steps' noun writes no record, so the close this session card asks
+nothing. A message Dan types drops a hold left from the request before,
 so the message is never sent under a later request. A subagent's Bash call that would record the
 main conversation's review as answered is refused, because its calls carry the main session's id.
 A record that cannot be read never holds the box: the box shows, with a line in
