@@ -1,0 +1,1905 @@
+[
+ {
+  "number": 3711,
+  "title": "Stop at the fourth round of review findings and ask Dan",
+  "url": "https://github.com/danwright32/claude-config/pull/3711",
+  "createdAt": "2026-11-26T06:41:16Z",
+  "isDraft": false,
+  "mergeable": "MERGEABLE",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "IN_PROGRESS",
+    "conclusion": ""
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "IN_PROGRESS",
+    "conclusion": ""
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "IN_PROGRESS",
+    "conclusion": ""
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "IN_PROGRESS",
+    "conclusion": ""
+   }
+  ]
+ },
+ {
+  "number": 3710,
+  "title": "Name the transcript when the usage limit recorder cannot read it",
+  "url": "https://github.com/danwright32/claude-config/pull/3710",
+  "createdAt": "2026-11-26T06:31:44Z",
+  "isDraft": false,
+  "mergeable": "MERGEABLE",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "IN_PROGRESS",
+    "conclusion": ""
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3709,
+  "title": "Delete the ultrathink line from the catch-up skill",
+  "url": "https://github.com/danwright32/claude-config/pull/3709",
+  "createdAt": "2026-11-26T06:28:53Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "IN_PROGRESS",
+    "conclusion": ""
+   }
+  ]
+ },
+ {
+  "number": 3708,
+  "title": "Name a reused run's untested suite parts in the merge helper's log",
+  "url": "https://github.com/danwright32/claude-config/pull/3708",
+  "createdAt": "2026-11-26T06:19:44Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3707,
+  "title": "Ask an unanswered read once more in the collision guard before refusing the call",
+  "url": "https://github.com/danwright32/claude-config/pull/3707",
+  "createdAt": "2026-11-26T06:02:26Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3706,
+  "title": "Keep a file whose name holds a line break out of the sync, so a pull never deletes it (#3540)",
+  "url": "https://github.com/danwright32/claude-config/pull/3706",
+  "createdAt": "2026-11-26T05:06:05Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3705,
+  "title": "Show ranges in the review scorer and compare two runs case by case (#3556)",
+  "url": "https://github.com/danwright32/claude-config/pull/3705",
+  "createdAt": "2026-11-26T05:01:32Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3704,
+  "title": "Fail the build when a mod could approve a tool call or make one of its own, and name mods from other plugins in status (#3681)",
+  "url": "https://github.com/danwright32/claude-config/pull/3704",
+  "createdAt": "2026-11-26T04:11:19Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3702,
+  "title": "Count only what is sent in transcript-shares, carry the prompt snapshot once, and infer thinking stored empty (#3646)",
+  "url": "https://github.com/danwright32/claude-config/pull/3702",
+  "createdAt": "2026-11-26T03:55:25Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3701,
+  "title": "Let two near zero suites trade places in the launch order check, and still fail a real reordering (#3674)",
+  "url": "https://github.com/danwright32/claude-config/pull/3701",
+  "createdAt": "2026-11-26T03:49:30Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3699,
+  "title": "Pin the web guidance tool to one version, refuse any other, and report when the pin falls behind (#3565)",
+  "url": "https://github.com/danwright32/claude-config/pull/3699",
+  "createdAt": "2026-11-26T03:27:16Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3698,
+  "title": "Wait for each lock holder in turn, and judge the suite stop by what it stopped (#3683)",
+  "url": "https://github.com/danwright32/claude-config/pull/3698",
+  "createdAt": "2026-11-26T03:17:33Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3693,
+  "title": "Read input run after -i, a PYTHONWARNINGS module and a dash named script in the Slack drafts gate (#3600)",
+  "url": "https://github.com/danwright32/claude-config/pull/3693",
+  "createdAt": "2026-11-26T02:30:16Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3687,
+  "title": "Judge a payload write by the real path of its destination, and count a link made by an inline script as a write (#3537)",
+  "url": "https://github.com/danwright32/claude-config/pull/3687",
+  "createdAt": "2026-11-26T01:35:53Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3686,
+  "title": "Add Read deny rules for stored logins and carry them to both Macs through the sync (#3563)",
+  "url": "https://github.com/danwright32/claude-config/pull/3686",
+  "createdAt": "2026-11-26T01:14:07Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3679,
+  "title": "Classify names in one pass per file in the scratch isolation scan, and rank the push gate's scanners (#3662)",
+  "url": "https://github.com/danwright32/claude-config/pull/3679",
+  "createdAt": "2026-11-26T00:47:12Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3678,
+  "title": "Wait on each judge by itself and report one that was ended as unmeasured, in two suites (#3656)",
+  "url": "https://github.com/danwright32/claude-config/pull/3678",
+  "createdAt": "2026-11-26T00:40:51Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3677,
+  "title": "Hold a turn that hands Dan a slash command to type with no step for it (#3652)",
+  "url": "https://github.com/danwright32/claude-config/pull/3677",
+  "createdAt": "2026-11-26T00:09:21Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3671,
+  "title": "Read zsh forms that run code and mark shapes the mods' reader cannot be sure of (#3496)",
+  "url": "https://github.com/danwright32/claude-config/pull/3671",
+  "createdAt": "2026-11-25T21:54:32Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3660,
+  "title": "Have a push's whole tree scan wait its turn behind another push's (#3536)",
+  "url": "https://github.com/danwright32/claude-config/pull/3660",
+  "createdAt": "2026-11-25T20:14:56Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3659,
+  "title": "Make the skill helper exits check follow a process to its ending (#3650)",
+  "url": "https://github.com/danwright32/claude-config/pull/3659",
+  "createdAt": "2026-11-25T20:09:14Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3658,
+  "title": "Record how Claude Code applies a mod hook's 10 second limit, measured live (#3627)",
+  "url": "https://github.com/danwright32/claude-config/pull/3658",
+  "createdAt": "2026-11-25T20:09:09Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3653,
+  "title": "Stop the rtk hook rewriting a prefixed grep into rtk grep (#3639)",
+  "url": "https://github.com/danwright32/claude-config/pull/3653",
+  "createdAt": "2026-11-25T19:16:56Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3644,
+  "title": "Add a step to disk-full that names which program is writing (#3589)",
+  "url": "https://github.com/danwright32/claude-config/pull/3644",
+  "createdAt": "2026-11-25T18:17:30Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3642,
+  "title": "Hold the awk reader's cost by a count, and stop it reading a long name again at every character (#3549)",
+  "url": "https://github.com/danwright32/claude-config/pull/3642",
+  "createdAt": "2026-11-25T18:12:42Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3634,
+  "title": "Stand the free space warning down once a drop has stopped (#3608)",
+  "url": "https://github.com/danwright32/claude-config/pull/3634",
+  "createdAt": "2026-11-25T17:45:58Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3632,
+  "title": "Read an mv or rm with many sources in time that grows in step with them (#3626)",
+  "url": "https://github.com/danwright32/claude-config/pull/3632",
+  "createdAt": "2026-11-25T17:40:55Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3631,
+  "title": "Add a leaner builder agent type, rendered from the rule files (#3389)",
+  "url": "https://github.com/danwright32/claude-config/pull/3631",
+  "createdAt": "2026-11-25T17:35:49Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3630,
+  "title": "Add the gh guard's PATH line to the session env file once, not at every session start (#3619)",
+  "url": "https://github.com/danwright32/claude-config/pull/3630",
+  "createdAt": "2026-11-25T17:35:34Z",
+  "isDraft": false,
+  "mergeable": "MERGEABLE",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "IN_PROGRESS",
+    "conclusion": ""
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "IN_PROGRESS",
+    "conclusion": ""
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "IN_PROGRESS",
+    "conclusion": ""
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "IN_PROGRESS",
+    "conclusion": ""
+   }
+  ]
+ },
+ {
+  "number": 3603,
+  "title": "Check a pull request description's count prompt against the head after a fix round (#3579)",
+  "url": "https://github.com/danwright32/claude-config/pull/3603",
+  "createdAt": "2026-11-25T14:49:07Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3598,
+  "title": "Recheck text posted while a repository was private, and say when this repository is not public",
+  "url": "https://github.com/danwright32/claude-config/pull/3598",
+  "createdAt": "2026-11-25T14:28:40Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3596,
+  "title": "Stop claude-sync reading a ps that cannot run as no watcher running",
+  "url": "https://github.com/danwright32/claude-config/pull/3596",
+  "createdAt": "2026-11-25T14:28:19Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3585,
+  "title": "Report a home path on a line that holds a byte that is not valid text (#3538)",
+  "url": "https://github.com/danwright32/claude-config/pull/3585",
+  "createdAt": "2026-11-25T03:28:01Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3580,
+  "title": "Hold a merge that changes lesson entries until Dan has answered for them (route 3 of #3343)",
+  "url": "https://github.com/danwright32/claude-config/pull/3580",
+  "createdAt": "2026-11-24T22:39:10Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3570,
+  "title": "Network check: refuse the helper browser's reachability probe so a browser run can end clean (#3319)",
+  "url": "https://github.com/danwright32/claude-config/pull/3570",
+  "createdAt": "2026-11-24T20:17:36Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3532,
+  "title": "Scope modes: place a git command by the repository it names (held for sign off) (#3398)",
+  "url": "https://github.com/danwright32/claude-config/pull/3532",
+  "createdAt": "2026-11-24T09:33:09Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3531,
+  "title": "No network wrapper: let ps run, which means it leaves the sandbox (held for sign off) (#3482)",
+  "url": "https://github.com/danwright32/claude-config/pull/3531",
+  "createdAt": "2026-11-24T08:30:32Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3519,
+  "title": "Long session notice: ask Dan in a picker, with the cost, once a session passes the line (#3307)",
+  "url": "https://github.com/danwright32/claude-config/pull/3519",
+  "createdAt": "2026-11-24T04:30:14Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "FAILURE"
+   }
+  ]
+ },
+ {
+  "number": 3490,
+  "title": "Design round guard: a probe written into a script's text must not change how the script is read (#3461)",
+  "url": "https://github.com/danwright32/claude-config/pull/3490",
+  "createdAt": "2026-11-23T06:53:13Z",
+  "isDraft": false,
+  "mergeable": "MERGEABLE",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3489,
+  "title": "Design round guard: hold a helper's call when a trap runs text from a variable (#3460)",
+  "url": "https://github.com/danwright32/claude-config/pull/3489",
+  "createdAt": "2026-11-23T05:58:27Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ },
+ {
+  "number": 3487,
+  "title": "Push gates: take a base only from a branch that is on the remote and in the history (#3454)",
+  "url": "https://github.com/danwright32/claude-config/pull/3487",
+  "createdAt": "2026-11-23T05:13:39Z",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "reviewDecision": "",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "name": "deal",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 1",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 2",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 3",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suites part 4",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   },
+   {
+    "__typename": "CheckRun",
+    "name": "suite",
+    "status": "COMPLETED",
+    "conclusion": "SUCCESS"
+   }
+  ]
+ }
+]

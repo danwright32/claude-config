@@ -40,7 +40,13 @@ If there is an open PR for the work just finished:
 
 Check the project's CLAUDE.md and memory for a deploy step that does not happen automatically (for example PET requires a manually triggered build after merge). Run it and confirm it took effect. If the project has no such step, skip silently.
 
-## 3. Pick the next issues
+## 3. Old pull requests first, then pick the next issues
+
+While a session is alive its pull request is looked after; once it ends, nothing looks at one it left open (claude-config#3614). So before ranking, list them, from the repo's checkout:
+
+    python3 ~/.claude/skills/next-issue/old-pull-requests.py
+
+It makes one `gh pr list --author @me --state open` call in the repository it runs in, never another, and prints one `OLD PR #<n> [<age>, <state>] <title>` row per pull request of Dan's open more than 3 days, oldest first, then an `OLD PRS` count line. The state comes from what gh returns: `draft`, `conflicting`, `not yet checked for conflicts` (GitHub works this out lazily, so the first read of a list often has it unknown), `checks red`, `changes requested`, `approved and waiting`, or `waiting`. It prints nothing when there are none, and then the picker holds only issues, as before. Exit 2 means the pull requests could not be listed: say so in one line, with its message, never as having none, and go on to rank the issues. Exit 3 means the list reached its limit and the oldest may be cut off: run it again with a higher `--limit`.
 
 The ranking is a script, not a judgement: run it and offer exactly the picks it prints, in its order (claude-config#1505). It used to be prose, and nothing in the prose ever brought structural work forward.
 
@@ -56,6 +62,8 @@ The ranking is a script, not a judgement: run it and offer exactly the picks it 
 5. An `UNLABELLED` line names issues with no priority label, which predate the rule and are ranked at the `p2` default meanwhile. Label each as you go, `gh issue edit <n> --add-label priority-pN`, choosing the level yourself (these are not Dan's to arbitrate, he has not read them; the scale is in `~/.claude/skills/milestone/NAMING.md`), then run step 1 again.
 
 ## 4. Present the picker and continue
+
+When the helper printed `OLD PR` rows, they come first: in the same AskUserQuestion call, a question ahead of the issues offering "Finish this" for each, as options labelled `Finish #<n>` with the row's title, age and state as the description, oldest first. A question holds at most 4 options, so offer the 3 oldest and a "Not now" option, and say in the question how many more there are when there are. Picking one means seeing it through to merge: update it from its base, resolve its conflicts, make its checks green, then step 1.
 
 Present the script's picks, all of them and in its order, with AskUserQuestion (label = issue number + short title, description = one plain-language line on what it is and why it is next; for the structural slot, that it is the structural work brought forward), passing `metadata: { source: "next-issue" }` so the picker manners mod knows it is a next issue offer. If that call is refused because Dan turned next issue pickers off for the session, give the same 3 as a plain numbered list instead. On selection, start immediately: read the issue, plan if non-trivial, then implement test-first per the global rules.
 
