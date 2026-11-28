@@ -179,6 +179,36 @@ if [ $(( now - last )) -ge "$COOLDOWN_SECONDS" ] \
   fi
 fi
 
+# HAND RERUNS (claude-config#3613). Each `gh run rerun` a session ran was recorded by rerun-record.sh
+# beside the spool; here each one's run is read from GitHub (one call a run, inside a few seconds of
+# this hook's 15), and a job that failed and then went green on a rerun for the second time, or one
+# that failed again on its rerun, becomes a finding in the spool, so `pending` below offers it like
+# any other. A run still going, or one that cannot be read, waits for the next review. Below the
+# sleep check at the top, so asleep nothing is read or offered and every record waits. Only when a
+# rerun is waiting, so an ordinary turn starts nothing. A failure to read or write rides in the reason.
+# A rerun DROPPED unread after its keep days (Dan, 2026-11-26) comes back on stdout, one line a run;
+# that line has been dropped from the only record of it, so it makes this review speak (urgent, below)
+# rather than wait for whichever review speaks next.
+reruns_said=""
+reruns_dropped=""
+if [ -f "$SPOOL_LIB" ]; then
+  _rr_key="$(bash "$SPOOL_LIB" key "$proj" "$transcript" 2>/dev/null)" || _rr_key=""
+  _rr_dir="$(bash "$SPOOL_LIB" reruns-dir 2>/dev/null)" || _rr_dir=""
+  if [ -n "$_rr_key" ] && [ -n "$_rr_dir" ] && compgen -G "$_rr_dir/$_rr_key.jsonl*" >/dev/null; then
+    _rr_err="$(mktemp "${TMPDIR:-/tmp}/claude-reruns-said.XXXXXX" 2>/dev/null)" || _rr_err=""
+    if [ -n "$_rr_err" ]; then
+      reruns_dropped="$(bash "$SELF_DIR/lib/rerun-resolve.sh" "$proj" "$transcript" 2>"$_rr_err")" || true
+      reruns_said="$(cat "$_rr_err" 2>/dev/null)" || true
+      rm -f "$_rr_err"
+    else
+      # No file to keep its messages apart in: the drops, which must make the review speak, still
+      # come back on their own, and the lost messages are said.
+      reruns_dropped="$(bash "$SELF_DIR/lib/rerun-resolve.sh" "$proj" "$transcript" 2>/dev/null)" || true
+      reruns_said="the hand rerun reader ran, but no temporary file could be made for its messages, so anything it could not read or write this turn is not shown here."
+    fi
+  fi
+fi
+
 seen_ledger=""
 kept_said=""
 if [ -f "$SPOOL_LIB" ]; then
@@ -203,6 +233,7 @@ if [ -f "$SPOOL_LIB" ]; then
   # render will not show it again, so it must not make a review fire either.
   if bash "$SPOOL_LIB" has-findings "$proj" "$transcript" "$seen_ledger" >/dev/null 2>&1; then urgent="yes"; fi
 fi
+if [ -n "$reruns_dropped" ]; then urgent="yes"; fi
 
 # One failure reason has no remedy at all: an agent spawned by another agent
 # names a transcript that is never written, so the harvest can never read it.
@@ -379,6 +410,9 @@ if [ -n "$muted_line" ]; then reason_args+=(--extra "$muted_line"); fi
 # the held back count, and both go out: lib/review-reason.py collects --extra with action="append",
 # which test-review-reason.sh asserts with two of them.
 if [ -n "$kept_said" ]; then reason_args+=(--extra "$kept_said"); fi
+# What the hand rerun reader could not read or write (#3613), the same way.
+if [ -n "$reruns_dropped" ]; then reason_args+=(--extra "HAND RERUNS DROPPED: $reruns_dropped"); fi
+if [ -n "$reruns_said" ]; then reason_args+=(--extra "HAND RERUNS: $reruns_said"); fi
 # A spool no key could be made for rides the same way, with whichever review speaks next, and does not
 # make one speak: it is the same fault at every turn until the digest is back (claude-config#2639).
 if [ -n "$spool_refused" ]; then reason_args+=(--extra "$spool_refused"); fi
@@ -426,7 +460,22 @@ else
   # names the file relatively, because the one thing this branch cannot do is work
   # out an absolute path. Nothing is settled here: this review carried no counts,
   # so it reported nothing that could be filed away.
-  cat <<'JSON'
+  #
+  # Except a hand rerun dropped this turn (#3613): its record is already gone, so its line is added
+  # inside the reason here, escaped in bash, since the helper that failed is the JSON writer.
+  static_payload() {
+    cat <<'JSON'
 {"decision":"block","reason":"END OF TURN ISSUE REVIEW. Read review/issue-review.md next to the Stop hooks in your Claude config directory (normally ~/.claude/hooks) and follow it exactly. The pointer that normally names its exact path could not be built, so find the file yourself rather than inventing a review from this line. Any subagent findings for this project are still in the spool: `bash ~/.claude/hooks/lib/issue-spool.sh pending \"$PWD\"` reads them without consuming them."}
 JSON
+  }
+  if [ -z "$reruns_dropped" ]; then
+    static_payload
+  else
+    _dropped_json="${reruns_dropped//\\/\\\\}"
+    _dropped_json="${_dropped_json//\"/\\\"}"
+    _dropped_json="$(printf '%s' "$_dropped_json" | tr '\000-\037' ' ')"
+    _static="$(static_payload)"
+    _tail='"}'
+    printf '%s HAND RERUNS DROPPED: %s"}\n' "${_static%"$_tail"}" "$_dropped_json"
+  fi
 fi

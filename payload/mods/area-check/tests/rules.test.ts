@@ -537,6 +537,22 @@ test("the project folder the installed spool helper reads a key from is no write
   expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL)] }))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
 })
 
+// #3613: `bash ~/.claude/hooks/lib/issue-spool.sh rerun <project> <repo> <run> <job>`, the hand rerun
+// record: the project folder is only where its spool key is read from, so it is no write; the rest is
+// judged as any script's arguments are.
+test('the hand rerun record names its project folder only for the spool key (#3613)', () => {
+  const run = {
+    what: 'a bash script file',
+    script: '~/.claude/hooks/lib/issue-spool.sh',
+    path: SPOOL,
+    args: [{ word: 'rerun', path: '/w/app/rerun' }, { word: '/w/app', path: '/w/app' }, { word: 'own/rep', path: '/w/app/own/rep' }, { word: '123', path: '/w/app/123' }],
+  }
+  expect(SPOOL_KEY_COMMANDS).toContain('rerun')
+  expect(shellTargets({ ...NONE, runs: [run] }, `${'/Users'}/dan`).map(x => x.word)).toEqual(['rerun', 'own/rep', '123'])
+  // The resolver is no subcommand of the helper any more, so a line naming it is judged as before.
+  expect(SPOOL_KEY_COMMANDS).not.toContain('resolve-reruns')
+})
+
 // #2255: `python3 probe.py 'src/*.ts'`, as mod-kit's reader answers it with cwd /w/app (measured
 // 2026-11-05): a pattern whose every pattern character is quoted, which the shell matched against no file.
 const QUOTED = { word: 'src/*.ts', folder: '/w/app/src', quoted: true as const }

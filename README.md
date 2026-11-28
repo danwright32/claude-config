@@ -12902,6 +12902,31 @@ at a permission prompt): none lets a tool call run unjudged, and they are left t
 rule, with what a hook that never yields does to its mod and to the mods beside it, is standing
 rule 7 in `docs/mods-design.md`.
 
+## Hand reruns of a failed check are counted
+
+A session that reruns a failed check with `gh run rerun` and sees it pass used to leave no trace that
+the check failed first, so a flaky job was never counted (L293, claude-config#3613).
+`hooks/rerun-record.sh`, a PostToolUse hook on Bash, records each hand rerun (the repository and
+the run, or the job for `--job`) in `~/.claude-issue-spool/reruns/<project key>.jsonl`. It posts
+nothing. The end of turn issue review reads each waiting run's final result from GitHub, one call a
+run inside a few seconds, and keeps anything still running or unreadable for the next review. A
+rerun the review tried and still could not read, first recorded 7 days ago or more, is dropped
+(`CLAUDE_RERUN_UNREAD_KEEP_DAYS`, Dan's decision of 2026-11-26), and that review speaks, even inside
+its cooldown, with one line naming the repository and the run; one not tried that turn for lack of
+time waits, and one whose record holds no readable date is never aged, kept and said. A job that
+failed and then went green on a rerun, in a run that ended green, is added to
+`~/.claude-issue-spool/reruns/flakes.jsonl`, which keeps 90 days (`CLAUDE_RERUN_FLAKE_KEEP_DAYS`, the
+same decision): an older line no longer counts and is removed, under a lock every writer of the file
+takes, by writing a temporary file beside it and renaming it over; a line with no readable date is
+kept and counts. Either setting that is not a whole number of days above zero is said and its
+default used. From a job's second such run the review offers it as a finding (add it to that job's
+flake issue, or open one).
+A job that failed again on its rerun is offered as that, so nobody reruns it a third time. Asleep,
+the review reads nothing and the records wait. Not covered: a rerun started from GitHub's web page,
+the merge helper's own rerun of a run that never started, and a rerun whose repository the command
+does not name and the directory's git remotes cannot tell. The design is in
+`hooks/review/subagent-harvest.md`.
+
 ## Sleep mode
 
 Sleep mode lets the Claude Code sessions you leave open keep working toward the goal you set each

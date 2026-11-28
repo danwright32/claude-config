@@ -58,6 +58,9 @@
 #                                              last went out, beside the spool (#2296)
 #   issue-spool.sh muted-sent   <dir>          record that it went out now
 #   issue-spool.sh reach-report                which pending keys no session can open
+#   issue-spool.sh rerun <dir> <repo> <run> <job> [transcript]
+#                                              record a hand rerun of a failed check (#3613)
+#   issue-spool.sh reruns-dir                  where the waiting reruns and the flake history live
 #
 # `raw` and `archive` exit 0 on an empty spool. They used to exit non-zero,
 # which kills any caller running under errexit on the ordinary empty case, and
@@ -2077,6 +2080,86 @@ PY_SPLIT
   return 0
 }
 
+# HAND RERUNS OF A FAILED CHECK (claude-config#3613). A session that reruns a failed check with
+# `gh run rerun` and sees it pass merges, and nothing recorded that the check failed first, so a
+# flaky job was never counted (L293). hooks/rerun-record.sh records each hand rerun here; the end of
+# turn review resolves them once the run has finished and offers a job that has failed and then gone
+# green on a rerun for the second time, and a job that failed again on its rerun.
+#
+# Beside the pending files, never in them, because those are drained by every `clear` after a picker
+# is answered and trimmed by compaction past PENDING_MAX_RECORDS, while a rerun has to wait, through
+# any number of clears, until its run has finished, and the record of earlier flakes has to outlive
+# every session. Under `<spool root>/reruns/`:
+#   <project key>.jsonl   reruns waiting for their run's final result, keyed as the pending files
+#   flakes.jsonl          one line per job that failed and then went green on a rerun, per run,
+#                         across every project, kept for 90 days (see below)
+# Only the review turns them into findings, through issue_spool_append, so what it offers goes
+# through the same pending, picker and clear as every other finding.
+issue_spool_reruns_dir() { printf '%s/reruns' "$(issue_spool_root)"; }
+
+
+# HOW LONG EACH IS KEPT, Dan's decision on 2026-11-26: a waiting rerun whose result has not been
+# readable for 7 days (CLAUDE_RERUN_UNREAD_KEEP_DAYS) is dropped, with one line saying so, and the
+# flake history keeps 90 days (CLAUDE_RERUN_FLAKE_KEEP_DAYS). Read here and nowhere else. A value
+# that is not a whole number above zero is said and the default used, so a typo can never become
+# "keep nothing" or "delete everything". The clock is a seam (CLAUDE_RERUN_NOW, seconds since the
+# epoch) so the limits are tested by SETTING it, never by waiting (L290, L524).
+_issue_spool_rerun_days() { # <setting name> <default> -> the days to use; says a refused value on stderr
+  local name="$1" def="$2" v
+  v="${!name:-}"
+  case "$v" in
+    '') printf '%s' "$def"; return 0 ;;
+    *[!0-9]*) ;;
+    *[1-9]*) printf '%s' "$v"; return 0 ;;
+  esac
+  echo "issue-spool: $name is '$v', which is not a whole number of days above zero, so the default of $def days is used." >&2
+  printf '%s' "$def"
+}
+_issue_spool_rerun_now() { # -> seconds since the epoch, from CLAUDE_RERUN_NOW when it is set to one
+  case "${CLAUDE_RERUN_NOW:-}" in ''|*[!0-9]*) date +%s ;; *) printf '%s' "$CLAUDE_RERUN_NOW" ;; esac
+}
+issue_spool_rerun_limits() { # sets _rr_unread_days, _rr_flake_days and _rr_now for the caller
+  _rr_unread_days="$(_issue_spool_rerun_days CLAUDE_RERUN_UNREAD_KEEP_DAYS 7)"
+  _rr_flake_days="$(_issue_spool_rerun_days CLAUDE_RERUN_FLAKE_KEEP_DAYS 90)"
+  _rr_now="$(_issue_spool_rerun_now)"
+}
+
+issue_spool_rerun() { # rerun <dir> <repo> <run id> <job id> [session-transcript]
+  local dir="${1:-$PWD}" repo="${2:-}" run="${3:-}" job="${4:-}" transcript="${5:-}" key file record sid
+  if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ] && [ "$(issue_spool_root)" = "${HOME%/}/.claude-issue-spool" ]; then
+    echo "issue-spool: refusing to record a rerun in the real spool at $(issue_spool_root): this is running under a test suite (CLAUDE_SUITE_RUN_ID=$CLAUDE_SUITE_RUN_ID)." >&2
+    return 3
+  fi
+  case "$repo" in
+    ''|*[!A-Za-z0-9._/-]*|/*|*/) echo "issue-spool: rerun needs a repository as owner/name; got '$repo'. Nothing was recorded." >&2; return 2 ;;
+    */*) ;;
+    *) echo "issue-spool: rerun needs a repository as owner/name; got '$repo'. Nothing was recorded." >&2; return 2 ;;
+  esac
+  case "$run" in *[!0-9]*) echo "issue-spool: rerun needs a run id of digits; got '$run'. Nothing was recorded." >&2; return 2 ;; esac
+  case "$job" in *[!0-9]*) echo "issue-spool: rerun needs a job id of digits; got '$job'. Nothing was recorded." >&2; return 2 ;; esac
+  if [ -z "$run" ] && [ -z "$job" ]; then
+    echo "issue-spool: rerun needs a run id or a job id. Nothing was recorded." >&2
+    return 2
+  fi
+  key="$(issue_spool_key "$dir" "$transcript")" || return
+  sid="$(issue_spool_session_id "$transcript")"
+  record="$(python3 -c '
+import json, sys, datetime
+r = {"ts": datetime.datetime.fromtimestamp(int(sys.argv[6]), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+     "repo": sys.argv[1], "run": sys.argv[2] or None, "job": sys.argv[3] or None, "cwd": sys.argv[4]}
+if sys.argv[5]:
+    r["session"] = sys.argv[5]
+print(json.dumps(r))' "$repo" "$run" "$job" "$dir" "$sid" "$(_issue_spool_rerun_now)" 2>/dev/null)"
+  [ -n "$record" ] || { echo "issue-spool: could not build the rerun record (python3 failed). Nothing was recorded." >&2; return 1; }
+  file="$(issue_spool_reruns_dir)/$key.jsonl"
+  if ! mkdir -p "$(issue_spool_reruns_dir)" 2>/dev/null || ! printf '%s\n' "$record" >> "$file" 2>/dev/null; then
+    echo "issue-spool: could not write the rerun of $repo run ${run:-?} job ${job:-?} to $file, so this hand rerun is not recorded and will not count toward a flake." >&2
+    return 1
+  fi
+  return 0
+}
+
+
 # Direct invocation dispatch. Sourcing the file defines the functions and runs
 # nothing, so the hooks can source it or shell out to it.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
@@ -2091,6 +2174,8 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     append)       issue_spool_append "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     note)         issue_spool_note "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
     mark-ended)   issue_spool_mark_ended "${1:-}" ;;
+    rerun)        issue_spool_rerun "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
+    reruns-dir)   issue_spool_reruns_dir ;;
     raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")" || exit; [ -s "$f" ] && cat "$f"; issue_spool_collect_done "$f"; exit 0 ;;
     pending)      issue_spool_pending "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
     has-findings) issue_spool_has_findings "${1:-$PWD}" "${2:-}" "${3:-}" ;;
