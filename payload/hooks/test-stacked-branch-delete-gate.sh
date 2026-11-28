@@ -258,7 +258,28 @@ judge "git push https://github.com/acme/widget.git --delete feat/x" "/tmp"
 check_eq "#1723 a remote given as a URL is read" "2" "$rc"
 check "#1723 as its repository" "pr list --repo acme/widget --base feat/x" "$calls"
 
-# 7. With no merged pull request to read a base from, the refusal still names the stacked one and
+# 6a. The word that makes a push a delete, written across a backslash and line break, is in the
+# payload in two pieces, and the shell that reads the string or the backquotes deletes all the
+# same (claude-config#3739).
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+echo '[{"number":7,"baseRefName":"develop"}]' > "$ST/merged"
+judge $'bash -c \'git push origin --del\\\nete feat/x\''
+check_eq "#3739 a --delete split by a backslash and line break inside a wrapper's string is refused" "2" "$rc"
+check "#3739 naming the stacked pull request" "#9" "$out"
+judge $'echo `git push origin --del\\\nete feat/x`'
+check_eq "#3739 and inside backquotes" "2" "$rc"
+judge $'bash -c \'git push origin :\\\nfeat/x\''
+check_eq "#3739 and a bare :branch split from its colon" "2" "$rc"
+judge $'git push origin --del\\\nete feat/x'
+check_eq "#3739 and in the open" "2" "$rc"
+fresh
+echo '[{"number":9}]' > "$ST/stacked"
+judge $'echo one \\\ntwo'
+check_eq "#3739 control: a command continued over a line that deletes nothing passes" "0" "$rc"
+check_eq "#3739 and nothing is asked of GitHub" "" "$calls"
+
+# 7.With no merged pull request to read a base from, the refusal still names the stacked one and
 # says where to move it, never a guessed branch.
 fresh
 echo '[{"number":9}]' > "$ST/stacked"

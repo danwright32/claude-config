@@ -6,7 +6,8 @@
 #   1. THE SCAN. Every hook that reads the segmented form calls ps_both_readings once, at its top
 #      level, before its first such read, and hands it the time limit its registration gives it.
 #      A hook that reads the form without it judges the first reading alone, and what the form
-#      hides goes unjudged with nothing said.
+#      hides goes unjudged with nothing said. Nor can a hook leave above that call on a test of
+#      the raw payload, unless a payload holding a backslash and line break is excepted from it.
 #   2. THE HELPER, against a stand in hook whose answer is a function of the text it is handed:
 #      the first reading is judged first, alone and as it always was; the second is judged only
 #      once the first has passed, in what the first left of the hook's time limit, and can only
@@ -56,6 +57,33 @@ reads_segmented() { # reads_segmented <file>: whether the file reads the segment
        /ps_parse_payload[[:space:]]+"/ && !/ps_parse_payload[[:space:]]+"[^"]*"[[:space:]]+raw/ { found = 1 }
        END { exit found ? 0 : 1 }' "$1"
 }
+# A hook that can leave between reading the payload and its ps_both_readings line leaves on a test
+# of the raw payload, where a word written across a backslash and line break is in two pieces:
+# the command is never handed to the helper, and what it hides goes unjudged with nothing said.
+# So the first line there that can exit has to stand below the arm that excepts a payload holding
+# the pair, by each of the three ways JSON spells it. early_exit_fault <file>: prints why the file
+# breaks that, or nothing. The body of a function defined there is not looked in: it is what a
+# hook does once a library will not load, and then there is no reader to hand anything to.
+# The arm as a hook writes it is  *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*)  and each backslash of
+# it is doubled here, inside double quotes.
+PAIR_ARM="*'\\\\\\n'*|*'\\\\\\u000'[aA]*|*'\\u005'[cC]*)"
+early_exit_fault() {
+  ARM="$PAIR_ARM" awk '
+    /^[[:space:]]*#/ { next }
+    called { next }
+    /^ps_both_readings "\$payload" [0-9]+( after)?[[:space:]]*$/ { called = 1; next }
+    /^payload="\$\((cat|ps_read_payload)\)"[[:space:]]*$/ { if (!read_at) read_at = NR; next }
+    !read_at { next }
+    /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*\{/ { if ($0 !~ /\}[[:space:]]*(#.*)?$/) in_fn = 1; next }
+    in_fn { if ($0 ~ /^\}/) in_fn = 0; next }
+    index($0, ENVIRON["ARM"]) && !exit_at { excepted = NR }
+    /(^|[^A-Za-z0-9_])exit([^A-Za-z0-9_]|$)/ && !exit_at { exit_at = NR }
+    END {
+      if (!called) exit 0
+      if (!read_at) { printf "no line above its ps_both_readings call reads the payload at its top level, so an exit above the call cannot be placed"; exit 0 }
+      if (exit_at && !excepted) printf "line %d can exit before ps_both_readings is reached, and no line between the payload being read and that one excepts a payload that holds a backslash and line break, by each way JSON spells the pair", exit_at
+    }' "$1"
+}
 
 # The scan is seen to fail on each way of getting it wrong, and to pass the right form.
 mkdir -p "$T/scan"
@@ -76,6 +104,26 @@ done
 for f in right raw; do
   why="$(scan_file "$T/scan/$f.sh")"
   [ -z "$why" ] && check "the scan passes a hook that has it right ($f)" ok || check "the scan passes a hook that has it right ($f)" "$why"
+done
+EARLY_TAIL='ps_both_readings "$payload" 30'
+printf '%s\n' 'payload="$(cat)"' 'case "$payload" in *push*) ;; *) exit 0 ;; esac' "$EARLY_TAIL" > "$T/scan/early.sh"
+printf '%s\n' 'payload="$(cat)"' 'case "$payload" in' '  *delete*) ;;' '  *) looks "$payload" || exit 0 ;;' 'esac' "$EARLY_TAIL" > "$T/scan/early-in-a-block.sh"
+printf '%s\n' 'payload="$(ps_read_payload)"' '[ -n "$payload" ] || exit 0' 'case "$payload" in' "  $PAIR_ARM ;;" '  *) named || exit 0 ;;' 'esac' "$EARLY_TAIL" > "$T/scan/arm-below-an-exit.sh"
+printf '%s\n' 'payload="$(cat)"' 'case "$payload" in' "  *'\\\\\\n'*) ;;" '  *) named || exit 0 ;;' 'esac' "$EARLY_TAIL" > "$T/scan/arm-of-one-spelling.sh"
+printf '%s\n' 'payload="$(cat)"' 'leave() { [ -n "${x}" ] || true; }  # a note' 'exit 0' "$EARLY_TAIL" > "$T/scan/early-after-a-function.sh"
+printf '%s\n' 'input="$(cat)"' 'payload="$input"' 'case "$payload" in *push*) ;; *) exit 0 ;; esac' "$EARLY_TAIL" > "$T/scan/read-not-found.sh"
+printf '%s\n' 'payload="$(cat)"' 'case "$payload" in' "  $PAIR_ARM ;;" '  *) named || exit 0 ;;' 'esac' "$EARLY_TAIL" > "$T/scan/early-excepted.sh"
+printf '%s\n' 'payload="$(cat)"' 'leave() {' '  exit 0' '}' 'refuse() { echo no >&2; exit 2; }' '. lib || leave' "$EARLY_TAIL" > "$T/scan/exit-in-a-function.sh"
+printf '%s\n' '. lib || {' '  payload="$(cat)"' '  exit 2' '}' 'payload="$(ps_read_payload)"' '# never exit 0 here' "$EARLY_TAIL" '[ -n "$payload" ] || exit 0' > "$T/scan/exits-elsewhere.sh"
+for f in early early-in-a-block arm-below-an-exit arm-of-one-spelling early-after-a-function read-not-found; do
+  why="$(early_exit_fault "$T/scan/$f.sh")"
+  [ -n "$why" ] && check "the scan fails a hook that can leave before the helper on a payload holding the pair ($f)" ok \
+    || check "the scan fails a hook that can leave before the helper on a payload holding the pair ($f)" "it passed"
+done
+for f in early-excepted exit-in-a-function exits-elsewhere right; do
+  why="$(early_exit_fault "$T/scan/$f.sh")"
+  [ -z "$why" ] && check "the scan passes a hook that cannot leave before the helper on a payload holding the pair ($f)" ok \
+    || check "the scan passes a hook that cannot leave before the helper on a payload holding the pair ($f)" "$why"
 done
 
 # The limit a hook hands over is the one its registration gives it, so the second run is given
@@ -151,6 +199,9 @@ for f in "$DIR"/*.sh "$DIR"/lib/*.sh; do
   [ "${f##*/}" = check-style-guide.sh ] && seen_style=yes
   why="$(scan_file "$f")"
   [ -z "$why" ] && check "${f##*/} judges both readings" ok || check "${f##*/} judges both readings" "$why"
+  why="$(early_exit_fault "$f")"
+  [ -z "$why" ] && check "${f##*/} cannot leave before the helper on a payload holding a backslash and line break" ok \
+    || check "${f##*/} cannot leave before the helper on a payload holding a backslash and line break" "$why"
   if [ "$have_jq" = yes ] && [ -n "$REG" ]; then
     why="$(limit_fault "$f" "$REG")"
     [ -z "$why" ] && check "${f##*/} gives the second reading what is left of its registered time limit" ok \
