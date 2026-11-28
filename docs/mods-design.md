@@ -6032,7 +6032,9 @@ facts and the bar are unchanged.
   neither decides nor sends the command another way, and hands back the command, the call's id and
   the reason (`handBack` in `rules.ts`). The decide tool still takes a decision only from the agent
   the call was held for, so the main session runs the command itself, deciding the hold on its own
-  call, or tells the agent it may decide. Nothing about which command is held changed. A script
+  call, or tells the agent it may decide. The sentence changes nothing about which command is
+  held (the same issue's other half, names of mods after the folder of `tools/check-mods.sh`, does,
+  and is in the README's account of the scripts let through by name). A script
   handed a checkout to read and a scratch folder to write into stays held: the reader gives a
   python or node program's write named by an argument with no word of which argument names it, so
   reading the script cannot show the checkout is only read. One that only reads and prints, its
