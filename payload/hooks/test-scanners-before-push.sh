@@ -127,6 +127,11 @@ checkout_parts(){
   grep -q '^SUITE payload/hooks/test-check-home-paths\.sh$' <<< "$_sel" \
     && check "#1734 and the home path check is among them" ok \
     || check "#1734 and the home path check is among them" "got=$_sel"
+  # The settings file suite reads every suite the payload ships for a second copy of the settings
+  # lookup, so a push carrying one is refused only while the gate selects it (claude-config#3859).
+  grep -q '^SUITE payload/hooks/test-settings-file\.sh$' <<< "$_sel" \
+    && check "#3859 and the settings file suite, which reads every suite for a copy of the settings lookup, is among them" ok \
+    || check "#3859 and the settings file suite, which reads every suite for a copy of the settings lookup, is among them" "got=$_sel"
   # The recorded floor names exactly the suites selected here, so it can never again sit far below
   # the selection (claude-config#1744: on 2026-10-25 it recorded 6 while 21 were selected). A scanner added is
   # named in the same change; one removed on purpose is taken out.
@@ -3001,6 +3006,35 @@ else
   check "#3536 the gate keeps its turn in a folder under its state folder" "found none under $TURNSTATE/turn"
 fi
 kill -9 "$_stuck" 2>/dev/null; wait "$_stuck" 2>/dev/null
+
+# --- a push carrying a second copy of the settings lookup is refused (claude-config#3859). The scan
+#     that keeps lib/settings-file.sh the only lookup reads every suite the payload ships, so a copy
+#     in any one of them fails it. The fixture holds the real suite, the shell libraries it loads,
+#     and plain suites enough to clear that suite's own floor on how many it must have read, so the
+#     planted copy is all that differs between the two pushes. The first push must say a scan RAN:
+#     going through is also what a gate that never selected the suite does (L98).
+R3859="$(mkrepo settingscopy)"
+: > "$R3859/claude-sync"
+mkdir -p "$R3859/payload/hooks/lib"
+cp "$DIR"/lib/*.sh "$R3859/payload/hooks/lib/"
+cp "$DIR/test-settings-file.sh" "$R3859/payload/hooks/test-settings-file.sh"
+_i3859=1
+while [ "$_i3859" -le 55 ]; do add_plain "$R3859" "pad$_i3859"; _i3859=$(( _i3859 + 1 )); done
+commit_all "$R3859"
+o3859a="$(fire "$R3859" "git push")"; c3859a=$?
+[ "$c3859a" -eq 0 ] && grep -q -F '1 whole tree scan(s) passed' <<< "$o3859a" \
+  && check "#3859 with every suite asking the shared settings lookup, the settings file suite is run and the push goes through" ok \
+  || check "#3859 with every suite asking the shared settings lookup, the settings file suite is run and the push goes through" "exit=$c3859a out=$o3859a"
+# The spelling is handed to printf apart from the path before it, so no line of this suite holds
+# the copy it plants, which the real scan would report here.
+printf '#!/usr/bin/env bash\nSETTINGS="$DIR/../%s"\necho "plain ownlookup ran"\nexit 0\n' "settings.hooks.json" > "$R3859/payload/hooks/test-ownlookup.sh"
+commit_all "$R3859"
+o3859b="$(fire "$R3859" "git push")"; c3859b=$?
+[ "$c3859b" -eq 2 ] && check "#3859 a push carrying a second copy of the settings lookup is refused" ok \
+  || check "#3859 a push carrying a second copy of the settings lookup is refused" "exit=$c3859b out=$o3859b"
+grep -q -F '=== payload/hooks/test-settings-file.sh ' <<< "$o3859b" && grep -q -F 'its own copy of the settings lookup' <<< "$o3859b" \
+  && check "#3859 and the refusal names the settings file suite and the copy it found" ok \
+  || check "#3859 and the refusal names the settings file suite and the copy it found" "out=$o3859b"
 
 # --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
 #     scans by the repository's origin, or its path when it has none, as the fixtures do, so a

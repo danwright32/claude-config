@@ -125,6 +125,61 @@ found="$(inline_copies "$DIR/..")"
   || check "no suite carries its own copy of the settings lookup" "ask lib/settings-file.sh (hook_settings_file) instead:
 $found"
 
+# ---- the scan read every suite the repository holds under the payload ---------------------------
+# The scan walks three trees of the payload, and the count above cannot tell one suite missing
+# among hundreds, so a suite kept anywhere else under the payload would carry a copy unread. In a
+# checkout the repository is asked for its own list, uncommitted suites included, and each suite on
+# it must be one the scan read.
+# Asking through lib/repo-files.sh is also what makes scanners-before-push.sh run this suite before
+# a push: that gate picks a suite by a line of its code listing the repository's files, so taking
+# this section out takes the suite out of the gate (claude-config#3859).
+unread_suites() {   # $1 = suites the repository lists, $2 = suites the scan read, both relative to the payload -> those in $1 only
+  local s
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    case $'\n'"$2"$'\n' in *$'\n'"$s"$'\n'*) ;; *) printf '%s\n' "$s" ;; esac
+  done <<LISTED
+$1
+LISTED
+}
+# Seen to fail first (L1): a suite the repository lists and the scan did not read is named, and
+# one the scan read is not.
+got="$(unread_suites 'hooks/test-a.sh
+agents/test-b.sh
+skills/s/test-c.sh' 'hooks/test-a.sh
+skills/s/test-c.sh')"
+[ "$got" = "agents/test-b.sh" ] && check "#3859 a suite the repository lists that the scan did not read is named" ok \
+  || check "#3859 a suite the repository lists that the scan did not read is named" "got [$got]"
+got="$(unread_suites 'hooks/test-a.sh' 'hooks/test-a.sh
+hooks/test-extra.sh')"
+[ -z "$got" ] && check "#3859 a suite the scan read is not named, nor one only the scan found" ok \
+  || check "#3859 a suite the scan read is not named, nor one only the scan found" "got [$got]"
+
+# The real tree. Both lists are cut to paths under the payload before they are compared, because the
+# repository's root and "$DIR/.." can spell one folder two ways. The pathspec also matches a script
+# inside a folder whose name holds test-, so the list is cut to suites by name, as the scan's is.
+ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$ROOT" ]; then
+  PAYLOAD_DIR="$(cd "$DIR/.." && pwd)"
+  if repo_list="$(bash "$DIR/lib/repo-files.sh" "$ROOT" 'payload/*test-*.sh' 2>&1)"; then
+    repo_suites="$(printf '%s\n' "$repo_list" | grep '/test-[^/]*\.sh$' | sed 's|^payload/||')"
+    read_suites="$(scanned_suites "$PAYLOAD_DIR" | awk -v p="$PAYLOAD_DIR/" 'index($0, p) == 1 { print substr($0, length(p) + 1) }')"
+    if [ -z "$repo_suites" ]; then
+      check "#3859 the repository lists its suites under the payload" "lib/repo-files.sh listed none under $ROOT/payload, so the comparison below would mean nothing"
+    else
+      missed="$(unread_suites "$repo_suites" "$read_suites")"
+      [ -z "$missed" ] && check "#3859 the scan read every suite the repository holds under the payload" ok \
+        || check "#3859 the scan read every suite the repository holds under the payload" "these are read by no scan for a copy of the settings lookup; move them under hooks, skills or mods, or widen scanned_suites:
+$missed"
+    fi
+  else
+    check "#3859 the repository lists its suites under the payload" "lib/repo-files.sh could not list $ROOT: $repo_list"
+  fi
+else
+  # Installed, there is no repository to ask. Said on the runner's agreed line, never skipped in silence.
+  printf 'SUITE-PART-UNMEASURED the check that the settings lookup scan read every suite the repository holds under the payload: %s is not the payload of a claude-config checkout (lib/checkout-root.sh), so there is no repository to ask; it runs where the repository is\n' "$DIR/.."
+fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
