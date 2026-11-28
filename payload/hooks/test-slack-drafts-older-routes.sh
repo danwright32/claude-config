@@ -324,19 +324,31 @@ refused "#3837 route 7: a script three deep that only names an endpoint is still
 says "#3837 route 7: and that refusal still names the no network wrapper" "no network wrapper"
 # Three deep or deeper, a script is read as commands only up to the gate's DEEP_FILE_MAX: a longer
 # one is judged by the names in it alone, which leaves a post behind it open (claude-config#3837).
-# The last case holds what the gate answers for that, so a change to it is seen. pad adds comment
-# lines of 100 bytes each, so 2000 of them stay under the limit and 2700 pass it.
+# The last case holds what the gate answers for that, so a change to it is seen. The limit is read
+# from the gate, so the two scripts stand either side of it whatever it is set to: pad adds comment
+# lines of 100 bytes each, up to 20000 bytes short of the limit or 20000 bytes past it.
+DEEP_MAX="$(python3 -c '
+import re, sys
+found = re.search(r"^DEEP_FILE_MAX = ([0-9 *]+)$", open(sys.argv[1]).read(), re.M)
+print(eval(found.group(1)) if found else "")' "$DIR/slack_drafts_only_gate.py" 2>/dev/null)"
 pad() { python3 -c 'import sys; sys.stdout.write(("# " + "x" * 97 + "\n") * int(sys.argv[1]))' "$1" >> "$2"; }
-chain lit 4 'bash post.sh'
-pad 2000 "$P/lit3.sh"
-chain big 4 'bash post.sh'
-pad 2700 "$P/big3.sh"
-run_here 'bash lit0.sh'
-refused "#3837 route 7: a script that posts, behind four others of which the last is 200 KB, is refused"
-run_here 'bash big3.sh'
-refused "#3837 route 7: a script of 270 KB that runs a script that posts, run by the command itself, is refused as before"
-run_here 'bash big0.sh'
-allowed "#3837 route 7, left as it is: a script that posts behind four others, of which the last is 270 KB, is judged by the names in it and passes"
+case "$DEEP_MAX" in
+  ''|*[!0-9]*)
+    check "#3837 route 7: the gate's DEEP_FILE_MAX is read from slack_drafts_only_gate.py" "no line setting it to a number was found, so the cases either side of the limit were not run"
+    ;;
+  *)
+    chain lit 4 'bash post.sh'
+    pad $(((DEEP_MAX - 20000) / 100)) "$P/lit3.sh"
+    chain big 4 'bash post.sh'
+    pad $(((DEEP_MAX + 20000) / 100)) "$P/big3.sh"
+    run_here 'bash lit0.sh'
+    refused "#3837 route 7: a script that posts, behind four others of which the last is just under the limit, is refused"
+    run_here 'bash big3.sh'
+    refused "#3837 route 7: a script past the limit that runs a script that posts, run by the command itself, is refused as before"
+    run_here 'bash big0.sh'
+    allowed "#3837 route 7, left as it is: a script that posts behind four others, of which the last is past the limit, is judged by the names in it and passes"
+    ;;
+esac
 
 echo "== route 8: a write that is only quoted words, in a text the reader gave up on =="
 
