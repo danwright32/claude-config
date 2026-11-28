@@ -151,13 +151,144 @@ describe('typedCommands, the review of pull request 3677', () => {
     expect(typedCommands("I'll remember to run `/sync-config` after the merge.")).toEqual([])
   })
 
-  // The second review: "use" is no verb after "your next move is to" either, as it is none leading a
-  // sentence, so a folder named there passes. "begin" stays: it is said of a command, never of a
-  // folder or an address, and M16 is a hand over said with it.
-  test('"use" after "your next step is to" names a folder, not a command to type', () => {
+  test('"use" after "your next step is to" hands a command over, and a system folder is no command', () => {
+    expect(typedCommands('Your next step is to use `/plan-council`.')).toEqual(['/plan-council'])
     expect(typedCommands('Your next step is to use `/tmp`')).toEqual([])
     expect(typedCommands('Your next step is to use `/tmp` for the copy.')).toEqual([])
     expect(typedCommands('Your next move is to begin `/plan-council`.')).toEqual(['/plan-council'])
+    // "use" leading a sentence still names a skill or a folder, and is not read.
+    expect(typedCommands('Use `/plan-council` for a change this size.')).toEqual([])
+  })
+  test('as built today, a project folder of one word after "your next step is to use" is held as a command', () => {
+    expect(typedCommands('Your next step is to use `/dist` for the copy.')).toEqual(['/dist'])
+  })
+})
+
+// #3865. Each rule has its two sides in view: what it passes, and the hand over beside it that
+// stays held. A test named "as built today" pins a reading that is open to question, kept because
+// a sentence of the same shape has to be read that way.
+describe('typedCommands, the misreads of #3865', () => {
+  test('"you should", "you must" and "you have to" inside a sentence are a suggestion or a report, and pass', () => {
+    expect(typedCommands('This feature is big enough that you should start `/plan-council` for it.')).toEqual([])
+    expect(typedCommands('I think you should run `/plan-lite` on this before we build.')).toEqual([])
+    expect(typedCommands('The README says you should run `/init` first.')).toEqual([])
+    expect(typedCommands('In the old design you must type `/compact` yourself, which is the problem.')).toEqual([])
+  })
+  test('"you should", "you must" and "you have to" leading a sentence or a clause are held', () => {
+    expect(typedCommands('You should now run `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('I cannot clear it myself; you have to type `/goal clear`.')).toEqual(['/goal'])
+    expect(typedCommands('The fix is merged, so you should run `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('To load it, you have to run `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('That means you must type `/compact` before the next turn.')).toEqual(['/compact'])
+    expect(typedCommands('The fix is merged and you should now run `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('The queued compact cannot run but you have to type `/compact` before the next turn.')).toEqual(['/compact'])
+    expect(typedCommands("I can't type slash commands, so you'll have to run `/reload-plugins`.")).toEqual(['/reload-plugins'])
+  })
+  test('as built today, "you have to" after an opening clause with no comma is missed', () => {
+    expect(typedCommands('Before I can go on you have to type `/compact`.')).toEqual([])
+  })
+
+  test('"is yours:" followed by a choice between commands passes', () => {
+    expect(typedCommands('The call is yours: `/plan-lite` is lighter and `/plan-council` goes deeper.')).toEqual([])
+    expect(typedCommands('The decision is yours: keep `/plan-lite` or move to `/plan-council`.')).toEqual([])
+  })
+  test('"is yours:" followed by what to do with the command, or by the command alone, is held', () => {
+    expect(typedCommands('Next is yours: paste the brief below into `/plan-council`.')).toEqual(['/plan-council'])
+    expect(typedCommands('The next step is yours: `/plan-council`.')).toEqual(['/plan-council'])
+    expect(typedCommands('The next step is yours: `/plan-council` with the brief below.')).toEqual(['/plan-council'])
+  })
+
+  test('a label that says the session will do the work is its own, whatever it says of Dan', () => {
+    expect(typedCommands('After you approve the plan I will do two things: run `/code-review` on the diff and merge it.')).toEqual([])
+    expect(typedCommands('What I will do for you next:\n1. Run `/code-review` on the diff.')).toEqual([])
+  })
+  test('as built today, the session\'s own plan under a label that names nobody is held', () => {
+    expect(typedCommands('Next: run `/code-review` on the diff, then merge.')).toEqual(['/code-review'])
+    expect(typedCommands('Before merging:\n- Run `/no-ai-tells` on the description')).toEqual(['/no-ai-tells'])
+    // The same shape is a hand over, which is why it is held.
+    expect(typedCommands('To plan it: type `/plan-lite`.')).toEqual(['/plan-lite'])
+  })
+  test('a label that says the session needs something from Dan hands the command to him', () => {
+    expect(typedCommands('**One thing I need from you:** type `/reload-plugins`.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('One thing I will need from you: type `/reload-plugins`.')).toEqual(['/reload-plugins'])
+  })
+
+  test('an imperative after ", then" in a sentence of imperatives is held', () => {
+    expect(typedCommands('Close the other tab, then type `/compact`.')).toEqual(['/compact'])
+    expect(typedCommands('Run `/reload-plugins`, then type `/compact`.')).toEqual(['/reload-plugins', '/compact'])
+  })
+  test('", then" after the session\'s own work, or after a condition, passes', () => {
+    expect(typedCommands("I'll merge it, then run `/code-review`.")).toEqual([])
+    expect(typedCommands('If you want a fuller plan, then run `/plan-council`.')).toEqual([])
+  })
+  test('"go ahead and" before the imperative is held', () => {
+    expect(typedCommands('Go ahead and run `/reload-plugins`.')).toEqual(['/reload-plugins'])
+  })
+
+  test('"before anything else" is no standing rule, and "on anything other people will read" is one', () => {
+    expect(typedCommands('Run `/reload-plugins` before anything else.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/no-ai-tells` on anything other people will read.')).toEqual([])
+  })
+  test('a web word naming something built for web addresses does not make the command a route', () => {
+    expect(typedCommands('Type `/reload-plugins` to load the new URL guard.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Paste this to plan the route check:\n\n```\n/plan-council Plan the route check\n```')).toEqual(['/plan-council'])
+    expect(typedCommands('Start `/login` and watch the redirect.')).toEqual([])
+    expect(typedCommands('The endpoint to probe is:\n\n```\n/health\n```')).toEqual([])
+  })
+  test('a code block is judged by the sentence that introduces it, not by the sentence before that one', () => {
+    expect(typedCommands('You ran the first half. Paste the second:\n\n```\n/plan-council Plan the rest\n```')).toEqual(['/plan-council'])
+    expect(typedCommands('The route check is fixed. Paste this to plan the rest:\n```\n/plan-council Plan the rest\n```')).toEqual(['/plan-council'])
+    expect(typedCommands('You typed this a minute ago:\n\n```\n/compact\n```')).toEqual([])
+    expect(typedCommands('Paste the first half. You ran this one already:\n\n```\n/compact\n```')).toEqual([])
+  })
+  test('a list under a line saying what the session needs is Dan\'s, and one under what it did or will do is its own', () => {
+    expect(typedCommands('I need two things:\n1. Run `/reload-plugins`.\n2. Tell me what the band shows.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('What I did:\n1. Run `/code-review` on the diff.')).toEqual([])
+    expect(typedCommands('What I will do next:\n1. Run `/code-review` on the diff.')).toEqual([])
+  })
+
+  test('a code block never closed hides nothing after it', () => {
+    expect(typedCommands('Here is the diff:\n```\n- old line\nType `/reload-plugins` to load it.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Paste this:\n```\n/goal clear')).toEqual(['/goal'])
+  })
+  test('file text inside a code block that is closed still passes', () => {
+    expect(typedCommands('Here is the skill text:\n\n```\nRun `/sync-config` after each pull.\n```')).toEqual([])
+    // With no word of its own that excuses it, only the block does.
+    expect(typedCommands('Here is the note it wrote:\n\n```\nType `/reload-plugins` to load it.\n```')).toEqual([])
+  })
+
+  test('a command handed over for later passes', () => {
+    expect(typedCommands('For the morning: run `/reload-plugins`.')).toEqual([])
+    expect(typedCommands('Run `/reload-plugins` when you are back.')).toEqual([])
+    expect(typedCommands("When you're back, run `/reload-plugins`.")).toEqual([])
+    expect(typedCommands('Type `/reload-plugins` tomorrow.')).toEqual([])
+    expect(typedCommands('For the morning, paste this:\n\n```\n/plan-council Plan the import\n```')).toEqual([])
+  })
+  test('a command the label or the next sentence puts off to the morning passes', () => {
+    expect(typedCommands('One thing to expect when you wake: this session runs the old guard until you run `/reload-plugins`.')).toEqual([])
+    expect(typedCommands('Loading the new guard needs you to type `/reload-plugins`. Nothing tonight depends on it, so it can wait until morning.')).toEqual([])
+    expect(typedCommands('This session keeps the old copy until you run `/reload-plugins`. That is on the list for when you wake.')).toEqual([])
+  })
+  test('a next sentence that puts something else off, or says more of the command, leaves it held', () => {
+    expect(typedCommands('Type `/compact` now. The merge queue can wait until morning.')).toEqual(['/compact'])
+    expect(typedCommands('Type `/compact` now. It is the only way to shrink this session.')).toEqual(['/compact'])
+    expect(typedCommands('Type `/compact` now.\n\nThat list is for the morning.')).toEqual(['/compact'])
+  })
+  test('another way offered in the next sentence makes the command an offer, and a consequence there does not', () => {
+    expect(typedCommands('To shrink it now, type `/compact` yourself. Or start a fresh session from the note.')).toEqual([])
+    expect(typedCommands('Type `/compact` now. Or the next request will fail.')).toEqual(['/compact'])
+  })
+  test('a command handed over for a moment that is Dan\'s to choose today is held', () => {
+    expect(typedCommands("When you're ready, start `/plan-council` with this brief:")).toEqual(['/plan-council'])
+    expect(typedCommands('The old area check is still loaded, so run `/reload-plugins` when you get a moment.')).toEqual(['/reload-plugins'])
+  })
+  test('as built today, a loose time is read as now and held', () => {
+    expect(typedCommands('Run `/reload-plugins` at your convenience.')).toEqual(['/reload-plugins'])
+    expect(typedCommands('Run `/reload-plugins` before the next build.')).toEqual(['/reload-plugins'])
+  })
+  test('a command offered beside another way passes, and one with its consequence after "or" is held', () => {
+    expect(typedCommands('Run `/compact`, or start a fresh session.')).toEqual([])
+    expect(typedCommands('Run `/reload-plugins` or the new guard stays unloaded.')).toEqual(['/reload-plugins'])
   })
 })
 
@@ -188,6 +319,21 @@ describe('apartFromTyped', () => {
     expect(leftOver('Type `/reload-plugins`. The tests pass. Tell me when it is done.', ['/reload-plugins'])).not.toBeNull()
     // Not held, nothing is taken out: the report back is the whole reply's step.
     expect(leftOver('Tell me when it is done.', ['/reload-plugins'])).not.toBeNull()
+  })
+  test('asking to be told when what the command starts has finished is the same step: one ask (#3865)', () => {
+    expect(leftOver('Paste this:\n\n```\n/plan-council Plan the venue import\n```\n\nTell me when the panel has finished.', ['/plan-council'])).toBeNull()
+    expect(leftOver('Type `/reload-plugins`. Tell me when the reload has finished.', ['/reload-plugins'])).toBeNull()
+    expect(leftOver('Run `/compact`. Tell me once the command is done.', ['/compact'])).toBeNull()
+  })
+  test('asking to be told when something else has finished keeps its own ask (#3865)', () => {
+    expect(leftOver('Paste this:\n\n```\n/plan-council Plan the venue import\n```\n\nTell me when the deploy has finished.', ['/plan-council'])).not.toBeNull()
+    expect(leftOver('Type `/reload-plugins`. Tell me when the panel has finished.', ['/reload-plugins'])).not.toBeNull()
+  })
+  test('a command in a code block never closed takes out its own paragraph, not the rest of the reply (#3865)', () => {
+    const said = 'Paste this:\n\n```\n/goal clear\n\nThe deploy is still waiting on you: click **Approve** on the page.'
+    expect(typedCommands(said)).toEqual(['/goal'])
+    expect(leftOver(said, ['/goal'])).not.toBeNull()
+    expect(apartFromTyped(said, ['/goal'])).not.toMatch(/goal clear/)
   })
 })
 

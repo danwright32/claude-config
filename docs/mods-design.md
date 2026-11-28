@@ -2528,10 +2528,11 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   line or in a block quote; file text inside a code block; a list the line above it calls the
   session's own plan or examples; a command called an example or named as a skill; a sentence
   that speaks of a web address (endpoint, route, URL, redirect, domain); a block introduced as
-  already typed; and a path. "use" and "enter" are not among the verbs, after "your next move is
-  to" ("Your next step is to use `/tmp`") as anywhere else; "begin" is read there: the independent
-  review of pull request 3677 found them holding a skill ("use the `/db-apply` skill"), a folder and
-  a web address, and no turn held in the count of 2026-11-27 below depended on them. A one word route with nothing said of it
+  already typed; and a path. "use" and "enter" are not among the verbs that lead a sentence: the
+  independent review of pull request 3677 found them holding a skill ("use the `/db-apply` skill"),
+  a folder and a web address, and no turn held in the count of 2026-11-27 below depended on them.
+  After "your next move is to", "begin" is read, and since #3865 "use" as well (the entry after
+  this one). A one word route with nothing said of it
   ("Start `/login`.") cannot be told from a command and is still held, once, and the ask lets the
   session answer in one line. The review's two lists, seventeen hand overs that passed and eleven
   replies held that handed nothing over, are cases in `tests/typed.test.ts`, held together so a
@@ -2565,6 +2566,49 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   last steps call named it, finished or not; this one follows each card through its steps calls
   and verdicts and asks for an unfinished step. By the first count's rule the same 30 days give
   25.
+- **The typed command check's misreads, narrowed rule by rule** (#3865). The second review of pull
+  request 3677 and the work MacBook's count of it listed replies read wrongly in both directions.
+  Each is a case in `tests/typed.test.ts`, the two sides of a rule in one test. No longer counted:
+  "you should", "you must" and "you have to" unless "you" leads its sentence or clause, since
+  inside a sentence they suggest or report ("big enough that you should start", "the README says
+  you should run"); "is yours:" followed by a choice that describes the commands; an imperative
+  after a label saying the session will do the work, whatever the label says of Dan ("After you
+  approve the plan I will do two things:"); a command for a time Dan is away ("for the morning",
+  "when you are back", "when you wake", "tomorrow"); one offered beside another way ("or start a
+  fresh session"); and one that the sentence right after it puts off or gives another way for,
+  where that sentence speaks of the command or opens with "or" ("so it can wait until morning",
+  "Or start a fresh session"). Now counted: an imperative after ", then" where the words before
+  it are not the session's own; "go ahead and run"; "you'll have to run"; "use" after "your next
+  step is to", with a closed list of system folders (`/tmp`, `/usr`) never a command; "before
+  anything else", which is no standing rule; a command beside a web word that names something
+  built for web addresses ("the new URL guard"); a code block judged by the sentence that
+  introduces it and not the one before it on the line ("You ran the first half. Paste the
+  second:"); a list under a line saying what the session needs ("I need two things:"); and
+  whatever follows a code block that is never closed, which hides nothing. A report back that
+  names the command, a word of its name or the panel a planning command starts is the command's
+  own step and gets no second ask ("Tell me when the panel has finished").
+  Left as built, each pinned by a test named for what it does today, and put to Dan: "you have
+  to" after an opening clause with no comma is missed ("Before I can go on you have to type
+  `/compact`"), since "In the old design you must type `/compact` yourself" has the same shape
+  and must pass; a project folder of one word after "your next step is to use" is held; a loose
+  time ("at your convenience", "before the next build") is held as now; and the session's own
+  plan under a label that names nobody ("Next: run `/code-review` on the diff, then merge.") is
+  held, since "To plan it: type `/plan-lite`" has the same shape and is a hand over.
+  The notice Claude Code writes itself when the account is out of usage needed no change. Claude
+  Code runs its StopFailure hooks there in place of Stop (its own text for that event: "Fires
+  instead of Stop when an API error (rate limit, auth failure, etc.) ended the turn"), and of the
+  45 turns that ended in such a notice in the personal MacBook's 30 days to 2026-11-28 none is
+  followed by a record of stop hooks having run, against 1,659 of 3,089 other turn ends. The
+  earlier counts held those turns only because a count reads the record; the count sets them
+  apart now.
+  Counted on 2026-11-28 over the personal MacBook's 134 interactive sessions of the 30 days
+  before (3,127 turns; the 45 ending in Claude Code's own notice set apart, neither check holding
+  any of them; 3,082 judged): 33 held by both the check as it was and the check as it is, none
+  newly held, 6 newly passed. Read one by one, 4 of the 6 hand the command over for the morning
+  or for when Dan is back and 2 offer it beside starting a new session. Of the 33 still held, 5
+  carry a loose time. Each moved turn is laid to the rule that moved it by running the new check
+  with that one rule put back: 1 to the wordings for later, 1 to another way in the same
+  sentence, 3 to the sentence right after, and 1 that two of those rules each pass.
 - **A call the permission check refused is answered by a step pinned after it, or by one line**
   (#3842). On 2026-11-27 the permission check refused a call that set a row of Dan's to do list.
   The session rightly did not send it again, then told him in eight replies that the row was his
