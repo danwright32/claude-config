@@ -267,8 +267,8 @@ code, out, err = record('handed', '--transcript', t5)
 check('a hand over is still written for a transcript naming no prompt', None if code == 0 and os.path.exists(HANDED(t5)) else 'exit %d, err %r' % (code, err))
 got = state(t5)
 check('and its state is "cannot be read", saying the turn cannot be told, never handed for ever', None if got.startswith('exit 3: ') and 'prompt' in got else got)
-# The review of pull request 3869: once a line naming a prompt was written, that hand over read as
-# none, with exit 0 and nothing said. Which turn it belongs to still cannot be told.
+# A hand over written with no turn stays "cannot be read" after the transcript comes to name a
+# prompt: which turn it belongs to still cannot be told, and "none" there would say nothing of it.
 add(t5, [user('p9', 'the next thing'), assistant()])
 got = state(t5)
 check('a hand over written with no turn stays "cannot be read" once the transcript names a prompt, never none in silence', None if got.startswith('exit 3: ') and 'names no turn' in got else got)
@@ -279,7 +279,7 @@ record('handed', '--transcript', t5)
 said('until the next hand over, in a turn that can be told, replaces it', state(t5), 'handed')
 
 # The same for a hand over file that holds no usable turn however it came to: no turn, a null one,
-# a number, an empty one. Each read as none before.
+# a number, an empty one.
 t5b = transcript('noturn', WORKED('p1'))
 for what, more in (('no turn at all', {}), ('a null turn', {'turn': None}), ('a number for its turn', {'turn': 7}), ('an empty turn', {'turn': ''})):
     with open(HANDED(t5b), 'w') as f:
@@ -365,8 +365,8 @@ said('and the record they leave is one whole hand over', state(t8), 'handed')
 check('with no temp file left behind', None if beside(t8) == [os.path.basename(HANDED(t8))] else 'beside it: %r' % beside(t8))
 
 # ---- Record files whose transcript has gone ----
-# The tidy up deletes files without asking, so each of its limits is held here (the review of pull
-# request 3869 found two it could lose with every suite still passing). It removes exactly two
+# The tidy up deletes files without asking, so each of its limits is held here by a planted file
+# that taking the limit away would remove, or leave. It removes exactly two
 # things: a record this file wrote, for a transcript that is no longer there, and a temp file of this
 # file's own naming that is more than an hour old. Everything else in the folder stays.
 t9 = transcript('kept', WORKED('p1'))

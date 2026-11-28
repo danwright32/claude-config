@@ -2642,10 +2642,9 @@ test('a review handed over and never answered does not hold his next request: th
   expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toEqual([])
 })
 
-// ---- The review of pull request 3869: the one message asks the record first ----
-// Before it, the message went out at any turn end after a refused call. Where the review had been
-// handed over and Dan had closed its picker, that message was the next prompt, the record read none
-// under it, and the box showed behind a review nobody had answered.
+// ---- The one message asks the record first ----
+// A message sent where the review was handed over and Dan closed its picker would be the next
+// prompt: the record reads none under it, and the box would show behind a review nobody answered.
 test("a review handed over and left unanswered when the turn ends: the mod sends nothing, at that turn end or a later one of the same request, and no box shows (#3843)", withKit, async ($, on) => {
   const { w, cards, submitted, reviewAsks, logs } = world(on)
   const asked = () => submitted.filter(s => s.text.startsWith(ASKS_AGAIN))
@@ -2724,8 +2723,8 @@ test("Dan asleep by the turn's end, after a box was held while he was awake: no 
 })
 
 // The mod's two older prompts at a turn's end start a new turn just as the message above does, so
-// each would show the box behind an unanswered review the same way (the lessons review of the first
-// fix found this). None of the three is sent over a review that is handed over and not answered.
+// each would show the box behind an unanswered review the same way. No prompt of the mod about the
+// box is sent over a review that is handed over and not answered.
 const GOAL_PROMPT = 'GOAL ACCOMPLISHED. The /goal'
 
 test("an unanswered review at the turn's end stops the question about shipped work too, with or without an earlier refused call, and for the rest of the request (#3843, #2523)", withLive, async ($, on) => {
@@ -2796,7 +2795,8 @@ test("a turn end that sends no prompt does not ask the record at all (#3843)", w
   expect(reviewAsks).toEqual([])
 })
 
-// ---- The review of pull request 3869: its other findings ----
+// ---- A hold and its message belong to one request; what counts as the turn's work after a failed
+// read; who may answer the review; a met /goal's own prompt; a note that cannot be kept ----
 
 test("a box held in one request, its turn interrupted, then Dan asks for something new: the old request's message is never sent under the new one (#3843)", withKit, async ($, on) => {
   const { w, submitted } = world(on)

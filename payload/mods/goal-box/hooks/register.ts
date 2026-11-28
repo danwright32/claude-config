@@ -348,8 +348,8 @@ const sendHeld = async ($: EngineInterface, id: string, what: string, text: stri
  * work that shipped before a picker answered mid turn).
  * Claimed before it is sent, so two turn ends at once ask once, and released when it did not enter,
  * so a passing failure is asked again at the next turn end (L368).
- * Since the review of pull request 3869 the end of turn review's record is asked first (endRecord):
- * a review handed over this turn that Dan has not answered spends the request's question unsent.
+ * The end of turn review's record is asked first, through `record` (endRecord): a review handed
+ * over this turn that Dan has not answered spends the request's question unsent.
  */
 const askIfDone = async ($: EngineInterface, record: () => Promise<EndRecord>): Promise<void> => {
   const since = (await $.state.get(requestAtRef)).value
@@ -878,7 +878,7 @@ export const register: Register = on => {
       await $.state.set(pickerRef, null)
       // #3843: and a box refused until the review was answered belonged to the request before, so
       // its one message is not sent under this one, where it would say "this request" of the wrong
-      // one and ask for a box under it (the review of pull request 3869). Work he picks in a picker
+      // one and ask for a box under it. Work he picks in a picker
       // does not do this: the hold is remembered across the new request that opens.
       await $.state.set(reviewHeldRef, null)
     }
@@ -916,7 +916,7 @@ export const register: Register = on => {
       // A reading that failed never holds the box and is never passed over in silence: said to Dan,
       // to the session, and kept for the close card's reasons file, where a later session can read it.
       // The box is claimed by now, so nothing here may stop it being drawn: a note that cannot be
-      // kept is said and passed over (the review of pull request 3869).
+      // kept is said and passed over.
       const said = shownUnreadText(review.unread)
       context.push(said)
       $.ui.log(said)
