@@ -630,12 +630,8 @@ const closeCheck = async ($: EngineInterface, seq: number, tries = 0): Promise<v
   // tried every few minutes for good, and the reason says which of the two it is.
   const isTriedAgain = tries < CARRIED_RETRIES
   await writeReasons($, false, [carriedReason({ failed: asked.failed, isTriedAgain })], seen)
-  if (isTriedAgain) armCloseCheck($, seq, tries + 1)
-}
-
-/** Starts a quiet period under `seq`, at whose end the close card is judged; a failure there is logged. */
-const armCloseCheck = ($: EngineInterface, seq: number, tries = 0): void => {
-  $.clock.after(QUIET_MS, () => void closeCheck($, seq, tries).catch(err => debug($, `the close this session card could not be judged (${errorText(err, MOD)})`)))
+  // Armed as the turn end arms the first, on the engine's clock, with a failure there logged alike.
+  if (isTriedAgain) $.clock.after(QUIET_MS, () => void closeCheck($, seq, tries + 1).catch(err => debug($, `the close this session card could not be judged (${errorText(err, MOD)})`)))
 }
 
 /**
@@ -880,7 +876,7 @@ export const register: Register = on => {
     // #3770: the quiet period before the close card, armed under this turn's count.
     const seq = (await $.state.get(closeSeqRef)).value ?? 0
     await $.state.set(closeAnswerRef, { seq, text: e.answer })
-    armCloseCheck($, seq)
+    $.clock.after(QUIET_MS, () => void closeCheck($, seq).catch(err => debug($, `the close this session card could not be judged (${errorText(err, MOD)})`)))
     const goal = await goalNow($)
     if (goal.state !== 'none') return r
     if (!goal.met) {
