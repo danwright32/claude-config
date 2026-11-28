@@ -4,7 +4,7 @@
 #
 #   STREAK_REPO=<owner/name> bash tools/ci-cold-cost-streak.sh
 #
-# The case is `bash tests/test-claude-sync.sh is judged within <limit> units of the yardstick` in
+# The case is `bash tests/test-claude-sync.sh is judged within <its limit, in words>` in
 # payload/hooks/test-slack-drafts-only-gate.sh. Where every sample of it ran out of the gate's 11
 # seconds on the runner it reports unmeasured rather than failing (Dan's decision of 2026-11-26,
 # "3.60.1 Read it as unmeasured"), and an unmeasured part passes. So a real slowdown that made every

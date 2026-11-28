@@ -6609,8 +6609,9 @@ personal MacBook, ten readings each taken in turn at a load of 37 to 103: 5.61 s
 before, 5.33 s and 53.7 after (the middle readings, a unit 0.100 s). No limit was changed with it.
 The limits were set again on 2026-11-23, to 67 units on macOS and 91 off it (Dan's choice, the
 highest reading on each platform plus 15 percent; the comment above them in the gate's suite
-holds the readings). Since 2026-11-26 the Linux limit is 83.2 units of the median yardstick sample
-rather than 91 of the least (#3406, below); macOS keeps 67 of the least.
+holds the readings). From 2026-11-26 the Linux limit was 83.2 units of the median yardstick sample
+rather than 91 of the least (#3406, below), and since #3863 it follows the runner's speed, by the
+same median (below); macOS keeps 67 of the least.
 Suite: `test-slack-drafts-held-once.sh`, which holds each reading by a count and saw each count
 fail on the gate as it was.
 
@@ -6724,6 +6725,69 @@ took. The suite replays CI's own records of that day through `cost.py`
 pass, greens stay green, and a made up record 20 percent dearer than the median passing reading
 fails. Each is replayed by the least sample and 91 too, and must give CI's own verdict. The
 unmeasured rule above and the streak are unchanged.
+
+Since #3863 the Linux limit is no longer one number: it follows the runner's speed (Dan's choice of
+2026-11-27 from a picker, "Limit follows machine speed (Recommended)"). On the same gate work the
+reading moves with the processor GitHub gives the job. The first readings of 34 pull request run
+attempts of 2026-11-27 had a middle of 80.5 units on fast runners (a yardstick unit under 0.100 s),
+73.3 on middle ones and 66.2 on slow ones (0.140 s and over), so 83.2 sat 3 percent over a fast
+runner's ordinary reading and 26 percent over a slow one's. Both failures of that day were fast
+runners, on a pull request that touched nothing the gate reads (run 46080507399, 83.8 and 84.1
+units). The judgement's seconds follow a straight line against the runner's unit, 2.25 s plus 53.5
+units, and each reading is now held to 1.178 times that line, the headroom 83.2 had over the median
+reading, at the whole run's median unit as before. In units the limit is 63.0 plus 2.65 s over the
+unit: 95.3 at 0.0822 s a unit, 83.2 at 0.1314 s, where the line reads the 70.6 that 83.2 was set
+from, and 79.9 at 0.1574 s. So a runner faster than 0.1314 s a unit has a higher limit than it had
+and a slower one a lower limit. A runner faster than the fastest the line was fitted on (0.0768 s a
+unit) is held to that runner's 97.5 units, because the line was not measured past it and would only
+rise there. A yardstick that reads no time at all, or a time below zero, fails the check in words:
+it is never a pass and never unmeasured. The limit is written in `cost_limit` as
+`line:1.178:2.25:53.5:0.0768` (headroom, seconds, units, fastest unit) and `cost.py` reads it,
+refusing a line with a number missing, at or below zero, or read as inf or nan; each record prints
+the limit its runner got as `ceiling`, and the line after its yardstick figures.
+
+Replayed over the 173 recorded run attempts (those 34 and the 139 above), the line gives 173 green,
+where 83.2 gives 169 green, 2 red and 2 that cannot be told. No run that passed 83.2 fails, and the
+two that now pass are the fast runners above. No recorded run holds a real cost rise, so the suite
+shows the limit failing on planted readings: a judgement 20 percent over the line fails on a fast,
+an ordinary and a slow runner, 18.5 percent fails and 17 passes, and 83.3 units still fails at
+0.1314 s a unit and on every slower runner. The suite's CI records, with run 46080507399's two
+attempts added, are replayed three ways, by the line, by the median and 83.2, and by the least
+sample and 91, and each must give the verdict and the readings of its own rule.
+
+What the line gives up. About half the recorded runs get a looser limit than 83.2: 83 of the 173,
+every runner faster than 0.1314 s a unit, 31 of them by over 10 percent and the fastest by 17.2
+(97.5 units). From 0.100 to 0.1314 s a unit the limit is 7.6 percent over 83.2 down to nothing over
+it. A rise under about 18 percent on a fast runner now passes, where 83.2 sat 3 to 5 percent over a
+fast runner's ordinary reading and failed unchanged work with it.
+
+With every run recorded from 2026-11-25 to 2026-11-27 made dearer by one share, and a run counted
+as caught when no reading it recorded is inside the limit, the line catches 11 of the 173 at 10
+percent where 83.2 catches 42 (32 of them fast runners), 34 against 64 at 15 percent, 84 against 90
+at 20, 118 against 106 at 25 and 139 against 128 at 30. The larger counts at 25 and 30 percent are
+not more slowdowns caught.
+They come from slow runners alone (0.140 s a unit and over: 50 against 24 at 25 percent, 60 against
+44 at 30), and on a slow runner a reading past the limit is a judgement that does not finish inside
+the gate's 11 seconds. No judgement recorded as finishing took more than 11.67 s of processor time,
+and the line allows more than that from a unit of 0.1432 s up, which is 79 of the 173 runs (83.2
+allowed more than that from 0.1403 s up, so this is older than the line). Where every judgement of
+the case runs out and the least is past the limit, the case answers unmeasured (above), which
+counts as no failure and leaves the run green. The planted readings of 20 percent over the line on
+a slow runner fail in the suite only because they are written as judgements that finished. On the
+other 94 runs, where the check can fail, the line catches fewer at every size of rise: 6 against 41
+at 10 percent, 23 against 58 at 15, 58 against 80 at 20, 69 against 83 at 25 and 82 against 85 at
+30. So a large rise on a slow runner is not caught on its pull request. It is caught on main, by
+`tools/ci-cold-cost-streak.sh` above, once the case has been unmeasured on five trees in a row. A
+rise of 10 to 15 percent passes on most runs at every speed (139 of the 173 stay green at 15
+percent), and no check holds this case's readings across runs to notice one: the streak reads only
+whether the case was unmeasured.
+
+The line is two numbers measured on one day (on the two days before, the middle run
+sits within 1 percent of it). When the gate's work for this command or GitHub's processors change
+a lot, fit it again from the notes a passing run prints. macOS keeps 67 by the least sample. Of
+those 173 records the fixtures file above held 15 on 2026-11-28. The per run samples of the rest
+were read from GitHub's logs and are not in the repository, and issue #3406 holds their totals
+only, so the replay cannot be redone from the repository alone.
 
 Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
 127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
