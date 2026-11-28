@@ -177,6 +177,18 @@ has "a sentence found nowhere beside a refused call is said to check nothing" "$
 out="$(node "$TOOL" --projects "$W/mixed" 2>&1)"
 has "a refused call whose result does not begin with the sentence is said, beside one that does" "$out" "Of the 2 refused calls the check did read, 1 have a result that does not begin with it, so the sentence no longer covers every refusal and this line misses some."
 
+# #3860: a refused call's record too long for the reader to keep whole is printed cut down, under
+# the record's own id, and the cross check still counts it as read.
+mkdir -p "$W/long/one"
+{
+  prompt l1
+  printf '{"parentUuid":"u","isSidechain":false,"promptId":"l1","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":"%s Reason: [Other]. %s"}]},"uuid":"long-1","toolDenialKind":"automode-blocked","toolUseResult":"Error: denied"}\n' "$DENIED" "$(perl -e 'print "y" x 70000')"
+  said l1 'I checked the deploy and it is live.'
+} > "$W/long/one/l.jsonl"
+out="$(node "$TOOL" --projects "$W/long" 2>&1)"
+has "a refused call in a record of over 65,536 bytes is read as one" "$out" "a call the permission check refused: in 1 turns"
+has "and the cross check counts it as read" "$out" "cross check: 1 tool results of the main conversation begin with the permission check's \"denied\" sentence; 0 of them the check would not read as a refused call."
+
 out="$(node "$TOOL" --projects "$W/empty" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "a folder holding no session record is counted as none, exit 0" ok || check "a folder holding no session record is counted as none, exit 0" "exit=$code"
 has "and says it read none" "$out" "0 session records last written in 30 days read"

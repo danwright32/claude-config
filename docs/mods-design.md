@@ -2628,6 +2628,35 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   calls the check read, 0 whose result begins otherwise. It takes a record kept under two project
   folders once; the 22 above was counted over every folder, and whether its two extra are such
   copies was not checked.
+  What that check could not see (#3860, found by the review of pull request 3854). Four misses,
+  each of which left the turn end quiet, are closed in the reader (`hooks/turn.ts`). A refused
+  call's record over 65,536 bytes was cut down like any tool result; it is now cut down to its top
+  level fields by a scan that steps over strings and nested values, so the kind is still read from
+  the record itself and a record that only holds the words nested inside it is not taken for one.
+  A refusal further back than the 4 MB window was never read; when the window holds no record of
+  another prompt, perl now walks back from the window's start a chunk at a time, printing each user
+  record cut down, each refusal and each `steps` call, and none of Claude's texts, until it meets
+  the turn's first record. The walk has two limits, 400 MB and 1.2 seconds, the second under the 2
+  seconds its caller stops it at, so it answers with what it read and a line saying it stopped; a
+  turn read that way, or a read that did not finish at all, is told to the turn end once
+  (`UNREAD_MARK`) with the same two ways out as a refusal, unless a step pinned in the part that
+  was read or the one line settles it. A stretch never read and a clean turn no longer look alike.
+  A transcript perl names as one it could not open still asks nothing, as before. What the engine
+  answers for a process stopped at its time limit is not in its types and its test engine runs no
+  process, so any failure that is not perl's own reason (which begins with the path) counts as a
+  read that did not finish. A refusal after this mod's own hold in the same turn was never asked
+  about, since a turn is held once; it is now asked about once more, and only what Claude wrote
+  after it can answer it, so the line said for the first refusal does not answer the second. Each
+  further hold needs a call refused since the last, so it cannot loop. A `steps` call that failed
+  counted as answering; the reader now prints each tool result's call id and whether it is an
+  error, and a call whose result is an error answers nothing. Shapes measured on 2026-11-28 over
+  the main conversations' records of 30 days on the personal MacBook (8,528 records): no user
+  record held more than one tool result (0 of 69,470), every refused or denied call's result
+  carried `is_error` and its call's id (2,320 of 2,320), every `steps` call was a block of its own
+  carrying its id (223 of 223), none of the 223 failed, and none of the 22 refusal records was
+  over 65,536 bytes. Left as it is, for Dan to decide: a prompt typed while a turn runs is written
+  under the running prompt's id (111 such records in those 30 days), so the reader starts no new
+  turn at it.
   A phrase stays only if what it catches are steps for Dan, so the five wordings were counted twice
   that day: as first written, and again (7,603 records, 10,501 turns) after two were narrowed to
   leave out what they had wrongly caught. Counts are turns, and "newly held" is the most it could

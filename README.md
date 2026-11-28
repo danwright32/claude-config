@@ -11964,7 +11964,15 @@ left for Dan on the steps card or to say in one line that nothing from it is his
 refusal is yours to do."). Three things answer it: a step the main conversation pins after the
 refusal, that line, and the line that answers every ask of this check, "None of these steps are
 yours to do now." A subagent's refusal is in its own
-record and holds nothing, and a turn that could not be read names no refusal. A page
+record and holds nothing. Since #3860 the refusal is read wherever it sits in the turn: in a
+record too long to keep whole (cut down to its top level fields), and further back than the last
+4 MB, which the reader walks back through to the turn's first record without printing Claude's
+texts. A `steps` call whose result is an error pinned nothing and answers nothing. A call refused
+after this mod already held the turn is asked about once more, and the line said for an earlier
+refusal does not answer it. When the reader could not get to the turn's first record inside its
+limits (`FAR_BYTES` and `FAR_MS`), or did not finish at all, the turn end is told once that the
+turn went unread and a refusal may have gone unseen, with the same two ways out; a transcript
+that is not there still names no refusal. A page
 published with the Artifact tool is judged as it is published, read from the file it came from
 (#1811, `hooks/page.ts`): two list items, numbered or bulleted, that each begin with a thing to do
 at a screen, or any two of ticks, Copy buttons and such a thing to do, make it a page of steps for
@@ -11978,7 +11986,8 @@ not judged. Behaviour in `docs/mods-design.md`, "Manual steps behaviour".
 
 </td><td>
 
-#614, #707, #708, #863, #886, #939, #1215, #1239, #1245, #1608, #1613, #1811, #1955, #3652, #3842
+#614, #707, #708, #863, #886, #939, #1215, #1239, #1245, #1608, #1613, #1811, #1955, #3652, #3842,
+#3860
 
 </td></tr>
 <tr><td>
