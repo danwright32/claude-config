@@ -443,6 +443,31 @@ unset _mv
 # never removes the receiving Mac's own copy. A mod's top level tsconfig.json is NOT excluded: the
 # engine only writes one where none exists and leaves an existing one alone, so it is source.
 
+# A FILE EACH MAC WRITES FOR ITSELF INSIDE A MIRRORED TREE (claude-config#3389). "<tree>/<path>",
+# relative to ~/.claude. The builder agent type is rendered on each Mac from that Mac's own
+# installed rules (write_builder_type), by Dan's decision of 2026-11-25 ("Each Mac writes its own
+# (Recommended)"), and Claude Code reads agent types only from the agents folder, which is mirrored
+# with --delete in both directions. So the one written file is left out of every reading of that
+# tree, on BOTH sides (L390, L625):
+#   a send never stages it, so one Mac's copy is never published. It holds whatever that Mac's
+#   rules import, a list of that Mac's own projects included, and the repository is public;
+#   an apply never deletes it, though the payload does not hold it. The protection is this list,
+#   read on the receiving Mac, never something derived from what the payload carries;
+#   and it is not content a tree holds (tree_holds_files), so an agents folder holding only this
+#   file is the empty folder of a fresh Mac, which clears nothing from the shared copy (#627).
+# Unlike an anchored entry of COMMON_EXCLUDES, which is written once per mirrored tree, an entry
+# here names its tree, so it reaches that one path and nothing else: no file of the same name in
+# hooks, commands or any other tree, and nothing else under agents.
+# tests/test-builder-type-install.sh reads this line and proves both directions, twice over.
+WRITTEN_HERE=('agents/builder.md')
+written_here_excludes(){   # $1 = a mirrored tree name -> one anchored --exclude per line, for that tree's top
+  local w
+  for w in "${WRITTEN_HERE[@]}"; do
+    case "$w" in "$1"/?*) printf -- '--exclude=/%s\n' "${w#"$1"/}" ;; esac
+  done
+  return 0
+}
+
 # desktop alert (no-op if disabled or the notifier isn't installed). Not shown while the Mac is
 # asleep (sleep mode, claude-config#841): what it would have said goes to the log instead, for the
 # morning. The sleep record is read through the tool's own copy of lib/sleep.sh, the one predicate
@@ -2107,6 +2132,9 @@ mirror_rsync_go(){   # $1 = destination root  $2.. = rsync flags -> runs the tre
     if ! mirror_rsync_alone "$d" "$src" "$dst"; then
       combined+=("$src")
       for e in ${anchored[@]+"${anchored[@]}"}; do ex+=(--exclude="/$d$e"); done
+      # A file this Mac writes for itself in this tree (WRITTEN_HERE), in every direction, since
+      # every send, apply and comparison of the trees comes through here.
+      for e in $(written_here_excludes "$d"); do ex+=(--exclude="/$d${e#--exclude=}"); done
       j=0
       while [ "$j" -lt "${#MR_EX_VAL[@]}" ]; do
         [ "${MR_EX_OWNER[$j]}" = "$i" ] && ex+=(--exclude="/$d${MR_EX_VAL[$j]#--exclude=}")
@@ -2123,6 +2151,7 @@ mirror_rsync_go(){   # $1 = destination root  $2.. = rsync flags -> runs the tre
     d="${MR_TREES[$i]}"; src="${MR_SRCS[$i]}"
     if mirror_rsync_alone "$d" "$src" "$dst"; then
       own=()
+      for e in $(written_here_excludes "$d"); do own+=("$e"); done
       j=0
       while [ "$j" -lt "${#MR_EX_VAL[@]}" ]; do
         [ "${MR_EX_OWNER[$j]}" = "$i" ] && own+=("${MR_EX_VAL[$j]}")
@@ -5137,6 +5166,12 @@ tree_holds_files(){   # $1 = a directory  $2.. = anchored rsync --exclude=/path 
       case "${rel##*/}" in $e) skip=1; break ;; esac
     done
     [ -n "$skip" ] && continue
+    # A file this Mac writes for itself in this tree (WRITTEN_HERE, claude-config#3389): never
+    # sent, so not content, exactly as the mirror reads it.
+    for e in "${WRITTEN_HERE[@]}"; do
+      [ "$e" = "${dir##*/}/$rel" ] && { skip=1; break; }
+    done
+    [ -n "$skip" ] && continue
     for e in "$@"; do
       n="${e#--exclude=}"
       case "$n" in
@@ -5658,6 +5693,9 @@ PROT
   fi
   # After every tree has been judged, so this send's own decisions read the record the last run left.
   record_trees_seen
+  # The builder agent type, from the rules this Mac holds at this send (claude-config#3389). After
+  # the mirror, which leaves the file out either way (WRITTEN_HERE), and never staged.
+  write_builder_type
   # hooks block of settings.json, with this Mac's home path tokenized, MERGED against what the
   # payload already holds rather than replacing it (claude-config#300). See merge_hook_blocks.
   if [ -f "$CLAUDE_HOME/settings.json" ]; then
@@ -7628,6 +7666,57 @@ rtk_exclusions_sentence(){
   esac
 }
 
+# ---------- the builder agent type, written on each Mac from its own rules (claude-config#3389) ----------
+# The builder type starts without the rule files, so its prompt carries a copy of them, rendered by
+# skills/orchestrate/render-builder-type.py. Dan chose on 2026-11-25 that each Mac writes its own
+# copy and the sync never carries it ("3.35.1 Each Mac writes its own (Recommended)"). So this runs
+# at every apply and every send, reads THIS Mac's installed rules and installed renderer (never the
+# payload's), and writes agents/builder.md, the file WRITTEN_HERE keeps out of the mirror both ways.
+#
+# A copy installed once goes on being believed after its source moved (L423), which is why it is
+# every apply and every send rather than an install step somebody runs: the watcher sends on each
+# change to a rule file, so the type follows the rules within one send.
+#
+# WRITTEN ONLY WHEN IT DIFFERS, and through a temporary file OUTSIDE the mirrored trees. The watcher
+# sends on any change under agents/, so a rewrite on every send would never settle, and a temporary
+# file beside the target would be a new agents file a send running at that moment could stage.
+#
+# A Mac with no renderer installed has nothing to write from and is left alone without a word: a
+# fresh Mac before its first pull, or a fixture home. Sessions there dispatch builders as before,
+# because the Agent tool does not list the type. Everything else that stops the write is SAID, on
+# stderr and in the sync log, and fails nothing: the earlier copy, if any, stays exactly as it was
+# (the renderer never writes a prompt it could not render whole), and the next apply or send tries
+# again. $1 = applied on an apply, which lists the file among what the pull changed.
+write_builder_type(){
+  local dir="$CLAUDE_HOME/skills/orchestrate" target="$CLAUDE_HOME/agents/builder.md" tmp err rc=0 why=""
+  [ -f "$dir/render-builder-type.py" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    why="python3 is not on PATH"
+  elif ! tmp="$(mktemp "$CLAUDE_HOME/.claude-sync-builder-type.XXXXXX" 2>/dev/null)"; then
+    why="a temporary file could not be made in $CLAUDE_HOME"
+  else
+    err="$(python3 -I "$dir/render-builder-type.py" --rules "$CLAUDE_HOME" 2>&1 >"$tmp")" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      why="the renderer exited $rc: $(printf '%s\n' "$err" | tail -n 1)"
+    elif [ ! -s "$tmp" ]; then
+      why="the renderer printed nothing"
+    elif cmp -s "$tmp" "$target" 2>/dev/null; then
+      rm -f "$tmp"
+      return 0
+    elif ! mkdir -p "$CLAUDE_HOME/agents" 2>/dev/null || ! mv -f "$tmp" "$target" 2>/dev/null; then
+      why="$target could not be written"
+    else
+      [ "${1:-}" = applied ] && record_applied updated "agents/builder.md (the builder agent type, written here from this Mac's rules and never sent)"
+      sync_log_line "wrote the builder agent type at $target from this Mac's rules"
+      return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  echo "claude-sync: the builder agent type at $CLAUDE_HOME/agents/builder.md was NOT written from this Mac's rules, because $why. $(if [ -f "$target" ]; then printf 'The copy already there was left exactly as it was, so builders of that type run on the rules as they stood when it was last written.'; else printf 'There is no copy on this Mac, so sessions here dispatch builders as general purpose agents, as before.'; fi) Nothing else was affected, and the next pull or send tries again. To see why by hand: python3 -I $dir/render-builder-type.py --rules $CLAUDE_HOME --check $target" >&2
+  sync_log_line "the builder agent type was NOT written, because $why"
+  return 0
+}
+
 # The apply's half: write the payload's list into rtk's config when it differs. Never fails the
 # apply: every refusal is said and the rest of the config still lands.
 write_rtk_exclusions(){
@@ -8151,6 +8240,9 @@ $f
   # first time CLAUDE.md arrives importing an index that does not exist here yet, and after a merge
   # or a renumber the index that does exist is one edit behind (#63).
   write_lesson_index "$CLAUDE_HOME"
+  # The builder agent type, from the rules as they now stand on this Mac: after the rule files and
+  # the renderer have landed and the index they import has been written (claude-config#3389).
+  write_builder_type applied
   # Derived from the hook that just landed, for the same reason and at the same moment
   # (claude-config#296).
   ensure_rtk_baseline
@@ -15654,6 +15746,9 @@ local_vs_payload_records(){
       printf 'note\t%s\n' "$d: the payload has no $d yet, so EVERY file under $CLAUDE_HOME/$d is new. The lines below may show them as unchanged: the rsync on this Mac itemizes files under a missing destination that way."
     fi
     ex=""; [ "$d" = skills ] && ex="$(skill_excludes)"
+    # A file this Mac writes for itself in this tree is never sent (WRITTEN_HERE, #3389), so it is
+    # not an edit waiting to go up.
+    ex="$ex $(written_here_excludes "$d" | tr '\n' ' ')"
     # -i is load-bearing: plain `rsync -an` prints NOTHING whatever differs, so
     # this whole section used to be decorative and status always read clean.
     # -c because -a quick-checks on size plus mtime, and a config edit that

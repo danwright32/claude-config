@@ -769,6 +769,10 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   # It only tightens, and a session cannot change a payload Claude Code wrote, so refusing the edit
   # would stop work with no remedy (#2517).
   judged fresh-worktree-base-gate.sh  Edit '{"file_path": "/nonexistent-2517/notes-@@.md", "old_string": "cut @@", "new_string": "b"}' '{}' "notice fresh-worktree-base-gate.sh header"
+  # It holds a builder's edit until it has read the project's own rules (#3389). The judged call is
+  # a builder's edit outside any repository, which passes, so the pair it is compared on is a pass
+  # both times; cut short it names an agent and cannot be parsed, and that it refuses.
+  judged builder-project-rules-gate.sh Edit '{"file_path": "/nonexistent-3389/notes-@@.md", "old_string": "cut @@", "new_string": "b"}' '{"agent_id": "a1b2c3d4", "agent_type": "builder"}' refuse
   judged playwright-subagent-gate.sh  mcp__playwright__browser_navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice playwright-subagent-gate.sh header"
   judged chrome-subagent-tab-gate.sh  mcp__claude-in-chrome__navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice chrome-subagent-tab-gate.sh header"
   # A builder sent with no model, in a session already orchestrating builders, which it refuses. A

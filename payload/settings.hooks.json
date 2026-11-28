@@ -287,6 +287,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/builder-project-rules-gate.sh",
+            "timeout": 15,
+            "onFailure": "block"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/fresh-worktree-base-gate.sh",
             "timeout": 30,
             "onFailure": "block",

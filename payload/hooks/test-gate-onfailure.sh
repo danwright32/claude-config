@@ -72,6 +72,7 @@ REFUSING=(
   amend-force-push-gate.sh
   temp-worktree-gate.sh
   fresh-worktree-base-gate.sh
+  builder-project-rules-gate.sh
   check-rtk-init.sh
   check-zsh-builtins.sh
   check-screenshot-window.sh
@@ -311,6 +312,7 @@ no-verify-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 scratchpad-subagent-gate.sh Write,Bash
 temp-worktree-gate.sh Bash,EnterWorktree
 fresh-worktree-base-gate.sh Edit,Write,MultiEdit,NotebookEdit
+builder-project-rules-gate.sh Edit,Write,MultiEdit,NotebookEdit
 monitor-action-gate.sh Monitor
 handback-claims-gate.sh SubagentHandback
 agent-leftovers-gate.sh SubagentHandback
