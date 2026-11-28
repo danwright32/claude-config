@@ -350,8 +350,8 @@ echo "slack drafts only: with the sources refusal on, the everyday tools are rea
 # a machine fast enough to finish inside its seconds, a state this suite cannot set and can see
 # (#3863). So where the gate answers that it ran out of time, and only there, the command is judged
 # again on the step clock, which no machine's speed can end, and the case is that verdict. The run
-# out is printed as an unmeasured part, so a machine where it always happens is seen. How long the
-# gate takes is held by the cost cases in test-slack-drafts-only-gate.sh.
+# out is printed as an unmeasured part, because on that machine nothing here holds the gate's
+# seconds for that tool.
 everyday_tool() { # everyday_tool <command> <the check's name>: the gate lets the tool through
   run_bash "$1"
   case "$RC $ERR" in
