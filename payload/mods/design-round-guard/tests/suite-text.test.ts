@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { SKIP_QUESTION, calledWith, fromInsideOutput } from '../hooks/rules.ts'
+import { SKIP_QUESTION, calledWith, fromInsideOutput, handedToUnknown } from '../hooks/rules.ts'
 import { call, refusalOf, withKit, world } from './world.ts'
 
 // #3602: a plain run of a test suite, held because text inside the suite file was read as a write
@@ -109,6 +109,13 @@ test('#3602: fromInsideOutput is true only of a plain name made from the text in
   expect(fromInsideOutput('x `a` y', '/s/x `a` y')).toBe(false)
   expect(fromInsideOutput('$(echo x', '/w/slate/app/page.tsx')).toBe(false)
   expect(fromInsideOutput('`echo x', '/w/slate/app/page.tsx')).toBe(false)
+})
+
+test('#3602: handedToUnknown gives no plain name made inside a substitution, and still gives a word the shell hands on as written', () => {
+  const run = (args: { word: string; path: string; unexpanded?: boolean }[]) => ({ script: 'mystery', what: 'a program the mods do not know', unknown: true as const, args })
+  const sub = '$(grep -c "$c" notes.txt)'
+  expect(handedToUnknown([run([{ word: sub, path: '/s/sysctl' }, { word: '$f', path: '/s/app/page.tsx' }])]).map(h => h.path)).toEqual(['/s/app/page.tsx'])
+  expect(handedToUnknown([run([{ word: sub, path: '/s/app/page.tsx', unexpanded: true }])]).map(h => h.path)).toEqual(['/s/app/page.tsx'])
 })
 
 test('#3602: calledWith writes a word named through an operator as the whole word, and leaves what it cannot write', () => {

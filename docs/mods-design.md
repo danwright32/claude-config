@@ -3031,6 +3031,39 @@ required: three that must move (held, then passed), four that change or sit besi
 (held both ways), a script file handed a live substitution (held both ways), and four that pass
 both ways. Not established: the work MacBook's records, and any call older than 2026-10-26.
 
+**A word a helper names through an operator, and a loop's word inside a substitution (#3602), for
+the design round guard.** Two readings of a script's own text, both in `rules.ts`.
+`calledWith` writes a call's word in place of each mention the body makes of it, and that covers a
+word named through one operator whose operand holds no expansion, quote or brace of its own
+(`OWN_FORM`): a piece (`${3:0:1500}`, `${@:2}`), an end taken off (`${1%.bak}`, `${1##*/}`), a
+replacement, a change of case and `${1:?usage}` are written as the whole word, since the shell
+hands on that word or part of it; a count (`${#1}`) as a number; a default (`${1:-none}`) as the
+call's word, or the default where the call gave none; an alternative (`${1:+--flag}`) as its own
+text where the call gave a word. So a helper that prints the first 1,500 characters of what it
+compared is read as one that prints it, and a helper that hands any such form to a program or
+writes to it is read as handing on or writing the call's file, and held. `${!1}`, `${1:=x}`,
+`${0}` and an operand holding an expansion (`${1:-$2}`) are not written out, and a body naming one
+is judged as a program the reader does not know, as is a body that keeps what it was handed in a
+variable.
+`handedToUnknown` gives no plain name the reader made from the text inside a command substitution
+(`fromInsideOutput`). mod-kit's write reader reads a word once for each word of a for loop whose
+variable it names, writing the loop's word in place wherever the variable stands, inside a
+substitution too, and gives each piece of a word holding a space as a name of its own. For
+`check "$1" "$(grep -qxF "$want" <<< "$code" && echo ok)"` in a loop over `'sysctl vm.swapusage'`
+that gave `sysctl` and `vm.swapusage` as files `check` was handed. Such a name is a word of the
+command inside the substitution, which the readers read as a command of its own. It is dropped
+only where the word's own name is a command's output, nothing beside its substitutions names a
+variable (`"$f$(date)"` may spell a name itself), and the name given holds no substitution (one
+that does is judged as a name the shell fills in, as before). Still held, each with a test in
+`tests/suite-text.test.ts`: a loop that writes each of its words, one that hands each to a program
+or to a helper that hands it on, and a loop's word handed over beside a substitution.
+Not covered, and still held: a helper that keeps what it was handed in a local variable and writes
+a file of that name under a folder the suite made with mktemp (`make_repo` in
+test-lessons-advisory.sh), which needs the body's variables followed and the folder shown to be a
+temporary one; and the values of an array assignment (`never=( "$home/x/App.swift" )`), which
+mod-kit's pipeline gives as commands of their own, so a value with a space in it is read as a
+program handed a file.
+
 **The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
 to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was
 decided on, the design round guard 13 and ask before saving 3 (swiftc 8, gh 3, chk 2, swift 1, set

@@ -10832,6 +10832,13 @@ that mark too, whichever run is handed it (a program the reader does not know, a
 tool: `mystery "x \$(a | b) y"` runs), unless it names a look changing file anywhere in its text,
 where it is judged as before and held, as is a word with no mark or with anything but the reader's
 own `true` for one,
+a helper's body read with the call's word in place also where it names the word through an
+operator (`${3:0:1500}`, `${1%.bak}`, `${1:-none}`, `${@:2}`: the whole word for a piece of it, so
+a helper that prints the start of what it compared runs and one that hands a piece of a name to a
+program is still held), and a plain name the reader makes from the text inside a command
+substitution (a for loop's word, written in place where the loop's variable is named inside
+`"$(grep -c "$want" notes.txt)"`) judged as no file the script hands on, while a loop that writes
+each of its words or hands each to a program is still held,
 while what the script itself was handed, passed on to such a program (`mystery "$1"`), is still not
 caught), a patch git apply, git am or patch reads from a file judged
 since #3022 by the files it changes (mod-kit's patch reader, placed as the command places them), and
