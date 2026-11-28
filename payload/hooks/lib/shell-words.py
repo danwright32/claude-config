@@ -1659,9 +1659,10 @@ def after_a_name(text, at):
     return i < at and text[i:at] not in RESERVED
 
 
-def crude_inner(text):
+def crude_listed(text, cut):
     """The stretches of one piece of the crude cut that may be commands of their own
-    (claude-config#3473): what follows each opener, closer or backquote, and what stands before a
+    (claude-config#3473), each as (where it starts, the stretch), `cut` being crude_cut's reading
+    of the piece: what follows each opener, closer or backquote, and what stands before a
     closer or a backquote. The cut left a `$( )`, a pair of backquotes, a `<( )` and a subshell
     whole, so `x=$(git push)` named no git command, and `(git push)` named the subcommand `push)`.
 
@@ -1681,23 +1682,212 @@ def crude_inner(text):
     the script runs, which it does not (L11). Only that `(` is passed over. Every `)` stays an
     edge, the one that closes it too, because the parenthesis may be glued to a name inside a quoted
     word, `x=$(git push origin "a(b")`, and the `)` after it then closes the substitution.
+
+    Two passes, so that nothing the cut gave can be lost to a finer one (claude-config#3786). The
+    first is the rule above, word for word: its edges, its order. The second reads the finer cut
+    (crude_cut) by the same rule and adds each stretch the first did not give: what follows an
+    ampersand, a `${ ` or coproc, and what stands before an ampersand, which is a whole command
+    with its own words (`git push origin main & wait` gave the push the words `& wait`). A stretch
+    the first pass gave whole is still given whole, so `(git push --force & x)` is still read as
+    one push with every word it had, and once more as the push the shell runs.
+
+    The two passes are handed back apart, (the first's, the second's), because crude_commands gives
+    every stretch of the first pass, of every piece, before any of the second: the list as #3473
+    left it is then the start of the list, record for record.
     """
-    out, at, first = [], 0, True
+    out, more, spans, at, first = [], [], set(), 0, True
     for m in CRUDE_EDGE.finditer(text):
         if m.group() == "(" and after_a_name(text, m.start()):
             continue
         part = text[at:m.start()]
         if part.strip() and (not first or m.group() in (")", "`")):
-            out.append(part)
+            out.append((at, part))
+            spans.add((at, m.start()))
         at, first = m.end(), False
     if not first and text[at:].strip():
-        out.append(text[at:])
+        out.append((at, text[at:]))
+        spans.add((at, len(text)))
+    for start, end, left, right in cut:
+        part = text[start:end]
+        if not part.strip() or not (left or right in (")", "`") or right[:1] == "&"):
+            continue
+        if (start, end) not in spans:
+            more.append((start, part))
+        more.extend((start, again) for again in crude_more(part, left))
+    return out, more
+
+
+# The edges of the finer cut (claude-config#3786): CRUDE_EDGE's, and three more places a command
+# starts that the cut read straight past.
+#   A single ampersand. `sleep 1 & git push` named no git command. Every & is an edge but the one
+#   written straight after an angle bracket, the & of `>&`, `<&`, `2>&1` and `>&-`: bash 3.2, zsh,
+#   sh, dash and ksh each run nothing after those (measured 2026-11-27, the words after each run
+#   as a marker in an empty folder). The & of `&>` and `&>>` IS an edge: bash, zsh and sh read a
+#   redirect there, and dash and ksh send the command to the background and run what follows the
+#   file name. What is listed there starts with the redirect, `> out.log`, and a redirect alone
+#   names no program, so the usual spelling, with nothing after the file name, adds no command.
+#   The angle bracket has to be a live one. After one a backslash escapes, `echo a\>&cmd`, the
+#   bracket is a character of the word and the & sends the command to the background: all five
+#   shells ran cmd, and none did after `echo a\\>&cmd`, where the backslash is the escaped one
+#   (measured 2026-11-27). half_a_redirect counts the backslashes.
+#   The `${` of `${ cmd; }`, which ksh 93 runs and bash 5.3 documents: a `${` with a space or a tab
+#   after it. With a line break or a `|` after it the cut already ends the piece there.
+#   The word coproc, which zsh runs a command after and bash 4 and later documents. A redirect may
+#   be glued to it: zsh ran the command of `coproc>/dev/null cmd` (measured 2026-11-27). The
+#   stretch then starts with the redirect, which every caller reads past to the program.
+CRUDE_MORE_EDGE = re.compile(CRUDE_EDGE.pattern + r"|\$\{(?=[ \t])|(?<!&)&+|(?<![\w$./-])coproc(?=[ \t(<>])")
+# The edges that start a nest: a shell of its own, whose cd moves nothing outside it.
+CRUDE_OPENERS = ("$(", "<(", ">(", "=(", "(", "`")
+# How many cds of one piece have their directory read from the whole rest of the piece, and how
+# far past its own stretch a later one is read (crude_nests). Set here, not measured.
+CRUDE_CD_WHOLE = 32
+CRUDE_CD_AHEAD = 256
+
+
+def half_a_redirect(text, at):
+    """Whether the & at text[at] is the second half of a `>&` or a `<&`: it is written straight
+    after an angle bracket that no backslash escapes. An even count of backslashes before the
+    bracket leaves it live, since each pair is one escaped backslash."""
+    if at == 0 or text[at - 1] not in "<>":
+        return False
+    i = at - 1
+    while i > 0 and text[i - 1] == "\\":
+        i -= 1
+    return (at - 1 - i) % 2 == 0
+
+
+def crude_cut(text):
+    """One piece cut at every edge of the finer cut: (start, end, left, right) for each stretch,
+    blank ones too, left and right the edges either side of it and "" at the piece's two ends.
+
+    The `(` written straight after a name is passed over as crude_listed passes over it, but for the
+    one glued to coproc, which is a word that takes a command after it as the reserved words do.
+    No shell on the Mac this was written on reads `coproc(cmd)` (bash 3.2 has no coproc and zsh 5.9
+    takes the parenthesis another way), so that one is listed unmeasured, on the side of more.
+    The & of a `>&` or a `<&` is passed over too (half_a_redirect).
+    """
+    out, at, left = [], 0, ""
+    for m in CRUDE_MORE_EDGE.finditer(text):
+        edge = m.group()
+        if edge == "(" and after_a_name(text, m.start()) and not (left == "coproc" and at == m.start()):
+            continue
+        if edge[:1] == "&" and half_a_redirect(text, m.start()):
+            continue
+        out.append((at, m.start(), left, edge))
+        at, left = m.end(), edge
+    out.append((at, len(text), left, ""))
     return out
 
 
-def crude_commands(s, cwd=""):
-    """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all,
-    and after the pieces of that cut the commands that may be written inside one (crude_inner).
+def crude_redirected(text, cut):
+    """The finer cut of a piece as bash, zsh and sh read a `&>` in it: a redirect, which ends no
+    command, so the stretch before the & and the one that starts with the > are one stretch.
+
+    dash and ksh send the command before the & to the background, which is the reading crude_cut
+    gives, and for a cd the two differ in where every command after it runs:
+    `(cd d &>/dev/null; cmd)` ran cmd in d in bash, zsh and sh and in the starting folder in dash
+    and ksh (measured 2026-11-27). So crude_commands reads the directories once by each.
+    """
+    out = []
+    for start, end, left, right in cut:
+        if out and out[-1][3][:1] == "&" and start < end and text[start] == ">":
+            out[-1] = (out[-1][0], end, out[-1][2], right)
+        else:
+            out.append((start, end, left, right))
+    return out
+
+
+def crude_more(part, left):
+    """A second reading of the stretch `part`, which follows the edge `left`, where the first names
+    another command than the shell runs.
+
+    After coproc and a name, bash runs the compound command that follows the name
+    (`coproc NAME { cmd; }`), so where a reserved word follows a name the stretch is given again
+    from that word. After an ampersand, zsh reads a `!` glued to it as its disown mark and runs
+    what follows (`true &!git push`, measured 2026-11-27), where bash runs a program named `!git`.
+    """
+    if left == "coproc":
+        m = re.match(r"\s*[A-Za-z_]\w*\s+(?=(\S+))", part)
+        if m and m.group(1) in RESERVED:
+            return [part[m.end():]]
+    elif left[:1] == "&" and re.match(r"!\S", part):
+        return [part[1:]]
+    return []
+
+
+def crude_nests(text, cut, nests, piped):
+    """Where each stretch of a piece runs by the crude cut's second reading of directories, as
+    {start of the stretch: directory}, moving `nests` past the piece (claude-config#3786).
+
+    The first reading is the one crude_commands always had: every cd it can see as a piece moves
+    every command after it, and a cd it cannot see as a piece moves nothing. It read the push of
+    `(cd /tmp/x && git push)` in the session's folder, and the push after `x=$(a; cd /tmp/b; c)`
+    in /tmp/b. This one keeps a directory for each nest open: an opener copies the directory it is
+    written in, a `)` or the backquote that closes drops the copy, and a cd moves the innermost one
+    only, whether the cd is a piece or a stretch of one. `nests` holds them, outermost first, each
+    [directory, OLDPWD, the edge that opened it, the directory and OLDPWD its list started with].
+
+    Three cds move nothing: one sent to the background by the ampersand after it, one handed to
+    coproc, and, at an ampersand, every cd of the list it ends, since bash, sh, dash and ksh run
+    `cd d && true & cmd` with cmd in the folder the list started in. zsh runs that cmd in d, which
+    is what the first reading says, so both are listed. A cd inside `${ cd d; }` moves the shell
+    (ksh, measured 2026-11-27), so `${` opens no nest. A cd with a nest among its words has its
+    directory read from the whole rest of the piece, as the first reading reads it, and moves when
+    the piece ends; a stretch that is no cd itself is never read on into the nest after it.
+
+    The nests are counted from the edges alone, so a parenthesis inside a quoted word or the `)` of
+    a case pattern inside a subshell miscounts them. That can only add a wrong directory to the
+    ones a command is listed in: the first reading's is always among them.
+
+    The cost is held in step with the piece's length. Reading the whole rest of the piece for every
+    cd with a nest among its words cost the square of it: 40,000 characters of `cd a (` took 7
+    seconds where the cut before took none (measured 2026-11-27 by the review of #3786's pull
+    request), and a gate past its time limit refuses. So only the first CRUDE_CD_WHOLE such cds of
+    a piece are read to its end, which is every one of them in a command a person writes. A later
+    one is read from its stretch and the CRUDE_CD_AHEAD characters after it, enough for the
+    directory unless it is longer than that, and then the directory named is a cut one: a folder
+    the command is listed in besides the one it always had, never in its place. The cds waiting
+    for the piece to end are kept by nest, so an ampersand drops its nest's in one step.
+    """
+    there, late, reads = {}, {}, 0
+    for start, end, left, right in cut:
+        if (left == "`" and nests[-1][2] == "`") or (left == ")" and len(nests) > 1):
+            nests.pop()
+        elif left in CRUDE_OPENERS:
+            nests.append([nests[-1][0], nests[-1][1], left, nests[-1][0], nests[-1][1]])
+        nest, part = nests[-1], text[start:end]
+        there[start] = nest[0]
+        whole = not right or right == ")" or (right == "`" and nest[2] == "`")
+        if part.strip() and right[:1] != "&" and left != "coproc":
+            target = cd_target(part)
+            if target is not None and whole:
+                nest[0], nest[1] = moved(nest[0], nest[1], target)
+            elif target is not None:
+                target = cd_target(text[start:] if reads < CRUDE_CD_WHOLE else text[start:end + CRUDE_CD_AHEAD])
+                reads += 1
+                if target is not None:
+                    # Keyed by the nest itself, which the entry keeps alive, so no other nest
+                    # made later can be handed the same key.
+                    late.setdefault(id(nest), (nest, []))[1].append(target)
+        # The & of `|&` is a pipe's, and the cut left it at the start of its piece.
+        if right[:1] == "&" and not (piped and end == 0):
+            nest[0], nest[1] = nest[3], nest[4]
+            late.pop(id(nest), None)
+    for nest, targets in late.values():
+        for target in targets:
+            nest[0], nest[1] = moved(nest[0], nest[1], target)
+    return there
+
+
+def crude_split(s, cwd=""):
+    """The reading used when commands() cannot be trusted, in its two parts: (the list as
+    claude-config#3473 left it, the records claude-config#3786 adds). crude_commands is the two
+    joined. They are handed back apart for _records, which reaches this reading below the top as
+    well, for a string a wrapper hands a shell or a script file, and gives every record of the
+    second part after all the records of the WHOLE command line, not only after this text's.
+
+    The reading is a cut at every separator, quotes and all, and after the pieces of that cut the
+    commands that may be written inside one (crude_listed).
 
     It can only see MORE commands than are there, which is the direction a gate that must not miss a
     push needs (L42), and it keeps the cds in order, so the last one before a push still governs it.
@@ -1710,16 +1900,78 @@ def crude_commands(s, cwd=""):
     could turn its answer either way. Each is given in its piece's directory, and a cd among them
     moves nothing, so no caller is handed less, or anything in another place, than before
     (claude-config#3473).
+
+    A second reading of the directories runs beside that one (crude_nests, claude-config#3786), in
+    which a cd inside a subshell or a substitution governs what follows it there and nothing after
+    the nest closes. Where it puts a command somewhere else, the command is given once more, there:
+    the push of `(cd /tmp/x && git push)` is read in the session's folder as before and in /tmp/x.
+    A text is cut on the separators it always was, so the pieces are the same; the separators are
+    kept only to tell where a list starts.
+
+    Everything claude-config#3786 lists comes after EVERYTHING the cut gave before it: the pieces,
+    then the commands #3473 found inside them, exactly the list that change left, and only then the
+    stretches of the finer cut and the second folder of any record. Placed beside the record they
+    belong to, the new ones stood ahead of old ones of a later piece, and a caller that answers at
+    the first record settling its question was answered by a new one: agent-overrides.py's
+    runs_script took `bash other.sh`, listed after a single ampersand, ahead of the merge helper in
+    a later `$( )`, and a Monitor that was refused was allowed. A new record can now only be
+    reached where every old one settled nothing.
+
+    A text holding a `&>` has its directories read twice by the second reading, once as dash and
+    ksh take it (the command before it goes to the background) and once as bash, zsh and sh do
+    (a redirect, crude_redirected), each with nests of its own, and a command is given in every
+    folder either names.
     """
-    out, found, old = [], [], None
-    for text in re.split(r"&&|\|\||;|\||\n", s):
-        if text.strip():
-            found.extend((cwd, inner) for inner in crude_inner(text))
-            out.append((cwd, text))
-            target = cd_target(text)
-            if target is not None:
-                cwd, old = moved(cwd, old, target)
-    return out + found
+    out, found, more, old = [], [], [], None
+    # One set of nests for each way of reading a `&>`, the second only where the text holds one.
+    readings = [[[cwd, None, "", cwd, None]] for _ in range(2 if "&>" in s else 1)]
+    joined = False
+
+    def elsewhere(theres, start, cwd):
+        """The folders the second reading runs the stretch at `start` in that are not cwd."""
+        dirs = []
+        for there in theres:
+            d = there.get(start, cwd)
+            if d != cwd and d not in dirs:
+                dirs.append(d)
+        return dirs
+
+    parts = re.split(r"(&&|\|\||;|\||\n)", s)
+    for n in range(0, len(parts), 2):
+        text, sep = parts[n], parts[n - 1] if n else ""
+        # A line break after && or a pipe starts no list: the shell reads on for the command.
+        joined = joined or sep in ("&&", "||", "|")
+        if not text.strip():
+            continue
+        if not joined:
+            for nests in readings:
+                nests[-1][3:] = nests[-1][:2]
+        joined = False
+        cut = crude_cut(text)
+        theres = [crude_nests(text, cut, readings[0], sep == "|")]
+        if len(readings) > 1:
+            theres.append(crude_nests(text, crude_redirected(text, cut), readings[1], sep == "|"))
+        more.extend((d, text) for d in elsewhere(theres, 0, cwd))
+        before, after = crude_listed(text, cut)
+        for start, inner in before:
+            found.append((cwd, inner))
+            more.extend((d, inner) for d in elsewhere(theres, start, cwd))
+        for start, inner in after:
+            more.append((cwd, inner))
+            more.extend((d, inner) for d in elsewhere(theres, start, cwd))
+        out.append((cwd, text))
+        target = cd_target(text)
+        if target is not None:
+            cwd, old = moved(cwd, old, target)
+    return out + found, more
+
+
+def crude_commands(s, cwd=""):
+    """The reading used when commands() cannot be trusted, as one list: the list as
+    claude-config#3473 left it, then every record claude-config#3786 adds (crude_split, which says
+    what each part holds and why the second comes after the first)."""
+    old, new = crude_split(s, cwd)
+    return old + new
 
 
 def alone(text):
@@ -3009,7 +3261,7 @@ def headed_string(text):
     return found[0], found[1]
 
 
-def _records(s, cwd, depth, scripts=None, fields=True):
+def _records(s, cwd, depth, scripts=None, fields=True, later=None, cut=None):
     """(records, crude) for a command line: each record (dir, text, wrap, rest, assigns, field, depth), a
     wrapper's commands right after it (claude-config#1478). wrap is "" for a command that is no
     wrapper, the wrapper's name (`bash -c`, `eval`, ...) for one whose string was read, and that name
@@ -3018,11 +3270,35 @@ def _records(s, cwd, depth, scripts=None, fields=True):
     script file a command runs as well, right after its record, and is given (path, text) for each
     one read (claude-config#2301). fields=False leaves each field "" for a caller that reads none: it
     is a reading of each command's words, and every_command, which drops it, asked for all 14,000 of
-    claude-sync's on every claude-sync line the Slack drafts gate judged (claude-config#2918)."""
-    try:
-        cut, crude = commands(s, cwd), False
-    except Unreadable:
-        cut, crude = crude_commands(s, cwd), True
+    claude-sync's on every claude-sync line the Slack drafts gate judged (claude-config#2918).
+
+    The records claude-config#3786 taught the crude cut to list (crude_split's second part) are the
+    one exception to "right after": wherever the cut is reached, at the top or for a string or a
+    script file below it, they are held back, each with its directory and its depth, and given
+    after every other record of the WHOLE command line, each with the commands it runs right after
+    it in turn. So the list this gave before #3786 is the start of the list it gives now, record
+    for record, for every text, and a caller that answers at the first record that settles its
+    question, or that keeps state from one record to the next, reaches every record it reached
+    before, in the order and the state it had, ahead of any new one. Given right after their own
+    string's records they stood ahead of the outer text's later commands: after
+    `eval 'true & bash other.sh; echo "never closed' ; bash merge-when-ready.sh 7`, whose outer
+    text the reader reads and whose string it cannot, agent-overrides.py's runs_script was answered
+    by `bash other.sh` and a Monitor running the merge helper was allowed. What that costs: a late
+    record stands away from its wrapper, so a caller that tells which shell or script a record is
+    inside by the records around it tells that of a late one from what stands at the end of the
+    list. Its directory and its depth are its own. later and cut are this function's alone: later
+    is the queue of held back records the outermost call drains, and cut is one of them, read in
+    place of s."""
+    outermost = later is None
+    if outermost:
+        later = []
+    crude = False
+    if cut is None:
+        try:
+            cut = commands(s, cwd)
+        except Unreadable:
+            (cut, new), crude = crude_split(s, cwd), True
+            later.extend((d, t, depth) for d, t in new)
     out = []
     for d, t in cut:
         if fields:
@@ -3037,7 +3313,7 @@ def _records(s, cwd, depth, scripts=None, fields=True):
                 # (glued_script), with the commands of a string it hands a shell read after it.
                 inner = []
                 if found is not None and depth < MAX_DEPTH:
-                    inner = _records(found[1], d, depth + 1, scripts, fields)[0]
+                    inner = _records(found[1], d, depth + 1, scripts, fields, later)[0]
                 out.append((d, t, "direct\x1d" + kept, rest, assigns, field, depth))
                 out.extend(inner)
                 continue
@@ -3054,14 +3330,14 @@ def _records(s, cwd, depth, scripts=None, fields=True):
                 scripts.append(found_script)
                 at = len(scripts) - 1
                 # Its commands, never its reason: the script's record keeps WHY_FILE below.
-                inner, _ = _records(found_script[1], d, depth + 1, scripts, fields)
+                inner, _ = _records(found_script[1], d, depth + 1, scripts, fields, later)
                 if not inner:
                     del scripts[at]
         if string is not None:
             if depth >= MAX_DEPTH:
                 why = why or WHY_DEEP
             else:
-                inner, inner_crude = _records(string, d, depth + 1, scripts, fields)
+                inner, inner_crude = _records(string, d, depth + 1, scripts, fields, later)
                 if inner_crude:
                     why = why or WHY_QUOTE
                 for _, t2, _, rest2, _, _, _ in inner:
@@ -3074,6 +3350,15 @@ def _records(s, cwd, depth, scripts=None, fields=True):
                         why = WHY_EVAL_CD
         out.append((d, t, wrapper + ("\x1d" + why if why else ""), rest, assigns, field, depth))
         out.extend(inner)
+    if outermost:
+        # The held back records, in the order they were met, each walked as a command of its own
+        # at the depth it was found at. One may hold back more (a string of its own that only
+        # the crude cut reads), which join the end of the same queue.
+        n = 0
+        while n < len(later):
+            d, t, at = later[n]
+            n += 1
+            out.extend(_records("", "", at, scripts, fields, later, [(d, t)])[0])
     return out, crude
 
 
@@ -3084,7 +3369,10 @@ def every_command(s, cwd="", scripts=None):
     string cannot be read, and then says why; depth is how many wrappers the command is inside.
     scripts, a list, reads each script file a command runs too, its commands right after the script's
     record one wrapper deeper, and is given (path, text) for each file read (claude-config#2301); a
-    relative script name is resolved only against an absolute cwd, so pass the session's directory."""
+    relative script name is resolved only against an absolute cwd, so pass the session's directory.
+    One kind of record is not right after its wrapper: those claude-config#3786 taught the crude cut
+    to list come after every other record of the whole text, each with its own directory and depth
+    (_records says why, and what a caller that reads a record's neighbours should know)."""
     out = []
     for d, t, wrap, _, _, _, depth in _records(s, cwd, 0, scripts, fields=False)[0]:
         wrapper, _, why = wrap.partition("\x1d")
