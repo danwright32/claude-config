@@ -64,6 +64,10 @@
 #       print only hookSpecificOutput.additionalContext for <event>, with no systemMessage: for a
 #       context that has to be handed over again (after a compaction, to a subagent) while the
 #       person was already told once (checkout-behind-notice.sh, claude-config#2712).
+#   hook_notice_into <object> <text>
+#       print <object>, one this library made, with <text> ahead of what it says to the person
+#       and hands the session: for a second thing to say once the one object is already made
+#       (lib/push-scope.sh, claude-config#3739). Returns 1, printing nothing, for no object.
 #   hook_ask_json <reason> [<notice>]
 #       print a PreToolUse ask: hookSpecificOutput with permissionDecision "ask" and <reason> as
 #       its permissionDecisionReason, which puts the call in front of the person, plus <notice> as
@@ -172,6 +176,34 @@ print(json.dumps(out))' 2>/dev/null && return 0
   else
     printf '{"systemMessage": "%s"}\n' "$(_hn_string "$text")"
   fi
+}
+
+# hook_notice_into <object> <text>: for a hook with a second thing to say after its one object
+# is already made. Prints that object with <text> ahead of what it says to the person and of
+# what it hands the session, each cut to HN_MAX, so standard output still holds exactly one
+# object. An object that handed the session nothing hands it what it says to the person, under
+# PostToolUse. Prints nothing and returns 1 for text that is no object, and with no python3.
+hook_notice_into() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  printf '%s' "$1" | HN_TEXT="$2" HN_MAX="$HN_MAX" python3 -c "$_HN_PY_CUT"'
+import sys
+try:
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+except ValueError:
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.exit(1)
+note = os.environb[b"HN_TEXT"]
+def ahead(said):
+    return cut(note + (b" The hook itself said: " + said.encode("utf-8", "replace") if isinstance(said, str) and said else b""))
+said = d.get("systemMessage")
+h = d.get("hookSpecificOutput")
+if not isinstance(h, dict):
+    h = {"hookEventName": "PostToolUse"}
+h["additionalContext"] = ahead(h.get("additionalContext", said))
+d["systemMessage"] = ahead(said)
+d["hookSpecificOutput"] = h
+print(json.dumps(d))' 2>/dev/null
 }
 
 hook_context_json() {

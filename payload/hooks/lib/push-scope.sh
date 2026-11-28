@@ -483,32 +483,12 @@ ps__say_reading() {   # $1 = first | second  $2 = the working folder
 ps__after_note() {   # $1 = the hook's name  $2 = why the second reading was not judged, as a clause
   printf 'NOTICE: %s: %s This hook runs after the command, so the command has already run and nothing here refuses it. What it hides was not judged by this hook, because %s. Do not run the command again on account of this notice (claude-config#3739).' "$1" "$PS__HIDES" "$2"
 }
-# Puts the notice in PS_NOTE into the object on standard input, ahead of what that object says to
-# the person and hands the session, and prints the one object. Exits 1 for text that is no object.
-PS__NOTE_INTO='
-import json, os, sys
-note = os.environb[b"PS_NOTE"].decode("utf-8", "replace")
-n = int(os.environ["PS_NOTE_MAX"])
-d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
-if not isinstance(d, dict):
-    sys.exit(1)
-def join(said):
-    m = note + (" The hook itself said: " + said if isinstance(said, str) and said else "")
-    return m if len(m) <= n else m[:n] + " ... (cut short at %d characters)" % n
-said = d.get("systemMessage")
-h = d.get("hookSpecificOutput")
-if not isinstance(h, dict):
-    h = {"hookEventName": "PostToolUse"}
-h["additionalContext"] = join(h.get("additionalContext", said))
-d["systemMessage"] = join(said)
-d["hookSpecificOutput"] = h
-print(json.dumps(d))'
 # The one way a hook that runs after the command ends when the second reading could not be
 # judged: with the notice, and exit 0. Claude Code hears a hook that exits 0 on standard output
 # alone, so the notice is always the one thing printed there: through lib/hook-notice.sh where the
 # hook loaded it, carrying what the first run said, and inside the first run's own object where
-# it said one, since a second object beside it would spoil both. Handed no working folder there
-# was no first run, and the notice says the hook did nothing else.
+# it said one (hook_notice_into), since a second object beside it would spoil both. Handed no
+# working folder there was no first run, and the notice says the hook did nothing else.
 ps__after_end() {   # $1 = the hook's name  $2 = the working folder, or nothing where none could be made  $3 = why, as a clause
   local note first="" merged=""
   note="$(ps__after_note "$1" "$3")"
@@ -520,7 +500,7 @@ ps__after_end() {   # $1 = the hook's name  $2 = the working folder, or nothing 
   fi
   printf '%s\n' "$note" >&2
   case "$first" in
-    '{'*) merged="$(printf '%s' "$first" | PS_NOTE="$note" PS_NOTE_MAX="${HN_MAX:-9000}" python3 -c "$PS__NOTE_INTO" 2>/dev/null)" || merged="" ;;
+    '{'*) if declare -F hook_notice_into >/dev/null 2>&1; then merged="$(hook_notice_into "$first" "$note")" || merged=""; fi ;;
   esac
   if [ -n "$merged" ]; then
     printf '%s\n' "$merged"
