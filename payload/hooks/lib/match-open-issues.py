@@ -22,8 +22,17 @@ repo is RESOLVED rather than assumed: failing open in a project whose checkout s
 workspace root meant this never ran there at all, and a footnote at the foot of the findings does
 not read as "this whole review was blind" (claude-config#344).
 
+ITEM MODE (claude-config#3555). Orchestrate's intake asks, for an item from Slack, whether an open
+issue or an open pull request already covers it, through skills/orchestrate/find-existing.sh. It is
+this matcher with two differences, both confined to that mode: it reads open pull requests as well,
+and an item that names no file path may still match on words, under the strict word rule written
+beside RARE_DF below. It does NOT fail
+open: an intake that could not look must say so and exit 2, because there an empty answer would
+send a second builder after work already in hand.
+
 Usage:  match-open-issues.py <project dir> < findings.txt > annotated.txt
         match-open-issues.py --paths < issues.json > paths.json   (the area check's reader)
+        match-open-issues.py --item <owner/repo or folder> < item.txt   (orchestrate's intake)
 """
 import json
 import os
@@ -136,25 +145,45 @@ def checkout_dir(project):
     return project, ""
 
 
+def gh_list(argv, cwd, timeout):
+    """(rows, gh's exit code, gh's first error line, what went wrong). The one place a list is asked
+    of gh, for the review and the intake alike. `what went wrong` is "" when rows is a JSON list.
+
+    `argv` is the whole command, "gh" first, the way every other hook writes the gh command it
+    BUILDS: a list that starts at the subcommand is the shape word-position-scan.py refuses as a
+    hand written READING of one (claude-config#1188)."""
+    try:
+        out = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
+                             timeout=timeout, errors="replace")
+    except Exception as exc:
+        return None, None, "", "could not be run (%s)" % type(exc).__name__
+    if out.returncode != 0:
+        return None, out.returncode, (out.stderr or "").strip().splitlines()[:1], "refused"
+    if not out.stdout.strip():
+        return None, 0, "", "empty"
+    try:
+        rows = json.loads(out.stdout)
+    except Exception:
+        return None, 0, "", "not json"
+    if not isinstance(rows, list):
+        return None, 0, "", "not json"
+    return rows, 0, "", ""
+
+
 def open_issues(project):
     """(issues, why it could not be read). Both empty means the repo genuinely has no open issue."""
     where, unresolved = checkout_dir(project)
     if unresolved:
         return [], unresolved
-    try:
-        out = subprocess.run(
-            ["gh", "issue", "list", "--state", "open", "--limit", "300",
-             "--json", "number,title,body"],
-            cwd=where, capture_output=True, text=True, timeout=TIMEOUT, errors="replace")
-    except Exception as exc:
-        return [], "gh could not be run (%s)" % type(exc).__name__
-    if out.returncode != 0:
-        return [], "gh refused: %s" % (out.stderr or "").strip().splitlines()[:1]
-    if not out.stdout.strip():
+    rows, _, err, wrong = gh_list(["gh", "issue", "list", "--state", "open", "--limit", "300",
+                                   "--json", "number,title,body"], where, TIMEOUT)
+    if wrong.startswith("could not be run"):
+        return [], "gh " + wrong
+    if wrong == "refused":
+        return [], "gh refused: %s" % err
+    if wrong == "empty":
         return [], "gh answered with nothing at all"
-    try:
-        rows = json.loads(out.stdout)
-    except Exception:
+    if wrong:
         return [], "gh answered with something that is not the issue list"
     return ([(r.get("number"), r.get("title") or "", r.get("body") or "")
              for r in rows if isinstance(r, dict) and r.get("number")], "")
@@ -164,10 +193,44 @@ def words(text):
     return {w for w in re.findall(r"[a-z][a-z0-9_-]{2,}", text.lower()) if w not in GENERIC}
 
 
-def match(finding, issues):
-    """The issues that already cover this finding, best first. Empty when nothing clearly does."""
+# Item mode's word rule, for an item naming no file path. It needs BOTH of two signals:
+#   - at least TITLE_SHARED words of the issue's or pull request's TITLE are in the item. A title is
+#     the summary of a subject; a body is long enough to share three words with almost anything
+#     (a Slack item about low free space on a backup drive shared "alert", "free", "morning" and
+#     "space" with the body of an issue about the free space warning's projection, and only "free"
+#     and "space" with its title);
+#   - at least RARE_SHARED of the words they share are RARE in this repository's open issues and
+#     pull requests, held by at most RARE_DF of them. Rarity is measured on the repository's own
+#     text, which is the answer to "every repo has its own generic vocabulary and no list here can
+#     know it": a word most issues use says nothing about which one this is.
+# A matcher that cries wolf is ignored, so the rule is strict and misses wording that differs:
+# nothing printed means no open item shares the item's words, never that none covers it. Measured on
+# 2026-11-27 against claude-config's 200 open issues and 74 open pull requests, TITLES ONLY: 0 of 12
+# made up items nothing covers matched anything, 6 of 7 paraphrases of open items found theirs, and
+# 1 unrelated neighbour was offered beside them. Bodies were not read, so a match a body would add
+# or take away is unmeasured (claude-config#3555's pull request has the detail).
+RARE_DF = 3
+RARE_SHARED = 2
+TITLE_SHARED = 3
+
+
+def rare_words(texts):
+    """The words held by at most RARE_DF of `texts`, each text counted once per word."""
+    df = {}
+    for text in texts:
+        for w in words(PATH_RE.sub(" ", text)):
+            df[w] = df.get(w, 0) + 1
+    return {w for w, n in df.items() if n <= RARE_DF}
+
+
+def match(finding, issues, rare=None, most=2):
+    """The issues that already cover this finding, best first, as (number, title, shared words).
+    Empty when nothing clearly does.
+
+    `rare` is item mode's word set (see rare_words). Left None, as the end of turn review leaves it,
+    a text naming no file path never matches, exactly as it always has."""
     named = set(paths(finding))
-    if not named:
+    if not named and rare is None:
         # With no file path there is nothing specific enough to match on. Title words alone
         # produced false siblings twice in the milestone helper, always claiming a cluster that was
         # not there, and the same words would do the same here (claude-config#265).
@@ -181,22 +244,150 @@ def match(finding, issues):
     for number, title, body in issues:
         text = title + "\n" + body
         shared_paths = {p for p in named if p in text}
-        if not shared_paths:
-            continue
+        shared_words = fw & words(PATH_RE.sub(" ", text))
         # A shared path and nothing else is a file two unrelated findings both mention. The words
         # are what say it is the same SUBJECT, and they are only ever a tie breaker. Two of them,
         # because one generic word is the false sibling this repo has already been caught by twice.
-        shared_words = fw & words(PATH_RE.sub(" ", text))
-        if len(shared_words) < 2:
+        if shared_paths and len(shared_words) >= 2:
+            hits.append((len(shared_paths), len(shared_words), number, title, shared_words))
             continue
-        hits.append((len(shared_paths), len(shared_words), number, title))
-    hits.sort(reverse=True)
-    return [(n, t) for _, _, n, t in hits[:2]]
+        if rare is not None:
+            in_title = fw & words(PATH_RE.sub(" ", title))
+            shared_rare = shared_words & rare
+            if len(in_title) >= TITLE_SHARED and len(shared_rare) >= RARE_SHARED:
+                hits.append((0, len(in_title) + len(shared_rare), number, title,
+                             in_title | shared_rare))
+    hits.sort(key=lambda h: (h[0], h[1], h[2]), reverse=True)
+    return [(n, t, sorted(s)) for _, _, n, t, s in hits[:most]]
+
+
+# ---- item mode: orchestrate's intake (claude-config#3555) ----
+
+# How many open issues, and separately open pull requests, one look reads. gh pages through them a
+# hundred at a time, so 1000 is ten requests per list; claude-config had 178 and 44 open on
+# 2026-11-26. A list that comes back FULL may have more behind it, and the look says so rather than
+# reading the newest thousand as all of them.
+def env_number(name, default, kind):
+    """A number from the environment, or the default when unset or not a number. Read here rather
+    than with a bare int() at import, where a bad value would crash the end of turn review too, a
+    mode that must never cost the review."""
+    try:
+        value = kind(os.environ.get(name) or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+ITEM_LIMIT = env_number("CLAUDE_ITEM_MATCH_LIMIT", 1000, int)
+ITEM_TIMEOUT = env_number("CLAUDE_ITEM_MATCH_TIMEOUT", 60, float)
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+TITLE_REF_RE = re.compile(r"#(\d+)\b")
+
+
+def could_not_look(why):
+    sys.stdout.write("COULD NOT LOOK: %s\n" % why)
+    return 2
+
+
+def item_where(target):
+    """(gh's extra args, the directory gh runs in, how to name the repository, why it cannot look)."""
+    if os.path.isdir(target):
+        where, unresolved = checkout_dir(target)
+        if unresolved:
+            return None, None, None, unresolved
+        try:
+            top = subprocess.run(["git", "-C", where, "rev-parse", "--show-toplevel"],
+                                 capture_output=True, text=True, timeout=ITEM_TIMEOUT,
+                                 errors="replace")
+        except Exception as exc:
+            return None, None, None, "git could not be run (%s)" % type(exc).__name__
+        if top.returncode != 0 or not top.stdout.strip():
+            return None, None, None, ("%s is not inside a git repository, so there is no issue "
+                                      "tracker to read" % target)
+        return [], top.stdout.strip(), "the repository at %s" % top.stdout.strip(), ""
+    if REPO_RE.match(target):
+        return ["--repo", target], None, target, ""
+    return None, None, None, ("%s is neither a folder nor owner/repo, so there is no issue tracker "
+                              "to read" % target)
+
+
+def item_read(kind, fields, extra, where, name):
+    """(rows, why it could not be read)."""
+    noun = "open issues" if kind == "issue" else "open pull requests"
+    rows, _, err, wrong = gh_list(["gh", kind, "list"] + extra +
+                                  ["--state", "open", "--limit", str(ITEM_LIMIT), "--json", fields],
+                                  where, ITEM_TIMEOUT)
+    first = (err[0] if err else "").strip()
+    if wrong == "refused" and "disabled issues" in first:
+        return None, "%s has its issue tracker turned off (gh: %s)" % (name, first)
+    if wrong == "refused":
+        return None, "gh could not read the %s of %s: %s" % (noun, name, first or "no reason given")
+    if wrong.startswith("could not be run"):
+        return None, "gh %s, so the %s of %s were not read" % (wrong, noun, name)
+    if wrong == "empty":
+        return None, "gh answered with nothing at all for the %s of %s" % (noun, name)
+    if wrong:
+        return None, "gh answered with something that is not the list of %s of %s" % (noun, name)
+    return [r for r in rows if isinstance(r, dict) and r.get("number")], ""
+
+
+def pr_names(pr):
+    """What a pull request says about the issues it covers: the ones GitHub records it closing,
+    else the ones its title names, else that it names none."""
+    closes = [c.get("number") for c in (pr.get("closingIssuesReferences") or [])
+              if isinstance(c, dict) and c.get("number")]
+    if closes:
+        return "closes " + ", ".join("#%d" % n for n in closes)
+    named = TITLE_REF_RE.findall(pr.get("title") or "")
+    if named:
+        return "names " + ", ".join("#%s" % n for n in named)
+    return "names no issue"
+
+
+def item_main(target):
+    text = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
+    if not text.strip():
+        return could_not_look("no item text on standard input, so there was nothing to match")
+    extra, where, name, why = item_where(target)
+    if why:
+        return could_not_look(why)
+    issues, why = item_read("issue", "number,title,body", extra, where, name)
+    if why:
+        return could_not_look(why)
+    prs, why = item_read("pr", "number,title,body,closingIssuesReferences", extra, where, name)
+    if why:
+        return could_not_look(why)
+    entries = [("issue", r) for r in issues] + [("pull request", r) for r in prs]
+    texts = ["%s\n%s" % (r.get("title") or "", r.get("body") or "") for _, r in entries]
+    rare = rare_words(texts)
+    hits = match(text, [(i, r.get("title") or "", r.get("body") or "")
+                        for i, (_, r) in enumerate(entries)], rare=rare, most=3)
+    out = []
+    if hits:
+        out.append("MAY ALREADY BE COVERED in %s (the orchestrating session decides):" % name)
+        for i, title, shared in hits:
+            kind, r = entries[i]
+            line = "%s #%d: %s" % (kind, r["number"], title)
+            if kind == "pull request":
+                line += "  (%s)" % pr_names(r)
+            out.append(line + "  [shares: %s]" % ", ".join(shared))
+    for noun, rows in (("open issues", issues), ("open pull requests", prs)):
+        if len(rows) >= ITEM_LIMIT:
+            out.append("READ ONLY THE NEWEST %d %s of %s: any older one was not compared."
+                       % (ITEM_LIMIT, noun, name))
+    if out:
+        sys.stdout.write("\n".join(out) + "\n")
+    return 0
 
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--paths":
         return paths_main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--item":
+        if len(sys.argv) != 3 or not sys.argv[2]:
+            return could_not_look("usage: match-open-issues.py --item <owner/repo or folder> "
+                                  "< item text")
+        return item_main(sys.argv[2])
     project = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
     text = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
     if "FINDING" not in text:
@@ -217,7 +408,7 @@ def main():
     out = []
     for line in text.split("\n"):
         if line.startswith("FINDING"):
-            for number, title in match(line, issues):
+            for number, title, _ in match(line, issues):
                 line += "  [already #%d: %s]" % (number, title[:70])
         out.append(line)
     sys.stdout.write("\n".join(out))

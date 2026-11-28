@@ -1214,6 +1214,50 @@ printf '%s' '[{"name":"changelog/technical"}]' > "$ST/labels"
 out="$(CHANGELOG_REGISTRY="$REG" MWR_CHANGELOG_GATE="$DIR/require-changelog-tag.sh" run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1178 control: the real gate lets a labelled pull request through the helper" "0" "$rc"
 
+# An announcement merges through the helper on an approval that was only ever in the session
+# (claude-config#3742 item 1). The helper hands every gate a payload naming no transcript and a
+# session id that is no session's, so the real gate can find his approval only on the record. His
+# answer gets there when he gives it: announce-answer-note.sh, the real hook, runs once the picker is
+# answered and notes it, and the gate's question reads it back from the session's own transcript.
+# No label command and no typed merge ran in between, which is what used to write an approval.
+REG_ANN="$WORKDIR/repos-announce.json"
+printf '%s\n' '{"repos":[{"name":"Widget","repo":"acme/widget","changelogFrom":"2026-01-01","announceChannel":"C0000TEST02"}]}' > "$REG_ANN"
+ANN_WORDING=$'@here\n**Handing a call back**\n\nYou can now hand a call back to the queue.'
+ANN_BODY=$'prose\n\n## Changelog\nAgents can now hand a call back to the queue.\n\n## Announcement\n'"$ANN_WORDING"$'\n\n## Testing\nran it'
+ANN_RECORD="$WORKDIR/announce-record"
+ann_fresh() { fresh "$OLD" 0 "$GREEN"; printf '%s' '[{"name":"changelog/announce"}]' > "$ST/labels"; printf '%s' "$ANN_BODY" > "$ST/body"; }
+ann_run() { CHANGELOG_REGISTRY="$REG_ANN" ANNOUNCE_APPROVALS_DIR="$ANN_RECORD" MWR_CHANGELOG_GATE="$DIR/require-changelog-tag.sh" run 7 --repo acme/widget --squash; }
+if . "$DIR/lib/announce-approval-fixture.sh" 2>/dev/null && declare -F aaf_shown >/dev/null; then ok
+else bad "#3742 lib/announce-approval-fixture.sh is missing beside this suite, so no session could be built"; aaf_shown() { :; }; aaf_talk() { :; }; fi
+ann_fresh
+out="$(ann_run)"; rc=$?
+check_eq "#3742 control: an announcement nobody asked Dan about is refused through the helper" "1" "$rc"
+check "#3742 in the gate's words" "its announcement is not wording Dan approved" "$out"
+check_eq "#3742 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+# The session asks him: the file opened in front of him, the picker put, the hook on his answer, and
+# then his answer in the transcript, which Claude Code writes after the hook has run.
+ann_file="$(aaf_shown "$WORKDIR/announce-wording" "$WORKDIR/announce-talk.jsonl" "$ANN_WORDING")"
+ann_picker="$(aaf_talk "$WORKDIR/announce-talk.jsonl" put acme/widget "$ann_file")"
+noted="$(aaf_talk "$WORKDIR/announce-talk.jsonl" payload "$ann_picker" acme/widget "$ann_file" | ANNOUNCE_APPROVALS_DIR="$ANN_RECORD" bash "$DIR/announce-answer-note.sh" 2>&1)"; rc=$?
+check_eq "#3742 the hook that notes his answer runs clean and says nothing" "0|" "$rc|$noted"
+aaf_talk "$WORKDIR/announce-talk.jsonl" answer "$ann_picker" acme/widget "$ann_file"
+ann_fresh
+out="$(ann_run)"; rc=$?
+check_eq "#3742 R2 still possible: an announcement he approved in the session merges through the helper, which names no session ($(printf '%s' "$out" | tr '\n' ' ' | cut -c1-900))" "0" "$rc"
+check_eq "#3742 and it is merged" "1" "$(count gh-calls 'pr merge')"
+check "#3742 his approval is on the record, with pull request 7 as the one that used it" '"kind": "used"' "$(grep '"pr": 7' "$ANN_RECORD/record.jsonl" 2>/dev/null)"
+check "#3742 as an approval of his, read back from the transcript" "\"picker\": \"$ann_picker\"" "$(grep '"kind": "approved"' "$ANN_RECORD/record.jsonl" 2>/dev/null)"
+# The same route with his Not yet: the note is taken and approves nothing.
+ANN_RECORD="$WORKDIR/announce-record-notyet"
+ann_file="$(aaf_shown "$WORKDIR/announce-wording-notyet" "$WORKDIR/announce-talk-notyet.jsonl" "$ANN_WORDING")"
+ann_picker="$(aaf_talk "$WORKDIR/announce-talk-notyet.jsonl" put acme/widget "$ann_file")"
+aaf_talk "$WORKDIR/announce-talk-notyet.jsonl" payload "$ann_picker" acme/widget "$ann_file" | ANNOUNCE_APPROVALS_DIR="$ANN_RECORD" bash "$DIR/announce-answer-note.sh" >/dev/null 2>&1
+aaf_talk "$WORKDIR/announce-talk-notyet.jsonl" answer "$ann_picker" acme/widget "$ann_file" "Not yet"
+ann_fresh
+out="$(ann_run)"; rc=$?
+check_eq "#3742 R2: his Not yet, noted by the same hook, merges nothing through the helper" "1" "$rc"
+check_eq "#3742 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+
 # The design score gate (#1364) is asked at the merge as well: a pull request whose closing keywords
 # name a Match the settled design issue below 100% is not merged through the helper any more than
 # when typed.
@@ -1285,6 +1329,30 @@ out="$(run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1995 a title edited during the wait stops the merge" "1" "$rc"
 check "#1995 in the gate's words" "title now names a work organisation" "$out"
 check_eq "#1995 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+
+# The lessons gate (#3343) is asked at the same two moments. Whether Dan has answered for the lesson
+# entries a pull request changes is known at once, so a merge waiting for him stops before a check
+# run and a lessons review are spent on it (L667); and a push while this waits can change an entry,
+# so it is asked again at the pinned merge. Its refusal is a decision: one ask, a stop, no retry.
+fresh "$OLD" 0 "$PENDING"
+printf 'Refusing to merge PR #7: it changes lesson entries in payload/LESSONS.md, and Dan has not answered the lesson picker for them.' > "$ST/lessons-gate-deny"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#3343 a pull request the lessons gate refuses stops the helper" "1" "$rc"
+check "#3343 in the gate's words, naming it" "lessons-merge-gate.sh refused the merge of #7 before any wait: Refusing to merge PR #7: it changes lesson entries" "$out"
+check_eq "#3343 before any wait" "0" "$(count sleeps '.')"
+check_eq "#3343 asked once, not again and again" "1" "$(grep -c 'tool_input' "$ST/lessons-gate-payloads" 2>/dev/null || true)"
+check_eq "#3343 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#3343 with the lessons gate allowing it, the merge goes through" "0" "$rc"
+check "#3343 the lessons gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/lessons-gate-payloads" 2>/dev/null)"
+check_eq "#3343 asked before the wait and again at the merge" "2" "$(grep -c 'tool_input' "$ST/lessons-gate-payloads" 2>/dev/null || true)"
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"; printf 'an entry changed after Dan answered' > \"\$ST/lessons-gate-deny\"" > "$ST/on-sleep"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#3343 an entry changed during the wait stops the merge" "1" "$rc"
+check "#3343 in the gate's words" "lessons-merge-gate.sh refused the merge of #7 at ${OLD:0:7}: an entry changed after Dan answered" "$out"
+check_eq "#3343 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
 # Every script this helper runs is named from the environment only under the test marker
 # (claude-config#2231 for the work names gate, #2317 for the rest): a script named there would stand
 # in for a merge gate, the lessons review or the worktree check on every merge this helper makes.
@@ -1301,7 +1369,8 @@ for marker in "" 0; do
   check_eq "#2317 outside a test run (marker '$marker') no script named in the environment is run" "" "$(cat "$ST/decoys-asked" 2>/dev/null)"
   check_eq "#2317 and the merge goes through the installed gates (marker '$marker')" "0" "$rc"
   for g in block-red-merge.sh pr-review-gate.sh require-changelog-tag.sh design-score-gate.sh \
-           require-verification-run.sh check-closing-merge.sh check-work-names-merge.sh lib/pr-review.sh; do
+           require-verification-run.sh check-closing-merge.sh check-work-names-merge.sh lessons-merge-gate.sh \
+           lib/pr-review.sh; do
     check "#2317 outside a test run the installed $g is run (marker '$marker')" "$g" "$(cat "$ST/installed-asked" 2>/dev/null)"
   done
 done
@@ -1329,7 +1398,7 @@ printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
 out="$(fake_in "$REPO" HOOK_TESTS_RUNNING=1 MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh" \
   MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh" MWR_VERIFY_GATE="$STUBS/verify-gate.sh" \
   MWR_CLOSING_GATE="$STUBS/closing-gate.sh" MWR_WORK_NAMES_GATE="$STUBS/work-names-gate.sh" MWR_REVIEW_LIB="$STUBS/pr-review.sh" \
-  MWR_WORKTREE_CHECK= bash "$FAKE_HELPER" 7 --repo acme/widget --squash)"; rc=$?
+  MWR_LESSONS_GATE="$STUBS/lessons-gate.sh" MWR_WORKTREE_CHECK= bash "$FAKE_HELPER" 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#2399 control: under the test marker the merge goes through after its wait" "0" "$rc"
 check "#2399 control: under the test marker the sleep named in MWR_SLEEP does the wait" "30" "$(cat "$ST/decoy-sleeps" 2>/dev/null)"
 check "#2399 control: under the test marker the clock named in MWR_NOW is read" "read" "$(cat "$ST/decoy-nows" 2>/dev/null)"

@@ -88,11 +88,18 @@ plant(){
   note "$PROJ/-Users-x-proj--claude-worktrees-w1/memory/MEMORY.md"
   note "$PROJ/-private-tmp-abc/$RUN.jsonl"
   note "$PROJ/-private-tmp-new/$RUN.jsonl"
+  # A headless run started in the user temp folder ($TMPDIR, /private/var/folders/<a>/<b>/T), where
+  # the test suites start most of theirs (#3235: 4,827 such project folders on the personal MacBook on
+  # 2026-11-26, 1,048 MB); and Dan's own project whose name holds the same words partway along.
+  note "$PROJ/-private-var-folders-kd-98c3x-T-tmp-abc/$RUN.jsonl"; note "$PROJ/-private-var-folders-kd-98c3x-T-tmp-abc/$RUN/tool-results/r.txt"
+  note "$PROJ/-private-var-folders-kd-98c3x-T-tmp-new/$RUN.jsonl"
+  note "$PROJ/-Users-x-private-var-folders-notes/$RUN.jsonl"
   age "$PROJ" 15
   # Ten days old: past the 7 days kept until #3413, inside the 14 kept since.
   note "$PROJ/-Users-x-proj/$SUB/subagents/agent-new.jsonl"; age "$PROJ/-Users-x-proj/$SUB/subagents/agent-new.jsonl" 10
   note "$PROJ/-Users-x-proj--claude-worktrees-w2/$RUN.jsonl"; age "$PROJ/-Users-x-proj--claude-worktrees-w2" 10
   age "$PROJ/-private-tmp-new" 2
+  age "$PROJ/-private-var-folders-kd-98c3x-T-tmp-new" 2
   age "$OUTSIDE" 30
 }
 # Every path under a folder with its time and size, read the same way on macOS and Linux.
@@ -167,6 +174,9 @@ ok "transcripts: an old worktree run is gone, folder and all" "[ ! -e '$PROJ/-Us
 ok "transcripts: an old /private/tmp run is gone, and its emptied folder" "[ ! -e '$PROJ/-private-tmp-abc' ]"
 ok "transcripts: a worktree run 10 days old stays, since they are kept 14 days" "[ -f '$PROJ/-Users-x-proj--claude-worktrees-w2/$RUN.jsonl' ]"
 ok "transcripts: a recent /private/tmp run stays" "[ -f '$PROJ/-private-tmp-new/$RUN.jsonl' ]"
+ok "transcripts: an old run started in the user temp folder is gone, and its emptied folder" "[ ! -e '$PROJ/-private-var-folders-kd-98c3x-T-tmp-abc' ]"
+ok "transcripts: a recent run started in the user temp folder stays" "[ -f '$PROJ/-private-var-folders-kd-98c3x-T-tmp-new/$RUN.jsonl' ]"
+ok "transcripts: Dan's own old session stays though its project name holds the same words" "[ -f '$PROJ/-Users-x-private-var-folders-notes/$RUN.jsonl' ]"
 LOG="$H/state/keep-rules/removed.log"
 ok "log: one line per removed item, with its size" "grep -q '	removed	notes: tar file	[0-9][0-9]*	$E/t1/base.tar\$' '$LOG'"
 ok "log: the folder line carries its size" "grep -q '	removed	notes: folder in a task folder	[1-9][0-9]*	$E/t1/fixtures\$' '$LOG'"

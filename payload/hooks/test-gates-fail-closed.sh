@@ -191,6 +191,7 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_gate block-red-merge.sh          "gh pr merge 5 --squash"         ALLOW_RED_MERGE
   declare_gate check-closing-merge.sh      "gh pr merge 5 --squash"         SKIP_CLOSING_CHECK
   declare_gate check-work-names-merge.sh   "gh pr merge 5 --squash"         -
+  declare_gate lessons-merge-gate.sh       "gh pr merge 5 --squash"         -
   declare_gate check-work-names-publish.sh "gh pr create --title T --body B" -
   declare_gate require-changelog-tag.sh    "gh pr merge 5 --squash"         ALLOW_UNTAGGED_MERGE
   declare_gate require-verification-run.sh "gh pr merge 5 --squash"         ALLOW_UNVERIFIED_MERGE
@@ -634,6 +635,10 @@ declare_advisory(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   # so it declares a fallback for each library instead, and test-session-end-notice.sh runs it with
   # each one gone (claude-config#1949).
   declare_advisory sync-stuck-notice.sh    UserPromptSubmit "-"
+  # announce-answer-note.sh runs after a picker, which this table's payloads cannot make. It loads
+  # its library before it reads what the call was, so with the library gone it says so on any call,
+  # this one included (claude-config#3742).
+  declare_advisory announce-answer-note.sh PostToolUse  "gh pr view 5"
 } > "$WORK/advisory"
 # A stand in rtk, so rtk-rewrite.sh reaches the reading it needs the library for on a machine with no
 # rtk or a different one: it rewrites every command by putting rtk in front.
@@ -734,6 +739,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged require-changelog-tag.sh     Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged check-closing-merge.sh       Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged check-work-names-merge.sh    Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
+  judged lessons-merge-gate.sh        Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged check-work-names-publish.sh  Bash "$(bash_call 'gh pr create --title T --body B')" '{}' refuse
   judged require-verification-run.sh  Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged require-issue-fields.sh      Bash "$(bash_call "gh issue create --title 'x' --body 'y'")" '{}' refuse
@@ -777,6 +783,12 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged db-write-ask.sh mcp__claude_ai_Supabase__execute_sql '{"query": "update runs set note = '"'"'@@'"'"' where false", "project_id": "probe"}' '{}' "ask db-write-ask.sh header"
   # And about a database client in a shell command it cannot parse (#2536).
   judged db-write-ask.sh              Bash "$(bash_call "psql -c 'delete from runs where false'")" '{}' "ask db-write-ask.sh header"
+  # It asks Dan before a connector tool deletes or changes something live (#3618), so a delete it
+  # cannot parse is asked about, naming the payload. No connector is reached: it reads a name.
+  judged connector-change-ask.sh mcp__claude_ai_Regal_MCP__delete-team '{"teamId": "team-@@", "description": "cut @@"}' '{}' "ask connector-change-ask.sh header"
+  # It asks Dan before a skill shipped by an MCP server loads (#3615), so a Skill call it cannot
+  # parse is asked about, naming the payload. No skill is loaded and no server reached: it reads a name.
+  judged server-skill-ask.sh Skill '{"skill": "claude_ai_Docs:pdf-@@", "args": "cut @@"}' '{}' "ask server-skill-ask.sh header"
 } > "$WORK/judged"
 # Every blocking gate is in the table, so one added later is not exempt by being unlisted (L96).
 while IFS= read -r g; do

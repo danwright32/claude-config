@@ -645,6 +645,18 @@ Rejected along the way:
   borrowing them gave one tree a different verdict hour to hour (#953). The gate type checks against
   one build's types pinned in `tools/typescript/claude-code-types` instead, beside
   `claude plugin validate`, which reads the module the way the engine will.
+- **One notification for every outcome of the check (until #3759).** A mod not listed, a mod refused
+  and a validation the bound stopped all set one flag, so on 2026-11-26 a validation that was merely
+  slow at a load average of about 60 was shown to Dan as "a mod is not loading on this Mac". A time out
+  measures `claude`, not the mod, so it is said as could not check and notifies after
+  `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` syncs in a row for the same mod (the number and its measurement
+  are in the table of limits), counted in `.mod-check-timeouts` once per sync, by a tag naming the
+  sync, since one send can check twice. One sync posts at most one notification about time outs,
+  naming every mod due (six timed out in one sync on 2026-11-26). The only other notifications are for
+  a record that cannot be read: once when a time out meets it, and once, not on every sync, while it
+  cannot be set aside. The other two outcomes still notify at once. Waiting
+  longer under load, or skipping the check, was left alone: the 30 second bound is a limit, and
+  changing it is Dan's decision.
 - **Treating an absent `payload/mods` as an empty one.** git cannot record an empty folder, so a
   Mac whose last mod was deleted publishes a `.gitkeep`; without it the other Mac found no tree,
   skipped it, and kept every mod.
@@ -946,6 +958,7 @@ that is added both fail until this table is updated.
 | 0.1 seconds | `SYNC_POLL_INTERVAL=0.1` | How finely claude-sync notices that the hook suite runner it started has ended, and that a held sync lock has been released | Beside a hook suite measured between 220 and 441 seconds, the difference between this and the two seconds it replaces is invisible, and the granularity was never load bearing. It is the whole cost in the test suite, where real pulls run against a stub runner that returns in milliseconds: measured 2026-08-30, a pull noticed such a runner 306ms after it finished against 4,203ms at a four second poll. No deadline moves with it, both being measured against the clock, which had to be made true of the lock's own ceiling in the same change because that one was counting turns of its loop, proved by #205 | 2026-08-30 |
 | 1 nested run | `SUITE_MAX_DEPTH=1` | The suite's own depth allowance | Every place the suite spawns itself is one level down and nothing in it legitimately needs a run nested two deep, proved by #34 | 2026-08-17 |
 | 20 minutes | `SUITE_WALL_DEFAULT=1200` in hooks/lib/suite-deadline.sh, the limit every suite arms with, overridden for one run by `SUITE_WALL_TIMEOUT` | Any suite, started directly or by the runner, is stopped as hung, and everything it started is killed | One number for all of them, derived from the slowest suite that takes it. Measured 2026-09-18 on this Mac: test-run-all-tests.sh, the slowest of those, took 89 seconds alone at load 6 and 70 to 76 seconds with three copies at once at load 25. Re-read 2026-09-19 from the runner's own timings store (~/.cache/claude-config/suite-timings), where the slowest suite armed with this default is test-run-all-tests.sh at 90 seconds and the next is test-subagent-issue-harvest.sh at 62, so every other suite has more headroom still. The worst slowdown on record is 5.6x, the sync suite's 348 seconds idle against 1943 at load 160 to 188 on 2026-08-22, which would put the slowest of these near 500 seconds, so the limit is 13x its idle time and 2.4x that worst case. Before this only one suite had a bound at all, and 152 copies of that one were found at zero CPU the day it was measured, the oldest seven hours old. tests/test-claude-sync.sh is the one suite that does NOT take this default: it legitimately runs for 1943 seconds under load, so it arms at its own `SUITE_TIMEOUT` plus 60 seconds, which is 30 of its watchdog's 2 second polls, so the watchdog that can name the section it stopped in is always the one that speaks at the ceiling, proved by #444 | 2026-09-19 |
+| 5 syncs | `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY=5` | A mod whose `claude plugin validate` was stopped at `SYNC_CLAUDE_CHECK_TIMEOUT` on this many syncs in a row notifies, once per run of them; fewer are said as could not check in the output and in status, and notify nobody | Read from this Mac's whole sync log on 2026-11-26 (2.7 MB, 2026-09-09 to 2026-11-26): 677 runs in which the mod check ran (an apply, or a logged time out), 41 of them with a time out, which formed 43 runs of time outs for one mod: 33 of one sync, 9 of two, and one of four (mod-kit, 6:40 PM to 8:14 PM ET on 2026-11-25, at a load average near 60). 5 is the smallest number none of them reached, so not one measured slow answer would have notified, while a check that never finishes is heard after five syncs that check: the run of four took an hour and a half on a busy evening, and the log averages about nine such syncs a day. The count only grows on syncs that check, so a quiet day stretches it, which is the price of not notifying on load, proved by #3759 | 2026-11-26 |
 | 30 seconds | `SYNC_CLAUDE_CHECK_TIMEOUT=30` | One `claude plugin list` or `claude plugin validate` asked about the mods is stopped, and the pull says the mods could not be checked | Measured 2026-10-03 on this Mac, three runs each: `plugin list --json` took 0.37 to 0.40 seconds and `plugin validate` 0.31 to 0.44, so this is about 70x the slowest. The check runs under the sync lock on the watcher's and the timer's path, so the cost of waiting too long is every sync behind a hung claude (a login prompt, a self update), while a slow first launch still fits inside it, proved by #606 | 2026-10-03 |
 | 30 seconds | `SYNC_SCRATCH_DU_TIMEOUT=30` | A `du` sizing abandoned scratch is stopped and the size is reported as not known | Measured 2026-09-18 on this Mac: one `du` over 792 flat scratch items holding 950 MB in 12,124 entries took 0.2 seconds, so this is 150x that, and the 1,139 items and 1.4 GB the pile left would be under a second at the same rate. A `du` still going at 30 seconds is reading a tree something is writing, and the four found that day had run 23 to 51 minutes, proved by #444 | 2026-09-18 |
 | 1 minute | `SYNC_WATCH_ASK_TIMEOUT=60` | The watcher's timer wake stops its one `git ls-remote` of the shared repo and records the repo as unreachable for that wake | A chosen number, not a measurement. One ask took 0.22 to 0.33 seconds over five samples on this Mac on 2026-11-22 at a load average of 7.5, so this is about 180x the slowest. The ask runs in the watcher's only loop, so the cost of waiting too long is every later send behind a stalled connection, while a stopped ask costs one wake, since the next wake asks again, proved by #3396 | 2026-11-22 |
@@ -1978,9 +1991,10 @@ that refuses more.
 
 ### Text posted while a repository was private (#3582)
 
-The publish gate's rule is that a private repository is passed without its lists being read. That
-leaves a hole in time, not in the rule: text posted while a repository is private is judged by
-nothing, and turning the repository public publishes it unjudged. On 2026-11-24 this repository
+The publish gate's rule was that a private repository is passed without its lists being read (it
+still is, unless the repository declares itself public, the last part below). That
+left a hole in time, not in the rule: text posted while a repository is private was judged by
+nothing, and turning the repository public published it unjudged. On 2026-11-24 this repository
 was private for some hours, 83 texts were posted, and a scan written by hand that night found 8
 lines in two issues naming a work organisation or repository. Three things were missing, and each
 is now a tested part.
@@ -2041,11 +2055,63 @@ what it refuses did not: `test-gh-write-aliases.sh` holds the seven forms' decis
   yet, is judged by origin's copy as last fetched, since a session started in a stale checkout
   is the one that most needs telling. Silence means checked and as expected, so every way of not knowing
   is said as not knowing (L98). One `gh repo view` per session start, bounded at 4 seconds inside
-  the hook's 10 second timeout, both settings, not measured.
+  the hook's 10 second timeout, both settings, not measured. Since the file is read through
+  `lib/expected-visibility.py`, its git reads share one bound of 3 seconds before that, also a
+  setting, and the suite holds the timeout above the two bounds and 3 seconds more, read from
+  where each is set, so a hook cut off mid wait cannot leave a session with no line at all.
 
-Still open, and Dan's to decide (#3582): whether the publish gate should judge text posted to this
-repository even while it is private, since it is meant to be public. The scan is the remedy after
-the fact; that rule would be the prevention.
+**A repository that declares itself public is judged while it is private.** Decided by Dan, by
+picker on 2026-11-25, as the comment of that date on #3582 records it: "Yes, check it anyway
+(Recommended)". The scan is the remedy after the fact; this rule is the prevention. Ruled out in
+that comment: leaving the gate as it was and relying on the notice and the scan, and judging
+posted text in every private repository, which would refuse work names in the work repositories'
+own pull requests and issues, where they belong. How it is built, and what was weighed:
+
+- **The gate's one decision point, `published()`, gained one question.** For a repository GitHub
+  says is not public it asks `declared()` what the repository says it is meant to be; `public`
+  goes on to exactly the judging a public repository gets, the work owner exception included, and
+  anything else returns as before. Nothing a public repository meets changed, and no path now
+  passes that refused before, so the rule can only judge and refuse more.
+- **One reader, `lib/expected-visibility.py`, for the gate and the notice.** The notice held the
+  reading in its own shell lines. Two readings of one file drift (L370), and they already had: read
+  by those lines, an empty copy on origin's default branch was taken as no file while an empty
+  file in the working tree was said as one that could not be understood, and a folder at the path
+  was taken as no file. The reader says both as a declaration that is there and cannot be read,
+  and the notice now says it could not tell for each. The reading itself is unchanged: the first
+  word of the first line that is not a comment, in any letter case, split on spaces and tabs as
+  before, so a word ending in a carriage return is still none of the three.
+- **The declaration belongs to the repository the text goes to, never to the folder.** The gate
+  already asks GitHub which repository a command posts to. A checkout is read on disk only when
+  its `origin` names that same repository, letter case aside, from the checkout's root, so a
+  folder inside it and a worktree read their own copy. For any other target the folder's file is
+  another repository's declaration, so GitHub is asked for the target's own.
+- **GitHub is asked in one GraphQL read that names the repository back**, through each signed in
+  account in turn. A REST read of the file answers 404 both for no such file and for a private
+  repository the account cannot see, and reading the second as the first would pass a declared
+  repository unjudged. Measured on 2026-11-26, one read each: the answer is a `Blob` with its
+  `text`, a `Tree` for a folder at that path, `null` for no such path, and a `null` repository with
+  an error for one that cannot be resolved. A `Blob` cut short or binary, a `Tree` and an answer
+  naming another repository are each refused.
+- **Cannot tell is refused, whatever the text** (L98, L345): that comment's own words are that the
+  gate "must say it could not tell, and refuse, when it cannot read the declaration of a repository
+  it is about to post to". An empty file and a file of comments alone are refused too: a file that
+  is there has been written to say something. So is git not answering which checkout the command
+  runs in, or what its origin is: read as no checkout, that sent the question to GitHub in the
+  place of a checkout whose own file can say public where GitHub's copy does not, and the text
+  passed (found by the lessons review of the first commit, reproduced with a stand in git that
+  sleeps past the reader's bound, then fixed).
+- **Asked of GitHub only when the checkout cannot answer** (weighed, not built: asking GitHub
+  every time). GitHub's copy on the default branch cannot be changed by a branch's working tree
+  and is never stale, but asking it for every post to a private repository adds a call, 0.39 to
+  0.50 seconds over five runs on 2026-11-26, to every `gh` write in every private repository on
+  both Macs, almost all of which declare nothing, and a new way for each of them to be refused
+  when that call fails. Reading the checkout costs 0.020 to 0.023 seconds and no call. What that
+  leaves open is said in the README: a checkout holding no file that has not fetched since its
+  origin gained one, and a branch whose working tree changes the file, are each read as that
+  checkout has them.
+- **Not closed by this**: text that reaches GitHub without a `gh` command a session runs. The
+  notice's wording changed to say so, since "the publish gate does not judge text posted to it"
+  stopped being true.
 
 ## One watcher, and a leftover loop stops itself (#604)
 
@@ -2227,6 +2293,39 @@ is said once, logged and notified, and recorded in `.hooks-refused`. The send re
 takes the line out of the base, so the payload's copy reads as not yet seen here and is kept: a
 refusal on one Mac must never travel as a deletion that unregisters the gate on the Mac whose script
 is fine. The first pull that finds the script registers it and clears the record.
+
+### A key beside the hooks block is named, kept, and never applied (#3741)
+
+The file is the hooks block's home and nothing else's, but nothing stopped somebody putting another
+top level key in it. Measured on 2026-11-26 with a `permissions` block in a throwaway folder: the
+pull read `.hooks` alone and said nothing, so the key reached neither Mac, and the next send rewrote
+the file as `{hooks: ...}`, deleting the key from the repository with no word either.
+
+So the pull names every such key, in its output and the sync log on each pull and in a notification
+once per set of keys (`.hooks-file-keys-told`), and the send writes its merged block into the object
+it read, so every other key stays in the file. It is not byte for byte the same: the send reads the
+whole file with this Mac's home path put back, then writes it afresh through jq and puts the
+placeholder back, so in any key a value holding this Mac's literal home path becomes
+`__CLAUDE_HOME__`, as in the hooks block, and the spacing is jq's. A commit holding only that
+rewrite can be dropped as already published, since to this Mac it is the same content (seen in
+`tests/test-sync-hooks-file-other-keys.sh`), so it reaches the repository with a send that carries a
+change of its own. What a pull writes to a Mac's
+`settings.json` does not change: it still reads only `.hooks`. A file holding JSON `null` holds no
+key and no hooks, and both of the send's readings take it as empty, so the send writes its block over
+it, as it did before #3741.
+
+Rejected along the way:
+
+- **Refusing the whole file on the pull, as `settings.shared.json` refuses a key off its list.** That
+  file holds nothing but optional settings, so refusing it whole costs a setting or two. This one
+  holds every gate, and since #1899 a removed or renamed gate has to be taken out of `settings.json`
+  for the Mac to keep working, so holding the block back over a key the sync does not read would stall
+  every hook change on both Macs for as long as the key stood.
+- **Refusing the send while the key is there.** The send rewrites the file on every run, so it would
+  have held this Mac's hook changes back on every edit until somebody removed the key, while the key
+  itself does no harm sitting in the repository. Keeping it costs nothing and loses nothing.
+- **Applying the key.** That is carrying a setting between Macs, which is what `settings.shared.json`
+  and its list exist to decide, one setting at a time with Dan's sign off.
 
 ## A conflict in a file this tool GENERATES is not a conflict
 
@@ -2739,6 +2838,151 @@ disputed in September are agreed diff now. That is why the seats became a tracke
 paragraphs above): the 72 are the candidates the 20 seats were seeded from, and the other 52 are
 protected.
 
+## One time limit runner, and the one moment it may signal (#3578)
+
+`hooks/lib/run-with-limit.sh <seconds> <command>` is a program an agent or a script runs. It starts
+the command as the leader of a process group of its own and ends the whole group at the limit. This
+records why it is built the way it is; README "A time limit that ends the whole process group" says
+what it does.
+
+**It signals a number only while its own child pins that number.** The diagnosis on the issue
+(2026-11-27) names the hazard, by reading the code and with nothing reproduced: a supervisor that
+signals a group number after it has collected the group's leader. Once a process is collected its
+id is free, and the kernel can hand the id to any new process, so that signal can land on a
+stranger. `bounded_run` has that shape (an alarm that arrives between its `waitpid` and its
+`alarm 0` signals `-$pid`), as do two of its three private copies and two of the skill scripts that
+stop a group. What pins a number is a child that has not been collected: it keeps its process id, running
+or ended, and the group it leads has that id. So the order is fixed. Learn that the command ended
+without collecting it, end what its group still holds, collect it last, signal nothing after. One
+class holds the call that signals and the call that collects, and refuses the first after the
+second, and after either of its own looks at the command was told the command is no longer the
+runner's child (the look before a fault's KILL, and the look for a suspended command, which until
+the second review of claude-config#3833 threw that answer away). The suite runs the program with
+those calls replaced by recorders and fails on a signal asked for after the collect, which the
+recorder never sends.
+
+**The pin is only real if the runner keeps its own ended children, so it makes sure first.** An
+independent review of the pull request (claude-config#3833, 2026-11-27) found, by reading, that a
+caller which ignores SIGCHLD hands the setting down, and that on Linux a process with it has its
+children collected by the system the moment they end: the number would then be pinned by nothing,
+and the fault handler would send KILL to it. So the runner sets SIGCHLD to its default before it
+starts anything and then proves the result: it starts a child that ends at once and collects it,
+and where the system says there is no such child the run is refused with 125 before the command.
+The command is started with SIGCHLD as its caller had it. The fault handler asks the system
+whether the command is still the runner's child (`waitid` with `WNOWAIT`, where python has it)
+before any KILL. Considered: refusing whenever SIGCHLD is ignored (rejected: every command under
+such a caller would then fail for a setting the runner can put right for itself). A command that
+moved itself to another group is ended by its own process id, which the same pin covers.
+
+**A command that left its group is sent TERM by its id only after the watch, and the watch is not
+cut short.** At the limit such a command's group reads empty at once, and the runner watches for
+the command's end for up to ten seconds (a setting, not a measurement) before it signals the
+command's own id. The second review (2026-11-27) asked for that signal as soon as the group reads
+empty and the watch has not seen the end. That reading cannot tell a command that left its group
+from an ordinary one that is ending. In Apple's published kernel source (xnu, read on 2026-11-27,
+not measured on this Mac) a process is marked dead at the start of its exit, from which point a
+walk of its group no longer counts it and the group reads empty, while the process event the
+runner's watch waits for is posted near the end of the exit, after its files are closed. All
+through that span a signal to its process id answers success. A TERM by id sent then goes to the
+runner's own uncollected child, so it breaks no rule, and it would make the runner say the
+command had left a group it never left. Considered: sending on that reading anyway (rejected: an
+untrue sentence about an ordinary run, at a rate set by how slow an exit is under load). What
+would tell the two apart is a look at the command's own group id, which names another group only
+for a command that is alive and has moved. That look is a design step the review did not spell
+out, so it is put to Dan on the pull request (claude-config#3833), and README says the ten
+seconds.
+
+**Python, because the rule cannot be held in perl or bash.** Bash collects a child by itself the
+moment it ends, whether or not the script calls `wait`, so a script never holds the pin. Perl's core
+has no call that reports a child's end without collecting it. Python has one on each system: a
+kqueue process event on macOS and `waitid` with `WNOWAIT` on Linux (the python3 of Apple's developer
+tools, 3.9.6, has no `os.waitid`, read on 2026-11-27, which is why the two systems differ). A bash
+launcher stands in front so that a missing python3 is said in words and comes back as 125 with
+nothing run. Considered: one python file with a shebang (rejected: with python3 missing, `env`
+answers 127, which reads as the command's own code). The launcher also asks the program one
+question before it hands a command over, and goes on only at the program's own answer: a
+`python3` that starts and is not Python (a version manager's shim) would otherwise hand back its
+own exit code, and its 0 would read as a pass with nothing run. The answer comes with the code
+125, so the question typed as the words of a run is no pass either. Considered: the launcher
+staying as the parent and checking a proof afterwards (rejected: bash would then stand between
+the caller's signal and the runner, and bash cannot hold the pin to pass a signal on). The
+question costs one more start of python3 in every run.
+
+**What is left in the group is read with no `ps`.** `ps` is setuid, and macOS refuses to start a
+setuid program in a sandbox, so a runner reading it could not run under the no network wrapper,
+where a suite that names a Slack endpoint has to run. On macOS signal 0 to the group answers it.
+Measured on 2026-11-27 on the personal MacBook (macOS 26.6.2, python 3.14.4), each with the probe's
+own children, one run: a group holding only its ended, uncollected leader answered EPERM, the same
+group with one more member answered success, and 15 ms after that member ended it answered EPERM. On
+Linux signal 0 succeeds for a group whose only member is its ended leader (read from the kernel's
+documented behaviour, not measured here), so there the members come from `/proc`. Both readers are
+asked about the runner's own group before anything starts, where the answer is known, and a system
+where that fails runs nothing: a reader that cannot see would report every leftover as none (L1).
+
+**A command that leaves a process running fails, with 123.** The diagnosis on the issue asked
+whether to fail the run or to stop the process and keep the command's code, and recommended failing:
+a suite that passes and leaves a process behind is the fault of 2026-11-24. It is Dan's to reverse.
+What is left gets one second to end by itself first. Without that, `exec > >(tee log)` would fail
+by a race, since a shell does not wait for a process substitution, and `tee` would be ended before
+it had written what it was piped. The one second, the two from TERM to KILL and the ten the group is
+watched after KILL are settings, not measurements.
+
+**The command starts only once the runner is ready, and a fault inside the runner ends the group.**
+The child waits on a pipe before it becomes the command, and is let go after the runner is watching
+it and has recorded its group. A runner that dies first closes the pipe and the child ends. A fault
+after that sends the group KILL while the child still pins it. Every signal that would end the
+runner and that it carries is carried over to the group first (TERM, INT, HUP, QUIT, USR1, USR2,
+ALRM, VTALRM, PROF, XCPU, and on Linux IO, PWR, STKFLT and the real time signals python can set,
+from its SIGRTMIN up, which is 34 with glibc), and the runner then ends by that signal, so a shell
+loop around it stops at Ctrl C once the handlers are in (README names the spans before that, and
+the launcher's). TSTP is caught and not acted on, and TTIN and TTOU are ignored while a command
+runs, because a stopped runner keeps no limit. Ignored and not caught: a write that raised a caught
+TTOU fails and is tried again for ever. They are set after the command's process exists, so the
+command starts with both as its caller had them. So the paths that run the command with nobody
+keeping its limit are these. Nothing in the same process can answer the first three: the runner
+ended by KILL; the runner stopped by STOP, for as long as it is stopped; and a real fault in the
+runner's own process, since a python handler cannot return from one, which is why the signals a
+fault raises (ABRT, BUS, FPE, ILL, SEGV, SYS, TRAP, and EMT on macOS) stay at their default. The
+fourth is left by choice: the same signals sent from outside, of which ABRT, TRAP, SYS and EMT
+could be carried over and are not. On Linux signals 32 and 33 belong to the C library, and python
+cannot set them. Considered: a watchdog inside the group that signals its own
+group with `kill 0`, as `tools/load-window.sh` does, which would outlive the runner (rejected: it
+is a second process in every run, and it cannot tell a command that ended from one that was
+stopped). Considered for TSTP: stopping the group and then the runner, and letting both go on
+together (rejected: it makes the runner a job control shell, and it leaves open whether time spent
+stopped counts toward the limit, which is Dan's to say).
+
+**The terminal is handed to nobody.** A command in a group of its own is in a background group of
+the caller's terminal, and one that reads or sets the terminal is suspended by the system until the
+limit (reproduced by the review with `cat` on a terminal of the probe's own making, 2026-11-27).
+The runner is for agents and gates, which have no terminal, so it says so (the usage, the README)
+and what it says with 124 tells when the command was suspended and not running. It names the
+terminal as the likely cause only: the runner's look shows that the command was suspended, never
+why, and a command that stopped itself gets the same words. Considered: giving the
+terminal's foreground to the command's group and taking it back (rejected: taking it back safely
+means handling the signals a background writer gets, and Ctrl Z would then stop the command and
+leave the runner to notice, which is the job control shell again).
+
+**The runner takes its own group record away.** A record left for every run ties its number to
+the session for as long as the marker folder lives, and process ids came round again within minutes
+(one sample on 2026-11-27). The file is removed when the group is known to hold nothing and just
+before the collect: the uncollected command still pins the number the file is named for, so no
+shell and no other runner can have made a file of that name. It stays when the runner could not
+end the group, after a fault, and when the runner was ended outright, which are the cases the
+record is for. What is lost: a member this user may not signal reads as nothing, so its record
+goes too.
+
+**The limit stays out of the no network wrapper.** The issue asked whether the wrapper should carry
+the limit. The wrapper takes no option and reads no setting, so that nothing on a command line can
+weaken it, and a limit would be its first option. The two compose: the wrapper first, the runner
+after it, which the suite runs.
+
+**Not built here.** No gate reads through the runner to the command behind it. That lets commands run
+that the Slack drafts gate, the payload write gate and the area check refuse today, so it needs Dan's
+sign off, and it should recognise the runner by its installed path, as the no network wrapper is
+recognised, so that a home made copy stays refused. `bounded_run`'s eight callers and the three
+private copies are not moved onto the runner either.
+
 ## A fresh worktree's first edit waits for an up to date base (#2517)
 
 `hooks/fresh-worktree-base-gate.sh` refuses a file edit in a worktree that has no commits of its own
@@ -3120,13 +3364,41 @@ nothing under the payload to read, 85 to 149 ms for one edited hook and one new 
 seconds for a replay of the 2026-11-22 send (refused, naming 100 files), against 1.0 seconds for the
 whole tree walk the send does not run. The replay took 6.5 to 12.4 seconds before the output went to
 a file. What was left was the check reading megabyte lines in the shell, and #3479 took that out:
-the check now puts each matching line to its rules in one awk pass and reports a long line as 300
-bytes of it. Measured on 2026-11-23 on the same 126 files, eight rounds at a load average near 175,
+the check now puts each matching line to its rules in one awk pass and reports a long line as at
+most 300 bytes of it, cut at whole characters (#3538). Measured on 2026-11-23 on the same 126 files, eight rounds at a load average near 175,
 the check alone took 3.8 to 4.3 seconds before and 0.4 to 0.8 after, its report fell from 11.5 MB
 to 70 KB, and it refused the same 100 files for the same 110 lines. Replayed over the
 newest 300 of main's sync commits, the check would have held 2: the incident, and one on 2026-10-04
 carrying a mod's test file from before the check read mods. It could judge every one, and held
 nothing that passes main's run.
+
+Three more things the check does since #3586. None excuses a line it used to report. The first
+two report more lines than before; the third reports the same lines and changes only how they are
+shown:
+
+- **A name that starts with a letter outside ASCII is a name.** The account name in a home path
+  had to start with an ASCII letter or digit, so that an elided example (the root, then dots or a
+  word in angle brackets) is not taken for a machine's path, and a home whose name starts with an
+  accented or a fullwidth letter passed. It may now also start with any byte from 128 up. The line
+  between the two was drawn from the repository: on 2026-11-26, 91 of its lines wrote a home root
+  followed by something that is not a name, 96 times, and what followed the slash was an ASCII
+  mark every time (a dot 70 times, an opening angle bracket 19, five other marks 7) and never a
+  byte from 128 up. A mark outside ASCII standing where a name would, such as an ellipsis
+  character, is reported as a name; written with dots it is not.
+- **The marker does not count on a line holding a byte that is not valid text.** The marker used
+  to be a grep between the search and the judge, in the caller's locale, and the grep macOS ships
+  saw it on such a line under C and often not under a UTF-8 locale, so the verdict turned on the
+  locale and a reported line was followed by advice to add the marker it carried. The judge now
+  looks for the marker itself, under C. A marked line of valid text is excused as before. A marked
+  line holding such a byte is judged like an unmarked one and reported in a group of its own,
+  which says the marker was seen, which byte it is and what was found. That is the stricter of
+  the two answers; excusing a marked line whatever it holds is the other, and is Dan's to choose.
+- **A control character in a reported line is shown, not obeyed.** Each is written as a backslash
+  and its octal value and counted in a note, like a byte that is not valid text: every byte below
+  32 but the tab, the delete character, and the 32 control characters just above ASCII. A carriage
+  return printed as it is drew the rest of the line over the file name and line number, which a
+  file with CRLF line ends did on every line reported from it, and an escape sequence could clear
+  them.
 
 `tests/test-claude-sync.sh` (the section "a send carrying a file that fails the home path check
 is held whole") and `hooks/test-check-home-paths.sh` (the `--files0-from` cases) hold it.
@@ -3212,8 +3484,317 @@ the builder's were made by the sessions that built it, not by Dan, and are his t
   second is refused and told to use a command of its own (the builder's). The bounds are chosen,
   not measured.
 
-`hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh` and the #3666 section of
-`hooks/test-changelog-tag.sh` hold it.
+Three gaps a review of the control found, each reproduced before it was closed (#3703; Dan asked
+for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are the builder's.
+
+- **The dependency bot's exit stands after the label is read.** The merge gate left for a pull
+  request the bot opened before it asked about the announce label, so one relabelled and given an
+  Announcement block merged unapproved and unrecorded. The exit is now taken only when the label was
+  read and is not the announce label. Ruled out: leaving on a label that could not be read, since
+  that pull request is not known to be free of it; it is refused like any other the judge could not
+  read, with the override it always offered.
+- **A long run of blank lines in the wording file is refused, and the hash is left alone.** Blank
+  lines are dropped before the hash because Slack moves them (#3664), so the hash cannot tell a
+  padded file from its lines written together. Ruled out: hashing with blank lines kept, which
+  would make every comparison with what Slack holds fail on spacing. The run is counted where
+  "blank" is already defined (`changelog-entry.js`, beside the normaliser), so the count and the
+  hash cannot disagree about what a blank line is (L370), and the library refuses an answer that
+  carries no count (L98). Only a run with wording below it counts: blank lines after the last line
+  hide nothing, and refusing them would send a session back to Dan over a file he may have left
+  that way himself. The limit of two is chosen, not measured.
+- **Reading an approval and writing one are separate, and a picker counts only from a transcript
+  Claude Code keeps.** The library's `check` command read pickers from whatever transcript its
+  standard input named and wrote what it found. Nothing a process is handed can prove its caller is
+  a hook: a hook and a session's command are both started by Claude Code, as the same user, with
+  input the caller chooses. So the line is drawn in three places that each hold something. The
+  command line a session has a use for (`list`, `check` without `--claim`) reads the record and
+  nothing else. The label hook refuses a Bash command running the library in any other form,
+  which stops the route the review took and every accident. It judges python wherever it is named
+  in a command, with python's options read as python reads them, and asks nothing of the words in
+  front of it. It keeps no list of other programs that could run the file: the file carries no
+  interpreter line, so run by its own path the shell reads it and python never does (measured
+  2026-11-25, directly and behind `env` and `nohup`; the library's suite holds the missing line),
+  and a list of launchers is only ever short of one (L96). Ruled out: refusing every command that
+  names the file and is not known only to read, which refuses `git add` of it. A program that is
+  not python by name and is handed the file (`uv run`, `ipython`) is not seen. And whoever asks,
+  by whatever route, a picker is read only from a `.jsonl` transcript under the projects folder
+  beside the record's state folder, so a file shaped like a transcript and kept anywhere else
+  approves nothing; this one also covers the library reached without being named, and a hook run
+  by hand. The merge gate's own call (`check --claim`) is unchanged, since it must write and was
+  left as it is for the phase being built beside this one. Ruled out: refusing to write when
+  `CLAUDECODE` is set, which Claude Code sets in a Bash tool's shell (seen set to 1 there on
+  2026-11-25) and is understood not to set in a hook's, which was not measured.
+  A session started from inside another session's
+  shell would hand that variable to its own hooks, which would then never save an approval, and
+  Dan would be asked again for wording he had approved; and one word in the command clears it.
+  Ruled out too: a transcript root the tests could name through a variable of its own, which a
+  session's command could name as well. The tests' record variable waives the folder rule only for
+  a record that is not this user's own, with "own" read from the account database. What is left
+  open is said in the README: a transcript forged inside that folder, and the library reached
+  without its name. Both are writes to files on a Mac the session can write.
+
+- **His answer is noted when he gives it, and read from the transcript afterwards (#3742, the
+  builder's).** A second review found that an approval given in the session was not found when the
+  merge went through `lib/merge-when-ready.sh`, whose payload names no transcript. The issue's
+  design was a hook after the picker that reads his answer into the record. Measured before it was
+  built: when a PostToolUse hook runs, the transcript holds the call's `tool_use` and not yet its
+  result, which Claude Code writes after those hooks (2026-11-26, read through the offset
+  `context-size-notice.sh` keeps of a session's own transcript). So the hook cannot read his answer
+  from the transcript at that moment. Ruled out: taking the answer from the payload the hook is
+  handed, which would make one run of the hook by hand, with a payload saying Approve for a picker
+  he answered Not yet, an approval with no transcript forged; and a child process left running to
+  wait for the transcript, whose race with the next command nothing would report. Chosen:
+  `announce-answer-note.sh` writes a note (which picker, in which session, the file's hash and
+  change time then) that approves nothing, and whichever hook next asks the library reads that
+  session's transcript back and judges the picker by the same rules as one of its own session. The
+  note's hash and change time replace the file as it stands, which also ends an approval being
+  lost to a write of the file before the first hook read it. A run of the hook by hand can only
+  write a note, and a note over a file changed after his answer is refused by its change time.
+  What the hook is handed was never printed (it runs only once installed), and the question
+  tool's schema has the dialog write his answers into the call's input, so the hook's copy of the
+  picker is not what decides anything: the picker is read from the transcript by its id, the
+  library is asked about every picker rather than those whose copy names the source, and a picker
+  neither copy says the source of draws a line to Dan and the session instead of silence. Ruled
+  out: a first test on the payload's text, which would have dropped every real picker without a
+  word if the dialog strips the metadata from the hook's copy.
+
+- **Every picker is noted by its ids alone, in silence, and judged later (#3789).** The hook above
+  was built on one reading, that the transcript holds a call's `tool_use` when its PostToolUse hook
+  runs, and on a guess about the hook's copy of the picker. Installed, it met the other case on
+  2026-11-26: for two pickers, one sent with metadata naming a source, no transcript line held the
+  picker's id when the hook ran and the hook's copy carried no metadata, and the transcript read
+  afterwards held both. So the hook could tell nothing, said its "could not be told" notice after
+  every picker in every session, and noted none, an approval picker included. The two readings
+  disagree and only an installed hook sees the real moment, so the fix does not depend on which is
+  true: every note now carries `held`, whether the transcript held the picker's line then, and the
+  first real pickers after an install answer it. A long transcript is ruled out as the cause in the
+  suite: one of the measured size (20 MB, 10,000 lines) is read in 0.009 seconds. Chosen: the hook
+  decides nothing. It notes every main session picker by session, transcript and picker id, says
+  nothing, and whichever hook next reads the transcript judges each noted picker in one pass: an
+  announcement's by the rules already there, any other settled so it is read once. A note that
+  holds no hash gives no wording, so such a picker is judged exactly as one with no note is, by
+  the file unchanged since his answer, and a note by ids alone lets nothing through that the same
+  picker read from its own session would not. Where the hook can already tell the picker is an
+  announcement's it still notes the file's hash, as before. Ruled out: keeping the notice for a
+  picker nobody can tell the source of, which is every picker on the measured path; a hook that
+  waits for the transcript to hold the line, whose wait holds up every picker Dan answers; and
+  reading the source from the payload alone, which the measurement shows is not there. The notice
+  that remains is for a note that could not be written, the one case where an approval is lost.
+  Sessions are read back by their newest unjudged note and not their first, since a session's first
+  note is now its first picker of any kind. What it costs: the record gains a line for every
+  picker and one more once judged, and nothing shortens it (README, "What bounds it").
+
+- **Whether a feature is announced is Dan's answer in a second picker, carried by the milestone
+  (#3669).** His words, 2026-11-25: "also, it should ask me before applying the label. It can be
+  part of the new feature discovery". Until then nothing asked him whether a feature would be
+  announced, so a yes could only be inferred at the last pull request, and a yes nobody acted on was
+  silently dropped. Chosen: feature discovery asks one picker of its own source
+  (`announce-discovery`); the plan handed to `create-milestone.sh` carries `announce` as `yes`, `no`
+  or `unasked`; the helper takes `yes` and `no` only when the approval library finds that answer of
+  his on the record, and writes one line into the milestone's description; and the merge gate
+  refuses the pull request that closes the milestone's last open issue under another label while
+  the line says yes, unless the record holds an announcement let through for that milestone that
+  GitHub says merged, or his `Not announcing` in a picker naming that milestone (R9). An
+  announcement covers the milestone only when its line was written after his last yes about the
+  milestone's title: a milestone is reused for a feature's next phase and discovery asks again, so
+  counting every such line let the first phase's announcement clear every merge finishing a later
+  phase he had said yes to. With no yes of his on the record every line counts, as before, and a
+  line that does not say when is not known to be newer than a yes. That decline
+  counts only while it is also his last answer about the feature in any picker: a discovery picker
+  names no milestone, so asking only among pickers naming the milestone let an old decline outlive
+  a newer `Announce it` and clear every later merge finishing that milestone. His decline
+  clears it only when the call read every noted session: with any left unread and nothing else to
+  clear the milestone, the answer is unread, since a newer `Announce it` there would be his last
+  answer (decided by the main session on the stricter side, 2026-11-26). Left unread is one class:
+  a session past the fifty or out of time, a noted session the call tried and could not read, and
+  a newer answer of his about the feature whose picker could not be checked yet and so has no
+  line. So is a noted session whose transcript is gone, on the one call that settles its notes,
+  whether they named a repository or were by their ids alone: the second kind is the one a
+  discovery picker's note always is, so it is the one that can have held his newer answer, and it
+  had been settled with nothing said while his decline cleared on that very call. A call that names no transcript tried none, or every merge by the merge helper would be
+  refused once a decline is on the record. The line alone does not
+  decide whether a milestone says yes: the gate also counts a milestone whose title the record
+  holds his yes about as his last yes or no, so a line that was dropped, altered, or written from
+  his answer about another feature cannot hide a yes the record holds. One name only (Dan, by
+  picker, 2026-11-26, "One name only (Recommended)"): his answer counts for a milestone only when
+  the picker named the feature exactly as the milestone is titled, letter case and spacing aside.
+  The plan used to carry a second name (`announce_feature`) for a picker that used other words,
+  and the helper wrote his answer about that name onto the milestone while the gate looked his
+  answers up by the title: a yes under the picker's name was lost with the line, and an old
+  decline naming the milestone outlived a newer yes under the picker's name. Now the helper asks
+  the library about the title, the library writes no line for a feature that is not the title, a
+  plan carrying the old field is refused, and a title changed after he answered means he is asked
+  again. The title is the milestone's own, not the plan's: the helper files a plan into an existing
+  milestone whose title matches on letters and digits alone, and the record keeps spaces and
+  punctuation in a name, so a plan titled "Handback" would land in "Hand back" carrying a line from
+  an answer the gate never finds under the milestone's title. Once the milestone is resolved the
+  helper asks the library again under its own title, in a dry run too, and refuses the plan with
+  nothing filed. Ruled out there: making the two keys agree, which changes which milestones every
+  other plan reuses. Ruled out: writing the picker's name into the line and having the gate ask about both
+  names, which closes the second fault and not the first. What it costs: every merge
+  that finishes a milestone in a repository that announces reads the record, and a record that
+  cannot be read refuses that merge as what could not be told. The line has
+  one writer and one reader, both in the library, and holds no name: the answer, his option's words
+  and the day in US Eastern time, so the helper never writes a work app's name into a description.
+  What counts as his yes or no is every rule of an approval that has a meaning without a file, and
+  three of this picker's own: the question must hold the words "agents must or can act differently",
+  must name the feature in the metadata's very words as a name of its own, between quotation marks
+  with the closing mark directly after the name (a run of letters inside a longer name, or the
+  first words of one that goes on after a space, is another feature's name; a name with no
+  quotation marks was ruled out on the stricter side, since nothing then says where the name ends,
+  and the skill's own question quotes it), and must have offered both options, so an answer is
+  never recorded about something the question did not say or as a choice he was not given. An answer that breaks a rule is recorded as `other`: it
+  decides nothing and, being his last answer, stands in front of an earlier yes or no. Ruled out:
+  a new hook to read his answer in before the helper runs (more registrations and tables; the
+  label hook, which already sees every Bash call, does it on a call naming the helper); letting
+  the helper read a transcript itself, which #3703 closed, since a session's command reads the
+  record only; letting the override clear R9, which would make the override the way a yes is
+  dropped; an exception for a pull request the dependency bot opened, which can close a last issue
+  like any other; and counting a `used` line as an announcement, since that line says the gate let
+  a merge go ahead and never that GitHub merged it, so the gate asks GitHub about each such pull
+  request and asks the library again naming the ones that did not merge as an announcement. That
+  is one that has not merged and also one that merged without the announce label: the line is
+  written before the merge runs, so a pull request let through, not merged, then stripped of its
+  label and merged under another would otherwise cover the milestone with nothing announced. The
+  second answer can name a pull request the first did not (two milestones finished by one pull
+  request, and a session left unread only by the second question), so the gate asks GitHub about
+  each of those too, and where that would change the list again the answer is what could not be
+  told: a third question was ruled out, since each one reads sessions back. A pull request that
+  closes no issue is settled by GitHub's answer alone, before the library is needed, so a broken
+  library cannot refuse every merge in a repository that announces. A description or answer file
+  handed to the library is read whole or refused, never cut: the helper writes what comes back into
+  the milestone. Known edge: a feature whose last open issue is cleanup rather than the release
+  asks him at that point.
+
+- **The second picker joins the note path with a judge of its own (#3669 on #3789).** As first
+  built, this picker's note carried its source, repository, feature and milestone, written by a
+  hook that could tell what the picker asked. #3789 measured that the hook can tell nothing, so
+  that note would never have been written. Chosen: the discovery picker is noted like any other, by
+  its ids alone, and its source is the second name in `NOTED_SOURCES`, with `decisions()` as its
+  judge beside `approvals()`. Each judge gives a line to a noted picker of its own source, settles
+  one of no source the record reads, and gives the other source's picker nothing at all, so
+  whichever hook reads a session first, the other judge still finds its picker unjudged. Both read
+  back the same sessions by one rule (`_read_back`), and a picker the record holds any outcome for
+  (`approved`, `withdrawn`, `settled`, `decided`) is read back by neither. The note carries nothing
+  beside its ids for this picker: there is no file to hash, and a feature the hook's copy named
+  would not be believed over the transcript's own call. Ruled out: one judge that gives both kinds
+  their lines on every call, which would have a call that runs the milestone helper write
+  approvals of wording, a job that call is not judged for; and keeping `"source"` on the note,
+  which exists only on the path the measurement says does not happen. What it costs: a session
+  whose only unjudged picker belongs to the other judge is read again by this one, and counts
+  among the sessions one call reads, until the other judge has asked.
+
+- **One call reads back fifty sessions, and a call that stops short says so (#3669).** Dan, by
+  picker, 2026-11-26: "Raise it to 50 (Recommended)". At five, his approval was missed, and he was
+  asked again, whenever five or more other sessions had a picker answered between his Approve and
+  a merge that names no session. The number is chosen, not measured; one pass over a 20 MB
+  transcript was measured at 0.009 seconds on 2026-11-26 (above). What bounds the whole read is
+  the call's 12 seconds (`CHECK_SECONDS`), not the number: sessions are read newest first, a call
+  out of time stops before the next one, and the sessions left unread, for either reason, are
+  counted in the call's answer. Ruled out: stopping in silence, which would make a refusal after a
+  short read indistinguishable from one that looked everywhere and found no approval. The merge
+  gate's two questions about a finishing pull request share those 12 seconds (the first answer's
+  `spent`, handed to the second as `--spent`), where each had 12 of its own. Ruled out: asking
+  the second of the record alone, which would forget the sessions the first left unread and let
+  a decline clear where the first would not have.
+
+- **Wording the merge would refuse is never approved, and the rules have one reader (#3846).** On
+  2026-11-27 Dan approved, by picker, wording whose first line was the mention followed by a
+  sentence. The label hook let the label on, the merge gate refused that wording for its opener,
+  and he was asked a second time: the rules for what a post may hold were read by the merge gate
+  and by nothing that runs before it. They now have one judge, `blockRefusal` in
+  `changelog-entry.js`, which the gate calls for the pull request and which a command line,
+  `announcement-refusal`, puts to a wording file or a description. Three things ask that command:
+  a session, as the step of "how to ask him" before the file is opened; the approval library,
+  which counts no Approve of wording it refuses; and the label hook, which refuses the label on
+  such wording before it looks for an approval. The choices are the builder's, each on the
+  stricter side.
+  - The library asks the command and keeps no rule. Ruled out: the rules restated in python,
+    which is a second reader that drifts from the first on the next rule added (L370).
+  - A wording file is judged as the block it becomes, read by the block's own reader
+    (`extractAnnouncement`), so line endings, spaces at the ends of lines and blank lines round
+    the wording count for what they count for at the merge. Every rule of the BLOCK reads one
+    line at a time and no blank line breaks one, so for lines ended as a file or GitHub ends
+    them the block's verdict depends only on the normalised wording the hash is of. The rules
+    about a FILE alone, below, are the other kind on purpose: a long run of blank lines, a
+    heading and a byte order mark each refuse a file for something the hash of its wording
+    cannot show. A bare carriage return was the
+    exception (the review of this change, M1): the hash reads it as a line's end and the block's
+    reader does not, so a line start it hid (a block quote, a table, a nested list) was judged by
+    nothing, while the record held one hash for that wording and for the same lines ended
+    properly, which are refused. Wording that holds a carriage return inside a line is now
+    refused by a rule of its own, `ANNOUNCEMENT_CARRIAGE_RETURN`, first in `announcementRefusal`,
+    so the gate and the command both give it. Ruled out: making the block's reader split lines
+    as the hash does, because that reader is also how merged history is read (`parseEntry`), and
+    refusing is the stricter of the two.
+  - The command exits 1 for wording it refuses and prints its answer either way, where the file's
+    other commands exit 0 for every answer. A session that reads only the status must not be told
+    refused wording passed (L184), and the library holds the status and the answer to each other,
+    so a mismatch is an answer that cannot be read. An answer that cannot be read approves
+    nothing and lets no label on (L98).
+  - The record's lines did not change, so approvals it already held still count where their
+    wording passes. A note of refused wording keeps the wording's hash and says in `why` what
+    stops an Approve of it. Ruled out: a note with no hash, as a padded file gets, because his
+    `Not yet` about that wording would then take back by file name where it took back by hash.
+  - An approval of refused wording that the record held before the rule is a hash and no wording,
+    so the library cannot judge it. The label hook can, since it holds the block, and it judges
+    the block before any approval is looked for. Ruled out: judging after the approval is found,
+    which needs a second time bound on a hook whose bounds already add up to most of the time
+    it is registered with (above); judged first, the hash and the judging share one bound. The cost is that a call refused for
+    its wording reads no picker into the record, which the merge gate has always done the same way.
+  - Wording nobody could judge is kept apart from wording that was refused (the review of this
+    change, M3). The hash and the judging share the note hook's bound, so a judge out of time put
+    its reason in the note's `why`, a note with a `why` approves nothing, and nothing judged the
+    file again: good wording was refused for good. Such a note now also says `"unjudged": true`,
+    and the call that reads it judges the file again while the file's change time still equals
+    the one noted (`_judged_again`). The builder's choices, each the stricter of two: the note
+    keeps its `why` and its hash and gains one field, so the library as it was, reading a new
+    note, still refuses, and his `Not yet` is still recorded by the hash (ruled out: the review's
+    sketch of a null `why`, which an older reader takes as an approval wherever the note holds a
+    hash); the file must be unchanged since the note, read either side of the judging, and where
+    the note holds a hash the file must still hash to it; a file that changed while it was being
+    hashed, or could not be read, is not unjudged and stays refused; a note written before the
+    field keeps its meaning, so an old note whose `why` was a judge out of time still refuses and
+    he is asked once more. The library's bound on one question can be shortened for the suites
+    through `ANNOUNCE_APPROVAL_HASH_SECONDS`, and never lengthened.
+  - The command refuses everything the approval refuses about what a FILE holds (the review's
+    L1). The approval refused a file with more than two blank lines in a row above wording
+    (#3703) and the command a session runs first did not, so "refuses nothing" was not yet "his
+    Approve will count". The file form now refuses it as `WORDING_FILE_BLANK_RUN`, by the count
+    the approval reads. The limit is a number in each file, held equal by a suite check. Ruled
+    out: the approval reading the limit from the command's answer, which makes an older
+    `changelog-entry.js` that does not send it a reason to refuse every file. A file's size and
+    its name are not content, so the command does not judge them and how to ask him says it
+    judges what the file holds.
+  - A refusal of a file is worded for a file (the review's L2). An empty wording file was told
+    "The heading in this pull request has no post under it ... or relabel this", and a file that
+    begins with a byte order mark was refused for its opener in a sentence quoting a first line
+    that reads exactly as the mention alone. Both refusals stay, under the gate's codes
+    (`EMPTY_ANNOUNCEMENT`, `ANNOUNCEMENT_NO_OPENER`), since the merge would refuse the block such
+    a file becomes under those codes; only the file form's words changed. So the command and the
+    gate agree on the code for every rule and on the words for every rule but these two, which
+    the suites hold to the code and to a sentence that names no pull request. A file that begins
+    with its own Announcement heading is told to leave it out by the heading rule.
+  - A wording file in which any line is a heading is refused, as `WORDING_FILE_HEADING` (the
+    review of this change, M2; round 1 left it unbuilt). A pull request's block ends at the next
+    heading, so such a file can never be the block whole: the lines below the heading were
+    judged by nothing, his Approve counted, and the label hook then asked for a block equal to
+    the file, which cannot be made. It is a rule about a file and not about a block, so it sits
+    in `wordingRefusal` and the gate has no such rule: in a description the heading really does
+    end the block, and the `--body` form is unchanged.
+  - Not covered, and left for a later change (the review's L3, L4, L6 and L7). A note written by
+    the hook as it was before this change holds a hash and no `why`, was never judged, and is
+    still approved by its hash; the label hook and the merge gate judge the block, so the cost
+    is one more "ask again". A line separator (U+2028) or a vertical tab inside a line hides a
+    line start from the rules; the hash and the judge agree there, so it is the gate's own
+    reading. At the label hook the hash and the judging share the five seconds the hash had
+    alone, so a loaded Mac is told to run the command again more often. And the docstring's
+    "a note that holds no hash is judged as one with no note" is not what `_note_for` does: it
+    returns any note naming the same repository and file, and that note's `why` then refuses.
+
+`hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh`,
+`hooks/test-announce-answer-note.sh`, the #3666, #3669 and #3846 sections of `hooks/test-changelog-tag.sh`
+and `skills/milestone/test-create-milestone.sh` hold it.
 
 ## Things known to be wrong and left that way
 

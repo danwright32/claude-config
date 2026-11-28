@@ -199,6 +199,28 @@ function normalizeAnnouncement(text) {
     .join('\n');
 }
 
+// The longest run of blank lines that has wording AFTER it, as {count, at}: how many lines, and the
+// number of the run's first line counting from 1; {0, 0} where no blank line stands before wording
+// (claude-config#3703). normalizeAnnouncement drops every blank line, so a file holding a post, three
+// hundred blank lines and then more text hashes the same as those lines written together, and the
+// hash cannot say the padding is there. The reader of the file Dan was shown asks here and refuses
+// a long run (lib/announce-approval.py), because the window it was opened in showed him the post and
+// then white space. Lines and blankness are read exactly as normalizeAnnouncement reads them, so
+// what counts as blank here is what the hash drops. Blank lines after the last line of wording have
+// nothing below them to hide and are not counted.
+function blankRunBeforeWording(text) {
+  const longest = { count: 0, at: 0 };
+  if (typeof text !== 'string') return longest;
+  const lines = text.split(/\r\n?|\n/);
+  let run = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (isBlank(lines[i])) { run += 1; continue; }
+    if (run > longest.count) { longest.count = run; longest.at = i - run + 1; }
+    run = 0;
+  }
+  return longest;
+}
+
 // The ONE hash of an announcement (claude-config#3666): the sha256 of its normalised form, in hex, or
 // the empty string for wording that says nothing, so an empty file or an empty block is never a hash
 // anything could be approved under. The wording Dan approves is a file and the wording that merges
@@ -314,21 +336,30 @@ function parseEntry(input) {
   // the post is where it is told. What the post may contain is the merge gate's (gateRefusal), not
   // this reader's.
   const announcement = extractAnnouncement(input && input.body);
+  const missing = missingAnnouncement(announcement);
+  if (missing) return refuse(missing.code, missing.reason, kind);
+  return { ok: true, kind: ANNOUNCE, line: block, announcement: announcement };
+}
+
+// Why an announce label has no post under it, as { code, reason }, or null when it has one:
+// `announcement` is extractAnnouncement's answer. Written once, for parseEntry, which refuses the
+// pull request with it, and for blockRefusal below, which judges wording before it is in one.
+function missingAnnouncement(announcement) {
   if (announcement === null) {
-    return refuse('NO_ANNOUNCEMENT',
-      'This pull request is labelled ' + LABEL_PREFIX + ANNOUNCE + ', which says agents must or can act '
+    return { code: 'NO_ANNOUNCEMENT',
+      reason: 'This pull request is labelled ' + LABEL_PREFIX + ANNOUNCE + ', which says agents must or can act '
       + 'differently, but its body has no "## Announcement" heading, so there is no post for agents to '
       + 'draft once the change is live. Add the heading with the whole post under it, opening with '
-      + ANNOUNCEMENT_OPENER + ' on a line of its own, beside the Changelog sentence for managers.', kind);
+      + ANNOUNCEMENT_OPENER + ' on a line of its own, beside the Changelog sentence for managers.' };
   }
   if (announcement === '') {
-    return refuse('EMPTY_ANNOUNCEMENT',
-      'The "## Announcement" heading in this pull request has no post under it, while the label ('
+    return { code: 'EMPTY_ANNOUNCEMENT',
+      reason: 'The "## Announcement" heading in this pull request has no post under it, while the label ('
       + LABEL_PREFIX + ANNOUNCE + ') says there is something to tell agents. Write the post, opening with '
       + ANNOUNCEMENT_OPENER + ' on a line of its own, or relabel this ' + LABEL_PREFIX + VISIBLE
-      + ' if agents have nothing to do differently.', kind);
+      + ' if agents have nothing to do differently.' };
   }
-  return { ok: true, kind: ANNOUNCE, line: block, announcement: announcement };
+  return null;
 }
 
 // ------------------------------------------------------------------ the merge gate's own rules
@@ -390,6 +421,24 @@ const HTML_COMMENT_OPEN = '<!' + '-'.repeat(2);
 
 // Why the post under an announce label cannot be drafted as it stands, or null when it can.
 function announcementRefusal(text) {
+  // A carriage return inside a line (the review of #3846, M1). The hash reads a bare carriage return
+  // as a line's end (normalizeAnnouncement) and the reader of the block does not (linesUnder), so
+  // the rules below, which each read one line, never saw a line start it hid: a block quote, a
+  // table, a nested list. The record then held one hash for wording that passed and for the same
+  // lines ended properly, which are refused. Refused by a rule of its own, and first, so nothing
+  // below judges a line whose starts are hidden. Refused, where the block's reader could have
+  // been made to split as the hash does, because that reader is also how merged history is read
+  // (parseEntry), and because a post drafted "exactly as written" has no carriage return to keep.
+  // A carriage return ending a line is not here: extractAnnouncement has already dropped it.
+  const cr = text.indexOf('\r');
+  if (cr !== -1) {
+    const before = text.slice(0, cr).split('\n').pop();
+    return gateRefuse('ANNOUNCEMENT_CARRIAGE_RETURN',
+      'The Announcement holds a carriage return in the middle of a line, after "' + before + '". The '
+      + 'wording is hashed with that character read as the end of a line, and judged and drafted with it '
+      + 'read as part of one, so what follows it would be checked by none of the rules for what a post '
+      + 'may hold. Replace it with an ordinary line break, or delete it.');
+  }
   if (text.indexOf(HTML_COMMENT_OPEN) !== -1) {
     return gateRefuse('ANNOUNCEMENT_HTML_COMMENT',
       'The Announcement block holds an HTML comment. GitHub hides a comment on the pull request '
@@ -427,6 +476,95 @@ function announcementRefusal(text) {
   return null;
 }
 
+// THE ONE JUDGE OF AN ANNOUNCEMENT'S WORDING (claude-config#3846): why the merge is refused for what
+// stands under the Announcement heading, as { code, reason }, or null when it is not. `block` is
+// extractAnnouncement's answer. The merge gate comes here for the pull request about to merge, and
+// so does everything that asks BEFORE the merge: the announcement-refusal command line, which a
+// session runs on the wording file before it is opened in front of Dan, and through it
+// lib/announce-approval.py, which counts no approval of wording refused here. On 2026-11-27 only the
+// gate read these rules, so Dan approved wording whose first line was the mention followed by a
+// sentence, the label went on, the merge was refused and he was asked a second time. A new rule
+// about what a post may hold goes in announcementRefusal, above, and is then asked everywhere.
+function blockRefusal(block) {
+  return missingAnnouncement(block) || announcementRefusal(block);
+}
+
+// A wording FILE's text judged as the block it becomes once it is under the heading of a pull
+// request: read by extractAnnouncement, the reader of that block, so the line endings, the spaces
+// at the ends of lines and the blank lines around the wording count for exactly what they count for
+// there, and judged by blockRefusal.
+//
+// Before that, what is true of a FILE and of no block is refused here, each with a code of its own
+// (the review of #3846 found each as wording that "refused nothing" and then could not merge):
+//   WORDING_FILE_HEADING   a line of the file is a heading. The block of a pull request ends at the
+//                          next heading, so the block could hold only the lines above it: the lines
+//                          below were judged by nothing, and the block's hash could never be the
+//                          hash of the file Dan approved. The --body form is right as it is, since
+//                          there the heading really does end the block.
+//   WORDING_FILE_BLANK_RUN a run of more than WORDING_BLANK_RUN blank lines stands above wording
+//                          (the review's L1). Blank lines are dropped before the hash, and the
+//                          window the file is opened in shows Dan the lines above such a run and
+//                          then white space, so lib/announce-approval.py counts no approval of the
+//                          file (claude-config#3703). This command is what a session runs before
+//                          he is asked, and it said such a file "refuses nothing". The count is
+//                          blankRunBeforeWording's, the one the approval reads, and the limit is
+//                          the approval's own BLANK_RUN, held equal by hooks/test-announce-approval.sh.
+//                          A block has no such rule: the merge gate has none, and a block is not a
+//                          window he was shown.
+// And two of the block's own refusals are given in words true of a file, under the block's codes
+// (the review's L2): EMPTY_ANNOUNCEMENT for a file that holds no post, and ANNOUNCEMENT_NO_OPENER
+// for a file that begins with a byte order mark.
+// A line of the file is a line as the hash reads one (normalizeAnnouncement's own line ends).
+// What this judges is what the file HOLDS. The approval also refuses a file larger than 256 KB and
+// a file name outside letters, digits, dot, dash and underscore, which are not content and are not
+// asked here.
+const WORDING_HEADING = '## Announcement';
+const FILE_LINE_END = /\r\n?|\n/;
+const WORDING_BLANK_RUN = 2;
+const BYTE_ORDER_MARK = String.fromCharCode(0xFEFF);
+function wordingRefusal(text) {
+  const raw = typeof text === 'string' ? text : '';
+  // Two refusals a block gets too, in words true of a FILE (the review's L2). The codes are the
+  // block's own, since the merge would refuse the block these files become under those codes; the
+  // sentences are not the block's, which speak of a heading in a pull request and of its label,
+  // neither of which the reader of a wording file has yet.
+  if (normalizeAnnouncement(raw) === '') {
+    return gateRefuse('EMPTY_ANNOUNCEMENT',
+      'The wording file holds no post: it is empty, or holds only blank lines. Write the whole post in '
+      + 'it, opening with ' + ANNOUNCEMENT_OPENER + ' on a line of its own.');
+  }
+  // A byte order mark is invisible, so the block's sentence quoted a first line that reads exactly
+  // as the mention alone. Said here by name, with nothing quoted.
+  if (raw.charAt(0) === BYTE_ORDER_MARK) {
+    return gateRefuse('ANNOUNCEMENT_NO_OPENER',
+      'The wording file begins with a byte order mark, an invisible character that some editors put '
+      + 'at the start of a file. It would be the first character of the post, so the first line would '
+      + 'not be ' + ANNOUNCEMENT_OPENER + ' alone, however it looks, and agents would not be notified. Save the file '
+      + 'as UTF-8 with no byte order mark, then run this again.');
+  }
+  const lines = raw.split(FILE_LINE_END);
+  for (let i = 0; i < lines.length; i += 1) {
+    if (ANY_HEADING.test(lines[i]) || ANNOUNCEMENT_HEADING.test(lines[i])) {
+      return gateRefuse('WORDING_FILE_HEADING',
+        'The wording file holds a heading on line ' + (i + 1) + ': "' + lines[i].replace(/\s+$/, '') + '". The '
+        + 'Announcement block of a pull request ends at the next heading, so the block could hold only the '
+        + 'lines above that one and could never be the wording Dan approves in this file. '
+        + (ANNOUNCEMENT_HEADING.test(lines[i])
+          ? 'The file is the post alone: leave the Announcement heading out of it.'
+          : 'Write that line without the # signs in front, in bold for example.'));
+    }
+  }
+  const run = blankRunBeforeWording(raw);
+  if (run.count > WORDING_BLANK_RUN) {
+    return gateRefuse('WORDING_FILE_BLANK_RUN',
+      'The wording file holds ' + run.count + ' blank lines in a row, from line ' + run.at + ', with more '
+      + 'wording below them. The window the file is opened in would show Dan the lines above and then '
+      + 'white space, so his approval of this file would approve nothing. Take the blank lines out, '
+      + 'leaving no more than ' + WORDING_BLANK_RUN + ' blank lines in a row anywhere above the last line of wording.');
+  }
+  return blockRefusal(extractAnnouncement(WORDING_HEADING + '\n' + raw));
+}
+
 // What the MERGE GATE refuses, beyond what parseEntry refuses on every Mac (the head of this file).
 // Called by hooks/require-changelog-tag.sh and by nothing else: `entry` is parseEntry's answer for
 // the pull request, `body` its description, `scope` what repoScope said about its repository.
@@ -454,7 +592,7 @@ function gateRefusal(entry, body, scope) {
     return gateRefuse(entry.code, entry.reason);
   }
 
-  if (entry.kind === ANNOUNCE) return announcementRefusal(entry.announcement);
+  if (entry.kind === ANNOUNCE) return blockRefusal(entry.announcement);
 
   // Any other label over an Announcement block: a post somebody wrote that nothing will ever draft.
   const stray = extractAnnouncement(body);
@@ -641,7 +779,9 @@ function requiredLabels(read, slug, today, options) {
 //            change as owed with its reason instead of dropping it.
 function announcementOwed(pr, read, slug, today) {
   const answer = function (state, why, channel, text) {
-    return { state: state, channel: channel || '', text: text || '', normalized: normalizeAnnouncement(text || ''), why: why || '' };
+    // `hash` is announcementHash's, the empty string where no post could be read (#3667): the reader
+    // that keeps what is owed is a mod, which cannot load this file, so it is handed the hash here.
+    return { state: state, channel: channel || '', text: text || '', normalized: normalizeAnnouncement(text || ''), hash: announcementHash(text || ''), why: why || '' };
   };
   if (!pr || typeof pr !== 'object' || Array.isArray(pr)) {
     return answer('unknown', 'the pull request on standard input could not be read as JSON holding its labels and body, so whether it owes an announcement cannot be told');
@@ -666,7 +806,15 @@ module.exports = {
   extractBlock: extractBlock,
   extractAnnouncement: extractAnnouncement,
   normalizeAnnouncement: normalizeAnnouncement,
+  blankRunBeforeWording: blankRunBeforeWording,
   announcementHash: announcementHash,
+  wordingRefusal: wordingRefusal,
+  // The most blank lines in a row a wording file may hold above wording, for the suite that holds
+  // lib/announce-approval.py's own number to it.
+  WORDING_BLANK_RUN: WORDING_BLANK_RUN,
+  // The names of the markdown rules, for the suite: it holds every one of them to a case that feeds
+  // the merge gate and the command line the same wording.
+  UNMEASURED_MARKDOWN_NAMES: UNMEASURED_MARKDOWN.map(function (rule) { return rule.name; }),
   changelogLabels: changelogLabels,
   carriesAnnounce: carriesAnnounce,
   repoScope: repoScope,
@@ -694,15 +842,29 @@ module.exports = {
 //   announcement <owner/name> [file]
 //       reads one pull request as JSON on standard input ({labels, body}, as gh or the API gives it)
 //       and prints announcementOwed's answer: {state: owed | none | unknown, channel, text,
-//       normalized, why}.
+//       normalized, hash, why}.
 //   announcement-hash [--body]
-//       reads wording on standard input and prints {found, hash, lines}: announcementHash's answer and
-//       how many lines the normalised wording has. Without the flag the input IS the wording (the
+//       reads wording on standard input and prints {found, hash, lines, blankRun, blankRunAt}:
+//       announcementHash's answer, how many lines the normalised wording has, and
+//       blankRunBeforeWording's answer about the wording as given. Without the flag the input IS the wording (the
 //       file Dan was shown). With --body it is a pull request description, hashed by the block under
 //       its Announcement heading, and `found` is false, with no hash, when it has no such heading.
-// Every answer either can give exits 0, "unknown" included, so the reader tells a gate that cannot
-// tell from a command that failed. A call naming no repository where one is needed, a flag nobody
-// defined, or any other command, prints the usage and exits 2.
+//   announcement-refusal [--body] <file | ->
+//       reads a wording file, or standard input when the file is named `-`, changes nothing, and
+//       prints {refused, code, reason}: whether the merge gate would refuse a pull request whose
+//       Announcement block is that wording, with the gate's own code and words, or with both null
+//       when it would not (wordingRefusal, claude-config#3846). Run on the wording file BEFORE it
+//       is opened in front of Dan, so he is never asked about wording that cannot merge. Of a file
+//       it also refuses what only a file can hold, each with a code of its own (WORDING_FILE_*): a
+//       heading, and a run of more than two blank lines above wording, which his approval is
+//       refused for. With --body
+//       the input is a pull request description, judged by the block under its Announcement heading.
+//       It exits 0 for wording the gate takes and 1 for wording it refuses, so a caller that reads
+//       only the status is never told refused wording passed (L184); the answer is printed either
+//       way. A file that cannot be read is no answer: why on standard error, and exit 3.
+// Every answer the first three can give exits 0, "unknown" included, so the reader tells a gate that
+// cannot tell from a command that failed. A call naming no repository or file where one is needed, a
+// flag nobody defined, or any other command, prints the usage and exits 2.
 if (require.main === module) {
   const cmd = process.argv[2];
   const rest = process.argv.slice(3);
@@ -712,7 +874,7 @@ if (require.main === module) {
   const named = typeof slug === 'string' && slug.trim();
   // Asked of the table's own names only: a command named `constructor` would otherwise find what
   // every object inherits, and the line below would throw where the usage is owed.
-  const flagTable = { 'required-labels': ['--needs-dan'], 'announcement-hash': ['--body'] };
+  const flagTable = { 'required-labels': ['--needs-dan'], 'announcement-hash': ['--body'], 'announcement-refusal': ['--body'] };
   const known = Object.prototype.hasOwnProperty.call(flagTable, cmd) ? flagTable[cmd] : [];
   const flagsKnown = flags.every(function (f) { return known.indexOf(f) !== -1; });
   const readNow = function () { return registryReader.readRegistry(plain[1] || registryReader.registryPath()); };
@@ -735,13 +897,34 @@ if (require.main === module) {
     withInput(function (raw) {
       const text = flags.indexOf('--body') !== -1 ? extractAnnouncement(raw) : raw;
       const normal = normalizeAnnouncement(text);
-      process.stdout.write(JSON.stringify({ found: text !== null, hash: announcementHash(text), lines: normal ? normal.split('\n').length : 0 }) + '\n');
+      const run = blankRunBeforeWording(text);
+      process.stdout.write(JSON.stringify({ found: text !== null, hash: announcementHash(text), lines: normal ? normal.split('\n').length : 0, blankRun: run.count, blankRunAt: run.at }) + '\n');
     });
+  } else if (cmd === 'announcement-refusal' && flagsKnown && plain.length === 1) {
+    const judge = function (raw) {
+      const refused = flags.indexOf('--body') !== -1 ? blockRefusal(extractAnnouncement(raw)) : wordingRefusal(raw);
+      process.stdout.write(JSON.stringify({ refused: refused !== null, code: refused ? refused.code : null, reason: refused ? refused.reason : null }) + '\n');
+      // Set, never process.exit: the answer above is still being written when this line runs.
+      process.exitCode = refused !== null ? 1 : 0;
+    };
+    if (plain[0] === '-') {
+      withInput(judge);
+    } else {
+      let raw = null;
+      try {
+        raw = require('fs').readFileSync(plain[0], 'utf8');
+      } catch (e) {
+        process.stderr.write('changelog-entry.js announcement-refusal: ' + plain[0] + ' could not be read (' + ((e && e.code) || 'an error') + '), so whether the merge would refuse its wording was not judged\n');
+        process.exitCode = 3;
+      }
+      if (raw !== null) judge(raw);
+    }
   } else {
     // One line, since a reader of a failed run quotes the last line it printed.
     process.stderr.write('Usage: changelog-entry.js required-labels <owner/name> [registry file] [--needs-dan] | '
       + 'announcement <owner/name> [registry file], with the pull request as JSON on standard input | '
-      + 'announcement-hash [--body], with the wording, or with --body a description, on standard input\n');
+      + 'announcement-hash [--body], with the wording, or with --body a description, on standard input | '
+      + 'announcement-refusal [--body] <file>, the wording file to judge, or - for standard input\n');
     process.exit(2);
   }
 }

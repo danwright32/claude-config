@@ -338,9 +338,25 @@ def applies(transcript_path, session_id, unread=None):
     return _pickers(transcript_path, session_id, SOURCE, APPLY, unread)
 
 
-def _pickers(transcript_path, session_id, source, word, unread=None, deadline=None):
+def answered_asks(transcript_path, session_id, source, word, unread=None, deadline=None):
+    """Every picker of one source that Dan answered with one word in this session and could read
+    as written, oldest first, each as the dialog got it: its whole input, metadata included, with
+    the questions its result hands back. For a gate that holds his answer to what the question
+    said (lib/lesson-merge.py, claude-config#3343), read by the one walk his Apply is read by.
+    Raises when the transcript cannot be read; unread gets (the input, why) for each not taken."""
+    return _pickers(transcript_path, session_id, source, word, unread, deadline, whole=True)
+
+
+def picker_faults(asks, deadline=None):
+    """_picker_faults, for a gate that must know before it names a picker whether Dan could read
+    its text as written (lib/lesson-merge.py, claude-config#3343)."""
+    return _picker_faults(asks, deadline)
+
+
+def _pickers(transcript_path, session_id, source, word, unread=None, deadline=None, whole=False):
     """applies(), for the pickers of one source that Dan answered with one word. deadline is
-    _picker_faults'."""
+    _picker_faults'. whole keeps each picker's input as the dialog got it (answered_asks), where
+    applies() keeps its metadata and the dry runs before it."""
     found, asked, dries, dry_sent = [], {}, [], {}
     with open(transcript_path, "rb") as f:
         for raw in f:
@@ -387,7 +403,7 @@ def _pickers(transcript_path, session_id, source, word, unread=None, deadline=No
                         # when it hands any, since a hook can reword what the session sent.
                         shown = result.get("questions")
                         got = dict(pair[0], questions=shown) if isinstance(shown, list) and shown else pair[0]
-                        found.append((got, (pair[0]["metadata"], pair[1])))
+                        found.append((got, got if whole else (pair[0]["metadata"], pair[1])))
     return _read_by_dan(found, word, unread, deadline)
 
 
