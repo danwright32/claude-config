@@ -15,7 +15,7 @@ On 2026-10-04 the disk fell from 25 GB to 8 GB free more than once while several
 sessions built and crash tested. Neither the low space warning, nor this sequence, nor Overture's
 DerivedData reclaim could see why, because the cause is a root only folder that no command here
 could read: `/System/Library/Caches/com.apple.coresymbolicationd`, macOS's symbol cache, at 194 GB.
-Dan's cleaner app found it. That is step 6.
+Dan's cleaner app found it. That is step 7.
 
 ## Before anything else
 
@@ -112,7 +112,91 @@ space warning names these holders itself when swap is more than 2% of the disk a
 already firing, and, with the disk to spare, when swap is also more than 90% of its own total (exit
 5, #2559).
 
-### 4. Where the weight is
+### 4. Which program is writing
+
+A folder ranking says where the weight is, never who is adding it, and a program can fill the disk
+from a place no `du` of the home folder reaches. On 2026-11-25 free space fell 88 GB between 9:48 and
+10:11 AM ET and no folder step explained it: the writer was Adobe Lightroom exporting, holding many
+`cr_sdk_*.tmp` files open in its temp folder under `/private/var/folders`, and the space came back
+when the export ended. On 2026-11-24 free space fell 21 GB in 34 minutes, in bursts with flat
+stretches between, and about half of it was never named. So when free space is falling and swap
+does not account for it, name the writer before ranking a single folder.
+
+macOS keeps, for every running program, a count of the bytes it has written to disk since it
+started. This reads that count twice, ten seconds apart, and sets what was written in those seconds
+against what free space did over the same seconds:
+
+```bash
+python3 ~/.claude/hooks/lib/disk-writers.py
+```
+
+It writes nothing. Its first list, what each program wrote in the window, answers while a burst is
+running; its second, what each has written since it started and when that was, still answers when
+the window lands in a flat stretch between bursts. It can read only programs running as Dan, and
+its second line says how many it could not (on 2026-11-25, 259 of 901: 164 running as root and 95
+as other system users). Their writes are unknown, never zero. When the programs it read do not add
+up to the fall, the rest is in those, and the sync and backup clients of step 6 are the first to
+suspect, since some of them run as root.
+
+Bytes written is not space held: a program that writes temp files and deletes them, or rewrites
+the same file, counts every write. So a program it names is a candidate, and one number names no
+cause. It is the cause once free space falls by about what it wrote over the same window, or gives
+the space back when it stops.
+
+A file deleted while a program still has it open keeps its space until the program closes it or
+quits, and has no name left in any folder, so neither `du` nor a `find` can see it. `lsof` can, as
+a file whose NLINK is 0; the path it prints is the one the file had, so the path alone does not say
+whether it is gone. This totals, for each program, the space held in files with no name left:
+
+```bash
+lsof +c 0 -n -P +L1 | awk 'NR > 1 && $5 == "REG" { s[$1 " pid " $2] += $7; n[$1 " pid " $2]++ } END { for (k in s) printf "%8.0f MB in %d files  %s\n", s[k] / 1e6, n[k], k }' | sort -rn | head -10
+```
+
+It too reads only Dan's programs, and says nothing about root's, with no error to show it left
+them out. For one program, by the pid either command printed, its files with no name left:
+
+```bash
+lsof -a -n -P -p <pid> +L1
+```
+
+and every file it holds open, largest first, which is where a temp folder full of files that still
+have their names shows:
+
+```bash
+lsof -a -n -P -p <pid> | awk '$5 == "REG"' | sort -k7 -rn | head -20
+```
+
+Keep the `-a`: without it `lsof` lists that program's files and also every file with no name left
+that any program holds. The remedy for a writer is stopping it, by letting the job finish or quitting
+the program; deleting what it holds frees nothing while it holds it.
+
+How many files are being created and changed, by anybody, can also be read without a password,
+from the folder where macOS logs file events. The folder cannot be listed, but its own size can be
+read, and on APFS a folder's size is 32 bytes per entry, the same number as its link count, two of
+them the folder's own (measured on five readable folders on 2026-11-25):
+
+```bash
+stat -f 'size %z, links %l, last changed %Sm' /System/Volumes/Data/.fseventsd
+```
+
+Read it twice, minutes apart: entries added between the readings are files being created or changed.
+It was 37,901 at 12:45 PM ET on 2026-11-25 and 38,172 four minutes later, and 347,500 on the night of
+2026-11-24. No reading from a day known to be healthy exists, so one count is not evidence of
+anything; a count climbing fast while free space falls is.
+
+Before step 5's walk, look at memory:
+
+```bash
+memory_pressure | tail -1
+```
+
+A whole disk walk (a `du` of the home folder, a `find` by date) taken while physical memory was full
+ran alongside both swap jumps on 2026-11-24. Whether it caused part of them or only coincided is not
+yet known, since a photo editor was also busy during the second. So while memory is full, take the
+readings above first, and say that the walk is not yet known to be safe at that moment before
+starting it.
+
+### 5. Where the weight is
 
 ```bash
 du -x -d 2 -g ~ 2>/dev/null | sort -rn | head -30
@@ -146,10 +230,10 @@ one (`--disable-features=MacAppCodeSignClone`, in `skills/design-rounds/headless
 2026-10-22) came from the design score's Playwright runs, which since claude-config#1537 start
 Chrome through that same file.
 
-### 5. The sync and backup clients, before anything else you find
+### 6. The sync and backup clients, before anything else you find
 
 These are the ones that fill a disk while looking idle, and they are the first place to look
-whatever step 4 said, because their staging areas are often outside the home directory and often
+whatever step 5 said, because their staging areas are often outside the home directory and often
 newer than anything `du` ranks highly.
 
 **Synology Drive.** The 2026-09-10 cause: a backup task with the whole home folder in scope,
@@ -187,7 +271,7 @@ downloaded:
 brctl quota 2>/dev/null; du -x -d 1 -g ~/Library/Mobile\ Documents 2>/dev/null | sort -rn | head
 ```
 
-### 6. The macOS symbol cache, which only an administrator can measure
+### 7. The macOS symbol cache, which only an administrator can measure
 
 `/System/Library/Caches/com.apple.coresymbolicationd` is filled by `coresymbolicationd` whenever a
 crash report is written or a process is sampled (`sample`, spindump, Instruments). It keeps symbols
@@ -195,7 +279,7 @@ per build, so every fresh build of an app that crashes or is sampled adds anothe
 agents building and crash testing can put well over a hundred gigabytes there. It lives on the data
 volume, not the read only system snapshot, so it counts against the free space step 1 reports.
 
-It is owned by root with no access for anyone else, so `du` without `sudo` reads nothing, and step 4
+It is owned by root with no access for anyone else, so `du` without `sudo` reads nothing, and step 5
 never sees it. Say that plainly rather than reporting it as small or absent. What can be read
 without a password is when a file was last added to it or removed from it, which says it is in use
 and nothing about its size:
@@ -224,7 +308,7 @@ sudo find /System/Library/Caches/com.apple.coresymbolicationd -mindepth 1 -delet
 The low space warning names this folder and both commands itself when its verdict is low or falling
 and the folder exists, so if it has already fired that way, those are the same ones.
 
-### 7. The usual large caches, once the above are ruled out
+### 8. The usual large caches, once the above are ruled out
 
 ```bash
 du -x -d 1 -g ~/Library/Caches ~/Library/Containers ~/Library/Developer 2>/dev/null | sort -rn | head -20
@@ -267,7 +351,7 @@ only the orphans nothing is using, judging each again just before removing it, a
 bash ~/.claude/hooks/derived-data-sweep.sh --delete
 ```
 
-### 8. Snapshots, which `du` cannot see at all
+### 9. Snapshots, which `du` cannot see at all
 
 Space held by local Time Machine snapshots does not appear in any directory listing, so a disk can
 be full with nothing to find.
@@ -285,7 +369,7 @@ too.
 
 Name no cause you have not measured. A folder being large is not evidence it is the one filling the
 disk; a folder growing between two readings is, once `df` shows the disk lost about the same amount
-over the same interval (step 4 says why `du`'s growth alone can be no growth at all).
+over the same interval (step 5 says why `du`'s growth alone can be no growth at all).
 
 ## Deleting anything
 
@@ -295,7 +379,7 @@ page where he ticks what goes, and removes them through `disk-remove.sh` with th
 `df`. What follows is for the few things this sequence found by path that the scan does not cover.
 
 Everything above is read only on purpose, except two deleting commands: the clearing command in
-step 6, which is Dan's to run once he has seen the size, and the sweep's `--delete` in step 7, which
+step 7, which is Dan's to run once he has seen the size, and the sweep's `--delete` in step 8, which
 the low space warning runs on its own (Dan's decision of 2026-10-20) and which by hand runs only
 once Dan has decided to clear the orphaned Xcode caches it listed. Step 2's check also deletes, by
 itself, its own copies of a warning's readings once they are 14 days old (#3157), and nothing else.
@@ -308,7 +392,7 @@ each item really went. Before removing anything:
 
 - Say what you propose to delete, how much you predict it frees, and what regenerates it. The
   prediction is a claim about `df`, not about `du`, which overstates anything holding clones or
-  hard links (step 4).
+  hard links (step 5).
 - Stop the thing that is writing first. Deleting under an active writer frees space that is
   reclaimed within minutes and hides the cause.
 - Never delete from a sync or backup client's own store to free space. Change its scope or pause it
