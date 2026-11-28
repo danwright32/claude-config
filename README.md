@@ -890,9 +890,12 @@ in its own words, which say to run the command directly: a command string whose 
 (`os.system(cmd)`), a command string that goes on past what the gate reads, and
 a script file it could not read, each only when the call names a `payload/` path besides or runs
 inside a payload folder, and a pattern with more than 512 files or a `**` in a checkout at risk.
-From a script file only a link is read, and only one whose path can be placed. A redirection of
-a link command is taken out before its words are read, so `2>/dev/null` is no file it writes, and
-the file an output redirection names is judged as a write (#3775). Each loop is held to
+From a script file a link is read, where its path can be placed, and the file an output
+redirection of any command of a shell script names; every other write a script file makes is
+named after the call. A redirection of a link command is taken out before its words are read, so
+`2>/dev/null` is no file it writes. A link command given one name makes its link in the folder it
+runs in and is judged there, and a string a script cuts into words itself (`.split()`) is run
+with no shell, so each of its words is judged as written (#3775). Each loop is held to
 a count, a limit set in the gate and not a measurement (256 command strings, 4,000 characters of
 one string, 512 files of a pattern, 8 script files, 256 quoted paths of one script file that makes
 a link).

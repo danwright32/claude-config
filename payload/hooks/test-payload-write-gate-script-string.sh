@@ -811,10 +811,10 @@ refused "#3775 kept until decided: an inline script in a script file, holding a 
 
 echo "what the redirection word was hiding inside a payload folder is refused for itself"
 
-# WHAT THE WORD WAS HIDING (claude-config#3775, found in review 2026-11-28). Inside a payload folder
-# every script holding a link command with a redirection was refused for the redirection word, and
-# that refusal also covered writes the script really makes there. With the word no longer placed,
-# each of those is read for what it is. Every script here is made up and none is run.
+# WHAT A REFUSAL FOR THE WORD ALSO COVERED (claude-config#3775). A script refused for a redirection
+# word is refused whatever else it does. With the word no longer placed, each write such a script
+# really makes inside a payload folder has to be read for what it is. Every script here is made
+# up and none is run.
 #
 # A link command given ONE name makes the link in the folder it runs in, under that name's last part.
 mkscript o1.sh "ln -s $FIX/elsewhere/a.txt 2>/dev/null"
@@ -823,7 +823,7 @@ refused "#3775 a link command given one name, its errors sent to /dev/null, run 
 says "#3775 naming the link it makes there" "a write to $HOOKS_DIR/a.txt."
 mkscript o2.sh "ln -s $FIX/elsewhere/a.txt"
 runbash "bash $FIX/scripts/o2.sh" "$HOOKS_DIR"
-refused "#3775 the same with no redirection, which was let through before"
+refused "#3775 the same with no redirection"
 mkscript o3.sh "ln -s \"\$p\" 2>/dev/null"
 runbash "bash $FIX/scripts/o3.sh" "$HOOKS_DIR"
 refused "#3775 one name that is a value: what the link is called cannot be told, the folder it lands in can"
@@ -870,7 +870,7 @@ refused "#3775 and with a tee whose output is sent to a file there"
 # shellcheck disable=SC2016
 printf 'import os\nos.system("ln -s $A $B/t </dev/null>payload/hooks/out.txt")\n' > "$FIX/scripts/g5.py"
 runbash "python3 $FIX/scripts/g5.py" "$FIX/dev"
-refused "#3775 the same write to a payload file from the root, which was let through before"
+refused "#3775 the same write to a payload file, from the root"
 # shellcheck disable=SC2016
 printf 'import os\nos.system("ln -s $A $B/t >/dev/null</dev/null")\n' > "$FIX/scripts/g6.py"
 runbash "python3 $FIX/scripts/g6.py" "$HOOKS_DIR"
@@ -918,7 +918,7 @@ refused "#3775 a script whose link command has a redirection and whose next line
 says "#3775 naming the file that line writes" "a write to $HOOKS_DIR/out.txt."
 mkscript l2.sh "echo hi > out.txt"
 runbash "bash $FIX/scripts/l2.sh" "$HOOKS_DIR"
-refused "#3775 the line that writes there with no link command beside it, which was let through before"
+refused "#3775 the line that writes there with no link command beside it"
 mkscript l3.sh "echo hi >> payload/hooks/out.txt"
 runbash "bash $FIX/scripts/l3.sh" "$FIX/dev"
 refused "#3775 a line of a script file adding to a payload file, run from the root"
@@ -928,6 +928,13 @@ allowed "#3775 control: lines writing under a value, to /dev/null and to a descr
 mkscript l5.sh "if [[ \"\$a\" > b ]]; then :; fi" "if (( n > 5 )); then :; fi" "x=\$(( n > 5 ))" "echo \"a > b\" 'c > d'"
 runbash "bash $FIX/scripts/l5.sh" "$HOOKS_DIR"
 allowed "#3775 control: a > in a test, in an arithmetic and in quotes is no redirection"
+mkscript l5b.sh "if [[ \$x > 3 || \$y > 4 ]]; then :; fi"
+runbash "bash $FIX/scripts/l5b.sh" "$HOOKS_DIR"
+allowed "#3775 control: nor is one in the second half of a test, which the reader cuts at its ||"
+mkscript l5c.sh ">lead.txt echo hi"
+runbash "bash $FIX/scripts/l5c.sh" "$HOOKS_DIR"
+refused "#3775 a line whose redirection is written before its command name"
+says "#3775 naming the file" "a write to $HOOKS_DIR/lead.txt."
 mkscript l6.sh "cd \"\$T\"" "echo hi > out.txt"
 runbash "bash $FIX/scripts/l6.sh" "$HOOKS_DIR"
 allowed "#3775 control: a line writing a relative file after the script moves to a folder named by a value"
@@ -960,7 +967,8 @@ mkscript u6.sh "ln -s $FIX/elsewhere/a.txt \"\$N\""
 runbash "bash $FIX/scripts/u6.sh" "$HOOKS_DIR"
 allowed "#3775 control: the same link with no redirection is let through, as it was"
 
-# Three readings a change could undo with every case above still passing (found in review).
+# Three readings no case above holds: a quoted name is one word, &> in a large script is read to
+# its end, and an input copied from a descriptor or closed is a read.
 mkdir -p "$FIX/elsewhere/my dir"
 mkscript q1.sh "ln -s $FIX/elsewhere/a.txt \"$FIX/elsewhere/my dir/l\" 2>/dev/null"
 runbash "bash $FIX/scripts/q1.sh" "$HOOKS_DIR"

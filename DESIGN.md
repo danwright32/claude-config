@@ -2603,6 +2603,33 @@ copies or closes a descriptor, writes no file. Where the words cannot say what i
 target holds a value, the redirection runs a command, `>|`, which the reader cuts at its `|`)
 they are placed exactly as before.
 
+Inside a payload folder that refusal covered more than the word (found in review on 2026-11-28,
+by asking main's gate, 3808's head and this branch about made up commands). Every script holding
+a link command with a redirection was refused there whatever else it did, so a reading that no
+longer places the word lets through each real write the refusal covered. Those a rule true of
+every script can read are read for themselves. A link command given one name makes the link in
+the folder it runs in, so the last part of that name is placed there, with a redirection or
+without (the folder itself where that part is a value). A redirection written against the target
+of the one before it (`</dev/null>out.txt`) is spaced before the redirections are taken out: in
+the two readings of text the second was part of the target of the first, and so a read. A string
+the script cuts into words itself (`"ln -s a <b".split()`) is run with no shell, so each word is
+placed as written; so is a string that stops at a quote mark unlike the one it opened with,
+which is not read to its end. What an output redirection of any command of a shell script file
+writes is placed where its words say it, by the same reading (`echo hi > out.txt` in a script
+run inside a payload folder, which main lets through). And a descriptor written as a name in
+braces (`{fd}>/dev/null`) is read as one written as a number.
+
+Two kinds of write that refusal covered are not read, because no rule says where they land. One
+is what a program writes by its own arguments: a `touch`, a `tee`, a `cp`, an inline script, any
+line of a script too large for the shared reader, a python file that opens a file. The other is
+a link whose name is a value, which the pull request of #3689 left unjudged and which the link
+commands of this repository's suites are. Main lets both through, 3808's head refused them only
+for the redirection word, and the report after the call names what they change. The suite pins
+each as let through until Dan decides. A redirection whose target is a value, its operator a
+word of its own (`2> "$T/err"`), is still placed as before and refused inside a payload folder,
+though written against its operator the same target is let through by every gate: letting the
+spaced spelling through lets a write to a value through that 3808's head refuses.
+
 Two other words of a script are still taken for a write that may be none, and are left as they
 were because no reading of them is right for every script. The text a symbolic link holds
 (`ln -s 999999 "$STATE/lock"`) is placed in the folder the command runs in, though it is read

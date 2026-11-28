@@ -1508,18 +1508,17 @@ def script_links(text, base, bare):
 # target holds a value, the redirection runs a command, or its form is not read here) every word
 # of a redirection of a link command is placed, the reading that sees more writes, never fewer.
 #
-# THE WORD WAS ALSO HIDING REAL WRITES (found in review 2026-11-28). Inside a payload folder every
-# script holding a link command with a redirection was refused for that word, whatever else it
-# did, so taking the word out let through what the refusal had covered by accident. Each of
-# those a rule that is true of every script can read is read for itself:
+# WHAT A REFUSAL FOR THE WORD ALSO COVERED. A script refused for a redirection word is refused
+# whatever else it does, so a reading that no longer places the word has to read for itself each
+# write that refusal covered, where a rule true of every script can:
 #   a link command given ONE name makes the link in the folder it runs in (place_link);
 #   a string the script cuts into words itself is run with no shell, so nothing in it is a
 #   redirection and each word is a word of the link command (CUT_BY_THE_SCRIPT);
 #   what an output redirection of ANY command of a shell script file writes is a write
 #   (shell_redirections).
-# What a program writes by its own arguments (touch, tee, cp, an inline script) is still not read
-# from a script file, and a link whose name is a value is still not judged: both are named after
-# the call, and the suite pins them as let through until Dan decides.
+# What a program writes by its own arguments (touch, tee, cp, an inline script) is not read from a
+# script file, and a link whose name is a value is not judged: no rule says where either lands, so
+# both are named after the call, and the suite pins them as let through until Dan decides.
 CUT_BY_THE_SCRIPT = re.compile(r"\s*\.\s*split\b")
 NAMED_DESCRIPTOR = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}(?=[<>])")
 
@@ -1618,6 +1617,10 @@ def shell_redirections(text, base):
         before = whole[:len(whole) - len(rest)] if rest and whole.endswith(rest) else ("" if rest else whole)
         taken = _sw.unredirected(before)[1] + _sw.unredirected(rest)[1]
     except Exception:
+        # A reading that failed is not one that found no redirection.
+        untold("a command of a script file whose redirections this gate could not read",
+               "payload-write-gate.sh could not read which files a command of a script file sends its output to: "
+               "the reading of its redirections failed.", base)
         return
     for r in taken:
         for w in redirection_told(r) or ():
