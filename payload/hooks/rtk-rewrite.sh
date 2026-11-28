@@ -545,7 +545,8 @@ rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to r
         if (c == "(") { flushword(); push("paren"); i++; continue }
         if (c == ")") {
           flushword()
-          # A `)` that closes nothing it can name (a case pattern, a stray) is not guessed at.
+          # A closing parenthesis that closes nothing it can name (a case pattern, a stray) is not
+          # guessed at.
           if (depth == 0 || ctx[depth] == "brace" || ctx[depth] == "bt" || ctx[depth] == "kw") { bad = 1; break }
           popgroup(); i++; continue
         }
@@ -562,6 +563,15 @@ if rtk_output_read_by_program "$REWRITTEN"; then exit 0; fi
 
 # No change: nothing to do.
 if [ "$CMD" = "$REWRITTEN" ]; then
+  exit 0
+fi
+
+# A subagent's call is left as typed. A rewritten call can be refused by auto mode's check with no
+# verdict, and those refusals fall almost only on subagents (claude-config#3548). Who is calling is
+# read as the subagent gates read it: agent_id is in the payload only inside a subagent, and its
+# presence is the signal, so an empty one still counts. This sits after every refusal and warning
+# above, so a subagent's caller is still warned; only the rewrite itself is withheld.
+if echo "$INPUT" | jq -e 'has("agent_id")' >/dev/null 2>&1; then
   exit 0
 fi
 
