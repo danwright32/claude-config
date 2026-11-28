@@ -2279,6 +2279,55 @@ export const argumentUnreached = (reading: ScriptReading, commands: readonly Run
   return undefined
 }
 
+// A word with each command substitution taken out, `$(...)` to the parenthesis that closes it and a
+// backquoted one to its closing backquote, text in quotes inside one passed over whole: what the
+// word spells beside what its commands print. The word itself where one is never closed.
+const besideOutput = (word: string): string => {
+  let out = ''
+  for (let i = 0; i < word.length; i++) {
+    const c = word[i] as string
+    if (c === '\\') {
+      out += word.slice(i, i + 2)
+      i++
+    } else if (c === '`') {
+      const end = word.indexOf('`', i + 1)
+      if (end < 0) return word
+      i = end
+    } else if (c === '$' && word[i + 1] === '(') {
+      let depth = 0
+      let j = i + 1
+      for (; j < word.length; j++) {
+        const d = word[j] as string
+        if (d === '\\') j++
+        else if (d === "'" || d === '"') {
+          let end = j + 1
+          while (end < word.length && word[end] !== d) end += d === '"' && word[end] === '\\' ? 2 : 1
+          j = end
+        } else if (d === '(') depth++
+        else if (d === ')' && --depth === 0) break
+      }
+      if (j >= word.length) return word
+      i = j
+    } else out += c
+  }
+  return out
+}
+
+/**
+ * Whether the reader made the name at `path` from text inside a command substitution in `word`
+ * (#3602): the word's own name is what a command prints (nameFromOutput), nothing beside its
+ * substitutions names a variable, and the name given is a plain one, holding no substitution
+ * itself. Where a for loop's variable is named inside a substitution
+ * (`check "$1" "$(grep -c "$want" notes.txt)"`), mod-kit's write reader writes each of the loop's
+ * words in place there and gives each piece as a name the word may spell, so the words of a
+ * suite's loop (`for want in 'sysctl vm.swapusage' 'df -h'`) were judged as files handed to the
+ * helper beside the substitution. Such a name is a word of the command inside the substitution,
+ * which the readers read as a command of its own, and is no name of this word. A word naming a
+ * variable beside its substitutions (`"$f$(date)"`) may spell a plain name itself and is not read
+ * so, and nor is a name still holding its substitution, which is judged as one the shell fills in.
+ */
+export const fromInsideOutput = (word: string, path: string): boolean => nameFromOutput(word) && !/[$`]/.test(besideOutput(word)) && !/\$\(|`/.test(path)
+
 /** A run as mod-kit's write reader gives it, as handedToUnknown reads it (#3416). */
 export type HandedRun = { script: string; what: string; unknown?: true; why?: string; remedy?: string; args: readonly { word: string; path?: string; unexpanded?: boolean }[] }
 
@@ -2294,8 +2343,9 @@ export type HandedRun = { script: string; what: string; unknown?: true; why?: st
  * the list of programs that only read applies in a script's text as it does on a command line.
  * A word the reader cannot place is not handed on by it (a variable the script never sets to one
  * value, what the script itself was handed, a pattern, a command's output), so none is given here;
- * argumentUnreached says what that leaves open. A script file, a module and a tool run through
- * npx are runs of another kind, read by the rules that were there before.
+ * argumentUnreached says what that leaves open. A plain name the reader made from the text inside
+ * a command substitution is given by none either (fromInsideOutput). A script file, a module
+ * and a tool run through npx are runs of another kind, read by the rules that were there before.
  * `unexpanded` is the reader's own mark on the word, kept since #3602: every `$` and backtick in
  * it is one the shell hands on as written, so the caller reads it as the name it spells
  * (patternMayBeLook's `asWritten`). It was dropped here before, so a `$(` in such a word was read
@@ -2308,7 +2358,7 @@ export const handedToUnknown = (runs: readonly HandedRun[] | undefined): { word:
     .filter(r => r.unknown)
     .flatMap(r =>
       r.args.flatMap(a =>
-        a.path === undefined ? [] : [{ word: a.word, path: a.path, program: r.script, why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '', ...(a.unexpanded === true ? { unexpanded: true as const } : {}) }],
+        a.path === undefined || (a.unexpanded !== true && fromInsideOutput(a.word, a.path)) ? [] : [{ word: a.word, path: a.path, program: r.script, why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '', ...(a.unexpanded === true ? { unexpanded: true as const } : {}) }],
       ),
     )
 
@@ -2449,7 +2499,15 @@ const plainCall = (c: RunCommand): boolean => !c.behind?.length && !c.xargs && !
 // Any mention of what a function was handed, and the plain ones this reading can write a word in
 // place of: `$1` to `$9`, `${1}`, `$@`, `$*`, `${@}`, `${*}`. `$0` and `$#` are not what it was handed.
 const HANDED = /\$(?:[1-9@*]|\{[#!]?[0-9@*])/
-const HANDED_PLAIN = /\$(?:[1-9@*]|\{(?:[1-9]|[@*])\})/g
+// One mention this reading writes a call's word in place of (calledWith), from its `$`: `$1`, `$@`,
+// `${1}`, `${12}`, a count (`${#1}`, `${#@}`), and a word named through one operator whose operand
+// holds no expansion, quote or brace of its own: a default or an alternative (`${1:-none}`,
+// `${2:+--flag}`, `${1:?usage}`), a piece (`${3:0:1500}`, `${@:2}`), an end taken off (`${1%.bak}`,
+// `${1##*/}`), a replacement (`${1//a/b}`) or a change of case. `${!1}`, which names another variable
+// by the word, `${1:=x}`, which the shell refuses, and `${0}` are none of them.
+const OWN_FORM = String.raw`\$(?:([1-9])|([@*])|\{(?:(#)([1-9][0-9]?|[@*])|([1-9][0-9]?|[@*])(?:(:?[-+?]|:(?!=)|##?|%%?|\/\/?|\^\^?|,,?)([^$${'`'}{}"'\\]*))?)\})`
+const HANDED_PLAIN = new RegExp(OWN_FORM, 'g')
+const HANDED_AT = new RegExp(OWN_FORM, 'y')
 const ASSIGNS = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/
 // What changes the words a function was handed, runs text as commands, or changes which function a
 // name runs: a body holding one is not read as its commands with the call's words in place.
@@ -2483,7 +2541,13 @@ export const ownDefinitions = (commands: readonly RunCommand[], name: string): {
  * (#3416), or undefined where it holds a heredoc, whose text this reading does not follow. `values`
  * are the call's words after the function's name, each made of characters the shell reads the same
  * inside double quotes and outside them, so a word is written in as it stands wherever the body
- * names it; text in single quotes and comments are left as written. Which quotes hold a character
+ * names it; text in single quotes and comments are left as written. A word named through an
+ * operator (OWN_FORM: `${3:0:1500}`, `${1%.bak}`, `${@:2}`) is written as the whole word, since the
+ * shell hands on that word or a piece of it; a count (`${#1}`) as a number; a default
+ * (`${1:-none}`) as the call's word, or the default where the call gave none; an alternative
+ * (`${1:+--flag}`) as its own text where the call gave a word. So a helper that prints the first
+ * 1,500 characters of what it compared is read as one that prints it, and one that hands a piece of
+ * a name to a program is read as handing that program the name. Which quotes hold a character
  * is read simply here, so the caller reads the result with mod-kit's pipeline and refuses any word
  * still naming what the function was handed.
  */
@@ -2511,13 +2575,23 @@ export const calledWith = (body: string, values: readonly string[]): string | un
     } else if (c === '<' && !quote && body[i + 1] === '<' && body[i + 2] !== '<' && body[i - 1] !== '<') {
       return undefined
     } else {
-      const m = c === '$' ? /^\$(?:([1-9])|\{([1-9])\}|[@*]|\{[@*]\})/.exec(body.slice(i, i + 4)) : null
+      HANDED_AT.lastIndex = i
+      const m = c === '$' ? HANDED_AT.exec(body) : null
       if (!m) {
         out += c
         continue
       }
-      const n = m[1] ?? m[2]
-      out += n ? (values[Number(n) - 1] ?? OWN_NONE) : values.join(' ')
+      const which = (m[1] ?? m[2] ?? m[4] ?? m[5]) as string
+      const all = which === '@' || which === '*'
+      const value = all ? values.join(' ') : values[Number(which) - 1]
+      const op = m[6]
+      // A count is a number. A default stands only where the call gave no word, and an alternative
+      // only where it gave one, neither carrying the word itself. Every other form gives the word
+      // or a piece of it, and is written as the whole word: more than the shell hands on, never less.
+      if (m[3]) out += '0'
+      else if (op === '-' || op === ':-') out += value || safeWord(m[7] ?? '')
+      else if (op === '+' || op === ':+') out += value ? safeWord(m[7] ?? '') : ''
+      else out += value ?? OWN_NONE
       i += m[0].length - 1
     }
   }
@@ -2606,7 +2680,7 @@ const wholeGroup = async (io: OwnCallIo, inner: string): Promise<readonly RunCom
  *   anything but a comment or a `;` (a redirect there is applied with each call's words), or holds a
  *   heredoc, a function, or shift, set, getopts, eval, source, trap, alias or unset;
  * - a body that keeps what it was handed in a variable (`local f="$1"`, `for f in "$@"`), names it
- *   in any other form (`${1:-x}`, `${@:2}`), runs it as a command, or hands it to a command the
+ *   in a form calledWith does not write out (`${!1}`, `${1:-$2}`), runs it as a command, or hands it to a command the
  *   reader marks unread or one that runs its words later (RUNS_LATER);
  * - a word that joins what was handed to another value (`"$ROOT/$1"`), where the joined name has
  *   the shape of a file the guard holds.
