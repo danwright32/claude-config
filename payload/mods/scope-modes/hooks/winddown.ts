@@ -6,10 +6,11 @@ import { EDITORS, type Cmd } from './nobuild.ts'
 // or no deploy step recorded (#687), the worktree and branch cleaned, and the issue closed. Until then the turn end is refused. Fixing
 // what blocks this issue's merge or deploy is allowed; starting new work is denied. Asking Dan
 // (AskUserQuestion) is never new work: winding down finalizes everything the session has open, so a
-// PR needing his sign off is asked about and merged, never parked waiting on him (#856). The one
-// exception is Dan's own answer to leave_pr_open: a PR he chose to leave open (#917), recorded
-// against the commit the PR was on, is settled until it is pushed to again, and a PR closed without
-// merging that he chose to leave closed (#1033) is settled while it stays closed.
+// PR needing his sign off is asked about and merged, never parked waiting on him (#856). The
+// exceptions are Dan's own answers. One is his answer to leave_pr_open: a PR he chose to leave open
+// (#917), recorded against the commit the PR was on, is settled until it is pushed to again, and a
+// PR closed without merging that he chose to leave closed (#1033) is settled while it stays closed.
+// The other is his own pick, in a session's picker, to close a PR unmerged (#3779, below).
 //
 // A closed PR is never settled without his answer, even where its work plainly merged in another PR
 // (ovation#711, whose work merged as #716): GitHub records no link from a closed PR to the one that
@@ -21,7 +22,9 @@ import { EDITORS, type Cmd } from './nobuild.ts'
 // merge it", about #1716). So a closed PR is reopened and finished by default, and he is asked about
 // leaving it closed only on a recorded reason it will never merge: its closing comment, or his own
 // earlier answer, naming a PR GitHub confirms is one (the PR that superseded it), quoted to him. A
-// comment naming only an issue, as #1716's did, is no such reason.
+// comment naming only an issue, as #1716's did, is no such reason. A PR he himself chose to close
+// unmerged, by picking that answer in a picker that named it (#3779, closedecision.ts), is left
+// closed on that answer with nothing more asked.
 
 export type Refusal = { what: string }
 
@@ -240,6 +243,11 @@ export type Reading = {
   inHand?: string
   /** Dan's choice to leave this PR open (#917) or closed (#1033), when he made one; never inferred. */
   choice?: LeftAsIs
+  /**
+   * Why GitHub could not say whether another number named in the picker he answered about this PR
+   * is a PR (#3779). Set only beside a choice still waiting on that answer.
+   */
+  choiceUnread?: string
   /**
    * The checkout was on this branch, which this session neither created, committed to nor pushed
    * (#1074): it is not the session's, so it has no PR or cleanup of the session's to finish.
@@ -461,12 +469,22 @@ export const outstanding = (r: Reading): string[] => {
   }
   if (r.pr.state === 'CLOSED') {
     if (settledByDan(r)) return []
+    // His own pick to close it (#3779), in a picker that named another number too: it settles this
+    // PR once GitHub has said that number is no PR. Until then it is never sent back to be reopened.
+    const also = r.choice && isLeftClosed(r.choice) ? (r.choice.unless ?? []).map(refSaid) : []
+    if (r.choice && also.length)
+      return [
+        `PR #${r.pr.number} was closed without merging, and ${r.choice.why}, which settles it once GitHub says ${also.join(' and ')}, which that picker also named, ${also.length === 1 ? 'is' : 'are'} no pull request. That could not be read${r.choiceUnread ? ` (${r.choiceUnread})` : ''}, so leave it closed until GitHub answers`,
+      ]
+    // His pick to close it that is not kept as his choice (#3779: its picker named a second pull
+    // request) settles nothing, and why is said with the PR at every turn end, never only in a log.
+    const notKept = r.choice && isLeftClosed(r.choice) && r.choice.notKept ? `. ${r.choice.why}, but that answer is not kept as his choice to close it: ${r.choice.notKept}` : ''
     // His answer to leave it open was about an open PR, so it settles nothing once closed. Dan would
     // rather merge it (#1767), so he is asked only on a recorded reason it will never merge.
     const n = r.pr.neverMerge
-    if (n) return [`PR #${r.pr.number} was closed without merging, and ${neverMergeSaid(n)}: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)`]
+    if (n) return [`PR #${r.pr.number} was closed without merging, and ${neverMergeSaid(n)}: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)${notKept}`]
     return [
-      `PR #${r.pr.number} was closed without merging: reopen it (gh pr reopen ${r.pr.number}) and finish it, as Dan would rather merge it. Ask him whether to leave it closed (mcp__scope-modes__leave_pr_open) only when he said earlier that another PR superseded it, passing his words as dan_said`,
+      `PR #${r.pr.number} was closed without merging: reopen it (gh pr reopen ${r.pr.number}) and finish it, as Dan would rather merge it. Ask him whether to leave it closed (mcp__scope-modes__leave_pr_open) only when he said earlier that another PR superseded it, passing his words as dan_said${notKept}`,
     ]
   }
   const d = r.deploy
@@ -513,7 +531,9 @@ export function settledByDan(r: Reading): boolean {
  */
 export const leftByChoice = (pr: { state: string; head?: string }, d: LeftAsIs | undefined): boolean => {
   if (!d) return false
-  if (isLeftClosed(d)) return pr.state === 'CLOSED'
+  // Left closed on a pick of his whose picker named another number (#3779) only once GitHub has
+  // said that number is no PR, which takes it off the record, and never on one not kept as his choice.
+  if (isLeftClosed(d)) return pr.state === 'CLOSED' && !d.unless?.length && !d.notKept
   return pr.state === 'OPEN' && !!pr.head && pr.head === d.head
 }
 

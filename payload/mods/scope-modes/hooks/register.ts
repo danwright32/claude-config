@@ -116,6 +116,7 @@ import {
 import { claimEntry, closeMatchIn, declinedEntry, declinedIn, filedEntry, issueLinkIn, judgeProposal, proposalPath, type ProposalState } from './proposals.ts'
 import { answeredIn, distinctQuestions, judgeNamed, linkNumber, linksIn as questionLinks, namedItems, settledKey, type ItemState, type Named } from './settled.ts'
 import { ENDED_SAID, MORNING_HEADING, morningStep, pickerAnswered, reviewsIn, stalePending, withDone, withPending, type MorningReview } from './morning.ts'
+import { changeLeft, notedSaid, notePicked, picksSaid, placePicked, type PickedIo, type PlaceIo } from './closedecision.ts'
 import { alreadyPut, ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, type HeldDelivery, type HeldMerge, type PutMorning } from './nightheld.ts'
 import { reportBase, reportTitle } from './reportname.ts'
 import { scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
@@ -4538,7 +4539,35 @@ const keepFound = async ($: EngineInterface, t: ScopeModesTarget, found: Found |
   return kept
 }
 
-const leftOpenOf = async ($: EngineInterface) => (await $.state.get(leftOpenRef)).value ?? []
+// Dan's own pick to close a PR unmerged (#3779), whose rules are closedecision.ts's: this mod's
+// record of his answers, its repository and link reader and its one way of asking GitHub whether a
+// number is a PR (namedPr, budgeted as every such read is, #1777), each spelled here. gh starts in
+// the home folder, since the session's own may be a worktree winding down has removed (#1059).
+const pickedIo = ($: EngineInterface, o: Lookup = {}): PickedIo & PlaceIo => {
+  const gh: GhRead = async args => {
+    const home = await $.env.get('HOME')
+    return $.process.run(['gh', ...args], { timeoutMs: RUN_MS, ...(home ? { cwd: home } : {}) }).catch(err => ({ exitCode: -1, stdout: '', stderr: msg(err) }))
+  }
+  return {
+    slug: () => sessionSlug($),
+    opened: () => openedOf($),
+    // Asked only of a PR he picked to close that a later picker of his names again.
+    state: async (repo, number) => {
+      const res = await gh(['pr', 'view', String(number), '--repo', repo, '--json', 'state'])
+      if (res.exitCode !== 0) return { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` }
+      try {
+        return String((JSON.parse(res.stdout) as { state?: unknown }).state ?? '')
+      } catch {
+        return { unreadable: 'GitHub answered something that is not JSON' }
+      }
+    },
+    linkRepo: link => $.modkit.linkRepo({ link }),
+    left: () => $.state.get(leftOpenRef),
+    setLeft: (all, ifVersion) => $.state.set(leftOpenRef, all, { ifVersion }),
+    log: line => $.ui.log(`scope-modes: ${line}`, { to: 'debug' }),
+    named: (repo, refs, where) => namedPr($, gh, repo, refs, where, o),
+  }
+}
 // owner/name a PR's link names, read by mod-kit's one reader of a github.com link (#961), or
 // undefined for no link or none it names.
 const repoOfLink = async ($: EngineInterface, url: string | undefined): Promise<string | undefined> => (url ? ((await $.modkit.linkRepo({ link: url })) ?? undefined) : undefined)
@@ -4557,6 +4586,17 @@ const keptSaid = (kept: readonly ScopeModesLeftAsIs[], whose: string): string =>
   const open = kept.filter(d => !isLeftClosed(d)).map(keptLine)
   const closed = kept.filter(isLeftClosed).map(keptLine)
   return `${open.length ? ` Left open by ${whose} choice: ${open.join('; ')}.` : ''}${closed.length ? ` Left closed by ${whose} choice: ${closed.join('; ')}.` : ''}`
+}
+// Every turn end names each PR Dan chose to close unmerged and quotes his answer (#3779), in the
+// transcript, where it stays: one the turn end's own refusal lists as left closed is not said twice.
+// A record that cannot be read is said too, never passed over.
+const sayPicks = async ($: EngineInterface, refusal = '') => {
+  try {
+    const said = picksSaid((await $.state.get(leftOpenRef)).value ?? [], d => refusal.includes(keptLine(d)))
+    if (said) $.ui.log(said)
+  } catch (err) {
+    $.ui.log(`Scope modes could not read the record of Dan's answers at this turn end (${msg(err)}), so a pull request he chose to close unmerged is not named here.`)
+  }
 }
 
 // The branches this session made its own (#1074): created, committed to or pushed.
@@ -4606,8 +4646,10 @@ const check = ($: EngineInterface, fresh = false, inFlight?: unknown): Promise<C
       // A PR is left as it is only on Dan's own answer to leave_pr_open, recorded against its
       // repository and number: open at its head (#917), or closed without merging (#1033). With none
       // recorded, #856's default holds and it is outstanding. A branch is left as it is only on his
-      // answer to leave_branch, by repository and name (#1074).
-      const choices = await leftOpenOf($)
+      // answer to leave_branch, by repository and name (#1074). His own pick to close a PR unmerged
+      // (#3779) is on the same record, and counts once GitHub has placed any other number its picker
+      // named; why one is still unplaced is said with its PR.
+      const { choices, unread: unplaced } = await placePicked(pickedIo($))
       // The branches this session pushed its branch into (#2533): with no PR of its own, theirs is its PR.
       const ownBranch = t.branch
       const into = ((await $.state.get(pushedIntoRef)).value ?? []).filter(p => p.from === ownBranch).map(p => p.to)
@@ -4622,7 +4664,8 @@ const check = ($: EngineInterface, fresh = false, inFlight?: unknown): Promise<C
         const pr = r.pr
         const d = repo && pr && !('unreadable' in pr) ? choiceFor(choices, repo, pr.number) : undefined
         const b = repo && r.branch ? branchChoiceFor(branchChoices, repo, r.branch) : undefined
-        const withChoice: Reading = { ...r, ...(d ? { choice: d } : {}), ...(b ? { branchLeft: b } : {}) }
+        const choiceUnread = d ? unplaced.get(d) : undefined
+        const withChoice: Reading = { ...r, ...(d ? { choice: d } : {}), ...(choiceUnread ? { choiceUnread } : {}), ...(b ? { branchLeft: b } : {}) }
         if (d && settledByDan(withChoice)) kept.push(d)
         // Said as kept by his choice only where his answer settled something (lessons review).
         if (b && settledByBranchChoice(withChoice) && !keptBranches.includes(b)) keptBranches.push(b)
@@ -4760,6 +4803,16 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   let asked: string
   let why: string
   if (read.state === 'CLOSED') {
+    // His own pick to close it unmerged, in a picker that named it (#3779), already settles it, so
+    // nothing more is asked; a number of that picker's GitHub could not place is asked about again now.
+    const placed = await placePicked(pickedIo($, { retry: true }), d => d.number === number && d.repo.toLowerCase() === repo.toLowerCase())
+    const had = choiceFor(placed.choices, repo, number)
+    // One not kept as his choice (its picker named a second PR) settles nothing, and is said below.
+    const notKept = had && isLeftClosed(had) && had.notKept ? ` ${had.why}, but that answer is not kept as his choice to close it: ${had.notKept}.` : ''
+    if (had && isLeftClosed(had) && had.picked && !notKept) {
+      const unplaced = placed.unread.get(had)
+      return unplaced ? unread(unplaced) : `${pr} is already left closed by Dan's own choice (${had.why}), so he was not asked again: winding down counts it settled unless it is reopened.`
+    }
     // Claude asks once, to put a question to Dan, so a read that failed is asked again now (#1777).
     let reason = await closingReason($, gh, repo, { ...read, number }, { retry: true })
     if (reason && 'unreadable' in reason) return unread(reason.unreadable)
@@ -4774,7 +4827,7 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
     }
     if (!reason) {
       const dan = danSaid ? "Dan's words given as dan_said name no PR" : "no words of Dan's naming one were given as dan_said"
-      return `${pr} has no recorded reason it will never merge (no closing comment names the PR that superseded it, and ${dan}), so Dan was not asked and nothing was recorded: reopen it (gh pr reopen ${number} --repo ${repo}) and finish it, as he would rather merge it.`
+      return `${pr} has no recorded reason it will never merge (no closing comment names the PR that superseded it, and ${dan}), so Dan was not asked and nothing was recorded: reopen it (gh pr reopen ${number} --repo ${repo}) and finish it, as he would rather merge it.${notKept}`
     }
     asked = neverMergeSaid(reason, true)
     why = neverMergeWhy(reason)
@@ -4793,14 +4846,15 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on ${pr}.`
   }
-  // One answer per PR: a new one, open or closed, replaces whatever he said about it before.
-  const others = (await leftOpenOf($)).filter(d => !(d.number === number && d.repo.toLowerCase() === repo.toLowerCase()))
+  // One answer per PR: a new one, open or closed, replaces whatever he said about it before, on the
+  // record as it stands when written, so an answer of his recorded since is never written over (#3779).
+  const others = (all: readonly ScopeModesLeftAsIs[]) => all.filter(d => !(d.number === number && d.repo.toLowerCase() === repo.toLowerCase()))
   if (answer === asIs.keep) {
-    await $.state.set(leftOpenRef, [...others, asIs.record(repo, number, why, head)])
+    await changeLeft(pickedIo($), all => [...others(all), asIs.record(repo, number, why, head)])
     return asIs.keptSaid(pr, head)
   }
   // Only his keep answer leaves it as it is: the other choice or anything typed withdraws an earlier one.
-  await $.state.set(leftOpenRef, others)
+  await changeLeft(pickedIo($), others)
   if (answer === asIs.other) return asIs.otherSaid(pr)
   return `Dan did not choose to leave ${pr} ${asIs.as}, so winding down still waits on it. He wrote: ${answer}`
 }
@@ -5492,7 +5546,7 @@ const useCleanups = async ($: EngineInterface, cleanups: readonly ScopeModesClea
 // Just don't start any new work". So no way out is ever offered; the issue is finished.
 const FINISH_ISSUES =
   'Every issue this session worked is finished, the verification its fix still owes included (a live check, a measurement, a follow up PR the fix needs), and closed only once that is done. Never ask Dan whether to turn winding down off or to close an issue unfinished, and never close one before what is left on it is done: do it. Only new work is refused.'
-const FINALIZE_ALL = `Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan. A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open, asked when he may want it left (for a reviewer outside this session, say), and a push after he answers asks again. A PR closed without merging is reopened and finished, as Dan would rather merge it, and left closed only on his answer to the same tool, asked only when its closing comment or his own earlier answer names the PR that superseded it. A branch, a worktree on it or uncommitted work stays as it is only on his answer to ${LEAVE_BRANCH_TOOL}, and a new branch to commit uncommitted work starts only on his answer to ${CLEANUP_TOOL}. ${FINISH_ISSUES}`
+const FINALIZE_ALL = `Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan. A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open, asked when he may want it left (for a reviewer outside this session, say), and a push after he answers asks again. A PR closed without merging is reopened and finished, as Dan would rather merge it, and left closed only on his own answer: his pick of an answer to close it unmerged in a picker that named it, with nothing more asked, or his answer to the same tool, asked only when its closing comment or his own earlier answer names the PR that superseded it. A branch, a worktree on it or uncommitted work stays as it is only on his answer to ${LEAVE_BRANCH_TOOL}, and a new branch to commit uncommitted work starts only on his answer to ${CLEANUP_TOOL}. ${FINISH_ISSUES}`
 const ASK_THEN_MERGE = 'When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers; never end the turn waiting on him.'
 
 // Each mode's note opens with its one definition (hooks/modes.ts), the same words the
@@ -5621,7 +5675,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'leave_pr_open',
       description:
-        "Ask Dan whether a PR stays as it is rather than being merged, the question following the PR's state on GitHub: an open PR left open, for when he may want it left (a reviewer outside this session, say), or a PR closed without merging left closed. Dan would rather merge a closed PR, so it is asked about only on a recorded reason it will never merge: its closing comment, or his own earlier words passed as dan_said, naming the PR that superseded it, quoted to him; with neither, nothing is asked, and you reopen it and finish it. Only his \"Leave it open\" (recorded against the PR's current head, and settled until it is pushed to again) or \"Leave it closed\" (settled unless it is reopened) is recorded. Every other PR is merged; never call this to end a turn sooner.",
+        "Ask Dan whether a PR stays as it is rather than being merged, the question following the PR's state on GitHub: an open PR left open, for when he may want it left (a reviewer outside this session, say), or a PR closed without merging left closed. Dan would rather merge a closed PR, so it is asked about only on a recorded reason it will never merge: its closing comment, or his own earlier words passed as dan_said, naming the PR that superseded it, quoted to him; with neither, nothing is asked, and you reopen it and finish it. A PR he already chose to close unmerged, by picking that answer in a picker that named it, is settled without this tool, and nothing more is asked. Only his \"Leave it open\" (recorded against the PR's current head, and settled until it is pushed to again) or \"Leave it closed\" (settled unless it is reopened) is recorded. Every other PR is merged; never call this to end a turn sooner.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -6106,10 +6160,16 @@ export const register: Register = on => {
       if (mayOpen && !r.deny) await noteOpened($, raw, r)
       if (filing && !r.deny) await noteProposalFiled($, filing.dir, r)
       // A morning picker of proposals Dan answered: what he left is declined (#1389).
+      let picked: string[] = []
       if (tool === 'AskUserQuestion' && !r.deny && pickerAnswered(r) === true) {
         await noteDeclined($, input, r)
         // And each overnight question he answered (3.n) is recorded answered (#3018).
         await noteAnswered($, input, r)
+        // And his pick to close a PR unmerged, in a picker naming it, is his decision that it stays
+        // closed (#3779). What his answer recorded, withdrew or could not record is said at once: to
+        // him in the transcript, and to the session with this result, below.
+        picked = notedSaid(await notePicked(pickedIo($), input, r))
+        for (const line of picked) $.ui.log(line)
       }
       if (mayBranch && !r.deny) await noteBranches($, raw, input.agentId)
       // A call refused here or beneath never ran, so it wrote nothing (#1108).
@@ -6126,7 +6186,7 @@ export const register: Register = on => {
       // next tool result; a subagent's result is not the main conversation's, and a refusal carries none.
       // What a judge said beside allowing this call (#3439) goes with its own result, to whichever of
       // the session or its agents made it; a refusal here or beneath carries none, as the call never ran.
-      const own = r.deny ? [] : said
+      const own = r.deny ? [] : [...said, ...picked]
       const held = input.agentId !== undefined || r.deny || !mid.notes.length ? [] : takeNotes(mid)
       if (!own.length && !held.length) return r
       return { ...r, context: [...(r.context ?? []), ...own, ...held] } as typeof r
@@ -6356,32 +6416,38 @@ export const register: Register = on => {
     // breaker), and the night's limits held only while a goal happened to be met. The settings Stop
     // hooks beneath stand down while asleep, so ending the chain here takes nothing from the night.
     hear(e)
-    const driven = await driveStop($, (e as { background_tasks?: unknown }).background_tasks)
-    if (driven !== 'not-driven') {
-      // The driver has this turn now, so the start /sleep owed it at the turn's end is not (#3136).
-      drivenStop(mid)
-      return driven ?? {}
-    }
-    // A turn end asks GitHub afresh about everything that can still change (#1037), with Claude
-    // Code's list of the session's work in flight, from which a PR can be in hand (#2901).
-    const c = await check($, true, (e as { background_tasks?: unknown }).background_tasks)
-    if (c === null) return next(e)
-    const inHand = c.inHand ?? []
-    if (c.left.length === 0) {
-      // Nothing outstanding but PRs this session's own merge runs are merging, unread only for the
-      // minute's looks (#2901): the turn ends, winding down stays on, and the next stop reads again.
-      if (inHand.length) {
-        $.ui.log(`scope-modes: winding down let the turn end with ${inHand.join('; ')} in hand, read again at the next stop`, { to: 'debug' })
-        return next(e)
+    // However this turn ends (driven overnight, not winding down, in hand, finished or refused),
+    // each PR Dan chose to close unmerged is named with his answer (#3779), in the one place below.
+    let refusal = ''
+    try {
+      const driven = await driveStop($, (e as { background_tasks?: unknown }).background_tasks)
+      if (driven !== 'not-driven') {
+        // The driver has this turn now, so the start /sleep owed it at the turn's end is not (#3136).
+        drivenStop(mid)
+        return driven ?? {}
       }
-      await finish($, c)
-      return next(e)
-    }
-    // A PR Dan chose to leave open (#917) or closed (#1033), and a branch he chose to leave as it is
-    // (#1074), are said apart, never as outstanding; so are the PRs in hand (#2901).
-    const kept = `${keptSaid(c.kept, "Dan's")}${keptBranchesSaid(c.keptBranches, "Dan's")}${inHandSaid(inHand)}`
-    return {
-      block: `Winding down is not finished: ${c.left.join('; ')}.${kept} ${FINALIZE_ALL} Keep watching CI and the deploy, fix only what blocks a merge or deploy, and file anything else. ${ASK_THEN_MERGE}`,
+      // A turn end asks GitHub afresh about everything that can still change (#1037), with Claude
+      // Code's list of the session's work in flight, from which a PR can be in hand (#2901).
+      const c = await check($, true, (e as { background_tasks?: unknown }).background_tasks)
+      if (c === null) return await next(e)
+      const inHand = c.inHand ?? []
+      if (c.left.length === 0) {
+        // Nothing outstanding but PRs this session's own merge runs are merging, unread only for the
+        // minute's looks (#2901): the turn ends, winding down stays on, and the next stop reads again.
+        if (inHand.length) {
+          $.ui.log(`scope-modes: winding down let the turn end with ${inHand.join('; ')} in hand, read again at the next stop`, { to: 'debug' })
+          return await next(e)
+        }
+        await finish($, c)
+        return await next(e)
+      }
+      // A PR Dan chose to leave open (#917) or closed (#1033), and a branch he chose to leave as it is
+      // (#1074), are said apart, never as outstanding; so are the PRs in hand (#2901).
+      const kept = `${keptSaid(c.kept, "Dan's")}${keptBranchesSaid(c.keptBranches, "Dan's")}${inHandSaid(inHand)}`
+      refusal = `Winding down is not finished: ${c.left.join('; ')}.${kept} ${FINALIZE_ALL} Keep watching CI and the deploy, fix only what blocks a merge or deploy, and file anything else. ${ASK_THEN_MERGE}`
+      return { block: refusal }
+    } finally {
+      await sayPicks($, refusal)
     }
   })
 
