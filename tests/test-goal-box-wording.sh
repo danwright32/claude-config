@@ -12,7 +12,8 @@
 #
 #   box.ts stops naming one of the three things, or its description stops carrying either constant;
 #   the reflection's last line stops naming one of the three, or stops asking for the one line;
-#   the issue review's last step stops asking for the one line;
+#   the issue review's last step stops asking for the one line, once and again on a change, or
+#     stops saying whose request the session's part is a part of;
 #   any of them asks a session to say nothing of a box it holds back, which is the fault this fixes:
 #     a box held on purpose and a box forgotten then look the same to Dan.
 #
@@ -114,8 +115,10 @@ issues = text_of(ISSUES) or ''
 step = [l for l in issues.split('\n') if l.startswith('6 GOAL BOX')]
 check('the issue review has its one GOAL BOX step', None if len(step) == 1 else 'found %d in %s' % (len(step), ISSUES))
 step = step[0] if step else ''
-check('the issue review asks the session to say what the box waits on, once', None if 'else say once what it waits on' in step else 'its step 6 is %r' % step)
-check("the issue review counts only the session's own part of the request", None if 'your part done, call it' in step else 'its step 6 is %r' % step)
+check('the issue review asks the session to say what the box waits on, once', None if 'else say once, ' in step and step.endswith('what it waits on.') else 'its step 6 is %r' % step)
+check('and again when what it waits on changes', None if 'say once, and on change, what it waits on' in step else 'its step 6 is %r' % step)
+# "Your part" alone names no whole, and at the last step of a review reads as a part of the review.
+check("the issue review counts only the session's own part, and says of what: Dan's request", None if 'your part of my request done, call it' in step else 'its step 6 is %r' % step)
 # Both halves of the step sit under its two conditions: with a /goal set, or the tool not offered,
 # the box waits on nothing of the session's, and a line saying so every turn would be noise.
 check('the issue review asks for neither with a /goal set or the tool not offered', None if step.startswith('6 GOAL BOX, last (no /goal set, goal_accomplished offered): ') else 'its step 6 does not open with its two conditions around both halves: %r' % step)

@@ -1,5 +1,5 @@
-# End of turn issue review
-Why each rule exists: review/issue-review-notes.md.
+# Issue review
+Why: review/issue-review-notes.md.
 ---
 FORMAT: open with a 3 line heavy box (┏┓┗┛ ┃ ━) labeled ISSUE REVIEW.
 
@@ -13,6 +13,6 @@ FORMAT: open with a 3 line heavy box (┏┓┗┛ ┃ ━) labeled ISSUE REVIEW
 
 5 CLEAR, after the picker, whatever I chose. The findings file ends with TO FILE THESE. Run that line, verbatim: no retyping, no $PWD, do NOT drop any of its arguments. No file, or THESE cannot be filed from this review: run nothing. LEFT records (other sessions, or harvested after the review was rendered): one line. Did NOT finish: quote why, no retry. Silent: report it.
 
-6 GOAL BOX, last (no /goal set, goal_accomplished offered): your part done, call it; else say once what it waits on.
+6 GOAL BOX, last (no /goal set, goal_accomplished offered): your part of my request done, call it; else say once, and on change, what it waits on.
 
 Nothing for me: no picker, no note. Plain language. Number every item 1.x. No dashes or bullets.

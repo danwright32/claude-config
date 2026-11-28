@@ -74,12 +74,15 @@ was placed after the reflection's EXCEPTION so a folded reflection would still a
 the reflection's points and said nothing of the box, and no box showed until Dan asked
 (claude-config#2523). So this review carries the same request as its own last step, after the clear.
 That is still only a prompt (L27); a check in the goal box mod itself is #2523's second half.
-The step counts only the session's own part of the request and asks the session to say once what
-a box it holds back waits on, for the reasons in session-reflection-notes.md ("What does not hold
-the box"). It says so in a few words because issue-review.md is at the size limit
-`test-review-instructions.sh` holds it to; the reflection's last line and the tool's description
-carry the rule in full (claude-config#3864). Both halves sit inside the step's two conditions, so
-with a /goal set, or the tool not offered, the step asks for no line.
+The step counts only the session's own part of Dan's request and asks the session to say what a
+box it holds back waits on, once and again when that changes, for the reasons in
+session-reflection-notes.md ("What does not hold the box"). "Your part of my request", never "your
+part" alone: at the last step of a review those two words read as a part of the review. It says
+so in a few words because issue-review.md is at the size limit `test-review-instructions.sh` holds
+it to, and the file's title and its pointer to this file were shortened to make the room; the
+reflection's last line and the tool's description carry the rule in full (claude-config#3864).
+Both halves sit inside the step's two conditions, so with a /goal set, or the tool not offered,
+the step asks for no line.
 
 ## The Open questions section
 Every issue body ends with a "## Open questions" section (claude-config#1279, Dan 2026-10-17): one "- [ ]"
