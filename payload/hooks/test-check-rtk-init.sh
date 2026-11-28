@@ -211,6 +211,19 @@ refused "#3739 the same after a quoted marker" "cat <<'EOF'; rtk init -g${NL}bod
 allowed "#3739 control: rtk gain after a heredoc's opener" "cat <<EOF; rtk gain${NL}body${NL}EOF"
 allowed "#3739 control: rtk init written in the heredoc's body alone" "cat <<EOF${NL}x; rtk init -g${NL}EOF"
 
+# A word written across the pair is in the payload in two pieces, so the look for the words in
+# the payload as it arrives answers for no payload that holds the pair (claude-config#3739).
+refused "#3739 rtk in, the pair, it -g" "rtk in${PAIR}it -g"
+refused "#3739 rt, the pair, k init -g" "rt${PAIR}k init -g"
+refused "#3739 rtk in, the pair, it -g in a wrapper's string" "bash -c 'rtk in${PAIR}it -g'"
+allowed "#3739 control: rtk ga, the pair, in" "rtk ga${PAIR}in"
+# With no reader the pieces cannot be joined, so only a payload naming both words whole is refused
+# as not judged, as it always was.
+nopy "echo one ${PAIR}two"
+check_eq "#3739 with no python3 a command that holds the pair and names neither word whole passes in silence" "0|" "$rc|$out"
+nopy "rtk ${PAIR}init -g"
+check_eq "#3739 with no python3 a command that names both words whole beside the pair is still refused" "2" "$rc"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

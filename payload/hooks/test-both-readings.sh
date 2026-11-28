@@ -40,7 +40,7 @@ echo "both readings: the scan"
 scan_file() {
   awk '
     /^[[:space:]]*#/ { next }
-    /^ps_both_readings "\$payload" [0-9]+[[:space:]]*$/ { calls++; if (!read_at) before = 1; next }
+    /^ps_both_readings "\$payload" [0-9]+( after)?[[:space:]]*$/ { calls++; if (!read_at) before = 1; next }
     /ps_both_readings/ { stray = NR }
     /ps_parse_payload[[:space:]]+"/ && !/ps_parse_payload[[:space:]]+"[^"]*"[[:space:]]+raw/ { if (!read_at) read_at = NR }
     END {
@@ -81,18 +81,28 @@ done
 # The limit a hook hands over is the one its registration gives it, so the second run is given
 # what is left of the time Claude Code really allows. limit_fault <hook file> <settings file>
 # prints why it is not, or nothing. A hook whose registration sets no limit runs under Claude
-# Code's own, and says UNSET_LIMIT, which is no more than that one.
+# Code's own, and says UNSET_LIMIT, which is no more than that one. A hook registered to run
+# after the command, and only such a hook, says after: told that, the helper never says the
+# command was refused or asks for it again, and told it wrongly a gate would stop refusing.
 UNSET_LIMIT=60
 limit_fault() {
-  local said declared name="${1##*/}"
-  said="$(sed -n 's/^ps_both_readings "\$payload" \([0-9][0-9]*\)[[:space:]]*$/\1/p' "$1")"
+  local said declared events says_after=no name="${1##*/}"
+  said="$(sed -n 's/^ps_both_readings "\$payload" \([0-9][0-9]*\)\( after\)\{0,1\}[[:space:]]*$/\1/p' "$1")"
+  grep -q '^ps_both_readings "\$payload" [0-9][0-9]* after[[:space:]]*$' "$1" && says_after=yes
   declared="$(jq -r --arg n "/$name" '[.hooks[][].hooks[]? | select((.command // "") | endswith($n)) | (.timeout // "none") | tostring] | unique | join(" ")' "$2" 2>/dev/null)" \
     || { printf 'the registration in %s could not be read' "$2"; return 0; }
+  events="$(jq -r --arg n "/$name" '[.hooks | to_entries[] | .key as $e | .value[].hooks[]? | select((.command // "") | endswith($n)) | $e] | unique | join(" ")' "$2" 2>/dev/null)"
   case "$declared" in
-    '') printf 'no registration names it, so there is no limit to hold the %s it says against' "${said:-nothing}" ;;
-    *' '*) printf 'it is registered with more than one limit (%s)' "$declared" ;;
-    none) [ "$said" = "$UNSET_LIMIT" ] || printf 'its registration sets no limit, so it must say %s, and it says %s' "$UNSET_LIMIT" "${said:-nothing}" ;;
-    *) [ "$said" = "$declared" ] || printf 'its registration gives it %s seconds and it says %s' "$declared" "${said:-nothing}" ;;
+    '') printf 'no registration names it, so there is no limit to hold the %s it says against' "${said:-nothing}"; return 0 ;;
+    *' '*) printf 'it is registered with more than one limit (%s)' "$declared"; return 0 ;;
+    none) [ "$said" = "$UNSET_LIMIT" ] || { printf 'its registration sets no limit, so it must say %s, and it says %s' "$UNSET_LIMIT" "${said:-nothing}"; return 0; } ;;
+    *) [ "$said" = "$declared" ] || { printf 'its registration gives it %s seconds and it says %s' "$declared" "${said:-nothing}"; return 0; } ;;
+  esac
+  case "$events:$says_after" in
+    PreToolUse:no|PostToolUse:yes) ;;
+    PreToolUse:yes) printf 'it is registered to run before the command and says after, so it would never refuse where the second reading is not judged' ;;
+    PostToolUse:no) printf 'it is registered to run after the command and does not say after, so it would say the command was refused and ask for it again' ;;
+    *) printf 'it is registered under [%s], and only PreToolUse alone or PostToolUse alone is known here' "$events" ;;
   esac
   return 0
 }
@@ -104,19 +114,26 @@ if [ "$have_jq" = yes ]; then
   {"type": "command", "command": "__CLAUDE_HOME__/hooks/unset.sh"},
   {"type": "command", "command": "__CLAUDE_HOME__/hooks/unset-wrong.sh"},
   {"type": "command", "command": "__CLAUDE_HOME__/hooks/other.sh", "timeout": 45},
+  {"type": "command", "command": "__CLAUDE_HOME__/hooks/before-says-after.sh", "timeout": 30},
   {"type": "command", "command": "__CLAUDE_HOME__/hooks/two.sh", "timeout": 30}]}],
  "PostToolUse": [{"matcher": "Bash", "hooks": [
+  {"type": "command", "command": "__CLAUDE_HOME__/hooks/after-right.sh", "timeout": 15},
+  {"type": "command", "command": "__CLAUDE_HOME__/hooks/after-unsaid.sh", "timeout": 30},
   {"type": "command", "command": "__CLAUDE_HOME__/hooks/two.sh", "timeout": 15}]}]}}
 JSON
   printf '%s\n' 'ps_both_readings "$payload" 60' > "$T/scan/unset.sh"
-  for f in unset-wrong other two stranger; do cp "$T/scan/right.sh" "$T/scan/$f.sh"; done
-  for f in right unset; do
+  printf '%s\n' 'ps_both_readings "$payload" 15 after' > "$T/scan/after-right.sh"
+  printf '%s\n' 'ps_both_readings "$payload" 30 after' > "$T/scan/before-says-after.sh"
+  for f in unset-wrong other two stranger after-unsaid; do cp "$T/scan/right.sh" "$T/scan/$f.sh"; done
+  for f in right unset after-right; do
     why="$(limit_fault "$T/scan/$f.sh" "$T/scan/settings.json")"
-    [ -z "$why" ] && check "the limit check passes a hook that says its registered limit ($f)" ok || check "the limit check passes a hook that says its registered limit ($f)" "$why"
+    [ -z "$why" ] && check "the limit check passes a hook that says its registered limit, and after where it runs after the command ($f)" ok \
+      || check "the limit check passes a hook that says its registered limit, and after where it runs after the command ($f)" "$why"
   done
-  for f in unset-wrong other two stranger no-limit; do
+  for f in unset-wrong other two stranger no-limit after-unsaid before-says-after; do
     why="$(limit_fault "$T/scan/$f.sh" "$T/scan/settings.json")"
-    [ -n "$why" ] && check "the limit check fails a hook that says another limit than its registered one ($f)" ok || check "the limit check fails a hook that says another limit than its registered one ($f)" "it passed"
+    [ -n "$why" ] && check "the limit check fails a hook that says another limit than its registered one, or after where it does not belong ($f)" ok \
+      || check "the limit check fails a hook that says another limit than its registered one, or after where it does not belong ($f)" "it passed"
   done
 fi
 REG=""
@@ -160,15 +177,17 @@ command -v python3 >/dev/null 2>&1 || { check "python3 is here to make the paylo
 # than any row gives it, and then passes.
 # Every run writes which reading it was told it is and what it read. Its time limit is BR_LIMIT
 # where a row names one, and the time it has used is read from the file BR_CLOCK names where a
-# row names one, so no row waits out a real limit. BR_LIB is the library it reads.
+# row names one, so no row waits out a real limit. BR_LIB is the library it reads, BR_AFTER the
+# word a hook that runs after the command hands over, and BR_NOTICE has it load the notice library.
 HOOK="$T/stand-in.sh"
 cat > "$HOOK" <<HOOKEND
 #!/bin/bash
 . "\${BR_LIB:-$DIR/lib}/push-scope.sh" || exit 9
 [ -z "\${BR_CLOCK-}" ] || ps__elapsed() { cat "\$BR_CLOCK"; }
+[ -z "\${BR_NOTICE-}" ] || . "$DIR/lib/hook-notice.sh" || exit 9
 payload="\$(ps_read_payload)"
 echo "start" >> "\$BR_LOG"
-ps_both_readings "\$payload" \${BR_LIMIT-600}
+ps_both_readings "\$payload" "\${BR_LIMIT-600}" \${BR_AFTER-}
 parsed="\$(ps_parse_payload "\$payload" segmented)" || { echo "the stand in could not parse its payload" >&2; exit 2; }
 cmd="\${parsed%%\$'\\x1f'*}"
 printf 'judged|%s|%s|%s\\n' "\${PS__READING:-alone}" "\${PS_READING-unset}" "\$cmd" >> "\$BR_LOG"
@@ -351,6 +370,69 @@ esac
 payload_for "$PUSH" | BR_LIB="$T/lib-fails" BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
 [ "$RC" = 2 ] && [ "$(cat "$T/err")" = "refused on the alone reading" ] && check "with that reader, a command that asks it nothing is judged as it always was" ok \
   || check "with that reader, a command that asks it nothing is judged as it always was" "exit $RC, said [$(cat "$T/err")]"
+
+# A hook that runs after the command has nothing left to refuse, and asking for the command again
+# would run it twice. Where the second reading cannot be judged it ends on a notice and exit 0,
+# with the first reading judged as it always was.
+run_after() { # run_after <seconds used> <limit> <command text> [yes to load the notice library]
+  : > "$T/log"
+  printf '%s' "$1" > "$T/clock"
+  payload_for "$3" | BR_AFTER=after BR_NOTICE="${4-}" BR_CLOCK="$T/clock" BR_LIMIT="$2" BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
+  OUT="$(cat "$T/out")"; ERR="$(cat "$T/err")"
+}
+after_notice() { # after_notice <what the row is> <words the notice must hold>
+  case "$RC:$ERR" in
+    0:*NOTICE*"has already run"*"$2"*"Do not run the command again"*)
+      case "$ERR" in
+        *BLOCKED*|*"send "*|*"refused on"*) check "$1" "it speaks of a refusal or of sending again: [${ERR:0:400}]" ;;
+        *) check "$1" ok ;;
+      esac ;;
+    *) check "$1" "exit $RC, said [${ERR:0:400}]" ;;
+  esac
+}
+NOTED="git status; cat <<EOF; echo hidden${NL}body${NL}EOF"
+run_after 599 600 "$NOTED"
+after_notice "a hook that runs after the command, with too little time left for the second reading, ends on a notice and exit 0" "leaves too little"
+[ "$(judged)" = first ] && check "there the first reading was judged as it always was, and the second not started" ok \
+  || check "there the first reading was judged as it always was, and the second not started" "judged [$(judged)]"
+case "$OUT" in
+  NOTICE*"The hook itself said: a note from the first reading") check "and the notice carries what the first run said" ok ;;
+  *) check "and the notice carries what the first run said" "said [${OUT:0:400}]" ;;
+esac
+run_after 595 600 "$SLOW"
+after_notice "such a hook whose second run does not finish in what is left ends on a notice and exit 0" "did not finish in the 2 seconds left"
+run_after 0 600 "cat <<EOF; echo done${NL}${long}${NL}EOF"
+after_notice "such a hook handed a command too long to read twice ends on a notice and exit 0" "longer than the 16384"
+[ "$(judged)" = first ] && check "and there the first reading is still judged" ok || check "and there the first reading is still judged" "judged [$(judged)]"
+run_after 0 "" "$HIDDEN"
+after_notice "such a hook that hands over no time limit ends on a notice and exit 0" "did not say how long"
+: > "$T/log"
+payload_for "$HIDDEN" | BR_AFTER=after BR_LIB="$T/lib-fails" BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
+ERR="$(cat "$T/err")"
+after_notice "such a hook whose reader fails ends on a notice and exit 0" "failed with exit 1"
+: > "$T/log"
+payload_for "$HIDDEN" | BR_AFTER=after TMPDIR="$T/absent/" BR_LOG="$T/log" bash "$HOOK" > "$T/out" 2> "$T/err"; RC=$?
+ERR="$(cat "$T/err")"
+after_notice "such a hook with nowhere to keep the two answers says so in a notice" "no working folder could be made"
+[ "$(judged)" = alone ] && check "and goes on by itself with the reading it always had" ok || check "and goes on by itself with the reading it always had" "judged [$(judged)]"
+run_after 0 600 "$HIDDEN"
+[ "$RC" = 2 ] && [ "$ERR" = "refused on the second reading" ] && [ "$(judged)" = "first second" ] \
+  && check "with time for both, a hook that runs after the command judges the second reading as any hook does" ok \
+  || check "with time for both, a hook that runs after the command judges the second reading as any hook does" "exit $RC, said [${ERR:0:300}], judged [$(judged)]"
+run_timed 599 600 "$HIDDEN"
+case "$RC:$ERR" in
+  2:BLOCKED*) check "control: the same command and clock in a hook that does not say after is a refusal" ok ;;
+  *) check "control: the same command and clock in a hook that does not say after is a refusal" "exit $RC, said [${ERR:0:300}]" ;;
+esac
+# With the notice library loaded, the notice is the one object Claude Code shows.
+if . "$DIR/lib/hook-notice.sh" 2>/dev/null && declare -F hook_notice_verdict >/dev/null; then
+  run_after 599 600 "$NOTED" yes
+  why="$(hook_notice_verdict "$OUT" "NOTICE.*has already run.*leaves too little.*The hook itself said: a note from the first reading")"
+  [ "$RC" = 0 ] && [ -z "$why" ] && check "with the notice library loaded the notice is one object where Claude Code shows it" ok \
+    || check "with the notice library loaded the notice is one object where Claude Code shows it" "exit $RC, $why, said [${OUT:0:300}]"
+else
+  check "lib/hook-notice.sh is here to read the notice with" "it could not be loaded, or holds no hook_notice_verdict"
+fi
 
 # Where the second reading cannot be made, the hook is what it always was, and says so where it must.
 mkdir -p "$T/no-python"

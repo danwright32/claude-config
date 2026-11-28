@@ -414,8 +414,11 @@ sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 # what it started is left to finish, a review a gate detached on purpose among it. Where both
 # readings reach what a gate acts on, the gate does that work in each run.
 #
-#   ps_both_readings <payload> <limit>   returns 0 to carry on with one reading; otherwise it
-#                                         exits with the answer of the two runs and never returns.
+#   ps_both_readings <payload> <limit> [after]   returns 0 to carry on with one reading; otherwise
+#                                                 it exits with the answer of the two runs and
+#                                                 never returns. A hook registered to run after
+#                                                 the command says after, and is then never told
+#                                                 the command was refused or should be sent again.
 [ "${PS__READING_OF-}" = "$$" ] || { PS__READING=""; PS__READING_OF=$$; }
 PS__SECOND_MAX=16384
 PS__OPENER_LINE='<<([^\\]|\\[^n])*; '
@@ -472,8 +475,30 @@ ps__say_reading() {   # $1 = first | second  $2 = the working folder
   cat "$2/out.$1" 2>/dev/null
   cat "$2/err.$1" >&2 2>/dev/null
 }
-ps_both_readings() {   # $1 = the payload as the hook read it  $2 = the hook's time limit, in seconds
-  local payload="${1-}" limit="${2-}" hook="${BASH_SOURCE[1]-}" clean work rc name used left
+ps__after_note() {   # $1 = the hook's name  $2 = why the second reading was not judged, as a clause
+  printf 'NOTICE: %s: %s This hook runs after the command, so the command has already run and nothing here refuses it. What it hides was not judged by this hook, because %s. Do not run the command again on account of this notice (claude-config#3739).' "$1" "$PS__HIDES" "$2"
+}
+# How a hook that runs after the command ends when the second reading could not be judged: with
+# what its first run said, the notice, and exit 0. The notice goes where Claude Code shows one
+# (lib/hook-notice.sh, where the hook loaded it), carrying what the first run said in plain words.
+# A first run that printed an object of its own is passed on as it is, since a second line would
+# spoil it for whatever reads it, and the notice is then on standard error alone.
+ps__after_end() {   # $1 = the hook's name  $2 = the working folder  $3 = why, as a clause
+  local note first
+  note="$(ps__after_note "$1" "$3")"
+  cat "$2/err.first" >&2 2>/dev/null
+  printf '%s\n' "$note" >&2
+  first="$(cat "$2/out.first" 2>/dev/null)"
+  case "$first" in
+    '{'*) printf '%s\n' "$first" ;;
+    *) [ -z "$first" ] || note="$note The hook itself said: $first"
+       if declare -F hook_notice_json >/dev/null 2>&1; then hook_notice_json "$note" PostToolUse
+       else printf '%s\n' "$note"; fi ;;
+  esac
+  exit 0
+}
+ps_both_readings() {   # $1 = the payload as the hook read it  $2 = the hook's time limit, in seconds  $3 = after, for a hook that runs after the command
+  local payload="${1-}" limit="${2-}" after="${3-}" hook="${BASH_SOURCE[1]-}" clean work rc name used left why=""
   # Taken out of the environment once read, so nothing this run starts is told it is a reading.
   case "${PS_READING-}" in
     "first:$PPID") PS__READING=first; unset PS_READING; return 0 ;;
@@ -489,31 +514,57 @@ ps_both_readings() {   # $1 = the payload as the hook read it  $2 = the hook's t
   # not saying, which is not a command with nothing hidden.
   printf '%s' "$clean" | python3 "$PS_SHELL_WORDS" second >/dev/null 2>&1; rc=$?
   [ "$rc" -ne 4 ] || return 0
+  # A gate that runs before the command refuses where the second reading cannot be judged, and
+  # says how to write the command. A hook that runs after it has nothing left to refuse and must
+  # not ask for the command again, which would run it twice: there the reason is kept in why,
+  # the first reading is judged as it always was, and the hook ends on a notice.
+  [ "$after" = after ] || after=""
   if [ "$rc" -ne 0 ]; then
-    printf 'BLOCKED: %s: the reader that says whether this command hides another (lib/shell-words.py second) failed with exit %s, so whether it hides one was not judged. Write the command more simply, with nothing after a heredoc opener on its line and no line continued inside a quoted string or backquotes, and send it again (claude-config#3739).\n' "$name" "$rc" >&2
-    exit 2
+    [ -n "$after" ] || {
+      printf 'BLOCKED: %s: the reader that says whether this command hides another (lib/shell-words.py second) failed with exit %s, so whether it hides one was not judged. Write the command more simply, with nothing after a heredoc opener on its line and no line continued inside a quoted string or backquotes, and send it again (claude-config#3739).\n' "$name" "$rc" >&2
+      exit 2
+    }
+    why="the reader that says whether a command hides another (lib/shell-words.py second) failed with exit $rc"
   fi
   # A limit that is no count of seconds gives nothing to share out. A leading 0 is refused with
   # it, since the arithmetic below would read the number as octal.
-  case "$limit" in
-    ''|*[!0-9]*|0*)
-      printf 'BLOCKED: %s: this command has two readings to judge, and this gate did not say how long it may take (it handed ps_both_readings "%s" where its time limit in seconds belongs), so the second could not be given what the first leaves. Nothing was judged. That is a fault in the gate and not in the command. Written with nothing after a heredoc opener on its line and no line continued inside a quoted string or backquotes, the command has one reading and is judged as it always was (claude-config#3739).\n' "$name" "$limit" >&2
-      exit 2 ;;
-  esac
-  if [ "${#clean}" -gt "$PS__SECOND_MAX" ]; then
-    printf 'BLOCKED: %s: this command runs something a plain reading of it hides (a command after a heredoc opener on the same line, or one written across a backslash and line break inside a string handed to a shell or inside backquotes), and its payload, at %s characters, is longer than the %s a gate reads a second time within its time limit, so what it hides was not judged. Write that command on a line of its own, after the heredoc closing line, or send the long text in a command of its own (claude-config#3739).\n' \
-      "$name" "${#clean}" "$PS__SECOND_MAX" >&2
-    exit 2
+  if [ -z "$why" ]; then
+    case "$limit" in
+      ''|*[!0-9]*|0*)
+        [ -n "$after" ] || {
+          printf 'BLOCKED: %s: this command has two readings to judge, and this gate did not say how long it may take (it handed ps_both_readings "%s" where its time limit in seconds belongs), so the second could not be given what the first leaves. Nothing was judged. That is a fault in the gate and not in the command. Written with nothing after a heredoc opener on its line and no line continued inside a quoted string or backquotes, the command has one reading and is judged as it always was (claude-config#3739).\n' "$name" "$limit" >&2
+          exit 2
+        }
+        why="this hook did not say how long it may take, which is a fault in the hook" ;;
+    esac
   fi
-  if [ -n "${PS_READING-}" ]; then
-    printf 'BLOCKED: %s: this command has two readings to judge, and PS_READING is already set in this hook environment by something that is not the hook that started it, so it cannot tell whether it is one of the two runs already. Nothing was judged. Unset PS_READING where Claude Code is started (claude-config#3739).\n' "$name" >&2
-    exit 2
+  if [ -z "$why" ] && [ "${#clean}" -gt "$PS__SECOND_MAX" ]; then
+    [ -n "$after" ] || {
+      printf 'BLOCKED: %s: this command runs something a plain reading of it hides (a command after a heredoc opener on the same line, or one written across a backslash and line break inside a string handed to a shell or inside backquotes), and its payload, at %s characters, is longer than the %s a gate reads a second time within its time limit, so what it hides was not judged. Write that command on a line of its own, after the heredoc closing line, or send the long text in a command of its own (claude-config#3739).\n' \
+        "$name" "${#clean}" "$PS__SECOND_MAX" >&2
+      exit 2
+    }
+    why="its payload, at ${#clean} characters, is longer than the $PS__SECOND_MAX a hook reads a second time within its time limit"
+  fi
+  if [ -z "$why" ] && [ -n "${PS_READING-}" ]; then
+    [ -n "$after" ] || {
+      printf 'BLOCKED: %s: this command has two readings to judge, and PS_READING is already set in this hook environment by something that is not the hook that started it, so it cannot tell whether it is one of the two runs already. Nothing was judged. Unset PS_READING where Claude Code is started (claude-config#3739).\n' "$name" >&2
+      exit 2
+    }
+    why="PS_READING is already set in this hook environment by something that is not the hook that started it"
   fi
   work="$(mktemp -d "${TMPDIR:-/tmp}/ps-readings.XXXXXX" 2>/dev/null)" && [ -d "$work" ] \
     && printf '%s' "$payload" > "$work/in" || {
     [ -z "${work:-}" ] || rm -rf "$work"
-    printf 'BLOCKED: %s: this command has two readings to judge and no working folder could be made under %s to hold them, so what it hides was not judged (claude-config#3739).\n' "$name" "${TMPDIR:-/tmp}" >&2
-    exit 2
+    [ -n "$after" ] || {
+      printf 'BLOCKED: %s: this command has two readings to judge and no working folder could be made under %s to hold them, so what it hides was not judged (claude-config#3739).\n' "$name" "${TMPDIR:-/tmp}" >&2
+      exit 2
+    }
+    # With nowhere to keep a run's answer the hook goes on by itself, with the reading it always
+    # had, and the notice is on standard error alone.
+    ps__after_note "$name" "${why:-no working folder could be made under ${TMPDIR:-/tmp} to hold the two readings}" >&2
+    printf '\n' >&2
+    return 0
   }
   # shellcheck disable=SC2064 # the folder is named now, on purpose
   trap "rm -rf '$work'" EXIT
@@ -522,20 +573,24 @@ ps_both_readings() {   # $1 = the payload as the hook read it  $2 = the hook's t
   if [ "$rc" -ne 0 ]; then
     ps__say_reading first "$work"; exit "$rc"
   fi
+  [ -z "$why" ] || ps__after_end "$name" "$work" "$why"
   used="$(ps__elapsed)"
   case "$used" in
     ''|*[!0-9]*)
+      [ -z "$after" ] || ps__after_end "$name" "$work" "this hook could not tell how long its first run took, so there was no telling what was left of its time limit"
       printf 'BLOCKED: %s: %s The plain reading passed this gate, and the gate could not tell how long that took (its clock answered "%s"), so the hidden one could not be given what is left of the time limit and was not judged. %s\n' "$name" "$PS__HIDES" "$used" "$PS__WRITE_IT" >&2
       exit 2 ;;
   esac
   left=$(( limit - 10#$used - PS__READING_RESERVE ))
   if [ "$left" -lt 1 ]; then
+    [ -z "$after" ] || ps__after_end "$name" "$work" "its first run took $used of the $limit seconds this hook has, which leaves too little to judge the hidden one in"
     printf 'BLOCKED: %s: %s The plain reading passed this gate, and that took %s of the %s seconds the gate has, which leaves too little to judge the hidden one in, so it was not judged. %s\n' "$name" "$PS__HIDES" "$used" "$limit" "$PS__WRITE_IT" >&2
     exit 2
   fi
   ps__run_reading second "$hook" "$work" "$left"; rc=$?
   # A run that was stopped was not judged, whatever it exited with on being stopped.
   if [ -e "$work/late" ]; then
+    [ -z "$after" ] || ps__after_end "$name" "$work" "judging it did not finish in the $left seconds left of the $limit this hook has, and was stopped"
     printf 'BLOCKED: %s: %s The plain reading passed this gate. Judging the hidden one did not finish in the %s seconds left of the %s the gate has, and was stopped, so it was not judged. %s\n' "$name" "$PS__HIDES" "$left" "$limit" "$PS__WRITE_IT" >&2
     exit 2
   fi

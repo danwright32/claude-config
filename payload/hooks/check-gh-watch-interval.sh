@@ -30,8 +30,14 @@ MIN_INTERVAL=60
 
 payload="$(cat)"
 # Every Bash call passes through here, and nearly none mention a watch: answer those at once,
-# before the shared reader is even loaded.
-case "$payload" in *watch*) ;; *) exit 0 ;; esac
+# before the shared reader is even loaded. A word written across a backslash and line break is in
+# the payload in two pieces, so a payload that holds that pair, by any way JSON spells it, is not
+# answered here (claude-config#3739).
+named_whole() { case "$payload" in *watch*) return 0 ;; esac; return 1; }
+case "$payload" in
+  *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*) ;;
+  *) named_whole || exit 0 ;;
+esac
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
@@ -40,8 +46,10 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
   printf '%s\n' "$1" >&2
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
-# Allow the command, saying in one line why it was not judged.
+# Allow the command, saying in one line why it was not judged. A payload here only for the pair it
+# holds names a watch nowhere whole, and with nothing to join its pieces there is nothing to say.
 not_judged() {   # $1 = what went wrong, as a clause
+  named_whole || exit 0
   hook_allow_notice "GH WATCH INTERVAL CHECK DID NOT RUN: $1, so whether this runs a gh watcher at gh's own short default was not judged."
 }
 # shellcheck source=lib/push-scope.sh

@@ -185,6 +185,19 @@ allowed "#3739 control: gh run view after a heredoc's opener" "cat <<EOF; gh run
 allowed "#3739 control: a minute interval after a heredoc's opener" "cat <<EOF; gh pr checks 12 --watch --interval 60${NL}body${NL}EOF"
 allowed "#3739 control: a watcher written in the heredoc's body alone" "cat <<EOF${NL}x; gh run watch 123456${NL}EOF"
 
+# A word written across the pair is in the payload in two pieces, so the look for the word in
+# the payload as it arrives answers for no payload that holds the pair (claude-config#3739).
+refused "#3739 gh run wat, the pair, ch" "gh run wat${PAIR}ch 123456"
+refused "#3739 gh pr checks --wa, the pair, tch" "gh pr checks 12 --wa${PAIR}tch"
+refused "#3739 gh run wat, the pair, ch in a wrapper's string" "bash -c 'gh run wat${PAIR}ch 123456'"
+allowed "#3739 control: gh run vi, the pair, ew" "gh run vi${PAIR}ew 123456"
+# With no reader the pieces cannot be joined, so only a payload naming a watch whole is said to
+# be not judged, as it always was.
+out="$(payload "echo one ${PAIR}two" | PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1)"; rc=$?
+check_eq "#3739 with no python3 a command that holds the pair and names no watch whole passes in silence" "0|" "$rc|$out"
+json="$(payload "gh run ${PAIR}watch 123456" | PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>/dev/null)"; rc=$?
+notice_of "#3739 with no python3 a command that names a watch whole beside the pair is still said to be not judged" "DID NOT RUN"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

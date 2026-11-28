@@ -35,12 +35,20 @@ ASK="If running it really is intended, ask Dan first, then add $OVERRIDE=1 to th
 
 payload="$(cat)"
 # Every Bash call passes through here, and nearly none name rtk and init: answer those at once,
-# before the shared reader is even loaded.
-case "$payload" in *rtk*) ;; *) exit 0 ;; esac
-case "$payload" in *init*) ;; *) exit 0 ;; esac
+# before the shared reader is even loaded. A word written across a backslash and line break is in
+# the payload in two pieces, so a payload that holds that pair, by any way JSON spells it, is not
+# answered here (claude-config#3739).
+named_whole() { case "$payload" in *rtk*) ;; *) return 1 ;; esac; case "$payload" in *init*) ;; *) return 1 ;; esac; }
+case "$payload" in
+  *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*) ;;
+  *) named_whole || exit 0 ;;
+esac
 
-# Refuse, saying the command could not be read rather than that it runs rtk init.
+# Refuse, saying the command could not be read rather than that it runs rtk init. A payload here
+# only for the pair it holds names the two words nowhere whole, and with nothing to join its
+# pieces it is let through.
 not_judged() {   # $1 = what went wrong, as a clause
+  named_whole || exit 0
   case "$payload" in *"$OVERRIDE=1"*) exit 0 ;; esac
   echo "BLOCKED: this command names rtk and init, and whether it runs rtk init could not be read: $1. $HARM So it is refused rather than guessed at. $DECISION $ASK" >&2
   exit 2

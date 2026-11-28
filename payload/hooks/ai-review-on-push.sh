@@ -138,8 +138,9 @@ did_not_run() {   # $1 = what went wrong, as a clause
 # Cleaned before anything parses it: a lone surrogate escape made jq read nothing (claude-config#1944).
 payload="$(ps_clean_payload "$payload")"
 # What the segmented form hides is judged in a run of its own, in what is left of this hook's
-# registered time limit, which is the number here (claude-config#3739).
-ps_both_readings "$payload" 15
+# registered time limit, which is the number here. This hook runs after the command, and says
+# so, so that it is never told the command was refused or should be sent again (claude-config#3739).
+ps_both_readings "$payload" 15 after
 parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
